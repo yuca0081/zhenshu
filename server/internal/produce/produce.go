@@ -35,12 +35,14 @@ import (
 	"webpage-video-agent/server/internal/events"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
+	"webpage-video-agent/server/internal/store"
 )
 
 type Runner struct {
 	DataDir string // 仓库根 data/（项目在 data/projects/<id>）
 	RootDir string // 仓库根（ai/ 脚本所在）
 	Hub     *events.Hub
+	Store   store.Store // render_jobs 记账（nil = 不记账，测试场景）；manifest 仍是事实源
 	OnDone  func(projectID, status, detail string) // 终态回写（status: video|failed|cancelled；detail 供聊天汇报失败原因等）
 
 	wg       sync.WaitGroup  // 在跑的制作/重做 goroutine（优雅停机等待终态落盘）
@@ -82,6 +84,7 @@ func (r *Runner) Start(projectID string) (bool, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	running[projectID] = cancel
 	p.Manifest(EventProduceStart, "") // 启动对账依据：有 start 无终态 = 进程死在中途（Reconcile 补写）
+	r.jobStart(projectID, "produce")
 	r.wg.Add(1)
 	go func() {
 		defer func() {
@@ -100,6 +103,7 @@ func (r *Runner) Start(projectID string) (bool, error) {
 			r.emit(projectID, "stage", "pipeline", "cancelled")
 			r.emit(projectID, "cancelled", "", detail)
 			r.Manifest(p, EventProduceCancelled, detail)
+			r.jobTerminal(projectID, "cancelled", "", detail)
 			if r.OnDone != nil {
 				r.OnDone(projectID, "cancelled", detail)
 			}
@@ -109,6 +113,7 @@ func (r *Runner) Start(projectID string) (bool, error) {
 			r.emit(projectID, "stage", "pipeline", "error: "+err.Error())
 			r.emit(projectID, "error", "", err.Error())
 			r.Manifest(p, EventProduceError, err.Error())
+			r.jobTerminal(projectID, "failed", "", err.Error())
 			if r.OnDone != nil {
 				r.OnDone(projectID, "failed", err.Error())
 			}
@@ -200,6 +205,7 @@ func (r *Runner) Rework(projectID string, segIDs []string, instruction string) (
 			r.emit(projectID, "stage", "pipeline", "cancelled")
 			r.emit(projectID, "cancelled", "", detail)
 			r.Manifest(p, EventReworkCancelled, joinSegIDs(segs)+": "+detail)
+			r.jobTerminal(projectID, "cancelled", "", detail)
 			if r.OnDone != nil {
 				r.OnDone(projectID, "cancelled", detail)
 			}
@@ -209,6 +215,7 @@ func (r *Runner) Rework(projectID string, segIDs []string, instruction string) (
 			r.emit(projectID, "stage", "pipeline", "error: "+err.Error())
 			r.emit(projectID, "error", "", err.Error())
 			r.Manifest(p, EventReworkError, joinSegIDs(segs)+": "+err.Error())
+			r.jobTerminal(projectID, "failed", "", err.Error())
 			if r.OnDone != nil {
 				r.OnDone(projectID, "failed", err.Error())
 			}
@@ -290,6 +297,7 @@ func (r *Runner) runRework(ctx context.Context, p *pipeline.Project, segs []cont
 		labels[i] = fmt.Sprintf("段%d「%s」", s.Idx, s.Key)
 	}
 	r.Manifest(p, EventReworkStart, only+": "+firstLine(instruction, 80))
+	r.jobStart(id, "rework")
 	r.emit(id, "progress", "rework", "重做 "+strings.Join(labels, "、"))
 
 	// 1. 目标段画面重生成（删旧场景文件强制重出；其余段产物原样复用）
@@ -336,6 +344,7 @@ func (r *Runner) runRework(ctx context.Context, p *pipeline.Project, segs []cont
 	}
 	r.emit(id, "done", "", "renders/main.mp4")
 	r.Manifest(p, EventReworkDone, only)
+	r.jobTerminal(id, "done", "renders/main.mp4", "")
 	if r.OnDone != nil {
 		r.OnDone(id, "video", strings.Join(labels, "、")+" 画面重做完成")
 	}
@@ -400,6 +409,7 @@ func (r *Runner) Reconcile() {
 			ev = EventReworkError
 		}
 		r.Manifest(p, ev, detail)
+		r.jobTerminal(id, "failed", "", detail)
 		if r.OnDone != nil {
 			r.OnDone(id, "failed", detail)
 		}
@@ -430,6 +440,26 @@ func (r *Runner) emit(id, typ, stage, detail string) {
 }
 
 func (r *Runner) Manifest(p *pipeline.Project, event, detail string) { p.Manifest(event, detail) }
+
+// jobStart/jobTerminal render_jobs 记账，与同名 manifest 事件成对出现。best-effort：
+// 库不可写只打日志绝不挡制作——manifest 才是对账事实源，这里只是可查询镜像。
+func (r *Runner) jobStart(projectID, kind string) {
+	if r.Store == nil {
+		return
+	}
+	if err := r.Store.StartRenderJob(projectID, kind); err != nil {
+		log.Printf("[produce] render_jobs 起跑记账失败 %s: %v", projectID, err)
+	}
+}
+
+func (r *Runner) jobTerminal(projectID, status, outputPath, errMsg string) {
+	if r.Store == nil {
+		return
+	}
+	if err := r.Store.FinishRenderJob(projectID, status, outputPath, errMsg); err != nil {
+		log.Printf("[produce] render_jobs 终态记账失败 %s: %v", projectID, err)
+	}
+}
 
 func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 	id := p.ID
@@ -480,6 +510,7 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 	}
 	r.emit(id, "done", "", "renders/main.mp4")
 	r.Manifest(p, EventProduceDone, "renders/main.mp4")
+	r.jobTerminal(id, "done", "renders/main.mp4", "")
 	if r.OnDone != nil {
 		r.OnDone(id, "video", "全片制作完成")
 	}

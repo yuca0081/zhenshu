@@ -71,7 +71,7 @@ func main() {
 		}
 	}
 	producer := &produce.Runner{
-		DataDir: cfg.DataDir, RootDir: root, Hub: hub,
+		DataDir: cfg.DataDir, RootDir: root, Hub: hub, Store: st,
 	}
 	ag := &agent.Agent{
 		DataDir: cfg.DataDir, RootDir: root, Store: st, Lib: lib, Producer: producer,

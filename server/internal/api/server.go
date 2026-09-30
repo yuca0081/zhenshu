@@ -59,6 +59,7 @@ func (s *Server) Router() *gin.Engine {
 	api.POST("/projects", s.createProject)
 	api.GET("/projects", s.listProjects)
 	api.GET("/projects/:id", s.projectView)
+	api.GET("/projects/:id/overview", s.overview)
 	api.GET("/projects/:id/manuscript", s.manuscript)
 	api.PUT("/projects/:id/manuscript", s.saveManuscript)
 	api.GET("/projects/:id/storyboard", s.storyboard)

@@ -79,6 +79,20 @@ type ProjectRow struct {
 
 func (ProjectRow) TableName() string { return "projects" }
 
+// RenderJobRow render_jobs 行：一次制作/重做一行（kind: produce|rework），
+// status: running|done|failed|cancelled。quality 恒 draft（管线暂只此一档），
+// kind 存 payload JSONB。磁盘 manifest 仍是事实源，这里是可查询镜像。
+type RenderJobRow struct {
+	ID         int64      `gorm:"column:id"          json:"id"`
+	ProjectID  string     `gorm:"column:project_id"  json:"-"` // 内存实现用；PG 查询不取
+	Kind       string     `gorm:"column:kind"        json:"kind"`
+	Status     string     `gorm:"column:status"      json:"status"`
+	OutputPath string     `gorm:"column:output_path" json:"output_path,omitempty"`
+	Error      string     `gorm:"column:error"       json:"error,omitempty"`
+	StartedAt  time.Time  `gorm:"column:started_at"  json:"started_at"`
+	FinishedAt *time.Time `gorm:"column:finished_at" json:"finished_at,omitempty"`
+}
+
 // Store 聊天案卷 + 项目元数据。chat_messages.project_id 在 DDL 里是 UUID 外键，
 // PG 实现按 disk_id 换写；内存实现直接存。
 type Store interface {
@@ -88,6 +102,11 @@ type Store interface {
 	ListProjects() ([]ProjectRow, error)
 	SaveMsg(m *Msg) error
 	ListMsgs(projectID string, afterID int64, limit int) ([]Msg, error)
+	// render_jobs 记账：起跑插 running 行，终态回写该项目最近一行 running
+	//（同项目同时最多一个任务，见 produce.running 幂等锁）。
+	StartRenderJob(projectID, kind string) error
+	FinishRenderJob(projectID, status, outputPath, errMsg string) error
+	ListRenderJobs(projectID string) ([]RenderJobRow, error)
 	Kind() string
 }
 
@@ -161,8 +180,39 @@ func (s *pgStore) ListProjects() ([]ProjectRow, error) {
 	return rows, err
 }
 
-func (s *pgStore) SaveMsg(m *Msg) error {
-	uuid, err := s.findUUID(m.ProjectID)
+func (s *pgStore) StartRenderJob(projectID, kind string) error {
+	uuid, err := s.findUUID(projectID)
+	if err != nil {
+		return err
+	}
+	payload, _ := json.Marshal(map[string]string{"kind": kind})
+	return s.db.Exec(`INSERT INTO render_jobs (project_id, quality, status, payload, started_at)
+		VALUES (?, 'draft', 'running', ?::jsonb, now())`, uuid, string(payload)).Error
+}
+
+func (s *pgStore) FinishRenderJob(projectID, status, outputPath, errMsg string) error {
+	uuid, err := s.findUUID(projectID)
+	if err != nil {
+		return err
+	}
+	return s.db.Exec(`UPDATE render_jobs SET status = ?, output_path = NULLIF(?, ''), error = NULLIF(?, ''), finished_at = now()
+		WHERE id = (SELECT max(id) FROM render_jobs WHERE project_id = ? AND status = 'running')`,
+		status, outputPath, errMsg, uuid).Error
+}
+
+func (s *pgStore) ListRenderJobs(projectID string) ([]RenderJobRow, error) {
+	uuid, err := s.findUUID(projectID)
+	if err != nil {
+		return nil, err
+	}
+	var rows []RenderJobRow
+	err = s.db.Table("render_jobs").
+		Select("id, payload->>'kind' AS kind, status, output_path, error, started_at, finished_at").
+		Where("project_id = ?", uuid).Order("id DESC").Limit(50).Scan(&rows).Error
+	return rows, err
+}
+
+func (s *pgStore) SaveMsg(m *Msg) error {	uuid, err := s.findUUID(m.ProjectID)
 	if err != nil {
 		return err
 	}
@@ -193,6 +243,8 @@ type memStore struct {
 	mu       sync.Mutex
 	projects []ProjectRow
 	msgs     []Msg
+	jobs     []RenderJobRow
+	jobSeq   int64
 	seq      int64
 }
 
@@ -243,6 +295,39 @@ func (s *memStore) SaveMsg(m *Msg) error {
 	}
 	s.msgs = append(s.msgs, *m)
 	return nil
+}
+
+func (s *memStore) StartRenderJob(projectID, kind string) error {
+	s.mu.Lock(); defer s.mu.Unlock()
+	s.jobSeq++
+	s.jobs = append(s.jobs, RenderJobRow{ID: s.jobSeq, ProjectID: projectID, Kind: kind, Status: "running", StartedAt: time.Now()})
+	return nil
+}
+
+func (s *memStore) FinishRenderJob(projectID, status, outputPath, errMsg string) error {
+	s.mu.Lock(); defer s.mu.Unlock()
+	for i := len(s.jobs) - 1; i >= 0; i-- {
+		if s.jobs[i].ProjectID == projectID && s.jobs[i].Status == "running" {
+			s.jobs[i].Status = status
+			s.jobs[i].OutputPath = outputPath
+			s.jobs[i].Error = errMsg
+			now := time.Now()
+			s.jobs[i].FinishedAt = &now
+			return nil
+		}
+	}
+	return nil // 无 running 行（起跑未记账）：manifest 是事实源，不虚报
+}
+
+func (s *memStore) ListRenderJobs(projectID string) ([]RenderJobRow, error) {
+	s.mu.Lock(); defer s.mu.Unlock()
+	var out []RenderJobRow
+	for i := len(s.jobs) - 1; i >= 0; i-- { // 新在前，与 PG 的 id DESC 同序
+		if s.jobs[i].ProjectID == projectID {
+			out = append(out, s.jobs[i])
+		}
+	}
+	return out, nil
 }
 
 func (s *memStore) ListMsgs(projectID string, afterID int64, limit int) ([]Msg, error) {
