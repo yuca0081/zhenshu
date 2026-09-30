@@ -222,6 +222,7 @@ v1 冗杂的根源不是仓库选址,是增长方式——把"能力增长"做�
 - frameqa:specHasScene 改查帧 HTML `<canvas`;revealPlan(提前穿帮对照)随 spec 消亡暂时降级,M0'-b 从时间轴恢复;契约漂移测试 TestSceneCodeMaxMatchesPython 退役;删除 `ai/render_spec.py`(1198 行)。
 - **首跑验收(SCENE_SURVIVAL=1,glm-5.3-flash)**:sceneGen 直写 10/10 段全过契约 lint 并渲出、画面非空,**确定性回放门禁 PASS**,全链 8.3 分钟。首跑修出一个真 bug:flash 模型在 JSON 前吐标签词 → provider 加 extractJSON 括号配平容错榜取(纯 JSON 恒等,全链路受益)+ 输出指令收紧(e438790)。环境:.env / npm-cache(425M)自 v1 复制。
 - 验证:`go build`+`go vet`+produce/contract/pipeline/llm 单测全绿;scene_lint 自检+金样例绿;assemble.py 冒烟七项绿。
+- **bake-off 第一场(2026-09-30,圆形监狱·解说版,8 段/104s,v1 项目 p20260928-150052 同题)**:v2 全链 PASS(sceneGen→check 含探针→render→stitch(BGM/后期/sfx)→frameQA),总耗时 14.6 分钟,41 次 LLM 调用/43.0 万 tokens(glm-5.3-flash)。成片 data/projects/bakeoff01/renders/main.mp4。七轮迭代收敛(每轮修一类真问题):JSON 前置垃圾词(extractJSON)→字幕短语堆叠 overlap(叶子级 allow-overlap/allow-occlusion)→F4 死锁(降为指导)→CSS transform/GSAP 混用(T9)→坏 JS 语法(J1 node --check)→HUD 撞角标区(保留区规则)。v1 基线同题成片对照观看;两版观感:风格一致性/完整度持平,v1 更均匀但更模板,v2 更野(个别段更有味/个别更糙),题材恰在 v1 引擎主场,v2 优势区(参数化装置)未发挥——第二场换图形装置类题材再比。
 - **未做**(M0'-b 起):design 独立阶段(现用 style_samples 皮肤做临时设计系统)、TTS 并行化+frac 比例时序、vendor 目录、同题 bake-off(质量评分,不止成活率)。阶段名(style_samples/compositions)未改——外部契约(web stageOrder/agent/m0)稳定优先,改名随 design 阶段一起做。
 
 
