@@ -156,10 +156,11 @@ func (r *Runner) reviewSegments(ctx context.Context, p *pipeline.Project, only s
 			return
 		}
 		var vd frameVerdict
-		_, rerr := prov.GenerateJSONVision(ctx,
+		// high：逐段审查调用量大，max 的深思考成本×段数不划算；max 留给 storyboard 这类每片一次的深规划
+		_, rerr := prov.GenerateJSONVisionEffort(ctx,
 			"你是科普视频的画面质检员，只输出 JSON。",
 			reviewPrompt(p, seg, voices[seg.ID]),
-			[]string{dataURL(sf.first), dataURL(sf.open), dataURL(sf.last), dataURL(sf.final)}, 0.2, &vd)
+			[]string{dataURL(sf.first), dataURL(sf.open), dataURL(sf.last), dataURL(sf.final)}, 0.2, &vd, llm.EffortHigh)
 		if rerr != nil {
 			r.Manifest(p, "frameqa.review_error", seg.ID+": "+rerr.Error())
 			return

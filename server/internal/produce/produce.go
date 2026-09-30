@@ -927,7 +927,8 @@ func (r *Runner) translateSubtitles(ctx context.Context, p *pipeline.Project) er
 	system := "你是视频字幕翻译器，只输出 JSON。把中文字幕短语翻成英文短句：字幕风格（短、口语、不逐字）、专有名词准确、每条独立成句不加引号。"
 	user := "把下面每段的中文字幕短语翻译成英文，输出同构 JSON：[{\"id\":\"segXX\",\"phrases\":[\"英文短语\", …]}]，段顺序与短语顺序必须与输入完全一致。\n\n" + pipeline.MustJSON(jobs)
 	var out []segJob
-	if _, err := prov.GenerateJSON(ctx, system, user, &out); err != nil {
+	// low：机械翻译不吃深思考，跟随端点默认（max）是白烧 reasoning token
+	if _, err := prov.GenerateJSONEffort(ctx, system, user, &out, llm.EffortLow); err != nil {
 		return err
 	}
 	got := map[string][]string{}
