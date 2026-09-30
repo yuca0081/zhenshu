@@ -259,6 +259,7 @@ def main(proj_dir: str) -> int:
     <meta charset="UTF-8" />
     <meta name="viewport" content="width={w}, height={h}" />
     <script src="assets/gsap.min.js"></script>
+    <script src="assets/hf.js"></script>
 {katex_head}    <style>
       * {{ margin: 0; padding: 0; box-sizing: border-box; }}
       html, body {{ width: {w}px; height: {h}px; overflow: hidden; background: #000; }}
@@ -321,6 +322,10 @@ def main(proj_dir: str) -> int:
     (proj / 'assets').mkdir(exist_ok=True)
     if not (proj / 'assets' / 'gsap.min.js').exists():
         shutil.copy(GSAP_SRC, proj / 'assets' / 'gsap.min.js')
+    # hf.js 守卫层随仓库升级：无条件覆盖（gsap 是三方固定版本，策略不同）
+    HF_SRC = AI_DIR / 'assets' / 'hf.js'
+    if HF_SRC.exists():
+        shutil.copyfile(HF_SRC, proj / 'assets' / 'hf.js')
     katex_src = AI_DIR / 'assets' / 'katex'
     if katex_src.exists() and not (proj / 'assets' / 'katex').exists():
         shutil.copytree(katex_src, proj / 'assets' / 'katex')

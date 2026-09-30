@@ -76,6 +76,8 @@ function shellDoc(frag: string): string {
     '<!doctype html><html><head><meta charset="utf-8">' +
     '<base href="' + base + '">' + katex +
     '<script src="' + gsap + '"><\/script>' +
+    // hf 守卫层与渲染工程同源同版本；旧项目 assets 无此文件仅 404 静默，不影响裸 gsap 画面
+    '<script src="' + assetURL(props.videoId, 'hf.js') + '"><\/script>' +
     '<style>' +
     'html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden}' +
     // 引擎同款 clip 语义：带 data-start/duration 的是绝对定位图层。皮肤自由 CSS 里的

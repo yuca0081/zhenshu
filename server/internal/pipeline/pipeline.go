@@ -1887,12 +1887,22 @@ func compRequest(p *Project, seg contract.Segment, direction, out string) string
 ## HyperFrames 硬规则（违反会被 lint 拒收）
 1. 整个文件就是一个 <template>…</template> 片段，无 DOCTYPE/html/head/body
 2. 根元素 data-composition-id="%s"；样式作用于根用 #root，不要给根加 class
-3. 恰好一个 gsap.timeline({{paused:true}}) 注册到 window.__timelines["%s"]
-4. 每个可见元素给 data-start / data-duration / data-track-index 与 class="clip"
-5. 确定性：无网络、无 Date.now、无 Math.random、无 CSS transition/repeat/yoyo
-6. 字体只用本地资产或系统楷体；不引任何外链
-7. 揭示随旁白时间点分布（不前载）；字幕带占底部 ~17%%，主内容留在上 83%%
-8. 元素命名规范（平台门禁）：每个有意义的可见元素带
+3. 恰好一个时间轴，用守卫 API 创建（内部即 paused 并注册 window.__timelines）：var tl = hf.timeline("%s");
+4. 动画一律走 hf 守卫 API，白名单外的属性会被 hf 当场拒绝并给出替代建议：
+   - hf.set(tl, 选择器, 属性表, 时刻) — 定格初值；hf.tween(tl, 选择器, {属性 + duration + ease}, 时刻)
+   - hf.fromTo(tl, 选择器, {起始}, {结束 + duration}, 时刻)
+   - 可补间属性只有 opacity / x / y / scale / scaleX / scaleY / rotation / skew 系（transform 合成器属性）。
+     letterSpacing、width、height、fontSize、top、left 等排版布局属性禁止补间——
+     字距展开拆成单字元素动 x，宽度增长用 scaleX，字号变化用 scale。
+   - canvas / 程序化动画：hf.eachFrame(tl, 时长秒, function(t){ draw(t); }) —
+     draw 必须是 t 的纯函数；随机数用固定种子每帧重生成，seek 到任意时刻画面可复现。
+   - 数字滚动（读数/统计跳变）：hf.count(tl, 元素, 起值, 止值, 时刻, 时长, 格式函数)
+   - 画面脚本里不直接调用 gsap（hf 内部已封装；引擎对裸 gsap 的违规属性仍会拦截）
+5. 每个可见元素给 data-start / data-duration / data-track-index 与 class="clip"
+6. 确定性：无网络、无 Date.now、无 Math.random、无 CSS transition/repeat/yoyo
+7. 字体只用本地资产或系统楷体；不引任何外链；字体栈里出现的每个字体都要有 @font-face（系统字体用 src:local 声明）
+8. 揭示随旁白时间点分布（不前载）；字幕带占底部 ~17%%，主内容留在上 83%%
+9. 元素命名规范（平台门禁）：每个有意义的可见元素带
    data-hf-name="人话名"（如 data-hf-name="箭头：蓝光弹开"）
 
 ## 输出要求
