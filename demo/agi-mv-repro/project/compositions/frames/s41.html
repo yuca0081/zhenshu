@@ -1,0 +1,53 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s41" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s41-track" class="clip" data-start="0" data-duration="5.400" data-track-index="0" data-hf-name="主轨"><div id="s41-e1" data-layout-allow-overflow data-hf-name="底" style="position:absolute;inset:0;background:#030303;"></div>
+    <div id="s41-e2" data-layout-allow-overflow data-hf-name="闪" style="position:absolute;top:390px;left:0;width:1920px;text-align:center;font:200 150px/1 'Segoe UI',Arial,sans-serif;color:#F4F1EA;letter-spacing:6px;opacity:0;">1.00</div>
+    <div id="s41-e3" data-layout-allow-overflow data-hf-name="IM" style="position:absolute;top:330px;left:220px;font:700 96px/1.3 'Segoe UI',Arial,sans-serif;color:#F4F1EA;opacity:0;">I&rsquo;m</div>
+    <div id="s41-e4" data-layout-allow-overflow data-hf-name="UPPING2" style="position:absolute;top:330px;left:220px;font:700 96px/1.3 'Segoe UI',Arial,sans-serif;color:#F4F1EA;opacity:0;">I&rsquo;m upping my</div>
+    <div id="s41-e5" data-layout-allow-overflow data-hf-name="PDOOM2" style="position:absolute;top:470px;left:215px;font:400 150px/1 Georgia,'Times New Roman',serif;color:#FF3B20;text-shadow:0 0 40px rgba(255,59,32,.45);opacity:0;">P(doom)</div>
+    <canvas width="1920" height="1080" id="s41-e6" data-layout-allow-overflow data-hf-name="无穷" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s41-e7" data-layout-allow-overflow data-hf-name="NAN" style="position:absolute;top:470px;left:900px;font:400 150px/1 Georgia,'Times New Roman',serif;color:#F4F1EA;opacity:0;">NaN</div>
+    <div id="s41-e8" data-layout-allow-overflow data-hf-name="注" style="position:absolute;top:680px;left:220px;font:14px/1.6 Consolas,'Courier New',monospace;color:#57534B;opacity:0;">&sup1; estimate no longer defined<br>(1) upper bound exceeded</div>
+    <div id="s41-e9" data-layout-allow-overflow data-hf-name="式号" style="position:absolute;top:505px;left:1420px;font:15px/1 Consolas,'Courier New',monospace;color:#57534B;opacity:0;">(1)</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      tl.to("#s41-e2",{opacity:.9,duration:.1},0.20);tl.to("#s41-e2",{opacity:0,duration:.4},0.60);
+      tl.to("#s41-e3",{opacity:1,duration:.15,ease:"none"},1.0);
+      tl.to("#s41-e3",{opacity:0,duration:.15,ease:"none"},1.4);
+      tl.to("#s41-e4",{opacity:1,duration:.15,ease:"none"},1.5);
+      tl.to("#s41-e5",{opacity:1,duration:.2,ease:"none"},2.1);
+      var cx=document.getElementById("s41-e6").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);
+if(t>2.6){var k=Math.min(1,(t-2.6)/0.8);
+  var fade=1-Math.min(1,Math.max(0,(t-4.05)/0.3));
+  cx.save();cx.translate(1000,545);cx.scale(0.9,0.9);
+  cx.strokeStyle='rgba(255,110,40,'+(0.95*fade)+')';cx.lineWidth=7;
+  cx.shadowColor='rgba(255,110,40,.8)';cx.shadowBlur=22*fade;
+  cx.beginPath();
+  var i,n=70,drawn=Math.floor(n*k);
+  for(i=0;i<=drawn;i++){var q=i/n;
+    var a=q*Math.PI*2;
+    var x=210*Math.cos(a)/(1+Math.sin(a)*Math.sin(a));
+    var y=210*Math.sin(a)*Math.cos(a)/(1+Math.sin(a)*Math.sin(a));
+    if(i==0)cx.moveTo(x,y);else cx.lineTo(x,y);}
+  cx.stroke();cx.shadowBlur=0;cx.restore();}
+};var pxv={v:0};tl.to(pxv,{v:5.400,duration:5.400,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s41-e7",{opacity:0,x:-6});tl.to("#s41-e7",{opacity:1,x:0,duration:.09,ease:"none"},4.05);tl.to("#s41-e7",{x:6,opacity:.4,duration:.05,ease:"none"},4.18);tl.to("#s41-e7",{x:0,opacity:1,duration:.05,ease:"none"},4.23);
+      tl.to("#s41-e8",{opacity:1,duration:.3,ease:"none"},4.4);
+      tl.to("#s41-e9",{opacity:1,duration:.2,ease:"none"},3.4);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 5.350);
+      window.__timelines["s41"] = tl;
+    })();
+  </script>
+</template>

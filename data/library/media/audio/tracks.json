@@ -1,0 +1,56 @@
+[
+ {
+  "name": "calm",
+  "file": "calm.mp3",
+  "duration": 48.0,
+  "mood": "温暖平静的和弦垫——通用科普/叙事，默认推荐"
+ },
+ {
+  "name": "bright",
+  "file": "bright.mp3",
+  "duration": 32.0,
+  "mood": "明快轻亮带琶音——产品介绍/轻松话题/新事物"
+ },
+ {
+  "name": "deep",
+  "file": "deep.mp3",
+  "duration": 48.0,
+  "mood": "低沉深邃的暗色垫——科技/悬疑/硬核知识"
+ },
+ {
+  "name": "epic",
+  "file": "epic.mp3",
+  "duration": 64.0,
+  "mood": "小调史诗推进（低音沉重和弦进行）——历史/战争/宏大叙事/星球宇宙"
+ },
+ {
+  "name": "mysterious",
+  "file": "mysterious.mp3",
+  "duration": 56.0,
+  "mood": "神秘悬浮暗垫（减和弦色彩）——谜题/未解之谜/心理/暗黑题材"
+ },
+ {
+  "name": "warm",
+  "file": "warm.mp3",
+  "duration": 40.0,
+  "mood": "温暖人文大调慢琶音——人物故事/传记/教育/公益"
+ },
+ {
+  "name": "melancholy",
+  "file": "melancholy.mp3",
+  "duration": 48.0,
+  "mood": "悲情小调慢垫（Am 空和声）——离别/灾难/悲伤叙事/悼念"
+ },
+ {
+  "name": "upbeat",
+  "file": "upbeat.mp3",
+  "duration": 24.0,
+  "mood": "欢快大调快琶音——美食/生活/旅行/萌宠/开箱"
+ },
+ {
+  "name": "nostalgic",
+  "file": "nostalgic.mp3",
+  "duration": 44.0,
+  "mood": "怀旧暖色七和弦——历史回顾/老照片/人物回忆/时代变迁"
+ }
+]

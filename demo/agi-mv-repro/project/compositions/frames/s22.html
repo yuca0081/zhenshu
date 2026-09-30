@@ -1,0 +1,60 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s22" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s22-track" class="clip" data-start="0" data-duration="3.500" data-track-index="0" data-hf-name="主轨"><canvas width="1920" height="1080" id="s22-e1" data-layout-allow-overflow data-hf-name="地形光柱" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s22-e2" data-layout-allow-overflow data-hf-name="SHARP" style="position:absolute;top:700px;left:760px;font:900 64px/1 'Arial Black','Segoe UI',sans-serif;color:#FF4D0D;text-shadow:0 0 24px rgba(255,77,13,.6);transform:rotate(-4deg);opacity:0;">SHARP</div>
+    <div id="s22-e3" data-layout-allow-overflow data-hf-name="SRR" style="position:absolute;top:790px;left:920px;font:800 30px/1 Consolas,'Courier New',monospace;color:#F4F1EA;opacity:0;">SRR · PDR</div>
+    <div id="s22-e4" data-layout-allow-overflow data-hf-name="圆环" style="position:absolute;top:190px;left:980px;width:480px;height:480px;border-radius:50%;border:2px solid rgba(255,255,255,.35);box-shadow:0 0 60px rgba(255,255,255,.08),inset 0 0 60px rgba(255,255,255,.05);opacity:0;"></div>
+    <div id="s22-e5" data-layout-allow-overflow data-hf-name="笑脸" style="position:absolute;top:270px;left:1060px;width:320px;height:320px;"><div style="position:absolute;inset:0;border-radius:50%;background:#F4F1EA;box-shadow:0 6px 40px rgba(0,0,0,.5);"></div><div style="position:absolute;left:27%;top:34%;width:9%;height:16%;border-radius:50%;background:#1A1815;"></div><div style="position:absolute;right:27%;top:34%;width:9%;height:16%;border-radius:50%;background:#1A1815;"></div><div style="position:absolute;left:26%;top:56%;width:48%;height:30%;border:solid #1A1815;border-width:0 0 7px 0;border-radius:0 0 90px 90px;"></div></div>
+    <div id="s22-e6" data-layout-allow-overflow data-hf-name="THERE" style="position:absolute;top:330px;left:1140px;font:900 76px/1 'Arial Black','Segoe UI',sans-serif;color:#FF4D0D;opacity:0;">THERE</div>
+    <div id="s22-e7" data-layout-allow-overflow data-hf-name="YOUARE" style="position:absolute;top:260px;left:1150px;font:900 64px/1.1 'Arial Black','Segoe UI',sans-serif;color:#F4F1EA;opacity:0;">YOU<br>ARE</div>
+    <div id="s22-e8" data-layout-allow-overflow data-hf-name="箭头" style="position:absolute;top:400px;right:80px;font:800 30px/1.6 Consolas,'Courier New',monospace;color:#F4F1EA;opacity:0;text-align:right;">TURN<br>←&nbsp;LEFT<br>SHARP</div>
+    <div id="s22-e9" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+    <div id="s22-e10" data-layout-allow-overflow data-hf-name="扫描纹" style="position:absolute;inset:0;pointer-events:none;opacity:.5;background:repeating-linear-gradient(0deg,rgba(255,255,255,.02) 0 1px,transparent 1px 3px);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s22-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+cx.save();cx.translate(300,240);cx.scale(1.9,1.9);
+var i,j;for(i=0;i<12;i++){cx.strokeStyle='rgba(190,185,178,'+(0.22-0.014*i)+')';cx.lineWidth=1;
+  cx.beginPath();
+  for(j=0;j<=60;j++){var a=j/60*Math.PI*2;
+    var r=(40+i*44)*(1+0.2*Math.sin(a*2.2+i*1.1));
+    var x=r*Math.cos(a),y=r*Math.sin(a)*0.7;
+    if(j==0)cx.moveTo(x,y);else cx.lineTo(x,y);}
+  cx.closePath();cx.stroke();}
+cx.restore();
+var k=Math.min(1,t/0.5);
+cx.strokeStyle='rgba(255,120,40,.95)';cx.lineWidth=6;
+cx.shadowColor='rgba(255,110,40,.9)';cx.shadowBlur=26;
+cx.beginPath();cx.moveTo(880,880);cx.lineTo(880,880-560*k);cx.stroke();
+var rip=Math.max(0,1-t/2.4);
+if(rip>0){cx.globalAlpha=rip;
+  cx.beginPath();cx.ellipse(880,880,150*(t*2%1)+60,36*(t*2%1)+14,0,0,Math.PI*2);cx.stroke();
+  cx.globalAlpha=1;}
+cx.shadowBlur=0;
+cx.fillStyle='rgba(255,255,255,.5)';cx.font='14px Consolas';
+cx.fillText('SAN ANTONIO ± 500 M',820,930);
+};var pxv={v:0};tl.to(pxv,{v:3.500,duration:3.500,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      tl.to("#s22-e2",{opacity:1,duration:.15,ease:"none"},.5);
+      tl.to("#s22-e3",{opacity:1,duration:.15,ease:"none"},.8);
+      gsap.set("#s22-e4",{opacity:0});tl.to("#s22-e4",{opacity:1,duration:0.4,ease:"none"},1.40);
+      gsap.set("#s22-e5",{opacity:0});tl.to("#s22-e5",{opacity:1,duration:0.4,ease:"none"},1.70);
+      gsap.set("#s22-e6",{scale:1.4,opacity:0});tl.to("#s22-e6",{opacity:1,duration:.06,ease:"none"},1.90);tl.to("#s22-e6",{scale:1,duration:0.25,ease:"power3.out"},1.90);
+      gsap.set("#s22-e7",{scale:1.4,opacity:0});tl.to("#s22-e7",{opacity:1,duration:.06,ease:"none"},2.30);tl.to("#s22-e7",{scale:1,duration:0.25,ease:"power3.out"},2.30);
+      gsap.set("#s22-e8",{opacity:0});tl.to("#s22-e8",{opacity:1,duration:0.3,ease:"none"},2.70);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 3.450);
+      window.__timelines["s22"] = tl;
+    })();
+  </script>
+</template>

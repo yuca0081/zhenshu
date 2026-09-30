@@ -1,0 +1,69 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s03" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s03-track" class="clip" data-start="0" data-duration="4.000" data-track-index="0" data-hf-name="主轨"><canvas width="1920" height="1080" id="s03-e1" data-layout-allow-overflow data-hf-name="曲线画布" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s03-e2" data-layout-allow-overflow data-hf-name="词" style="position:absolute;top:210px;left:180px;font:800 82px/1.15 'Segoe UI',Arial,sans-serif;color:#F4F1EA;white-space:nowrap;"><span data-c style="display:inline-block;">T</span><span data-c style="display:inline-block;">h</span><span data-c style="display:inline-block;">e</span><span data-c style="display:inline-block;">r</span><span data-c style="display:inline-block;">e</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">w</span><span data-c style="display:inline-block;">a</span><span data-c style="display:inline-block;">s</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">a</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;color:#FF4D0D;">s</span><span data-c style="display:inline-block;color:#FF4D0D;">u</span><span data-c style="display:inline-block;color:#FF4D0D;">d</span><span data-c style="display:inline-block;color:#FF4D0D;">d</span><span data-c style="display:inline-block;color:#FF4D0D;">e</span><span data-c style="display:inline-block;color:#FF4D0D;">n</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">d</span><span data-c style="display:inline-block;">r</span><span data-c style="display:inline-block;">o</span><span data-c style="display:inline-block;">p</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">i</span><span data-c style="display:inline-block;">n</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">y</span><span data-c style="display:inline-block;">o</span><span data-c style="display:inline-block;">u</span><span data-c style="display:inline-block;">r</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">t</span><span data-c style="display:inline-block;">r</span><span data-c style="display:inline-block;">a</span><span data-c style="display:inline-block;">i</span><span data-c style="display:inline-block;">n</span><span data-c style="display:inline-block;">i</span><span data-c style="display:inline-block;">n</span><span data-c style="display:inline-block;">g</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">l</span><span data-c style="display:inline-block;">o</span><span data-c style="display:inline-block;">s</span><span data-c style="display:inline-block;">s</span></div>
+    <div id="s03-e3" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+    <div id="s03-e4" data-layout-allow-overflow data-hf-name="扫描纹" style="position:absolute;inset:0;pointer-events:none;opacity:.5;background:repeating-linear-gradient(0deg,rgba(255,255,255,.02) 0 1px,transparent 1px 3px);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s03-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+cx.font='14px Consolas';
+if(t<2.6){
+  cx.strokeStyle='rgba(255,255,255,.35)';cx.lineWidth=2;
+  cx.beginPath();cx.moveTo(260,300);cx.lineTo(260,860);cx.lineTo(1700,860);cx.stroke();
+  cx.fillStyle='rgba(255,255,255,.45)';
+  cx.fillText('log L',150,320);cx.fillText('steps →',1600,900);
+  var i,n=90;
+  cx.strokeStyle='rgba(255,110,40,.9)';cx.lineWidth=2.6;
+  cx.shadowColor='rgba(255,110,40,.8)';cx.shadowBlur=12;
+  cx.beginPath();
+  var drawn=Math.floor(n*Math.min(1,t/2.2));
+  for(i=0;i<=drawn;i++){var q=i/n;
+    var x=260+q*1400;
+    var y=310+ (1-Math.pow(1-q,2.2))*470 + 14*Math.sin(q*22)+10*hsh(i)-5;
+    if(i==0)cx.moveTo(x,y);else cx.lineTo(x,y);}
+  cx.stroke();
+  if(drawn>0&&drawn<n){var q2=drawn/n;var x2=260+q2*1400;
+    var y2=310+(1-Math.pow(1-q2,2.2))*470+14*Math.sin(q2*22);
+    cx.fillStyle='#FFC08A';cx.beginPath();cx.arc(x2,y2,6,0,Math.PI*2);cx.fill();}
+  cx.shadowBlur=0;
+}else{
+  var k=(t-2.6)/1.0;
+  cx.save();cx.translate(960,540);cx.scale(1+0.2*k,1+0.2*k);cx.rotate(0.06*k);
+  var i,j;
+  for(i=0;i<16;i++){cx.strokeStyle='rgba(200,195,188,'+(0.30-0.012*i)+')';cx.lineWidth=1.2;
+    cx.beginPath();
+    for(j=0;j<=64;j++){var a=j/64*Math.PI*2;
+      var r=(38+i*34)*(1+0.16*Math.sin(a*3+i*1.7)+0.1*Math.sin(a*5-i));
+      var x=r*Math.cos(a)*1.9,y=r*Math.sin(a);
+      if(j==0)cx.moveTo(x,y);else cx.lineTo(x,y);}
+    cx.closePath();cx.stroke();}
+  cx.restore();
+  cx.strokeStyle='rgba(255,110,40,.85)';cx.lineWidth=2.4;
+  cx.shadowColor='rgba(255,110,40,.9)';cx.shadowBlur=14;
+  cx.beginPath();
+  var i3;for(i3=0;i3<=50;i3++){var q3=i3/50;
+    var x3=100+q3*1750;
+    var y3=760-240*q3+90*Math.sin(q3*9+t*2.4)+26*(hsh(i3+Math.floor(t))-0.5);
+    if(i3==0)cx.moveTo(x3,y3);else cx.lineTo(x3,y3);}
+  cx.stroke();cx.shadowBlur=0;
+}
+};var pxv={v:0};tl.to(pxv,{v:4.000,duration:4.000,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s03-e2 [data-c]",{opacity:0,y:36});tl.to("#s03-e2 [data-c]",{opacity:1,y:0,duration:0.5,stagger:0.06,ease:"power2.out"},0.56);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 3.950);
+      window.__timelines["s03"] = tl;
+    })();
+  </script>
+</template>

@@ -1,0 +1,38 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s07" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s07-track" class="clip" data-start="0" data-duration="1.700" data-track-index="0" data-hf-name="主轨"><div id="s07-e2" data-layout-allow-overflow data-hf-name="纸底" style="position:absolute;inset:0;background:#ECE8DF;background-image:repeating-linear-gradient(0deg,rgba(60,50,30,.05) 0 1px,transparent 1px 4px);"></div>
+    <canvas width="1920" height="1080" id="s07-e1" data-layout-allow-overflow data-hf-name="虫群" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s07-e3" data-layout-allow-overflow data-hf-name="MY" style="position:absolute;top:170px;left:0;width:1920px;text-align:center;font:900 430px/1 'Arial Black','Segoe UI',sans-serif;letter-spacing:10px;color:#14120F;">MY</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s07-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+cx.globalAlpha=.85;
+var i;for(i=0;i<220;i++){
+  var bx=960+1400*(hsh(i)-.5)+60*Math.sin(t*2+hsh(i*7)*9);
+  var by=880+240*(hsh(i*3)-.5)+50*Math.sin(t*3.1+i);
+  cx.fillStyle='rgba(20,17,14,.9)';
+  var a=hsh(i*11)*Math.PI*2;
+  cx.save();cx.translate(bx,by);cx.rotate(a);
+  cx.fillRect(-4,-1.5,8,3);cx.fillRect(-2,-5,4,4);cx.fillRect(-2,1,4,4);
+  cx.restore();}
+cx.globalAlpha=1;
+};var pxv={v:0};tl.to(pxv,{v:1.700,duration:1.700,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s07-e3",{scale:1.5,opacity:0});tl.to("#s07-e3",{opacity:1,duration:.06,ease:"none"},0.18);tl.to("#s07-e3",{scale:1,duration:0.3,ease:"power3.out"},0.18);
+      tl.to("#s07-e3",{x:12,duration:.05,ease:"power1.inOut"},0.500);tl.to("#s07-e3",{x:-8,duration:.05,ease:"power1.inOut"},0.555);tl.to("#s07-e3",{x:4,duration:.05,ease:"power1.inOut"},0.610);tl.set("#s07-e3",{x:0},0.665);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 1.650);
+      window.__timelines["s07"] = tl;
+    })();
+  </script>
+</template>

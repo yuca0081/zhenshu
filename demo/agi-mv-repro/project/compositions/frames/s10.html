@@ -1,0 +1,73 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s10" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s10-track" class="clip" data-start="0" data-duration="7.600" data-track-index="0" data-hf-name="主轨"><canvas width="1920" height="1080" id="s10-e1" data-layout-allow-overflow data-hf-name="触手" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s10-e2" data-layout-allow-overflow data-hf-name="看穿" style="position:absolute;top:430px;left:170px;font:400 54px/1.2 Georgia,'Times New Roman',serif;color:#F4F1EA;white-space:nowrap;"><span data-c style="display:inline-block;">s</span><span data-c style="display:inline-block;">e</span><span data-c style="display:inline-block;">e</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;color:#FF4D0D;">t</span><span data-c style="display:inline-block;color:#FF4D0D;">h</span><span data-c style="display:inline-block;color:#FF4D0D;">r</span><span data-c style="display:inline-block;color:#FF4D0D;">o</span><span data-c style="display:inline-block;color:#FF4D0D;">u</span><span data-c style="display:inline-block;color:#FF4D0D;">g</span><span data-c style="display:inline-block;color:#FF4D0D;">h</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">t</span><span data-c style="display:inline-block;">h</span><span data-c style="display:inline-block;">e</span></div>
+    <div id="s10-e3" data-layout-allow-overflow data-hf-name="笑脸" style="position:absolute;top:260px;left:260px;width:440px;height:440px;"><div style="position:absolute;inset:0;border-radius:50%;background:#F4F1EA;box-shadow:0 6px 40px rgba(0,0,0,.5);"></div><div style="position:absolute;left:27%;top:34%;width:9%;height:16%;border-radius:50%;background:#1A1815;"></div><div style="position:absolute;right:27%;top:34%;width:9%;height:16%;border-radius:50%;background:#1A1815;"></div><div style="position:absolute;left:26%;top:56%;width:48%;height:30%;border:solid #1A1815;border-width:0 0 7px 0;border-radius:0 0 90px 90px;"></div></div>
+    <div id="s10-e4" data-layout-allow-overflow data-hf-name="SHOGGOTHS" style="position:absolute;top:430px;left:330px;font:900 96px/1.2 'Segoe UI',Arial,sans-serif;color:#F4F1EA;letter-spacing:2px;text-shadow:0 4px 26px rgba(0,0,0,.8);white-space:nowrap;">SHOGGOTH'S</div>
+    <div id="s10-e5" data-layout-allow-overflow data-hf-name="LIES" style="position:absolute;top:540px;left:330px;font:900 96px/1.2 'Segoe UI',Arial,sans-serif;color:#FF4D0D;letter-spacing:2px;text-shadow:0 0 30px rgba(255,77,13,.6);white-space:nowrap;">LIES,</div>
+    <div id="s10-e6" data-layout-allow-overflow data-hf-name="标签0" style="position:absolute;top:300px;left:120px;font:800 52px/1 'Segoe UI',Arial,sans-serif;color:#F4F1EA;letter-spacing:3px;">WITH</div>
+    <div id="s10-e7" data-layout-allow-overflow data-hf-name="标签1" style="position:absolute;top:370px;left:120px;font:800 52px/1 'Segoe UI',Arial,sans-serif;color:#F4F1EA;letter-spacing:3px;">YOUR</div>
+    <div id="s10-e8" data-layout-allow-overflow data-hf-name="标签2" style="position:absolute;top:440px;left:120px;font:800 52px/1 'Segoe UI',Arial,sans-serif;color:#F4F1EA;letter-spacing:3px;">SHINIGAMI</div>
+    <div id="s10-e9" data-layout-allow-overflow data-hf-name="标签3" style="position:absolute;top:510px;left:120px;font:800 52px/1 'Segoe UI',Arial,sans-serif;color:#FF4D0D;letter-spacing:3px;text-shadow:0 0 26px rgba(255,77,13,.7);">EYES</div>
+    <div id="s10-e10" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+    <div id="s10-e11" data-layout-allow-overflow data-hf-name="扫描纹" style="position:absolute;inset:0;pointer-events:none;opacity:.5;background:repeating-linear-gradient(0deg,rgba(255,255,255,.02) 0 1px,transparent 1px 3px);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s10-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+var cxr=1230,cyr=560,i,j;
+if(t>2.2){
+  var k=Math.min(1,(t-2.2)/1.2);
+  for(i=0;i<11;i++){
+    var baseA=(i/11)*Math.PI*2+hsh(i)*0.7;
+    cx.strokeStyle='rgba(120,115,108,'+(0.55*k)+')';
+    cx.lineWidth=26-16*(i%3)/2;
+    cx.beginPath();
+    var px2=cxr,py2=cyr,aa=baseA;
+    cx.moveTo(px2,py2);
+    for(j=1;j<=7;j++){aa+=0.22*Math.sin(t*1.6+i*1.3+j*0.9);
+      var seg=42+18*hsh(i*9+j);
+      px2+=Math.cos(aa)*seg;py2+=Math.sin(aa)*seg;
+      cx.lineTo(px2,py2);}
+    cx.stroke();
+    cx.fillStyle='rgba(30,28,26,'+0.6*k+')';
+    cx.beginPath();cx.arc(px2,py2,(26-16*(i%3)/2)/1.6,0,Math.PI*2);cx.fill();}}
+var eyes=[[1180,520,26],[1300,470,20],[1250,620,22],[1360,560,16],[1150,640,14],[1330,660,12]];
+if(t>3.2){for(i=0;i<eyes.length;i++){var ek=Math.min(1,(t-3.2-i*0.28)/0.4);
+  if(ek<=0)continue;
+  var e0x=eyes[i][0],e0y=eyes[i][1],e0r=eyes[i][2];
+  var g=cx.createRadialGradient(e0x,e0y,2,e0x,e0y,e0r*2.4);
+  g.addColorStop(0,'rgba(255,150,60,'+(0.95*ek)+')');g.addColorStop(1,'rgba(255,90,20,0)');
+  cx.fillStyle=g;cx.beginPath();cx.arc(e0x,e0y,e0r*2.4,0,Math.PI*2);cx.fill();
+  cx.fillStyle='rgba(255,200,140,'+ek+')';
+  cx.beginPath();cx.arc(e0x,e0y,e0r*0.5,0,Math.PI*2);cx.fill();
+  cx.strokeStyle='rgba(60,55,50,'+ek+')';cx.lineWidth=2;
+  cx.beginPath();cx.arc(e0x,e0y,e0r,0,Math.PI*2);cx.stroke();}}
+cx.fillStyle='rgba(255,255,255,.4)';cx.font='14px Consolas';
+cx.fillText('tentacles: 11',80,980);cx.fillText('eyes: 6',80,1004);
+cx.fillText('0.'+String(15+Math.floor(t*1.7)%80).padStart(2,'0'),80,1030);
+};var pxv={v:0};tl.to(pxv,{v:7.600,duration:7.600,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s10-e2 [data-c]",{opacity:0,y:36});tl.to("#s10-e2 [data-c]",{opacity:1,y:0,duration:0.5,stagger:0.05,ease:"power2.out"},0.35);
+      gsap.set("#s10-e3",{scale:0.2,opacity:0});tl.to("#s10-e3",{scale:1,opacity:1,duration:.5,ease:"power2.out"},.15);tl.to("#s10-e3",{scale:.34,x:760,y:-90,duration:.9,ease:"power2.inOut"},2.1);
+      gsap.set("#s10-e4",{scale:1.3,opacity:0});tl.to("#s10-e4",{opacity:1,duration:.06,ease:"none"},1.61);tl.to("#s10-e4",{scale:1,duration:0.25,ease:"power3.out"},1.61);
+      gsap.set("#s10-e5",{scale:1.3,opacity:0});tl.to("#s10-e5",{opacity:1,duration:.06,ease:"none"},2.05);tl.to("#s10-e5",{scale:1,duration:0.25,ease:"power3.out"},2.05);
+      gsap.set("#s10-e6",{scale:1.2,opacity:0});tl.to("#s10-e6",{opacity:1,duration:.06,ease:"none"},3.60);tl.to("#s10-e6",{scale:1,duration:0.25,ease:"power3.out"},3.60);
+      gsap.set("#s10-e7",{scale:1.2,opacity:0});tl.to("#s10-e7",{opacity:1,duration:.06,ease:"none"},4.15);tl.to("#s10-e7",{scale:1,duration:0.25,ease:"power3.out"},4.15);
+      gsap.set("#s10-e8",{scale:1.2,opacity:0});tl.to("#s10-e8",{opacity:1,duration:.06,ease:"none"},4.70);tl.to("#s10-e8",{scale:1,duration:0.25,ease:"power3.out"},4.70);
+      gsap.set("#s10-e9",{scale:1.2,opacity:0});tl.to("#s10-e9",{opacity:1,duration:.06,ease:"none"},5.25);tl.to("#s10-e9",{scale:1,duration:0.25,ease:"power3.out"},5.25);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 7.550);
+      window.__timelines["s10"] = tl;
+    })();
+  </script>
+</template>

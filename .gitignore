@@ -1,0 +1,69 @@
+# Python / Node 工具链缓存
+.venv/
+npm-cache/
+node_modules/
+__pycache__/
+
+# 平台运行时数据（项目产物/refs/媒体增长物）不入库；渲染引擎源码在 ai/
+# 素材库边界（docs/asset-library.md §8）：registry/模板库/catalog 种子资产追踪；
+# gallery 81MB 可由 element_gallery.py 再生，不入库；media/image 与 refs/ 不追踪。
+data/*
+!data/library/
+data/library/*
+!data/library/registry/
+data/library/registry/gallery/
+!data/library/methods/
+!data/library/media/
+data/library/media/*
+!data/library/media/audio/
+!data/library/templates.json
+!data/library/catalog.json
+
+# OS / 编辑器
+.DS_Store
+Thumbs.db
+*.log
+
+# 环境变量（真实值不入库）
+.env
+
+# 本地构建产物
+bin/
+web/dist/
+
+# 本地成片输出（可从项目 renders 再生）
+videos/
+
+# 3D 验证片渲染产物（不入库）
+demo/aegis3d/renders/
+
+# 多风格验证管线产物（style_test_harness.py 可再生）
+demo/styletest/
+deploy/app-linux
+
+# demo 渲染产物（mp4/抽帧）不入库
+demo/custom-clips/
+demo/selfvideo-frames/
+
+# 本地构建产物（服务二进制）
+server/server.exe
+server/server.exe*
+server/server-test.exe~
+
+# scene 原型闸媒体产物（GATE.md 有复现命令，可再生）
+demo/scene-prototype/*.mp4
+demo/scene-prototype/*.png
+demo/scene-prototype/assets/
+server/m0.exe
+server/server_new.exe
+
+# 根目录临时草稿（分析稿/调参脚本/抽帧/截图，均可再生）
+tmp_*
+
+# AGI MV 复现 demo：脚本+工程源入库；渲染/npm 缓存/分段缓存/歌曲文件不入库
+demo/agi-mv-repro/project/renders/
+demo/agi-mv-repro/project/.hf-seg/
+demo/agi-mv-repro/project/song_full.m4a
+demo/agi-mv-repro/*.wav
+demo/ink-prototype/*.mp4
+demo/ink-prototype/*.png

@@ -1,0 +1,29 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s25" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s25-track" class="clip" data-start="0" data-duration="1.500" data-track-index="0" data-hf-name="主轨"><div id="s25-e1" data-layout-allow-overflow data-hf-name="底" style="position:absolute;inset:0;background:#050404;"></div>
+    <div id="s25-e2" data-layout-allow-overflow data-hf-name="PDOOM" style="position:absolute;top:170px;left:130px;font:16px/1 Consolas,'Courier New',monospace;letter-spacing:4px;color:#F4F1EA;opacity:.8;">P(DOOM)</div>
+    <div id="s25-e3" data-layout-allow-overflow data-hf-name="数值" style="position:absolute;top:280px;left:100px;font:200px/1 'Segoe UI',Arial,sans-serif;font-weight:200;color:transparent;-webkit-text-stroke:2px rgba(244,241,234,.75);letter-spacing:8px;opacity:0;">0.81</div>
+    <div id="s25-e4" data-layout-allow-overflow data-hf-name="线" style="position:absolute;top:600px;left:120px;width:820px;height:2px;background:rgba(244,241,234,.4);transform:scaleX(0);transform-origin:left;"></div>
+    <div id="s25-e5" data-layout-allow-overflow data-hf-name="角" style="position:absolute;bottom:120px;right:130px;font:13px/1.6 Consolas,'Courier New',monospace;color:#57534B;text-align:right;">hundred-thousand GPU cluster<br>clawed back: 0</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      gsap.set("#s25-e2",{opacity:0});tl.to("#s25-e2",{opacity:1,duration:0.2,ease:"none"},0.10);
+      gsap.set("#s25-e3",{opacity:0});tl.to("#s25-e3",{opacity:1,duration:0.3,ease:"none"},0.30);
+      tl.to("#s25-e4",{scaleX:1,duration:.8,ease:"none"},.5);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 1.450);
+      window.__timelines["s25"] = tl;
+    })();
+  </script>
+</template>

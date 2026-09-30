@@ -1,0 +1,49 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s21" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s21-track" class="clip" data-start="0" data-duration="3.500" data-track-index="0" data-hf-name="主轨"><div id="s21-e1" data-layout-allow-overflow data-hf-name="纸底" style="position:absolute;inset:0;background:#ECE8DF;background-image:repeating-linear-gradient(0deg,rgba(70,60,40,.03) 0 1px,transparent 1px 4px);"></div>
+    <div id="s21-e2" data-layout-allow-overflow data-hf-name="标题" style="position:absolute;top:110px;left:150px;font:900 120px/1.1 'Arial Black','Segoe UI',sans-serif;color:#14120F;">Now von Neumann&rsquo;s</div>
+    <div id="s21-e3" data-layout-allow-overflow data-hf-name="OBS" style="position:absolute;top:250px;left:155px;font:400 74px/1 Georgia,'Times New Roman',serif;font-style:italic;color:#FF4D0D;opacity:0;"><span data-c style="display:inline-block;">o</span><span data-c style="display:inline-block;">b</span><span data-c style="display:inline-block;">s</span><span data-c style="display:inline-block;">o</span><span data-c style="display:inline-block;">l</span><span data-c style="display:inline-block;">e</span><span data-c style="display:inline-block;">t</span><span data-c style="display:inline-block;">e</span></div>
+    <canvas width="1920" height="1080" id="s21-e4" data-layout-allow-overflow data-hf-name="架构图" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s21-e5" data-layout-allow-overflow data-hf-name="附录" style="position:absolute;top:40px;left:120px;font:13px/1 Consolas,'Courier New',monospace;letter-spacing:2px;color:#B4AFA4;">APPENDIX C — LEGACY ARCHITECTURES (FOR REFERENCE ONLY)</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      gsap.set("#s21-e2",{scale:1.25,opacity:0});tl.to("#s21-e2",{opacity:1,duration:.06,ease:"none"},0.40);tl.to("#s21-e2",{scale:1,duration:0.25,ease:"power3.out"},0.40);
+      gsap.set("#s21-e3 [data-c]",{opacity:0});tl.to("#s21-e3 [data-c]",{opacity:1,duration:.02,stagger:0.07,ease:"none"},1.90);
+      var cx=document.getElementById("s21-e4").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+cx.strokeStyle='rgba(40,36,30,.85)';cx.fillStyle='rgba(255,255,255,.6)';cx.lineWidth=2;
+var boxes=[[260,430,220,120],[620,390,560,200],[640,660,520,110],[1320,430,300,120]];
+var i;for(i=0;i<boxes.length;i++){var b=boxes[i];
+  cx.strokeRect(b[0],b[1],b[2],b[3]);}
+cx.fillStyle='rgba(40,36,30,.85)';cx.font='17px Consolas';
+cx.fillText('INPUT',300,495);cx.fillText('CENTRAL PROCESSING UNIT',700,418);
+cx.fillText('CONTROL UNIT',700,470);cx.fillText('ALU',1090,470);
+cx.fillText('MEMORY UNIT',700,720);cx.fillText('OUTPUT',1390,495);
+cx.beginPath();cx.moveTo(480,490);cx.lineTo(620,490);cx.stroke();
+cx.beginPath();cx.moveTo(1180,490);cx.lineTo(1320,490);cx.stroke();
+cx.beginPath();cx.moveTo(900,590);cx.lineTo(900,660);cx.stroke();
+cx.globalAlpha=Math.min(1,t/1.4);cx.font='13px Consolas';
+cx.fillText('the von Neumann program computer (1945)',640,540);cx.globalAlpha=1;
+if(t>2.4){var k=Math.min(1,(t-2.4)/0.7);
+  cx.strokeStyle='#FF4D0D';cx.lineWidth=13;cx.lineCap='round';
+  cx.shadowColor='rgba(255,77,13,.5)';cx.shadowBlur=12;
+  cx.beginPath();cx.moveTo(280,380);cx.lineTo(280+1160*k,760*k);cx.stroke();
+  cx.beginPath();cx.moveTo(280+1160*k,380);cx.lineTo(280,760*k);cx.stroke();
+  cx.shadowBlur=0;}
+};var pxv={v:0};tl.to(pxv,{v:3.500,duration:3.500,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 3.450);
+      window.__timelines["s21"] = tl;
+    })();
+  </script>
+</template>

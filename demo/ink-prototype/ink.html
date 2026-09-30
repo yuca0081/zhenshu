@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <script src="assets/gsap.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 1920px; height: 1080px; overflow: hidden; background: #F2EDE3; }
+    #root { position: relative; width: 1920px; height: 1080px; overflow: hidden; }
+    #cv { position: absolute; inset: 0; }
+    #t-idx { position: absolute; right: 2.8%; top: 3.8%; color: #6b6455; font-size: 23px;
+      font-variant-numeric: tabular-nums; font-family: Georgia, serif; }
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="main" data-start="0" data-duration="6" data-width="1920" data-height="1080">
+    <canvas id="cv" width="1920" height="1080"></canvas>
+    <div id="t-idx">t=0.000s</div>
+  </div>
+  <script>
+    // ── 水墨原型闸（路线 1：离线确定性 mp4 素材，docs/analyes/ink-fluid-analysis.md §5）──
+    // CPU 版 Stam 稳定流体（半拉格朗日平流 + Jacobi 压力投影 + 涡度约束），
+    // 状态式模拟但「任意 t = 从 0 固定步长重放到 t」：顺序渲染只推演一遍，
+    // 倒 seek 自动从头重放 → 两次渲染逐帧同像素（确定性闸的判据）。
+    // 管线内不做模拟：本片渲成 mp4 入素材库，引擎只挑 id（§5.4 不做清单同源）。
+    var W = 1920, H = 1080;
+    var ctx = document.getElementById('cv').getContext('2d');
+    var tIdx = document.getElementById('t-idx');
+    var DUR = 6, DT = 1 / 30;
+    // 模拟网格（粗格 + 放大时双线性 = 墨的柔软边界）
+    var NX = 192, NY = 108, CELLS = NX * NY;
+    var NITER = 22; // Jacobi 压力迭代
+
+    function mk() { return new Float32Array(CELLS); }
+    var dye = mk(), dye0 = mk();
+    var u = mk(), v = mk(), u0 = mk(), v0 = mk();
+    var prs = mk(), prs0 = mk(), div = mk(), curl = mk();
+    var grain = mk(); // 纸面颗粒（静态、seeded）
+
+    var rndState = 1234567;
+    function srand() { // 确定性 LCG（初始铺场用；运行时事件表也是固定的）
+      rndState = (rndState * 1103515245 + 12345) & 0x7fffffff;
+      return rndState / 0x7fffffff;
+    }
+    for (var gi = 0; gi < CELLS; gi++) grain[gi] = srand();
+
+    var IX = function (x, y) { return x + y * NX; };
+
+    function setBnd(f, x, y) { // 边界取邻内值（自由滑移近似）
+      if (x < 1) return f[IX(1, y)];
+      if (x > NX - 2) return f[IX(NX - 2, y)];
+      if (y < 1) return f[IX(x, 1)];
+      if (y > NY - 2) return f[IX(x, NY - 2)];
+      return f[IX(x, y)];
+    }
+
+    function advect(dst, src, uu, vv) { // 半拉格朗日：回溯取双线性
+      for (var y = 1; y < NY - 1; y++) {
+        for (var x = 1; x < NX - 1; x++) {
+          var i = IX(x, y);
+          var bx = x - DT * uu[i] * 30;   // 速度尺度：格/帧
+          var by = y - DT * vv[i] * 30;
+          bx = bx < 0.5 ? 0.5 : bx > NX - 1.5 ? NX - 1.5 : bx;
+          by = by < 0.5 ? 0.5 : by > NY - 1.5 ? NY - 1.5 : by;
+          var x0 = bx | 0, y0 = by | 0, fx = bx - x0, fy = by - y0;
+          var a = src[IX(x0, y0)], b = src[IX(x0 + 1, y0)];
+          var c = src[IX(x0, y0 + 1)], d = src[IX(x0 + 1, y0 + 1)];
+          dst[i] = a * (1 - fx) * (1 - fy) + b * fx * (1 - fy) + c * (1 - fx) * fy + d * fx * fy;
+        }
+      }
+    }
+
+    function vorticity() { // 涡度约束（卷曲的关键——没有它墨晕开是死板的圆）
+      for (var y = 1; y < NY - 1; y++) for (var x = 1; x < NX - 1; x++) {
+        var i = IX(x, y);
+        curl[i] = (v[i + 1] - v[i - 1] - u[i + NX] + u[i - NX]) * 0.5;
+      }
+      for (var y = 2; y < NY - 2; y++) for (var x = 2; x < NX - 2; x++) {
+        var i = IX(x, y);
+        var dx = Math.abs(curl[i + 1]) - Math.abs(curl[i - 1]);
+        var dy = Math.abs(curl[i + NX]) - Math.abs(curl[i - NX]);
+        var len = Math.sqrt(dx * dx + dy * dy) + 1e-5;
+        var force = 8.0 * curl[i];
+        u[i] += force * (dy / len) * DT;
+        v[i] += force * (-dx / len) * DT;
+      }
+    }
+
+    function project() { // 散度 → Jacobi 压力 → 减梯度（不可压）
+      for (var y = 1; y < NY - 1; y++) for (var x = 1; x < NX - 1; x++) {
+        var i = IX(x, y);
+        div[i] = (u[i + 1] - u[i - 1] + u[i + NX] - u[i - NX]) * 0.5;
+        prs[i] = 0;
+      }
+      for (var it = 0; it < NITER; it++) {
+        for (var y = 1; y < NY - 1; y++) for (var x = 1; x < NX - 1; x++) {
+          var i = IX(x, y);
+          prs0[i] = (div[i] + prs[i - 1] + prs[i + 1] + prs[i - NX] + prs[i + NX]) / 4;
+        }
+        var tmp = prs; prs = prs0; prs0 = tmp;
+      }
+      for (var y = 1; y < NY - 1; y++) for (var x = 1; x < NX - 1; x++) {
+        var i = IX(x, y);
+        u[i] -= (prs[i + 1] - prs[i - 1]) * 0.5;
+        v[i] -= (prs[i + NX] - prs[i - NX]) * 0.5;
+      }
+    }
+
+    function splat(cx, cy, r, du, dv, amt) { // 注墨：高斯核染料 + 冲量
+      var x0 = Math.max(1, cx - r - 2) | 0, x1 = Math.min(NX - 2, cx + r + 2) | 0;
+      var y0 = Math.max(1, cy - r - 2) | 0, y1 = Math.min(NY - 2, cy + r + 2) | 0;
+      for (var y = y0; y <= y1; y++) for (var x = x0; x <= x1; x++) {
+        var dx = x - cx, dy = y - cy, d2 = (dx * dx + dy * dy) / (r * r);
+        if (d2 > 4) continue;
+        var g = Math.exp(-d2 * 2.2) * amt;
+        var i = IX(x, y);
+        dye[i] = Math.min(3, dye[i] + g);
+        u[i] += du * g; v[i] += dv * g;
+      }
+    }
+
+    // 事件表（固定的"运笔"脚本：一滴 → 斜向一滴 → 横扫一笔 → 右侧一点）
+    var EVENTS = [
+      { t: 0.15, cx: 96, cy: 54, r: 5, du: 0, dv: 0.6, amt: 1.4 },
+      { t: 1.3, cx: 40, cy: 30, r: 4, du: 1.4, dv: 0.9, amt: 1.2 },
+      { t: 2.6, cx: 0, cy: 0, r: 0, sweep: true }, // 横扫：x=30..160 沿 y=62 逐格注入
+      { t: 4.3, cx: 150, cy: 42, r: 3.5, du: -0.8, dv: 0.7, amt: 1.1 }
+    ];
+
+    function step() { // 一个固定步：注墨（事件表）→ 涡度 → 平流 → 投影
+      for (var e = 0; e < EVENTS.length; e++) {
+        var ev = EVENTS[e];
+        if (ev.sweep) { // 横扫持续 1.2s：每步沿笔路注入微量
+          var k = (simT - ev.t) / 1.2;
+          if (k >= 0 && k <= 1) {
+            var px = 30 + 130 * k, py = 62 + 4 * Math.sin(k * 3.1);
+            splat(px, py, 2.5, 1.8, 0.15, 0.16);
+          }
+          continue;
+        }
+        if (!ev.done && simT >= ev.t) { ev.done = true; splat(ev.cx, ev.cy, ev.r, ev.du, ev.dv, ev.amt); }
+      }
+      vorticity();
+      advect(u0, u, u, v); advect(v0, v, u, v);
+      var t1 = u; u = u0; u0 = t1; var t2 = v; v = v0; v0 = t2;
+      project();
+      advect(dye0, dye, u, v);
+      var t3 = dye; dye = dye0; dye0 = t3;
+      for (var i = 0; i < CELLS; i++) { // 微耗散 + 墨比水重（缓沉）
+        dye[i] *= 0.9985;
+        v[i] += 0.012 * Math.min(1, dye[i]);
+      }
+      simT += DT;
+    }
+
+    function resetSim() {
+      dye.fill(0); u.fill(0); v.fill(0); prs.fill(0);
+      simT = 0;
+      for (var e = 0; e < EVENTS.length; e++) EVENTS[e].done = false;
+    }
+    var simT = -1;
+
+    // 帧驱动：t 前进 → 逐固定步推演；t 倒退 → 从 0 重放（确定性来源）
+    function ensure(t) {
+      if (t < simT - 1e-4) resetSim();
+      while (simT < t - DT / 2) step();
+    }
+
+    // ── 绘制：染料密度 → 宣纸上的墨（粗格画到小画布再双线性放大）──
+    var mini = document.createElement('canvas');
+    mini.width = NX; mini.height = NY;
+    var mctx = mini.getContext('2d');
+    var img = mctx.createImageData(NX, NY);
+    var FRAME = '48,46,42'; // 墨色（近黑暖灰）
+    var PAPER = [242, 237, 227];
+    function paint() {
+      var px = img.data;
+      for (var i = 0; i < CELLS; i++) {
+        var d = dye[i];
+        var a = d <= 0 ? 0 : Math.min(1, 0.92 * (1 - Math.exp(-d * 1.6)));
+        var j = i * 4;
+        var g = grain[i];
+        var paperTone = 1 - 0.05 * g; // 纸面微颗粒
+        px[j] = Math.round(FRAME.split(',')[0] * a + PAPER[0] * paperTone * (1 - a));
+        px[j + 1] = Math.round(46 * a + PAPER[1] * paperTone * (1 - a));
+        px[j + 2] = Math.round(42 * a + PAPER[2] * paperTone * (1 - a));
+        px[j + 3] = 255;
+      }
+      mctx.putImageData(img, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.clearRect(0, 0, W, H);
+      ctx.drawImage(mini, 0, 0, W, H);
+    }
+
+    window.__timelines = window.__timelines || {};
+    var tl = gsap.timeline({ paused: true });
+    tl.to({}, {
+      duration: DUR, ease: 'none',
+      onUpdate: function () {
+        var t = tl.time();
+        ensure(t);
+        paint();
+        tIdx.textContent = 't=' + t.toFixed(3) + 's';
+      }
+    }, 0);
+    window.__timelines['main'] = tl;
+  </script>
+</body>
+</html>

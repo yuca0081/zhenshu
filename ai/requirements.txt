@@ -1,0 +1,18 @@
+# ai/ 管线 Python 依赖（部署镜像与本地环境共用同一份；此前只存在于
+# tts_align.py docstring，容器内 jieba/soundfile 缺失导致 TTS 对齐必崩）。
+#
+# 本地全量（含重引擎）：
+#   pip install -r ai/requirements.txt funasr modelscope torch
+# 服务器/容器（faster-whisper 降级档，funasr+torch 约 2GB 不装）：
+#   pip install -r ai/requirements.txt
+
+# tts_align.py（TTS + 词级对齐，produce 必经路径）
+jieba>=0.42
+soundfile>=0.12
+edge-tts>=6.1
+faster-whisper>=1.0
+
+# extract_video_features.py（参考视频解析，styleref 生产路径）
+numpy>=1.24
+pillow>=10.0
+scikit-learn>=1.3

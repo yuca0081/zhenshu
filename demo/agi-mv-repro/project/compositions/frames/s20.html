@@ -1,0 +1,59 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s20" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s20-track" class="clip" data-start="0" data-duration="4.000" data-track-index="0" data-hf-name="主轨"><div id="s20-e1" data-layout-allow-overflow data-hf-name="纸底" style="position:absolute;inset:0;background:#ECE8DF;background-image:repeating-linear-gradient(0deg,rgba(70,60,40,.03) 0 1px,transparent 1px 4px);"></div>
+    <canvas width="1920" height="1080" id="s20-e2" data-layout-allow-overflow data-hf-name="神经网络" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s20-e3" data-layout-allow-overflow data-hf-name="词0" style="position:absolute;top:100px;left:260px;font:900 110px/1 'Arial Black','Segoe UI',sans-serif;color:#14120F;">Forward</div>
+    <div id="s20-e4" data-layout-allow-overflow data-hf-name="词1" style="position:absolute;top:100px;left:830px;font:900 110px/1 'Arial Black','Segoe UI',sans-serif;color:#14120F;">M</div>
+    <div id="s20-e5" data-layout-allow-overflow data-hf-name="词2" style="position:absolute;top:100px;left:1130px;font:900 110px/1 'Arial Black','Segoe UI',sans-serif;color:#14120F;">L</div>
+    <div id="s20-e6" data-layout-allow-overflow data-hf-name="词3" style="position:absolute;top:100px;left:1430px;font:900 110px/1 'Arial Black','Segoe UI',sans-serif;color:#14120F;">P,</div>
+    <div id="s20-e7" data-layout-allow-overflow data-hf-name="backward" style="position:absolute;top:930px;left:1300px;font:900 84px/1 'Arial Black','Segoe UI',sans-serif;color:#14120F;transform:rotate(180deg) translateY(28px);opacity:0;">backward</div>
+    <div id="s20-e8" data-layout-allow-overflow data-hf-name="repeat" style="position:absolute;top:830px;left:1300px;font:900 74px/1 'Arial Black','Segoe UI',sans-serif;color:#14120F;opacity:0;">repeat,</div>
+    <div id="s20-e9" data-layout-allow-overflow data-hf-name="附录" style="position:absolute;top:40px;left:120px;font:13px/1 Consolas,'Courier New',monospace;letter-spacing:2px;color:#B4AFA4;">APPENDIX A — TRAINING PASS (FOR REFERENCE ONLY)</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s20-e2").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+var i,j,l2;
+var layers=[4,7,7,7,3];
+cx.strokeStyle='rgba(90,84,74,.5)';cx.lineWidth=1.1;
+var xs=[330,700,1070,1440,1780];
+function ny(i2,n2){return 300+(i2-(n2-1)/2)*64;}
+var wave=Math.min(1,t/2.4);
+var lit=Math.floor(wave*4);
+for(l2=0;l2<4;l2++){var nA=layers[l2],nB=layers[l2+1];
+  for(i=0;i<nA;i++)for(j=0;j<nB;j++){
+    cx.globalAlpha=(l2<=lit)?.5:.16;
+    cx.beginPath();cx.moveTo(xs[l2],ny(i,nA));cx.lineTo(xs[l2+1],ny(j,nB));cx.stroke();}}
+cx.globalAlpha=1;
+for(l2=0;l2<5;l2++)for(i=0;i<layers[l2];i++){
+  var on=l2<=lit;
+  cx.fillStyle=on?'#FF4D0D':'#EFEAE0';
+  cx.strokeStyle='rgba(40,36,30,.8)';cx.lineWidth=1.4;
+  cx.beginPath();cx.arc(xs[l2],ny(i,layers[l2]),13,0,Math.PI*2);cx.fill();cx.stroke();}
+cx.fillStyle='rgba(60,54,46,.8)';cx.font='15px Consolas';
+cx.fillText('INPUT x',300,880);cx.fillText('W1',676,880);cx.fillText('HIDDEN N.',1046,880);
+cx.fillText('HIDDEN N.2',1416,880);cx.fillText('OUTPUT y',1740,880);
+cx.fillText('FORWARD PASS →',300,180);
+};var pxv={v:0};tl.to(pxv,{v:4.000,duration:4.000,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s20-e3",{scale:1.4,opacity:0});tl.to("#s20-e3",{opacity:1,duration:.06,ease:"none"},0.40);tl.to("#s20-e3",{scale:1,duration:0.25,ease:"power3.out"},0.40);
+      gsap.set("#s20-e4",{scale:1.4,opacity:0});tl.to("#s20-e4",{opacity:1,duration:.06,ease:"none"},0.90);tl.to("#s20-e4",{scale:1,duration:0.25,ease:"power3.out"},0.90);
+      gsap.set("#s20-e5",{scale:1.4,opacity:0});tl.to("#s20-e5",{opacity:1,duration:.06,ease:"none"},1.20);tl.to("#s20-e5",{scale:1,duration:0.25,ease:"power3.out"},1.20);
+      gsap.set("#s20-e6",{scale:1.4,opacity:0});tl.to("#s20-e6",{opacity:1,duration:.06,ease:"none"},1.50);tl.to("#s20-e6",{scale:1,duration:0.25,ease:"power3.out"},1.50);
+      tl.to("#s20-e7",{opacity:1,duration:.2,ease:"none"},2.1);
+      tl.to("#s20-e8",{opacity:1,duration:.2,ease:"none"},2.7);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 3.950);
+      window.__timelines["s20"] = tl;
+    })();
+  </script>
+</template>

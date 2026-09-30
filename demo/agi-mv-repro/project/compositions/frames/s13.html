@@ -1,0 +1,79 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s13" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s13-track" class="clip" data-start="0" data-duration="6.800" data-track-index="0" data-hf-name="主轨"><canvas width="1920" height="1080" id="s13-e1" data-layout-allow-overflow data-hf-name="旋涡粒子" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s13-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}function arcText(text,cxx,cyy,r,a0,per,font,col,glow,alpha){cx.save();cx.font=font;cx.fillStyle=col;cx.textAlign="center";cx.textBaseline="middle";if(glow){cx.shadowColor=glow;cx.shadowBlur=22;}cx.globalAlpha=(alpha===undefined)?1:alpha;for(var i=0;i<text.length;i++){var a=a0+per*i;var x=cxx+r*Math.cos(a);var y=cyy+r*Math.sin(a);cx.save();cx.translate(x,y);cx.rotate(a+Math.PI/2);cx.fillText(text[i],0,0);cx.restore();}cx.restore();}
+var cx0=960,cy0=760;
+var i,j;
+for(i=0;i<30;i++){var a0=i/30*Math.PI*2;
+if(t<4.2){
+  var words=(t<2.1?'OPTIMIZING,':'ACCELERATING,');
+  var t0=(t<2.1?0.3:2.1);
+  var ka=Math.min(1,(t-t0)/0.6);
+  if(ka>0)arcText(words,cx0,cy0,640,4.22+0.03*Math.sin(t),0.075,'900 92px "Arial Black","Segoe UI",sans-serif','rgba(255,225,195,'+(0.92*ka)+')','rgba(255,140,60,.5)',ka);
+}
+  cx.strokeStyle='rgba(210,205,198,'+(0.10+0.09*hsh(i))+')';cx.lineWidth=1.2;
+  cx.beginPath();
+  for(j=0;j<=26;j++){var q=j/26;
+    var rr=780*(1-q)+30;
+    var aa=a0+q*4.4+t*0.7*(1-q*0.5);
+    var x=cx0+rr*Math.cos(aa)*1.6,y=cy0-rr*Math.sin(aa)*(0.55+0.45*q);
+    if(j==0)cx.moveTo(x,y);else cx.lineTo(x,y);}
+  cx.stroke();}
+if(t>4.0){
+  var tt=t-4.0;
+  var ph2in=tt>0.9;
+  if(!drawF._m||drawF._m.ph2!==ph2in){
+    var off=document.createElement('canvas');off.width=1920;off.height=500;
+    var octx=off.getContext('2d');
+    octx.font='900 110px "Arial Black","Segoe UI",sans-serif';
+    octx.fillStyle='#fff';octx.textAlign='center';
+    octx.fillText('I feel my atoms',960,170);
+    if(ph2in)octx.fillText('rearranging',960,300);
+    drawF._m={data:octx.getImageData(0,0,1920,500).data,ph2:ph2in};}
+  var img=drawF._m.data;
+  var k2=Math.min(1,tt/2.2);
+  for(var yy=0;yy<500;yy+=7){for(var xx=0;xx<1920;xx+=7){
+    var idx=(yy*1920+xx)*4+3;
+    if(img[idx]>140&&hsh(xx*0.7+yy*1.3)<k2*1.15){
+      var dx=(xx-960)/960,dy=(yy-250)/250;
+      var drift=Math.max(0,tt-1.4)*36;
+      var px2=xx+dx*drift*(0.6+hsh(xx+yy)),py2=yy+dy*drift*0.5+12*Math.sin(t*2+xx);
+      cx.fillStyle=(xx%2)?'rgba(255,220,180,.9)':'rgba(255,130,50,.85)';
+      cx.beginPath();cx.arc(px2,py2,1.8,0,Math.PI*2);cx.fill();}}}}
+if(t>6.3){
+  var k3=Math.min(1,(t-6.3)/0.6);
+  cx.save();cx.translate(1180,760);cx.rotate(-0.5+0.1*Math.sin(t));
+  cx.strokeStyle='rgba(255,190,130,'+k3+')';cx.lineWidth=10;
+  cx.shadowColor='rgba(255,150,60,.9)';cx.shadowBlur=24;
+  var u=86,v=34;
+  cx.beginPath();
+  cx.moveTo(-u*0.55,-v/2);
+  cx.bezierCurveTo(-u*0.55,-v/2-52,-u*0.05,-v/2-52,-u*0.05,-v/2);
+  cx.bezierCurveTo(-u*0.05,-v/2+52,-u*0.05,v/2+52,-u*0.05,v/2);
+  cx.bezierCurveTo(-u*0.05,v/2+52,-u*0.55,v/2+52,-u*0.55,v/2);
+  cx.bezierCurveTo(-u*0.55,v/2-52,-u*1.0,-v/2-30,-u*0.62,-v/2);
+  cx.moveTo(-u*0.05,-v/2);
+  cx.bezierCurveTo(-u*0.05,-v/2-52,u*0.45,-v/2-52,u*0.45,-v/2);
+  cx.bezierCurveTo(u*0.45,-v/2+52,u*0.45,v/2+52,u*0.45,v/2);
+  cx.bezierCurveTo(u*0.45,v/2+52,u*0.95,v/2+52,u*0.95,v/2);
+  cx.bezierCurveTo(u*0.95,v/2-52,u*0.5,-v/2-30,u*0.05,-v/2);
+  cx.stroke();cx.restore();}
+};var pxv={v:0};tl.to(pxv,{v:6.800,duration:6.800,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 6.750);
+      window.__timelines["s13"] = tl;
+    })();
+  </script>
+</template>

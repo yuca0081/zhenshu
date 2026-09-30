@@ -1,0 +1,44 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s16" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s16-track" class="clip" data-start="0" data-duration="1.500" data-track-index="0" data-hf-name="主轨"><div id="s16-e1" data-layout-allow-overflow data-hf-name="纸底" style="position:absolute;inset:0;background:#ECE8DF;background-image:linear-gradient(105deg,rgba(60,50,30,.06),transparent 40%),repeating-linear-gradient(0deg,rgba(70,60,40,.03) 0 1px,transparent 1px 4px);"></div>
+    <div id="s16-e2" data-layout-allow-overflow data-hf-name="NVDA" style="position:absolute;top:330px;left:150px;font:900 220px/1 'Arial Black','Segoe UI',sans-serif;letter-spacing:4px;"><span style="color:#9A958C;">NVD</span><span style="color:#FF4D0D;">A</span></div>
+    <div id="s16-e3" data-layout-allow-overflow data-hf-name="MOON" style="position:absolute;top:600px;left:155px;font:700 44px/1 'Segoe UI',Arial,sans-serif;letter-spacing:18px;color:#B4AFA4;">TO THE MOON</div>
+    <canvas width="1920" height="1080" id="s16-e4" data-layout-allow-overflow data-hf-name="股价" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s16-e5" data-layout-allow-overflow data-hf-name="涨幅" style="position:absolute;top:170px;right:170px;font:700 26px/1 Consolas,'Courier New',monospace;color:#FF4D0D;opacity:0;">UP 52.63%</div>
+    <div id="s16-e6" data-layout-allow-overflow data-hf-name="抬头" style="position:absolute;top:64px;left:150px;font:14px/1 Consolas,'Courier New',monospace;letter-spacing:3px;color:#B4AFA4;">TICKER · NASDAQ · NVDA</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      gsap.set("#s16-e2",{scale:1.4,opacity:0});tl.to("#s16-e2",{opacity:1,duration:.06,ease:"none"},0.20);tl.to("#s16-e2",{scale:1,duration:0.3,ease:"power3.out"},0.20);
+      gsap.set("#s16-e3",{opacity:0});tl.to("#s16-e3",{opacity:1,duration:0.3,ease:"none"},0.70);
+      var cx=document.getElementById("s16-e4").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+cx.strokeStyle='rgba(120,115,108,.4)';cx.lineWidth=1.5;
+cx.beginPath();cx.moveTo(1000,920);cx.lineTo(1880,920);cx.moveTo(1000,920);cx.lineTo(1000,140);cx.stroke();
+var k=Math.min(1,t/0.9);
+cx.strokeStyle='rgba(255,100,30,.95)';cx.lineWidth=4;
+cx.shadowColor='rgba(255,100,30,.7)';cx.shadowBlur=14;
+cx.beginPath();var i,n=40;var dn=Math.floor(n*k);
+for(i=0;i<=dn;i++){var q=i/n;
+  var x=1010+q*840,y=890-Math.pow(q,2.6)*700+16*Math.sin(q*17);
+  if(i==0)cx.moveTo(x,y);else cx.lineTo(x,y);}
+cx.stroke();cx.shadowBlur=0;
+if(dn<n){var q2=dn/n;cx.fillStyle='#FFB27A';
+  cx.beginPath();cx.arc(1010+q2*840,890-Math.pow(q2,2.6)*700,6,0,Math.PI*2);cx.fill();}
+};var pxv={v:0};tl.to(pxv,{v:1.500,duration:1.500,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s16-e5",{opacity:0});tl.to("#s16-e5",{opacity:1,duration:0.2,ease:"none"},0.90);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 1.450);
+      window.__timelines["s16"] = tl;
+    })();
+  </script>
+</template>

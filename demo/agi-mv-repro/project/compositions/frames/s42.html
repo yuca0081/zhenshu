@@ -1,0 +1,34 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s42" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s42-track" class="clip" data-start="0" data-duration="2.400" data-track-index="0" data-hf-name="主轨"><div id="s42-e1" data-layout-allow-overflow data-hf-name="底" style="position:absolute;inset:0;background:#020202;"></div>
+    <div id="s42-e2" data-layout-allow-overflow data-hf-name="光点" style="position:absolute;top:470px;left:948px;width:24px;height:24px;border-radius:50%;background:#FFDDB8;box-shadow:0 0 60px 24px rgba(255,170,90,.55);opacity:0;"></div>
+    <div id="s42-e3" data-layout-allow-overflow data-hf-name="按钮" style="position:absolute;top:540px;left:810px;padding:20px 46px;border:1px solid rgba(255,255,255,.4);border-radius:10px;background:rgba(14,12,11,.8);color:#C9C4BA;font:500 30px/1 'Segoe UI',Arial,sans-serif;letter-spacing:1px;opacity:0;">&#8635; Regenerate</div>
+    <div id="s42-e4" data-layout-allow-overflow data-hf-name="注" style="position:absolute;top:660px;left:0;width:1920px;text-align:center;font:15px/1 Consolas,'Courier New',monospace;color:#4A463F;opacity:0;">this response could not be verified</div>
+    <div id="s42-e5" data-layout-allow-overflow data-hf-name="角标" style="position:absolute;top:44px;left:44px;border-left:2px solid rgba(255,255,255,.3);border-top:2px solid rgba(255,255,255,.3);width:34px;height:34px;opacity:.5;"></div>
+    <div id="s42-e6" data-layout-allow-overflow data-hf-name="角标" style="position:absolute;top:44px;right:44px;border-right:2px solid rgba(255,255,255,.3);border-top:2px solid rgba(255,255,255,.3);width:34px;height:34px;opacity:.5;"></div>
+    <div id="s42-e7" data-layout-allow-overflow data-hf-name="角标" style="position:absolute;bottom:44px;left:44px;border-left:2px solid rgba(255,255,255,.3);border-bottom:2px solid rgba(255,255,255,.3);width:34px;height:34px;opacity:.5;"></div>
+    <div id="s42-e8" data-layout-allow-overflow data-hf-name="角标" style="position:absolute;bottom:44px;right:44px;border-right:2px solid rgba(255,255,255,.3);border-bottom:2px solid rgba(255,255,255,.3);width:34px;height:34px;opacity:.5;"></div>
+    
+    <div id="s42-e9" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      tl.to("#s42-e2",{opacity:1,duration:.5,ease:"sine.out"},.1);
+      tl.to("#s42-e3",{opacity:1,duration:.4,ease:"none"},.7);
+      tl.to("#s42-e4",{opacity:1,duration:.4,ease:"none"},1.1);
+      tl.to("#s42-e3",{opacity:.55,duration:.1,ease:"none"},1.9);tl.to("#s42-e3",{opacity:1,duration:.1,ease:"none"},2.0);
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 2.350);
+      window.__timelines["s42"] = tl;
+    })();
+  </script>
+</template>

@@ -1,0 +1,44 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s26" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s26-track" class="clip" data-start="0" data-duration="2.200" data-track-index="0" data-hf-name="主轨"><canvas width="1920" height="1080" id="s26-e1" data-layout-allow-overflow data-hf-name="回形针" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s26-e2" data-layout-allow-overflow data-hf-name="词" style="position:absolute;top:100px;left:250px;font:300 30px/1 'Segoe UI',Arial,sans-serif;color:#F4F1EA;"><span style="color:#FF4D0D;">paper</span>clips fill the room</div>
+    <div id="s26-e3" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s26-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}function clip(c,s,col,lw,gl){c.strokeStyle=col;c.lineWidth=lw*s;c.lineJoin="round";c.lineCap="round";if(gl){c.shadowColor="rgba(255,150,70,.8)";c.shadowBlur=gl;}var u=120*s,v=52*s;c.beginPath();c.moveTo(-u*0.55,-v/2);c.bezierCurveTo(-u*0.55,-v/2-44,-u*0.06,-v/2-44,-u*0.06,-v/2);c.bezierCurveTo(-u*0.06,-v/2+44,-u*0.06,v/2+44,-u*0.06,v/2);c.bezierCurveTo(-u*0.06,v/2+44,-u*0.55,v/2+44,-u*0.55,v/2);c.bezierCurveTo(-u*0.55,v/2-44,-u*0.92,-v/2-24,-u*0.6,-v/2);c.moveTo(-u*0.06,-v/2);c.bezierCurveTo(-u*0.06,-v/2-44,u*0.4,-v/2-44,u*0.4,-v/2);c.bezierCurveTo(u*0.4,-v/2+44,u*0.4,v/2+44,u*0.4,v/2);c.bezierCurveTo(u*0.4,v/2+44,u*0.86,v/2+44,u*0.86,v/2);c.bezierCurveTo(u*0.86,v/2-44,u*0.42,-v/2-24,u*0.02,-v/2);c.stroke();}
+var cx0=960,cy0=560;
+var k=Math.min(1,t/0.5);
+var mulp=Math.max(0,Math.min(1,(t-1.35)/0.5));
+cx.save();cx.translate(cx0,cy0);cx.rotate(-0.18+0.02*Math.sin(t));
+cx.globalAlpha=1-mulp;
+clip(cx,1.9,'rgba(235,231,223,.95)',8,18);
+cx.restore();
+if(mulp>0){
+  cx.save();cx.globalAlpha=mulp;cx.translate(cx0,cy0);
+  var i,j;for(i=0;i<6;i++)for(j=0;j<9;j++){
+    var sx=(j-4)*230,sy=(i-2.5)*190;
+    cx.save();cx.translate(sx,sy);cx.rotate((hsh(i*9+j)-0.5)*0.5);
+    clip(cx,0.85,'rgba(210,206,198,.8)',6,0);
+    cx.restore();}
+  cx.restore();}
+cx.fillStyle='rgba(244,241,234,.85)';cx.font='300 30px "Segoe UI",sans-serif';
+if(t>0.4)cx.fillText('as paper',80,140);
+};var pxv={v:0};tl.to(pxv,{v:2.200,duration:2.200,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s26-e2",{opacity:0});tl.to("#s26-e2",{opacity:1,duration:0.2,ease:"none"},0.55);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 2.150);
+      window.__timelines["s26"] = tl;
+    })();
+  </script>
+</template>

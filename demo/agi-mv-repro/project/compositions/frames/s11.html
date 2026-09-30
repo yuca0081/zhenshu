@@ -1,0 +1,48 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s11" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s11-track" class="clip" data-start="0" data-duration="3.400" data-track-index="0" data-hf-name="主轨"><canvas width="1920" height="1080" id="s11-e1" data-layout-allow-overflow data-hf-name="示波器" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s11-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+cx.fillStyle='rgba(30,8,4,.55)';cx.fillRect(0,0,1920,1080);
+cx.strokeStyle='rgba(255,120,60,.16)';cx.lineWidth=1;
+var i;for(i=0;i<24;i++){cx.beginPath();cx.moveTo(i*80,0);cx.lineTo(i*80,1080);cx.stroke();}
+for(i=0;i<14;i++){cx.beginPath();cx.moveTo(0,i*80);cx.lineTo(1920,i*80);cx.stroke();}
+cx.strokeStyle='rgba(255,110,40,.92)';cx.lineWidth=3.4;
+cx.shadowColor='rgba(255,110,40,.9)';cx.shadowBlur=18;
+cx.beginPath();
+var n=160;for(i=0;i<=n;i++){var q=i/n;
+  var x=q*1920;
+  var y=540+120*Math.sin(q*9-t*2.6)+36*Math.sin(q*23-t*4.4)*(0.4+0.6*Math.sin(t*1.1));
+  if(i==0)cx.moveTo(x,y);else cx.lineTo(x,y);}
+cx.stroke();cx.shadowBlur=0;
+var beam=Math.max(0,1-t/0.9);
+if(beam>0){cx.strokeStyle='rgba(255,150,70,'+beam+')';cx.lineWidth=5;
+  cx.shadowColor='rgba(255,140,60,.9)';cx.shadowBlur=30;
+  cx.beginPath();cx.moveTo(0,540);cx.lineTo(1920,540);cx.stroke();cx.shadowBlur=0;}
+if(t>1.0){var seen=(t-1.0)/0.045;
+  cx.save();cx.font='600 58px "Segoe UI",sans-serif';cx.fillStyle='rgba(255,235,220,.92)';
+  var text='We had a stable training run';
+  for(var c2=0;c2<text.length&&c2<seen;c2++){var qx=(140+c2*58)/1920;
+    var yy=400+120*Math.sin(qx*9-t*2.6)+36*Math.sin(qx*23-t*4.4)*(0.4+0.6*Math.sin(t*1.1));
+    cx.fillText(text[c2],140+c2*58,yy);}
+  cx.restore();}
+cx.fillStyle='rgba(255,255,255,.4)';cx.font='13px Consolas';
+cx.fillText('CH1 0.5 V/DIV',60,60);cx.fillText('CH2 0.2 V',60,84);cx.fillText('1.025 s/div',60,108);
+};var pxv={v:0};tl.to(pxv,{v:3.400,duration:3.400,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 3.350);
+      window.__timelines["s11"] = tl;
+    })();
+  </script>
+</template>

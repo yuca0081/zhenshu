@@ -1,0 +1,14 @@
+[
+ {
+  "name": "whoosh",
+  "file": "whoosh.mp3",
+  "duration": 0.6,
+  "desc": "段边界气流声（fade 转场缝合）"
+ },
+ {
+  "name": "riser",
+  "file": "riser.mp3",
+  "duration": 1.2,
+  "desc": "章节切换上扬（大转折预告）"
+ }
+]

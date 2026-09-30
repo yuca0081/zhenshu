@@ -1,0 +1,33 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s28" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s28-track" class="clip" data-start="0" data-duration="1.100" data-track-index="0" data-hf-name="主轨"><canvas width="1920" height="1080" id="s28-e1" data-layout-allow-overflow data-hf-name="针海暗" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s28-e2" data-layout-allow-overflow data-hf-name="压暗" style="position:absolute;inset:0;background:rgba(4,3,3,.35);"></div>
+    <div id="s28-e3" data-layout-allow-overflow data-hf-name="大字" style="position:absolute;top:430px;left:0;width:1920px;text-align:center;font:900 118px/1.05 'Arial Black','Segoe UI',sans-serif;color:#F4F1EA;letter-spacing:1px;"><span data-c style="display:inline-block;">N</span><span data-c style="display:inline-block;">O</span><span data-c style="display:inline-block;">W</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">T</span><span data-c style="display:inline-block;">H</span><span data-c style="display:inline-block;">E</span><span data-c style="display:inline-block;">R</span><span data-c style="display:inline-block;">E</span><span data-c style="display:inline-block;">&</span><span data-c style="display:inline-block;">r</span><span data-c style="display:inline-block;">s</span><span data-c style="display:inline-block;">q</span><span data-c style="display:inline-block;">u</span><span data-c style="display:inline-block;">o</span><span data-c style="display:inline-block;">;</span><span data-c style="display:inline-block;">S</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;color:#FF4D0D;text-shadow:0 0 34px rgba(255,77,13,.6);">N</span><span data-c style="display:inline-block;color:#FF4D0D;text-shadow:0 0 34px rgba(255,77,13,.6);">O</span><span data-c style="display:inline-block;color:#FF4D0D;text-shadow:0 0 34px rgba(255,77,13,.6);">W</span><span data-c style="display:inline-block;color:#FF4D0D;text-shadow:0 0 34px rgba(255,77,13,.6);">H</span><span data-c style="display:inline-block;color:#FF4D0D;text-shadow:0 0 34px rgba(255,77,13,.6);">E</span><span data-c style="display:inline-block;color:#FF4D0D;text-shadow:0 0 34px rgba(255,77,13,.6);">R</span><span data-c style="display:inline-block;color:#FF4D0D;text-shadow:0 0 34px rgba(255,77,13,.6);">E</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">L</span><span data-c style="display:inline-block;">E</span><span data-c style="display:inline-block;">F</span><span data-c style="display:inline-block;">T</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">T</span><span data-c style="display:inline-block;">O</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">G</span><span data-c style="display:inline-block;">O</span></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s28-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}function clip(c,s,col,lw,gl){c.strokeStyle=col;c.lineWidth=lw*s;c.lineJoin="round";c.lineCap="round";if(gl){c.shadowColor="rgba(255,150,70,.8)";c.shadowBlur=gl;}var u=120*s,v=52*s;c.beginPath();c.moveTo(-u*0.55,-v/2);c.bezierCurveTo(-u*0.55,-v/2-44,-u*0.06,-v/2-44,-u*0.06,-v/2);c.bezierCurveTo(-u*0.06,-v/2+44,-u*0.06,v/2+44,-u*0.06,v/2);c.bezierCurveTo(-u*0.06,v/2+44,-u*0.55,v/2+44,-u*0.55,v/2);c.bezierCurveTo(-u*0.55,v/2-44,-u*0.92,-v/2-24,-u*0.6,-v/2);c.moveTo(-u*0.06,-v/2);c.bezierCurveTo(-u*0.06,-v/2-44,u*0.4,-v/2-44,u*0.4,-v/2);c.bezierCurveTo(u*0.4,-v/2+44,u*0.4,v/2+44,u*0.4,v/2);c.bezierCurveTo(u*0.4,v/2+44,u*0.86,v/2+44,u*0.86,v/2);c.bezierCurveTo(u*0.86,v/2-44,u*0.42,-v/2-24,u*0.02,-v/2);c.stroke();}
+var i,j;for(j=0;j<6;j++){var q=j/6,scale=(0.4+q*1.3),y0=560+q*500;
+  var rowN=Math.ceil(12*scale);
+  for(i=0;i<rowN;i++){var sx=960+(i-rowN/2)*(170*scale);
+    cx.save();cx.globalAlpha=0.15+q*0.25;cx.translate(sx,y0);
+    clip(cx,scale,'rgba(150,146,140,.8)',5,0);
+    cx.restore();}}
+};var pxv={v:0};tl.to(pxv,{v:1.100,duration:1.100,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s28-e3",{scale:1.25,opacity:0});tl.to("#s28-e3",{opacity:1,duration:.06,ease:"none"},0.10);tl.to("#s28-e3",{scale:1,duration:0.25,ease:"power3.out"},0.10);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 1.050);
+      window.__timelines["s28"] = tl;
+    })();
+  </script>
+</template>

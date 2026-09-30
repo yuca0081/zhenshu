@@ -1,0 +1,205 @@
+[
+ {
+  "kind": "title",
+  "name": "大标题",
+  "category": "文字",
+  "scene": "开场定调、段结论的整行大字",
+  "menu": "大标题（整行居中，只给 y）。y, text(≤12字), fs(默认84), reveal"
+ },
+ {
+  "kind": "note",
+  "name": "便签",
+  "category": "文字",
+  "scene": "概念标注、轻量强调的色块标签",
+  "menu": "便签/色块标签（给左上角坐标）。x, y, text(≤12字), bg(butter/mint/sky/coral/peach/pink), rot(±3), fs(默认40), reveal"
+ },
+ {
+  "kind": "panel",
+  "name": "卡片面板",
+  "category": "容器",
+  "scene": "2–4 行说明/对比/清单的承载容器",
+  "menu": "卡片面板（白底厚描边+彩色标题栏，放 2–4 行说明/对比/清单）。x, y, w(默认560), h(默认320), title(≤12字,可选), text(≤60字,可选), bg(navy/green/mint/sky/coral/butter=强调色), fs(默认36), reveal"
+ },
+ {
+  "kind": "chip",
+  "name": "胶囊标签",
+  "category": "文字",
+  "scene": "短词/短语的强调标签",
+  "menu": "胶囊标签（短词/短语强调）。x, y, text(≤12字), bg(navy/green/mint/sky/coral/butter/white), fs(默认40), reveal"
+ },
+ {
+  "kind": "zone",
+  "name": "高亮区",
+  "category": "容器",
+  "scene": "垫底圈住一组元素，分组/强调区域",
+  "menu": "淡色高亮区（垫底圈住一组元素，分组/强调区域；必须放在 elements 最前面）。x, y, w, h, bg(mint/sky/butter/coral), dashed(1=虚线边框), reveal"
+ },
+ {
+  "kind": "timeline",
+  "name": "时间线",
+  "category": "流程",
+  "scene": "步骤/流程/层次的纵向序列",
+  "menu": "垂直时间线（粗竖线+彩色圆点+粗体文字，步骤/流程/层次）。x(线x), y(顶), nodes(2–6条,每条≤12字), gap(节点间距,默认110), color, fs(默认40), reveal"
+ },
+ {
+  "kind": "bracket",
+  "name": "大括号",
+  "category": "流程",
+  "scene": "圈住时间线或一组步骤的竖排标注",
+  "menu": "大括号+竖排标注（圈住时间线/一组步骤，如\"多次重复执行\"）。x, y, h(160–800), text(≤8字), color, reveal"
+ },
+ {
+  "kind": "strip",
+  "name": "方块序列",
+  "category": "流程",
+  "scene": "向量/维度/批量的小方块示意",
+  "menu": "小方块序列+省略号（向量/维度/批量示意）。x, y, n(2–8), size(默认44), color, text(≤10字,如\"512维\"), reveal"
+ },
+ {
+  "kind": "barrow",
+  "name": "粗块箭头",
+  "category": "流程",
+  "scene": "流程指向的实心大箭头",
+  "menu": "粗块箭头（流程指向，实心大箭头，可配 rot 转向）。x, y, w(默认260), h(默认90), rot(角度), color, reveal"
+ },
+ {
+  "kind": "table",
+  "name": "表格",
+  "category": "数据",
+  "scene": "数字/短文本的行列对比",
+  "menu": "格子表格（数字/短文本行列对比）。x, y, w(默认520), rows(2–7行×最多4列,每格≤8字), cell_h(默认76), fs(默认30), reveal"
+ },
+ {
+  "kind": "quote",
+  "name": "金句",
+  "category": "文字",
+  "scene": "引用/点题的大字+署名",
+  "menu": "金句/引用（大引号+重磅大字+署名）。x, y, w(默认1240), text(≤22字=金句本体), name(≤10字,可选=出处/署名), reveal"
+ },
+ {
+  "kind": "checklist",
+  "name": "对勾清单",
+  "category": "流程",
+  "scene": "卖点/论据/要点的逐条打勾",
+  "menu": "对勾清单（卖点/论据/要点，逐条打勾）。x, y, nodes(2–5条,每条≤14字), gap(默认96), color, fs(默认40), reveal"
+ },
+ {
+  "kind": "stat",
+  "name": "指标卡",
+  "category": "数据",
+  "scene": "关键参数/数据的大数字+小标签",
+  "menu": "指标卡（大数字+小标签，关键参数/数据）。x, y, w(默认420), text(≤8字=数值如\"13年\"/\"48%\"), title(≤12字=标签), reveal"
+ },
+ {
+  "kind": "label",
+  "name": "文字标注",
+  "category": "文字",
+  "scene": "辅助说明的纯文字",
+  "menu": "文字标注。x, y, text(≤14字), fs(默认38), reveal"
+ },
+ {
+  "kind": "big",
+  "name": "大数字",
+  "category": "文字",
+  "scene": "数字/短语的超大强调",
+  "menu": "大数字/短语强调。x, y, text(≤8字), fs(默认110), reveal"
+ },
+ {
+  "kind": "image",
+  "name": "照片",
+  "category": "媒体",
+  "scene": "实体名词的主视觉（制作期搜图或 AI 生图本地化）",
+  "menu": "真实照片或 AI 生图——实体名词主视觉首选。source=\"search\"（默认）=制作期按 query 搜图下载，query 是中文搜索词 2–12 字（如\"蓝鲸 海面\"）；source=\"gen\"=AI 生图，query 是一句完整画面描述 20–60 字（插画/概念示意/抽象背景用，真实名人品牌产品禁用）。role=\"bg\"=全幅背景层（照片满画幅+纸色渐变压暗，每段最多 1 张，放 elements 最前；x/y/w/h 忽略，dim 0–1 压暗浓度默认 0.55，blur 0–12 毛玻璃）。普通图：x, y, w(默认520), h(默认360), rot(±3), reveal"
+ },
+ {
+  "kind": "icon",
+  "name": "图标",
+  "category": "媒体",
+  "scene": "抽象概念/动作的视觉锚点",
+  "menu": "手绘线稿图标（抽象概念/动作的视觉锚点）。x, y, size(48–400，主体物 120–260), name, rot(±6), reveal"
+ },
+ {
+  "kind": "emoji",
+  "name": "表情",
+  "category": "媒体",
+  "scene": "大号彩色 emoji 点缀/角色",
+  "menu": "大号彩色 emoji 点缀/角色（本地系统字体）。x, y, text(1–2 个 emoji 字符), fs(默认140), reveal。一屏 ≤2 个"
+ },
+ {
+  "kind": "chart_bar",
+  "name": "柱状图",
+  "category": "数据",
+  "scene": "数据对比",
+  "menu": "手绘柱状图（数据对比）。x, y, w(默认560), h(默认360), values(2–6个数), labels(每柱≤6字), reveal"
+ },
+ {
+  "kind": "chart_line",
+  "name": "折线图",
+  "category": "数据",
+  "scene": "趋势变化",
+  "menu": "手绘折线图（趋势变化）。x, y, w, h, values(3–8个数=折线点), labels(可选), reveal"
+ },
+ {
+  "kind": "chart_pie",
+  "name": "饼图",
+  "category": "数据",
+  "scene": "占比（手绘感）",
+  "menu": "手绘饼图（占比）。x, y, w, h(短边=直径), values(2–5), labels, reveal"
+ },
+ {
+  "kind": "chart_donut",
+  "name": "环形图",
+  "category": "数据",
+  "scene": "占比（现代感，中心可放标题）",
+  "menu": "环形图（占比，现代感；中心可放标题）。x, y, w(默认460), h(默认360), values(2–5), labels(每项≤6字), title(≤6字,可选=中心文字), reveal"
+ },
+ {
+  "kind": "disc",
+  "name": "圆盘",
+  "category": "图形",
+  "scene": "抽象主体/备用实心圆",
+  "menu": "实心圆盘（抽象主体/备用）。cx, cy, r(60–180), bg(mint/sky/butter/coral), reveal"
+ },
+ {
+  "kind": "circle",
+  "name": "圆点",
+  "category": "图形",
+  "scene": "小物体/角色的小圆",
+  "menu": "小圆点（小物体/角色）。cx, cy, r(20–60), fill(white/mint/sky/butter), reveal"
+ },
+ {
+  "kind": "beam",
+  "name": "粗条",
+  "category": "图形",
+  "scene": "条状物/光束",
+  "menu": "粗条（条状物/光束，给左上角）。x, y, w, h, rot, bg, reveal"
+ },
+ {
+  "kind": "arrow",
+  "name": "箭头",
+  "category": "流程",
+  "scene": "起终点连接与指向",
+  "menu": "箭头（给起终点）。x1, y1, x2, y2, text(可选), reveal"
+ },
+ {
+  "kind": "custom",
+  "name": "自由设计",
+  "category": "自由",
+  "scene": "注册 kind 组合不出来的视觉效果：斜切大字板/故障标题/氛围光斑/纹理底/创意构图",
+  "menu": "自由设计元素（表达力逃生舱，每段≤3个；纯装饰垫底放 elements 最前）。容器 x,y,w,h（内容裁剪在容器内），text(≤12字=命名)。html(≤3200字,容器内HTML,禁script/iframe/外链img/内联onclick/position:fixed/CSS animation·transition)，css(≤2000字,可选,自动限定在容器内,选择器写自己的类名,@keyframes自动改名)，js(≤2000字,可选GSAP片段:变量 T=本元素揭示秒数、ID=容器选择器、tl=时间线；入场自己负责:先 gsap.set(ID,{opacity:0}) 再 tl.to(...,T)；禁 repeat/yoyo/window/document/定时器/随机，粒子和轨迹用固定坐标或公式算，禁 Math.random)。不给 js 则整容器默认淡入；可用 anim(pop/fade/rise/slide/wipe/blur/none) 换入场。role=\"bg\"=全幅背景特效层（x/y/w/h 忽略满画幅：渐变氛围/粒子雨/光斑漂移/网格底纹，运动全部写进 tl）。需要图片请用 image 元素另行组合"
+ },
+ {
+  "kind": "scene",
+  "name": "程序化画布",
+  "category": "自由",
+  "scene": "全画幅 canvas 逐帧绘制：粒子系统、弦图/函数曲线、线框3D投影、生成艺术、加色辉光——无状态纯函数绘制（t→画面），seek 确定性",
+  "menu": "程序化画布（每段≤1个，全画幅垫底，豁免安全区/重叠/元素数）。code(≤8000字,__draw(t,ctx,W,H,rng)的函数体本身——直接写语句,禁止function声明/函数头:同t必须同像素;随机只用rng,禁Math.random/Date/rAF/setTimeout/DOM/出网),seed(0-99999,默认42),reveal/anim/exit不支持。scene 段元素数下限放宽到 1"
+ },
+ {
+  "kind": "formula",
+  "name": "数学公式",
+  "category": "文字",
+  "scene": "LaTeX 数学公式排版（KaTeX 离线渲染）：分式/根号/上下标/矩阵/希腊字母/求和积分",
+  "menu": "数学公式。x,y,fs(24-160,默认48),color,tex(≤500字,LaTeX源码,禁\\href等外链命令)。注意公式里的下划线是 LaTeX 语法不是 markdown"
+ }
+]

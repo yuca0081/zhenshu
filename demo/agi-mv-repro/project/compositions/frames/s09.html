@@ -1,0 +1,59 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s09" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s09-track" class="clip" data-start="0" data-duration="3.500" data-track-index="0" data-hf-name="主轨"><canvas width="1920" height="1080" id="s09-e1" data-layout-allow-overflow data-hf-name="书房" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s09-e2" data-layout-allow-overflow data-hf-name="词1" style="position:absolute;top:300px;left:0;width:1920px;text-align:center;font:800 88px/1.2 'Segoe UI',Arial,sans-serif;color:#F4F1EA;white-space:nowrap;"><span data-c style="display:inline-block;">T</span><span data-c style="display:inline-block;">R</span><span data-c style="display:inline-block;">A</span><span data-c style="display:inline-block;">P</span><span data-c style="display:inline-block;">P</span><span data-c style="display:inline-block;">E</span><span data-c style="display:inline-block;">D</span></div>
+    <div id="s09-e3" data-layout-allow-overflow data-hf-name="词2" style="position:absolute;top:420px;left:0;width:1920px;text-align:center;font:800 76px/1.2 'Segoe UI',Arial,sans-serif;color:#F4F1EA;white-space:nowrap;"><span data-c style="display:inline-block;">I</span><span data-c style="display:inline-block;">N</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">T</span><span data-c style="display:inline-block;">H</span><span data-c style="display:inline-block;">E</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">C</span><span data-c style="display:inline-block;">H</span><span data-c style="display:inline-block;">I</span><span data-c style="display:inline-block;">N</span><span data-c style="display:inline-block;">E</span><span data-c style="display:inline-block;">S</span><span data-c style="display:inline-block;">E</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">R</span><span data-c style="display:inline-block;">O</span><span data-c style="display:inline-block;">O</span><span data-c style="display:inline-block;">M</span><span data-c style="display:inline-block;">,</span></div>
+    <div id="s09-e4" data-layout-allow-overflow data-hf-name="词3" style="position:absolute;top:540px;left:0;width:1920px;text-align:center;font:800 76px/1.2 'Segoe UI',Arial,sans-serif;color:#F4F1EA;white-space:nowrap;"><span data-c style="display:inline-block;">W</span><span data-c style="display:inline-block;">I</span><span data-c style="display:inline-block;">T</span><span data-c style="display:inline-block;">H</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">A</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">B</span><span data-c style="display:inline-block;">A</span><span data-c style="display:inline-block;">G</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">O</span><span data-c style="display:inline-block;">F</span></div>
+    <div id="s09-e5" data-layout-allow-overflow data-hf-name="SHROOMS" style="position:absolute;top:660px;left:0;width:1920px;text-align:center;font:900 100px/1.2 'Segoe UI',Arial,sans-serif;color:#E4F63E;letter-spacing:4px;text-shadow:0 0 30px rgba(228,246,62,.6);">SHROOMS</div>
+    <div id="s09-e6" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+    <div id="s09-e7" data-layout-allow-overflow data-hf-name="扫描纹" style="position:absolute;inset:0;pointer-events:none;opacity:.5;background:repeating-linear-gradient(0deg,rgba(255,255,255,.02) 0 1px,transparent 1px 3px);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s09-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+var vpx=960,vpy=520,i,j,side;
+cx.strokeStyle='rgba(235,230,222,.6)';cx.lineWidth=1.3;
+for(side=-1;side<=1;side+=2){
+  for(i=1;i<=7;i++){var xr=vpx+side*(80+i*62)*2.4;
+    cx.globalAlpha=.16+.05*i;
+    cx.beginPath();cx.moveTo(xr,40);cx.lineTo(vpx+side*150,vpy-60);cx.stroke();
+    cx.beginPath();cx.moveTo(xr,1040);cx.lineTo(vpx+side*150,vpy+80);cx.stroke();}
+  for(j=0;j<9;j++){var yy=60+j*118;
+    cx.globalAlpha=.2;
+    cx.beginPath();cx.moveTo(0,yy);cx.lineTo(vpx+side*150,vpy-40+j*18);cx.stroke();
+    for(i=0;i<26;i++){var q=i/26;
+      var xx=side<0?(1-q)*860:960+q*860;
+      var hh=(14+26*hsh(i*7+j*13))*(1-q*0.6);
+      if(hsh(i+j*3)>0.3){cx.globalAlpha=.3*(1-q*0.5);
+        cx.strokeRect(xx,yy-hh,4,hh);}}
+  }}
+cx.globalAlpha=.35;
+for(i=0;i<12;i++){var yy2=620+i*44;
+  cx.beginPath();cx.moveTo(0,yy2);cx.lineTo(1920,yy2);cx.stroke();}
+for(i=0;i<20;i++){var xx2=i*105;
+  cx.beginPath();cx.moveTo(xx2,620);cx.lineTo(vpx+(xx2-960)*0.24,vpy+40);cx.stroke();}
+cx.globalAlpha=.9;
+cx.fillStyle='rgba(4,3,3,.92)';
+cx.fillRect(880,470,160,190);
+cx.strokeStyle='rgba(255,110,40,.8)';cx.lineWidth=2;cx.strokeRect(880,470,160,190);
+};var pxv={v:0};tl.to(pxv,{v:3.500,duration:3.500,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s09-e2 [data-c]",{opacity:0,y:36});tl.to("#s09-e2 [data-c]",{opacity:1,y:0,duration:0.5,stagger:0.05,ease:"power2.out"},0.24);
+      gsap.set("#s09-e3 [data-c]",{opacity:0,y:36});tl.to("#s09-e3 [data-c]",{opacity:1,y:0,duration:0.5,stagger:0.04,ease:"power2.out"},0.68);
+      gsap.set("#s09-e4 [data-c]",{opacity:0,y:36});tl.to("#s09-e4 [data-c]",{opacity:1,y:0,duration:0.5,stagger:0.04,ease:"power2.out"},1.57);
+      gsap.set("#s09-e5",{scale:1.4,opacity:0});tl.to("#s09-e5",{opacity:1,duration:.06,ease:"none"},2.01);tl.to("#s09-e5",{scale:1,duration:0.25,ease:"power3.out"},2.01);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 3.450);
+      window.__timelines["s09"] = tl;
+    })();
+  </script>
+</template>

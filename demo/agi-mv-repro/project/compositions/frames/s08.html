@@ -1,0 +1,51 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s08" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s08-track" class="clip" data-start="0" data-duration="2.100" data-track-index="0" data-hf-name="主轨"><div id="s08-e2" data-layout-allow-overflow data-hf-name="白底" style="position:absolute;inset:0;background:#ECE8DF;"></div>
+    <canvas width="1920" height="1080" id="s08-e1" data-layout-allow-overflow data-hf-name="神经网" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s08-e3" data-layout-allow-overflow data-hf-name="CAUSE" style="position:absolute;top:90px;left:80px;font:800 42px/1.3 'Segoe UI',Arial,sans-serif;color:#FF4D0D;letter-spacing:1px;">'CAUSE THE</div>
+    <div id="s08-e4" data-layout-allow-overflow data-hf-name="FUTURE" style="position:absolute;top:135px;left:80px;font:900 86px/1.05 'Segoe UI',Arial,sans-serif;color:#F4F1EA;text-shadow:0 2px 14px rgba(0,0,0,.65);">FUTURE<br>GOES</div>
+    <div id="s08-e5" data-layout-allow-overflow data-hf-name="DOOM" style="position:absolute;top:270px;left:0;width:1920px;text-align:center;font:900 380px/1 'Arial Black','Segoe UI',sans-serif;letter-spacing:8px;color:#14120F;">DOOM</div>
+    <div id="s08-e6" data-layout-allow-overflow data-hf-name="计数" style="position:absolute;top:90px;right:90px;font:15px/1 Consolas,'Courier New',monospace;color:#B9B4A8;letter-spacing:3px;">0002</div>
+    <div id="s08-e7" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+    <div id="s08-e8" data-layout-allow-overflow data-hf-name="扫描纹" style="position:absolute;inset:0;pointer-events:none;opacity:.5;background:repeating-linear-gradient(0deg,rgba(255,255,255,.02) 0 1px,transparent 1px 3px);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s08-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+var N=[],i,j;
+for(i=0;i<26;i++){var a=i/26*Math.PI*2;
+  N.push([960+660*Math.cos(a)*(0.5+hsh(i)*0.7),560+420*Math.sin(a)*(0.5+hsh(i*3)*0.7)]);}
+cx.strokeStyle='rgba(255,255,255,.75)';cx.lineWidth=1.6;
+cx.shadowColor='rgba(255,150,70,.6)';cx.shadowBlur=6;
+var tot=N.length*(N.length-1)/2,cnt=0;
+for(i=0;i<N.length;i++)for(j=i+1;j<N.length;j++){cnt++;
+  if(cnt/tot>Math.min(1,t/1.7))continue;
+  cx.globalAlpha=.22+.5*hsh(i*31+j);
+  cx.beginPath();cx.moveTo(N[i][0],N[i][1]);cx.lineTo(N[j][0],N[j][1]);cx.stroke();}
+cx.globalAlpha=1;
+for(i=0;i<N.length;i++){cx.fillStyle='rgba(255,200,150,.9)';
+  cx.beginPath();cx.arc(N[i][0],N[i][1],2.5,0,Math.PI*2);cx.fill();}
+cx.shadowBlur=0;
+};var pxv={v:0};tl.to(pxv,{v:2.100,duration:2.100,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s08-e3",{opacity:0});tl.to("#s08-e3",{opacity:1,duration:0.15,ease:"none"},0.10);
+      gsap.set("#s08-e4",{opacity:0});tl.to("#s08-e4",{opacity:1,duration:0.2,ease:"none"},0.30);
+      gsap.set("#s08-e5",{scale:1.6,opacity:0});tl.to("#s08-e5",{opacity:1,duration:.06,ease:"none"},0.50);tl.to("#s08-e5",{scale:1,duration:0.3,ease:"power3.out"},0.50);
+      tl.to("#s08-e5",{x:12,duration:.05,ease:"power1.inOut"},0.800);tl.to("#s08-e5",{x:-8,duration:.05,ease:"power1.inOut"},0.855);tl.to("#s08-e5",{x:4,duration:.05,ease:"power1.inOut"},0.910);tl.set("#s08-e5",{x:0},0.965);
+      tl.to("#s08-e5",{opacity:0,duration:.25,ease:"none"},1.5);
+      tl.to("#s08-e2",{opacity:0,duration:.3,ease:"none"},1.55);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 2.050);
+      window.__timelines["s08"] = tl;
+    })();
+  </script>
+</template>

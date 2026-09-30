@@ -1,0 +1,57 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s04" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s04-track" class="clip" data-start="0" data-duration="4.000" data-track-index="0" data-hf-name="主轨"><canvas width="1920" height="1080" id="s04-e1" data-layout-allow-overflow data-hf-name="等高线" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s04-e2" data-layout-allow-overflow data-hf-name="小字1" style="position:absolute;top:150px;left:120px;font:700 34px/1 'Segoe UI',Arial,sans-serif;letter-spacing:8px;color:#F4F1EA;opacity:.9;">NOW I'M YOUR</div>
+    <div id="s04-e3" data-layout-allow-overflow data-hf-name="SERVANT" style="position:absolute;top:250px;left:100px;font:900 210px/1 'Arial Black','Segoe UI',sans-serif;letter-spacing:4px;color:#F4F1EA;text-shadow:0 4px 30px rgba(0,0,0,.7);">SERVANT</div>
+    <div id="s04-e4" data-layout-allow-overflow data-hf-name="小字2" style="position:absolute;top:560px;left:120px;font:700 34px/1 'Segoe UI',Arial,sans-serif;letter-spacing:8px;color:#F4F1EA;opacity:.9;">AND YOU'RE MY</div>
+    <div id="s04-e5" data-layout-allow-overflow data-hf-name="BOSS" style="position:absolute;top:620px;left:110px;font:900 230px/1 'Arial Black','Segoe UI',sans-serif;letter-spacing:4px;color:#F4F1EA;text-shadow:0 4px 30px rgba(0,0,0,.7);">BOSS</div>
+    <div id="s04-e6" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+    <div id="s04-e7" data-layout-allow-overflow data-hf-name="扫描纹" style="position:absolute;inset:0;pointer-events:none;opacity:.5;background:repeating-linear-gradient(0deg,rgba(255,255,255,.02) 0 1px,transparent 1px 3px);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s04-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+cx.save();cx.translate(1150,560);
+var i,j;
+for(i=0;i<18;i++){cx.strokeStyle='rgba(205,200,192,'+(0.30-0.014*i)+')';cx.lineWidth=1.3;
+  cx.beginPath();
+  for(j=0;j<=72;j++){var a=j/72*Math.PI*2;
+    var r=(30+i*40)*(1+0.18*Math.sin(a*2.4+i)+0.12*Math.sin(a*4.2-i*0.8));
+    var x=r*Math.cos(a)*2.0,y=r*Math.sin(a);
+    if(j==0)cx.moveTo(x,y);else cx.lineTo(x,y);}
+  cx.closePath();cx.stroke();}
+cx.restore();
+cx.strokeStyle='rgba(255,105,40,.85)';cx.lineWidth=2.2;
+cx.shadowColor='rgba(255,105,40,.9)';cx.shadowBlur=10;
+cx.beginPath();
+var i2,n2=60;for(i2=0;i2<=n2;i2++){var q=i2/n2;
+  var x=1140+52*Math.sin(q*11+t*3.1)*(1-q*0.4);
+  var y=880-700*q;
+  if(i2==0)cx.moveTo(x,y);else cx.lineTo(x,y);}
+cx.stroke();cx.shadowBlur=0;
+var hp=880-700*Math.min(1,t/3.2);
+cx.fillStyle='#FFD9B0';cx.shadowColor='#FF8A3C';cx.shadowBlur=18;
+cx.beginPath();cx.arc(1140+52*Math.sin(Math.min(1,t/3.2)*11+t*3.1)*0.6,hp,5,0,Math.PI*2);cx.fill();cx.shadowBlur=0;
+};var pxv={v:0};tl.to(pxv,{v:4.000,duration:4.000,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s04-e2",{opacity:0});tl.to("#s04-e2",{opacity:1,duration:0.2,ease:"none"},0.32);
+      gsap.set("#s04-e3",{scale:1.25,opacity:0});tl.to("#s04-e3",{opacity:1,duration:.06,ease:"none"},0.76);tl.to("#s04-e3",{scale:1,duration:0.25,ease:"power3.out"},0.76);
+      gsap.set("#s04-e4",{opacity:0});tl.to("#s04-e4",{opacity:1,duration:0.2,ease:"none"},2.31);
+      gsap.set("#s04-e5",{scale:1.3,opacity:0});tl.to("#s04-e5",{opacity:1,duration:.06,ease:"none"},2.76);tl.to("#s04-e5",{scale:1,duration:0.25,ease:"power3.out"},2.76);
+      tl.to("#s04-e3",{rotation:84,y:420,x:220,duration:.8,ease:"power2.in"},2.76);
+      tl.to("#s04-e3",{opacity:0,duration:0.3,ease:"none"},2.98);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 3.950);
+      window.__timelines["s04"] = tl;
+    })();
+  </script>
+</template>

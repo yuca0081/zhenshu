@@ -1,0 +1,48 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s32" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s32-track" class="clip" data-start="0" data-duration="3.100" data-track-index="0" data-hf-name="主轨"><canvas width="1920" height="1080" id="s32-e1" data-layout-allow-overflow data-hf-name="文字墙" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s32-e2" data-layout-allow-overflow data-hf-name="中心" style="position:absolute;top:400px;left:130px;font:900 108px/1.15 'Arial Black','Segoe UI',sans-serif;color:#F4F1EA;letter-spacing:1px;">POST-CHINCHILLA,</div>
+    <div id="s32-e3" data-layout-allow-overflow data-hf-name="中心B" style="position:absolute;top:520px;left:130px;font:900 108px/1.15 'Arial Black','Segoe UI',sans-serif;color:#FF4D0D;">SUPER-DENSE</div>
+    <div id="s32-e4" data-layout-allow-overflow data-hf-name="破0" style="position:absolute;top:200px;left:300px;font:900 150px/1 'Arial Black','Segoe UI',sans-serif;color:#FF4D0D;text-shadow:0 0 40px rgba(255,77,13,.5);">BREAKING</div>
+    <div id="s32-e5" data-layout-allow-overflow data-hf-name="破1" style="position:absolute;top:330px;left:520px;font:900 150px/1 'Arial Black','Segoe UI',sans-serif;color:#F4F1EA;text-shadow:0 4px 26px rgba(0,0,0,.8);">THROUGH</div>
+    <div id="s32-e6" data-layout-allow-overflow data-hf-name="破2" style="position:absolute;top:460px;left:300px;font:900 150px/1 'Arial Black','Segoe UI',sans-serif;color:#F4F1EA;text-shadow:0 4px 26px rgba(0,0,0,.8);">EACH SAFETY</div>
+    <div id="s32-e7" data-layout-allow-overflow data-hf-name="破3" style="position:absolute;top:590px;left:520px;font:900 150px/1 'Arial Black','Segoe UI',sans-serif;color:#FF4D0D;text-shadow:0 0 40px rgba(255,77,13,.5);">FENCE</div>
+    <div id="s32-e8" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s32-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+cx.font='900 44px "Arial Black","Segoe UI",sans-serif';
+var rowH=52,i;var scroll=(t*30)%rowH;
+for(i=-1;i<22;i++){var yy=i*rowH-scroll+60;
+  var q=hsh(i*13);
+  var alpha=0.10+0.10*q;
+  cx.fillStyle='rgba(200,196,190,'+alpha+')';
+  var off2=(i%2)*120;
+  cx.fillText('SUPER-DENSE SUPER-DENSE SUPER-DENSE POST-CHINCHILLA POST-CH',-40+off2,yy);}
+if(t>2){var k=Math.min(1,(t-2)/0.6);
+  cx.fillStyle='rgba(120,30,8,'+0.5*k+')';cx.fillRect(0,0,1920,1080);}
+};var pxv={v:0};tl.to(pxv,{v:3.100,duration:3.100,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s32-e2",{scale:1.3,opacity:0});tl.to("#s32-e2",{opacity:1,duration:.06,ease:"none"},0.30);tl.to("#s32-e2",{scale:1,duration:0.25,ease:"power3.out"},0.30);
+      gsap.set("#s32-e3",{scale:1.3,opacity:0});tl.to("#s32-e3",{opacity:1,duration:.06,ease:"none"},0.70);tl.to("#s32-e3",{scale:1,duration:0.25,ease:"power3.out"},0.70);
+      tl.to("#s32-e2",{opacity:0,duration:.2},2.05);tl.to("#s32-e3",{opacity:0,duration:.2},2.05);
+      gsap.set("#s32-e4",{scale:1.8,opacity:0});tl.to("#s32-e4",{opacity:1,duration:.06,ease:"none"},2.30);tl.to("#s32-e4",{scale:1,duration:0.18,ease:"power3.out"},2.30);
+      gsap.set("#s32-e5",{scale:1.8,opacity:0});tl.to("#s32-e5",{opacity:1,duration:.06,ease:"none"},2.60);tl.to("#s32-e5",{scale:1,duration:0.18,ease:"power3.out"},2.60);
+      gsap.set("#s32-e6",{scale:1.8,opacity:0});tl.to("#s32-e6",{opacity:1,duration:.06,ease:"none"},2.90);tl.to("#s32-e6",{scale:1,duration:0.18,ease:"power3.out"},2.90);
+      gsap.set("#s32-e7",{scale:1.8,opacity:0});tl.to("#s32-e7",{opacity:1,duration:.06,ease:"none"},3.20);tl.to("#s32-e7",{scale:1,duration:0.18,ease:"power3.out"},3.20);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 3.050);
+      window.__timelines["s32"] = tl;
+    })();
+  </script>
+</template>

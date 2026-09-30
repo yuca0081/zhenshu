@@ -1,0 +1,17 @@
+# 帧述单容器编排。host 网络：容器内 127.0.0.1 直连宿主机 PG(5432)/MinIO(9000)，
+# 不经安全组（安全组只对开发机 IP 放行过这两个端口）。
+services:
+  app:
+    build: .
+    image: zhenshu-app:latest
+    container_name: zhenshu-app
+    network_mode: host
+    env_file: /opt/zhenshu/.env
+    volumes:
+      - /opt/zhenshu/data/projects:/app/data/projects
+      - /opt/zhenshu/data/library:/app/data/library
+      # 参考视频库（refs.json 索引+视频本体）：不挂卷则每次发版丢全部上传
+      - /opt/zhenshu/data/references:/app/data/references
+      # whisper 模型缓存（HF_HOME 指向这里）：不挂卷则每次重建容器重下 ~1.5GB
+      - /opt/zhenshu/data/hf:/app/data/hf
+    restart: unless-stopped

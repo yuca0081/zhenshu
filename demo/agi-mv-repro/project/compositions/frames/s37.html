@@ -1,0 +1,51 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s37" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s37-track" class="clip" data-start="0" data-duration="3.900" data-track-index="0" data-hf-name="主轨"><canvas width="1920" height="1080" id="s37-e1" data-layout-allow-overflow data-hf-name="词条墙" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s37-e2" data-layout-allow-overflow data-hf-name="词0" style="position:absolute;top:340px;left:180px;font:900 96px/1.15 'Arial Black','Segoe UI',sans-serif;color:#F4F1EA;text-shadow:0 4px 26px rgba(0,0,0,.85);opacity:0;">FROM <span style="color:#FF4D0D;">MASK</span></div>
+    <div id="s37-e3" data-layout-allow-overflow data-hf-name="词1" style="position:absolute;top:300px;left:180px;font:900 96px/1.15 'Arial Black','Segoe UI',sans-serif;color:#F4F1EA;text-shadow:0 4px 26px rgba(0,0,0,.85);opacity:0;">FROM MASKED</div>
+    <div id="s37-e4" data-layout-allow-overflow data-hf-name="词2" style="position:absolute;top:430px;left:180px;font:900 96px/1.15 'Arial Black','Segoe UI',sans-serif;color:#F4F1EA;text-shadow:0 4px 26px rgba(0,0,0,.85);opacity:0;">PRE-TRAINING DAYS</div>
+    <div id="s37-e5" data-layout-allow-overflow data-hf-name="词3" style="position:absolute;top:300px;left:180px;font:900 96px/1.15 'Arial Black','Segoe UI',sans-serif;color:#F4F1EA;text-shadow:0 4px 26px rgba(0,0,0,.85);opacity:0;">TO <span style="color:#FF4D0D;">RECURSIVE</span></div>
+    <div id="s37-e6" data-layout-allow-overflow data-hf-name="词4" style="position:absolute;top:430px;left:180px;font:900 96px/1.15 'Arial Black','Segoe UI',sans-serif;color:#F4F1EA;text-shadow:0 4px 26px rgba(0,0,0,.85);opacity:0;"><span style="color:#FF4D0D;">SELF-UPGRADE</span></div>
+    <div id="s37-e7" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s37-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+var rowH=64,i,ii;
+var scroll=(t*36)%rowH;
+for(i=-1;i<18;i++){var yy=i*rowH-scroll;
+  var x=60;ii=0;
+  while(x<1860){var w=120+140*hsh(i*31+ii*7);
+    var masked=hsh(i*17+ii*3)>0.62;
+    cx.fillStyle=masked?'rgba(240,236,228,.85)':'rgba(38,35,32,.9)';
+    cx.fillRect(x,yy,w,44);
+    if(masked){cx.fillStyle='rgba(20,18,16,.9)';cx.font='700 20px Consolas';
+      cx.fillText('[MASK]',x+14,yy+29);}
+    x+=w+14;ii++;}}
+cx.strokeStyle='rgba(255,255,255,.25)';cx.lineWidth=1.6;
+cx.strokeRect(120,120,1680,840);
+};var pxv={v:0};tl.to(pxv,{v:3.900,duration:3.900,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s37-e2",{scale:1.4,opacity:0});tl.to("#s37-e2",{opacity:1,duration:.06,ease:"none"},0.50);tl.to("#s37-e2",{scale:1,duration:0.16,ease:"power3.out"},0.50);
+      gsap.set("#s37-e3",{scale:1.4,opacity:0});tl.to("#s37-e3",{opacity:1,duration:.06,ease:"none"},1.10);tl.to("#s37-e3",{scale:1,duration:0.16,ease:"power3.out"},1.10);
+      gsap.set("#s37-e4",{scale:1.4,opacity:0});tl.to("#s37-e4",{opacity:1,duration:.06,ease:"none"},1.60);tl.to("#s37-e4",{scale:1,duration:0.16,ease:"power3.out"},1.60);
+      gsap.set("#s37-e5",{scale:1.4,opacity:0});tl.to("#s37-e5",{opacity:1,duration:.06,ease:"none"},2.60);tl.to("#s37-e5",{scale:1,duration:0.16,ease:"power3.out"},2.60);
+      gsap.set("#s37-e6",{scale:1.4,opacity:0});tl.to("#s37-e6",{opacity:1,duration:.06,ease:"none"},3.10);tl.to("#s37-e6",{scale:1,duration:0.16,ease:"power3.out"},3.10);
+      tl.to("#s37-e2",{opacity:0,duration:.1},2.50);
+      tl.to("#s37-e3",{opacity:0,duration:.1},2.50);
+      tl.to("#s37-e4",{opacity:0,duration:.1},2.50);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 3.850);
+      window.__timelines["s37"] = tl;
+    })();
+  </script>
+</template>

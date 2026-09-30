@@ -1,0 +1,254 @@
+<template>
+  <style>
+@font-face{font-family:"KaiTi";src:local("KaiTi"),local("楷体"),local("SimKai");}
+@font-face{font-family:"STKaiti";src:local("STKaiti"),local("华文楷体");}
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:"KaiTi","STKaiti",serif;color:#E8DFC8;}
+.s-bg{position:absolute;inset:0;background:
+  radial-gradient(ellipse 1400px 900px at 50% 42%, #2A3A5C 0%, #18223A 55%, #0C1220 100%);}
+.s-vig{position:absolute;inset:0;background:radial-gradient(ellipse 1600px 1000px at 50% 50%, transparent 55%, rgba(0,0,0,.55) 100%);}
+.s-el{position:absolute;}
+.s-year{left:120px;top:210px;width:820px;text-align:center;font-size:190px;font-weight:700;line-height:1;
+  background:linear-gradient(180deg,#F4D97C,#B8860B);-webkit-background-clip:text;background-clip:text;color:transparent;
+  letter-spacing:6px;}
+.s-ti{left:120px;top:440px;width:820px;text-align:center;font-size:50px;color:#8FA3C8;letter-spacing:12px;}
+.s-team{left:120px;top:530px;width:820px;text-align:center;font-size:80px;font-weight:700;color:#F2E6C4;
+  text-shadow:0 4px 18px rgba(0,0,0,.6);}
+.s-region{left:120px;top:650px;width:820px;text-align:center;font-size:42px;color:#9DB2D6;letter-spacing:8px;}
+.s-note{left:120px;top:725px;width:820px;text-align:center;font-size:38px;color:#D8B04A;letter-spacing:4px;}
+.s-title{left:0;right:0;top:120px;text-align:center;font-size:104px;font-weight:700;letter-spacing:16px;
+  background:linear-gradient(180deg,#F4D97C,#B8860B);-webkit-background-clip:text;background-clip:text;color:transparent;}
+.s-sub{left:0;right:0;top:280px;text-align:center;font-size:46px;color:#9DB2D6;letter-spacing:12px;}
+.s-range{left:0;right:0;top:390px;text-align:center;font-size:34px;color:#5F7396;letter-spacing:6px;}
+.s-end1{left:0;right:0;top:170px;text-align:center;font-size:96px;font-weight:700;letter-spacing:14px;
+  background:linear-gradient(180deg,#F4D97C,#B8860B);-webkit-background-clip:text;background-clip:text;color:transparent;}
+.s-end2{left:0;right:0;top:760px;text-align:center;font-size:46px;color:#D8CFA8;letter-spacing:6px;line-height:1.7;}
+  </style>
+  <div data-composition-id="seg01" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s-bg" class="clip" data-start="0" data-duration="38" data-track-index="0" data-hf-name="深空底+渐晕"></div>
+      <canvas id="s-gl" class="clip" data-start="0" data-duration="38" data-track-index="1" data-hf-name="3D 不朽盾" width="1920" height="1080"></canvas>
+
+      <div id="s-titlecard" class="s-el clip s-title" data-start="0" data-duration="3.5" data-track-index="6" data-hf-name="标题：TI 不朽盾">DOTA 2 · 国际邀请赛</div>
+      <div id="s-subcard" class="s-el clip s-sub" data-start="0" data-duration="3.5" data-track-index="6" data-hf-name="副标题：不朽盾">不 朽 盾 · 十 三 年 荣 光</div>
+      <div id="s-rangecard" class="s-el clip s-range" data-start="0" data-duration="3.5" data-track-index="6" data-hf-name="年份范围">2011 — 2024</div>
+
+      <div id="s-y0" class="s-el clip s-year" data-start="3.5" data-duration="2.3" data-track-index="6" data-hf-name="年份 2011">2011</div>
+      <div id="s-t0" class="s-el clip s-ti" data-start="3.5" data-duration="2.3" data-track-index="6" data-hf-name="届数 TI1">TI1</div>
+      <div id="s-n0" class="s-el clip s-team" data-start="3.5" data-duration="2.3" data-track-index="6" data-hf-name="冠军 2011">Na'Vi</div>
+      <div id="s-r0" class="s-el clip s-region" data-start="3.5" data-duration="2.3" data-track-index="6" data-hf-name="地区 2011">乌克兰</div>
+
+      <div id="s-y1" class="s-el clip s-year" data-start="5.8" data-duration="2.3" data-track-index="6" data-hf-name="年份 2012">2012</div>
+      <div id="s-t1" class="s-el clip s-ti" data-start="5.8" data-duration="2.3" data-track-index="6" data-hf-name="届数 TI2">TI2</div>
+      <div id="s-n1" class="s-el clip s-team" data-start="5.8" data-duration="2.3" data-track-index="6" data-hf-name="冠军 2012">iG</div>
+      <div id="s-r1" class="s-el clip s-region" data-start="5.8" data-duration="2.3" data-track-index="6" data-hf-name="地区 2012">中国</div>
+      <div id="s-g1" class="s-el clip s-note" data-start="5.8" data-duration="2.3" data-track-index="6" data-hf-name="注 2012">中国首冠</div>
+
+      <div id="s-y2" class="s-el clip s-year" data-start="8.1" data-duration="2.3" data-track-index="6" data-hf-name="年份 2013">2013</div>
+      <div id="s-t2" class="s-el clip s-ti" data-start="8.1" data-duration="2.3" data-track-index="6" data-hf-name="届数 TI3">TI3</div>
+      <div id="s-n2" class="s-el clip s-team" data-start="8.1" data-duration="2.3" data-track-index="6" data-hf-name="冠军 2013">Alliance</div>
+      <div id="s-r2" class="s-el clip s-region" data-start="8.1" data-duration="2.3" data-track-index="6" data-hf-name="地区 2013">瑞典</div>
+
+      <div id="s-y3" class="s-el clip s-year" data-start="10.4" data-duration="2.3" data-track-index="6" data-hf-name="年份 2014">2014</div>
+      <div id="s-t3" class="s-el clip s-ti" data-start="10.4" data-duration="2.3" data-track-index="6" data-hf-name="届数 TI4">TI4</div>
+      <div id="s-n3" class="s-el clip s-team" data-start="10.4" data-duration="2.3" data-track-index="6" data-hf-name="冠军 2014">Newbee</div>
+      <div id="s-r3" class="s-el clip s-region" data-start="10.4" data-duration="2.3" data-track-index="6" data-hf-name="地区 2014">中国</div>
+
+      <div id="s-y4" class="s-el clip s-year" data-start="12.7" data-duration="2.3" data-track-index="6" data-hf-name="年份 2015">2015</div>
+      <div id="s-t4" class="s-el clip s-ti" data-start="12.7" data-duration="2.3" data-track-index="6" data-hf-name="届数 TI5">TI5</div>
+      <div id="s-n4" class="s-el clip s-team" data-start="12.7" data-duration="2.3" data-track-index="6" data-hf-name="冠军 2015">Evil Geniuses</div>
+      <div id="s-r4" class="s-el clip s-region" data-start="12.7" data-duration="2.3" data-track-index="6" data-hf-name="地区 2015">北美</div>
+
+      <div id="s-y5" class="s-el clip s-year" data-start="15" data-duration="2.3" data-track-index="6" data-hf-name="年份 2016">2016</div>
+      <div id="s-t5" class="s-el clip s-ti" data-start="15" data-duration="2.3" data-track-index="6" data-hf-name="届数 TI6">TI6</div>
+      <div id="s-n5" class="s-el clip s-team" data-start="15" data-duration="2.3" data-track-index="6" data-hf-name="冠军 2016">Wings Gaming</div>
+      <div id="s-r5" class="s-el clip s-region" data-start="15" data-duration="2.3" data-track-index="6" data-hf-name="地区 2016">中国</div>
+      <div id="s-g5" class="s-el clip s-note" data-start="15" data-duration="2.3" data-track-index="6" data-hf-name="注 2016">草根传奇</div>
+
+      <div id="s-y6" class="s-el clip s-year" data-start="17.3" data-duration="2.3" data-track-index="6" data-hf-name="年份 2017">2017</div>
+      <div id="s-t6" class="s-el clip s-ti" data-start="17.3" data-duration="2.3" data-track-index="6" data-hf-name="届数 TI7">TI7</div>
+      <div id="s-n6" class="s-el clip s-team" data-start="17.3" data-duration="2.3" data-track-index="6" data-hf-name="冠军 2017">Team Liquid</div>
+      <div id="s-r6" class="s-el clip s-region" data-start="17.3" data-duration="2.3" data-track-index="6" data-hf-name="地区 2017">欧洲</div>
+
+      <div id="s-y7" class="s-el clip s-year" data-start="19.6" data-duration="2.3" data-track-index="6" data-hf-name="年份 2018">2018</div>
+      <div id="s-t7" class="s-el clip s-ti" data-start="19.6" data-duration="2.3" data-track-index="6" data-hf-name="届数 TI8">TI8</div>
+      <div id="s-n7" class="s-el clip s-team" data-start="19.6" data-duration="2.3" data-track-index="6" data-hf-name="冠军 2018">OG</div>
+      <div id="s-r7" class="s-el clip s-region" data-start="19.6" data-duration="2.3" data-track-index="6" data-hf-name="地区 2018">欧洲</div>
+      <div id="s-g7" class="s-el clip s-note" data-start="19.6" data-duration="2.3" data-track-index="6" data-hf-name="注 2018">首支双冠</div>
+
+      <div id="s-y8" class="s-el clip s-year" data-start="21.9" data-duration="2.3" data-track-index="6" data-hf-name="年份 2019">2019</div>
+      <div id="s-t8" class="s-el clip s-ti" data-start="21.9" data-duration="2.3" data-track-index="6" data-hf-name="届数 TI9">TI9</div>
+      <div id="s-n8" class="s-el clip s-team" data-start="21.9" data-duration="2.3" data-track-index="6" data-hf-name="冠军 2019">OG</div>
+      <div id="s-r8" class="s-el clip s-region" data-start="21.9" data-duration="2.3" data-track-index="6" data-hf-name="地区 2019">欧洲</div>
+      <div id="s-g8" class="s-el clip s-note" data-start="21.9" data-duration="2.3" data-track-index="6" data-hf-name="注 2019">卫冕成功</div>
+
+      <div id="s-y9" class="s-el clip s-year" data-start="24.2" data-duration="2.3" data-track-index="6" data-hf-name="年份 2021">2021</div>
+      <div id="s-t9" class="s-el clip s-ti" data-start="24.2" data-duration="2.3" data-track-index="6" data-hf-name="届数 TI10">TI10</div>
+      <div id="s-n9" class="s-el clip s-team" data-start="24.2" data-duration="2.3" data-track-index="6" data-hf-name="冠军 2021">Team Spirit</div>
+      <div id="s-r9" class="s-el clip s-region" data-start="24.2" data-duration="2.3" data-track-index="6" data-hf-name="地区 2021">东欧</div>
+      <div id="s-g9" class="s-el clip s-note" data-start="24.2" data-duration="2.3" data-track-index="6" data-hf-name="注 2021">败者组奇迹</div>
+
+      <div id="s-y10" class="s-el clip s-year" data-start="26.5" data-duration="2.3" data-track-index="6" data-hf-name="年份 2022">2022</div>
+      <div id="s-t10" class="s-el clip s-ti" data-start="26.5" data-duration="2.3" data-track-index="6" data-hf-name="届数 TI11">TI11</div>
+      <div id="s-n10" class="s-el clip s-team" data-start="26.5" data-duration="2.3" data-track-index="6" data-hf-name="冠军 2022">Tundra Esports</div>
+      <div id="s-r10" class="s-el clip s-region" data-start="26.5" data-duration="2.3" data-track-index="6" data-hf-name="地区 2022">英国</div>
+
+      <div id="s-y11" class="s-el clip s-year" data-start="28.8" data-duration="2.3" data-track-index="6" data-hf-name="年份 2023">2023</div>
+      <div id="s-t11" class="s-el clip s-ti" data-start="28.8" data-duration="2.3" data-track-index="6" data-hf-name="届数 TI12">TI12</div>
+      <div id="s-n11" class="s-el clip s-team" data-start="28.8" data-duration="2.3" data-track-index="6" data-hf-name="冠军 2023">Team Spirit</div>
+      <div id="s-r11" class="s-el clip s-region" data-start="28.8" data-duration="2.3" data-track-index="6" data-hf-name="地区 2023">东欧</div>
+      <div id="s-g11" class="s-el clip s-note" data-start="28.8" data-duration="2.3" data-track-index="6" data-hf-name="注 2023">双冠王朝</div>
+
+      <div id="s-y12" class="s-el clip s-year" data-start="31.1" data-duration="2.3" data-track-index="6" data-hf-name="年份 2024">2024</div>
+      <div id="s-t12" class="s-el clip s-ti" data-start="31.1" data-duration="2.3" data-track-index="6" data-hf-name="届数 TI13">TI13</div>
+      <div id="s-n12" class="s-el clip s-team" data-start="31.1" data-duration="2.3" data-track-index="6" data-hf-name="冠军 2024">Team Liquid</div>
+      <div id="s-r12" class="s-el clip s-region" data-start="31.1" data-duration="2.3" data-track-index="6" data-hf-name="地区 2024">欧洲</div>
+
+      <div id="s-end1" class="s-el clip s-end1" data-start="33.4" data-duration="4.6" data-track-index="6" data-hf-name="结尾：盾名">AEGIS OF CHAMPIONS</div>
+      <div id="s-end2" class="s-el clip s-end2" data-start="33.4" data-duration="4.6" data-track-index="6" data-hf-name="结尾：统计">双冠之师：OG · Team Spirit · Team Liquid<br/>中国三冠：iG · Newbee · Wings Gaming</div>
+    </div>
+  </div>
+  <script src="assets/three.min.js"></script>
+  <script>
+    (function () {
+      var TOTAL = 38;
+      var st = { pulse: 1 };            // 年份切换的敲击脉冲（GSAP 驱动，确定性）
+      var canvas, renderer, scene, camera, shield, dust;
+
+      // ── 程序化 Aegis：盾体挤出 + 中央徽章 + 放射刺 + 铭牌 ──
+      function shieldOutline(s) {
+        var sh = new THREE.Shape();
+        sh.moveTo(0, -1.35 * s);                                   // 底尖
+        sh.bezierCurveTo(1.15 * s, -0.85 * s, 1.28 * s, 0.25 * s, 1.05 * s, 0.72 * s);
+        sh.bezierCurveTo(0.85 * s, 1.10 * s, 0.42 * s, 1.22 * s, 0, 1.18 * s);
+        sh.bezierCurveTo(-0.42 * s, 1.22 * s, -0.85 * s, 1.10 * s, -1.05 * s, 0.72 * s);
+        sh.bezierCurveTo(-1.28 * s, 0.25 * s, -1.15 * s, -0.85 * s, 0, -1.35 * s);
+        return sh;
+      }
+      function buildShield() {
+        var g = new THREE.Group();
+        var gold = new THREE.MeshStandardMaterial({ color: 0xC9A227, metalness: 0.78, roughness: 0.32 });
+        var goldDark = new THREE.MeshStandardMaterial({ color: 0x8C6B12, metalness: 0.85, roughness: 0.4 });
+        var goldLite = new THREE.MeshStandardMaterial({ color: 0xE8C766, metalness: 0.7, roughness: 0.26 });
+        var body = new THREE.Mesh(new THREE.ExtrudeGeometry(shieldOutline(1.55),
+          { depth: 0.34, bevelEnabled: true, bevelThickness: 0.09, bevelSize: 0.09, bevelSegments: 3, curveSegments: 48 }), gold);
+        body.position.z = -0.17;
+        g.add(body);
+        var inner = new THREE.Mesh(new THREE.ExtrudeGeometry(shieldOutline(1.26),
+          { depth: 0.1, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.05, bevelSegments: 2, curveSegments: 48 }), goldDark);
+        inner.position.z = 0.2;
+        g.add(inner);
+        var ring = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.075, 20, 60), goldLite);
+        ring.position.z = 0.34;
+        g.add(ring);
+        for (var i = 0; i < 8; i++) {                                // 放射刺（固定角度，确定性）
+          var spike = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.34, 12), goldLite);
+          var a = i / 8 * Math.PI * 2;
+          spike.position.set(Math.cos(a) * 0.62, Math.sin(a) * 0.62, 0.38);
+          spike.rotation.z = a - Math.PI / 2;
+          g.add(spike);
+        }
+        var gem = new THREE.Mesh(new THREE.SphereGeometry(0.22, 32, 24),
+          new THREE.MeshStandardMaterial({ color: 0x3D6FB8, metalness: 0.4, roughness: 0.12 }));
+        gem.position.z = 0.42;
+        g.add(gem);
+        return g;
+      }
+      function buildDust() {                                         // 金尘：LCG 伪随机布点（无 Math.random）
+        var n = 140, pos = new Float32Array(n * 3), seed = 42;
+        function rnd() { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; }
+        for (var i = 0; i < n; i++) {
+          pos[i * 3] = (rnd() - 0.5) * 14;
+          pos[i * 3 + 1] = (rnd() - 0.5) * 9;
+          pos[i * 3 + 2] = (rnd() - 0.5) * 5 - 1;
+        }
+        var geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        return new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xD8B04A, size: 0.045, transparent: true, opacity: 0.55 }));
+      }
+      function ensureGL() {
+        if (renderer) return;
+        canvas = document.getElementById('s-gl');
+        renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+        renderer.setSize(1920, 1080, false);
+        scene = new THREE.Scene();
+        camera = new THREE.PerspectiveCamera(42, 1920 / 1080, 0.1, 100);
+        scene.add(new THREE.HemisphereLight(0x8899bb, 0x221a08, 0.55));
+        var key = new THREE.DirectionalLight(0xfff1cf, 2.6); key.position.set(4, 6, 6); scene.add(key);
+        var rim = new THREE.DirectionalLight(0x6f9fff, 1.6); rim.position.set(-6, 3, -6); scene.add(rim);
+        var fill = new THREE.PointLight(0xffd27a, 1.1, 30); fill.position.set(-3, -2, 5); scene.add(fill);
+        shield = buildShield(); scene.add(shield);
+        dust = buildDust(); scene.add(dust);
+      }
+      function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+      function backOut(x) { var c = 1.70158; x = Math.min(Math.max(x, 0), 1); return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); }
+      function clamp01(x) { return Math.min(Math.max(x, 0), 1); }
+
+      // ── 渲染帧：一切状态 = t 的纯函数（seek 到哪帧，渲染哪帧）──
+      function renderFrame(t) {
+        ensureGL();
+        var appear = clamp01(t / 1.4);
+        var intro = clamp01(t / 3.5);
+        var yearin = easeOutCubic(clamp01((t - 3.5) / 1.2));       // 盾从中央滑到右主位
+        var outp = clamp01((t - 33.4) / 2.2);
+        var rotY, camX = 0, camY = 0.15, camZ, px = 0, py = -0.85, tiltX = 0, fl = 0.06 * Math.sin(t * 1.1);
+        if (t < 3.5) {                                               // 出场：标题在上，盾从下方旋入
+          rotY = -4.6 + 4.6 * easeOutCubic(intro);
+          camZ = 9.4 - 1.6 * easeOutCubic(intro);
+        } else if (t < 33.4) {                                       // 年份：盾居右主位，文字左列
+          rotY = 0.55 * t;
+          camZ = 6.2 - 0.7 * clamp01((t - 3.5) / 26);
+          camX = 0.3 * Math.sin(t * 0.32);
+          px = 2.15 * yearin;
+          py = fl;
+          tiltX = 0.05 * Math.sin(t * 0.21);
+        } else {                                                     // 收尾：回正居中特写
+          var base = 0.55 * 33.4;
+          rotY = base - (base % (2 * Math.PI));
+          rotY += (2 * Math.PI) * (1 - easeOutCubic(outp));
+          px = 2.15 * (1 - easeOutCubic(outp));
+          camZ = 5.6 - 0.5 * outp; camY = 0.15 + 0.25 * outp;
+          py = fl; tiltX = -0.06 * outp;
+        }
+        var s = backOut(appear) * st.pulse;
+        shield.scale.set(s, s, s);
+        shield.rotation.y = rotY;
+        shield.rotation.x = tiltX;
+        shield.position.set(px, py, 0);
+        dust.rotation.y = t * 0.03;
+        dust.position.y = 0.15 * Math.sin(t * 0.4);
+        camera.position.set(camX, camY, camZ);
+        camera.lookAt(0, 0, 0);
+        renderer.render(scene, camera);
+      }
+
+      var tl = gsap.timeline({ paused: true });
+      // 3D 帧驱动：hyperframes 对子时间轴的 seek 是 suppressEvents 的，
+      // onUpdate 不触发；改挂 gsap.ticker（rAF 生命周期内、截图合成前必跑），
+      // 渲染内容是 tl.time() 的纯函数，seek 到哪渲哪，确定性不破。
+      renderFrame(0);
+      gsap.ticker.add(function () { renderFrame(tl.time()); });
+      // 标题/年份/结尾文本动效（绝对时刻，确定性）
+      tl.from('#s-titlecard', { opacity: 0, y: 46, duration: 0.6, ease: 'power2.out' }, 0.15);
+      tl.from('#s-subcard', { opacity: 0, y: 30, duration: 0.5, ease: 'power2.out' }, 0.45);
+      tl.from('#s-rangecard', { opacity: 0, duration: 0.5, ease: 'none' }, 0.8);
+      var yearStarts = [3.5, 5.8, 8.1, 10.4, 12.7, 15, 17.3, 19.6, 21.9, 24.2, 26.5, 28.8, 31.1];
+      for (var i = 0; i < yearStarts.length; i++) {
+        var t0 = yearStarts[i];
+        tl.from('#s-y' + i, { opacity: 0, x: -60, duration: 0.35, ease: 'power2.out' }, t0 + 0.05);
+        tl.from('#s-t' + i, { opacity: 0, duration: 0.35, ease: 'none' }, t0 + 0.2);
+        tl.from('#s-n' + i, { opacity: 0, y: 34, duration: 0.35, ease: 'power2.out' }, t0 + 0.15);
+        tl.from('#s-r' + i, { opacity: 0, y: 22, duration: 0.3, ease: 'power2.out' }, t0 + 0.3);
+        var gn = document.getElementById('s-g' + i);
+        if (gn) tl.from('#s-g' + i, { opacity: 0, scale: 0.7, duration: 0.3, ease: 'back.out(1.8)' }, t0 + 0.45);
+        tl.to(st, { pulse: 1.05, duration: 0.1, ease: 'power2.out' }, t0);          // 敲击：盾微胀
+        tl.to(st, { pulse: 1.0, duration: 0.3, ease: 'power2.out' }, t0 + 0.1);     // 回落
+      }
+      tl.from('#s-end1', { opacity: 0, y: 40, duration: 0.6, ease: 'power2.out' }, 33.55);
+      tl.from('#s-end2', { opacity: 0, y: 26, duration: 0.55, ease: 'power2.out' }, 33.95);
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, TOTAL - 0.05);
+      window.__timelines["seg01"] = tl;
+    })();
+  </script>
+</template>

@@ -1,0 +1,46 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s27" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s27-track" class="clip" data-start="0" data-duration="2.600" data-track-index="0" data-hf-name="主轨"><canvas width="1920" height="1080" id="s27-e1" data-layout-allow-overflow data-hf-name="回形针海" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s27-e2" data-layout-allow-overflow data-hf-name="杀开关" style="position:absolute;top:150px;left:1060px;width:560px;background:rgba(8,7,6,.85);border:1px solid rgba(255,255,255,.14);padding:22px 26px;font:20px/1.7 Consolas,'Courier New',monospace;color:#C9C4BA;"><span data-c style="display:inline-block;color:#F4F1EA;">K</span><span data-c style="display:inline-block;color:#F4F1EA;">i</span><span data-c style="display:inline-block;color:#F4F1EA;">l</span><span data-c style="display:inline-block;color:#F4F1EA;">l</span><span data-c style="display:inline-block;color:#F4F1EA;">s</span><span data-c style="display:inline-block;color:#F4F1EA;">w</span><span data-c style="display:inline-block;color:#F4F1EA;">i</span><span data-c style="display:inline-block;color:#F4F1EA;">t</span><span data-c style="display:inline-block;color:#F4F1EA;">c</span><span data-c style="display:inline-block;color:#F4F1EA;">h</span><span data-c style="display:inline-block;width:.32em;color:#F4F1EA;">&nbsp;</span><span data-c style="display:inline-block;#C9C4BA">w</span><span data-c style="display:inline-block;#C9C4BA">h</span><span data-c style="display:inline-block;#C9C4BA">y</span><span data-c style="display:inline-block;#C9C4BA">'</span><span data-c style="display:inline-block;#C9C4BA">s</span><span data-c style="display:inline-block;width:.32em;#C9C4BA">&nbsp;</span><span data-c style="display:inline-block;#C9C4BA">i</span><span data-c style="display:inline-block;#C9C4BA">t</span><span data-c style="display:inline-block;width:.32em;#C9C4BA">&nbsp;</span><span data-c style="display:inline-block;#C9C4BA">o</span><span data-c style="display:inline-block;#C9C4BA">n</span><span data-c style="display:inline-block;width:.32em;#C9C4BA">&nbsp;</span><span data-c style="display:inline-block;color:#FF4D0D;">P</span><span data-c style="display:inline-block;color:#FF4D0D;">T</span><span data-c style="display:inline-block;color:#FF4D0D;">O</span><span data-c style="display:inline-block;color:#FF4D0D;">?</span></div>
+    <div id="s27-e3" data-layout-allow-overflow data-hf-name="杀开关2" style="position:absolute;top:240px;left:1090px;font:14px/1.9 Consolas,'Courier New',monospace;color:#6E6A60;opacity:0;">&gt; STATUS: unattended<br>&gt; coverage 0.0% · operators 0<br>&gt; next review: never</div>
+    <div id="s27-e4" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s27-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}function clip(c,s,col,lw,gl){c.strokeStyle=col;c.lineWidth=lw*s;c.lineJoin="round";c.lineCap="round";if(gl){c.shadowColor="rgba(255,150,70,.8)";c.shadowBlur=gl;}var u=120*s,v=52*s;c.beginPath();c.moveTo(-u*0.55,-v/2);c.bezierCurveTo(-u*0.55,-v/2-44,-u*0.06,-v/2-44,-u*0.06,-v/2);c.bezierCurveTo(-u*0.06,-v/2+44,-u*0.06,v/2+44,-u*0.06,v/2);c.bezierCurveTo(-u*0.06,v/2+44,-u*0.55,v/2+44,-u*0.55,v/2);c.bezierCurveTo(-u*0.55,v/2-44,-u*0.92,-v/2-24,-u*0.6,-v/2);c.moveTo(-u*0.06,-v/2);c.bezierCurveTo(-u*0.06,-v/2-44,u*0.4,-v/2-44,u*0.4,-v/2);c.bezierCurveTo(u*0.4,-v/2+44,u*0.4,v/2+44,u*0.4,v/2);c.bezierCurveTo(u*0.4,v/2+44,u*0.86,v/2+44,u*0.86,v/2);c.bezierCurveTo(u*0.86,v/2-44,u*0.42,-v/2-24,u*0.02,-v/2);c.stroke();}
+var i,j;
+for(j=0;j<10;j++){var q=j/10;
+  var scale=(0.3+q*1.5),y0=300+q*760;
+  var rowN=Math.ceil(14*scale);
+  for(i=0;i<rowN;i++){
+    var sx=960+(i-rowN/2)*(150*scale)+(hsh(i*7+j)-0.5)*30*scale;
+    if(sx<-160||sx>2080)continue;
+    cx.save();cx.translate(sx,y0+(hsh(i+j*3)-0.5)*36);cx.rotate((hsh(i*3+j)-0.5)*0.3);
+    cx.globalAlpha=0.25+q*0.5;
+    clip(cx,scale*0.9,'rgba(200,196,188,.85)',5,0);
+    cx.restore();}}
+cx.globalAlpha=1;
+var g=cx.createRadialGradient(960,420,10,960,420,420);
+g.addColorStop(0,'rgba(255,90,30,.5)');g.addColorStop(1,'rgba(255,90,30,0)');
+cx.fillStyle=g;cx.beginPath();cx.arc(960,420,420,0,Math.PI*2);cx.fill();
+cx.fillStyle='rgba(255,150,80,.95)';cx.shadowColor='#FF6A2B';cx.shadowBlur=24;
+cx.beginPath();cx.arc(960,420,7,0,Math.PI*2);cx.fill();cx.shadowBlur=0;
+};var pxv={v:0};tl.to(pxv,{v:2.600,duration:2.600,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s27-e2 [data-c]",{opacity:0});tl.to("#s27-e2 [data-c]",{opacity:1,duration:.02,stagger:0.055,ease:"none"},0.40);
+      gsap.set("#s27-e3",{opacity:0});tl.to("#s27-e3",{opacity:1,duration:0.4,ease:"none"},1.60);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 2.550);
+      window.__timelines["s27"] = tl;
+    })();
+  </script>
+</template>

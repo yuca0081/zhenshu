@@ -1,0 +1,54 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s12" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s12-track" class="clip" data-start="0" data-duration="5.300" data-track-index="0" data-hf-name="主轨"><canvas width="1920" height="1080" id="s12-e1" data-layout-allow-overflow data-hf-name="黑洞" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s12-e2" data-layout-allow-overflow data-hf-name="BUTNOW" style="position:absolute;top:210px;left:150px;font:800 40px/1 'Segoe UI',Arial,sans-serif;letter-spacing:10px;color:#F4F1EA;">BUT NOW THE</div>
+    <div id="s12-e3" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+    <div id="s12-e4" data-layout-allow-overflow data-hf-name="扫描纹" style="position:absolute;inset:0;pointer-events:none;opacity:.5;background:repeating-linear-gradient(0deg,rgba(255,255,255,.02) 0 1px,transparent 1px 3px);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s12-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+var cx0=880,cy0=560,i,j;
+cx.save();cx.translate(cx0,cy0);
+var rot=t*0.5;
+for(i=0;i<26;i++){var a=i/26*Math.PI*2+rot;
+  var r1=90+60*hsh(i),r2=420+260*hsh(i*3);
+  cx.strokeStyle='rgba(255,255,255,'+(0.10+0.08*hsh(i*7))+')';cx.lineWidth=1.1;
+  cx.save();cx.rotate(a);
+  cx.beginPath();cx.moveTo(0,0);
+  for(j=1;j<=5;j++){var rr=r1+(r2-r1)*j/5;var aa=0.5*j;
+    cx.lineTo(rr*Math.cos(aa),rr*Math.sin(aa));}
+  cx.stroke();cx.restore();}
+var g=cx.createRadialGradient(0,0,70,0,0,240);
+g.addColorStop(0,'rgba(0,0,0,1)');g.addColorStop(.42,'rgba(0,0,0,.95)');
+g.addColorStop(.55,'rgba(255,120,40,.9)');g.addColorStop(.75,'rgba(255,70,15,.35)');
+g.addColorStop(1,'rgba(255,60,10,0)');
+cx.fillStyle=g;cx.beginPath();cx.arc(0,0,240,0,Math.PI*2);cx.fill();
+cx.fillStyle='#000';cx.beginPath();cx.arc(0,0,96,0,Math.PI*2);cx.fill();
+for(i=0;i<9;i++){var aa2=rot*2+i/9*Math.PI*2;
+  cx.strokeStyle='rgba(255,170,90,'+(0.25+0.2*Math.sin(t*3+i))+')';cx.lineWidth=2;
+  cx.beginPath();cx.ellipse(0,0,150+i*10,(150+i*10)*0.3,aa2*0.1,0,Math.PI*2);cx.stroke();}
+cx.restore();
+function arcText(text,cxx,cyy,r,a0,per,font,col,glow,alpha){cx.save();cx.font=font;cx.fillStyle=col;cx.textAlign="center";cx.textBaseline="middle";if(glow){cx.shadowColor=glow;cx.shadowBlur=22;}cx.globalAlpha=(alpha===undefined)?1:alpha;var per=per||0.055;for(var i=0;i<text.length;i++){var a=a0+per*i;var x=cxx+r*Math.cos(a);var y=cyy+r*Math.sin(a);cx.save();cx.translate(x,y);cx.rotate(a+Math.PI/2);cx.fillText(text[i],0,0);cx.restore();}cx.restore();}
+if(t>1.1){var ka=Math.min(1,(t-1.1)/0.8);
+  arcText("SINGULARITY'S",880,560,330,-1.9-0.15*Math.sin(t*.8),0.075,'900 74px "Arial Black","Segoe UI",sans-serif','rgba(244,241,234,.96)','rgba(255,255,255,.35)',ka);}
+if(t>2.7){var kb=Math.min(1,(t-2.7)/0.7);
+  arcText("BEGUN",880,560,395,0.9,0.075,'900 74px "Arial Black","Segoe UI",sans-serif','rgba(255,160,80,.9)','rgba(255,110,40,.5)',kb);}
+};var pxv={v:0};tl.to(pxv,{v:5.300,duration:5.300,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s12-e2",{opacity:0});tl.to("#s12-e2",{opacity:1,duration:0.2,ease:"none"},0.50);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 5.250);
+      window.__timelines["s12"] = tl;
+    })();
+  </script>
+</template>

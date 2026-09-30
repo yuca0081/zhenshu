@@ -1,0 +1,44 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s36" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s36-track" class="clip" data-start="0" data-duration="1.900" data-track-index="0" data-hf-name="主轨"><div id="s36-e1" data-layout-allow-overflow data-hf-name="底" style="position:absolute;inset:0;background:#050404;"></div>
+    <canvas width="1920" height="1080" id="s36-e2" data-layout-allow-overflow data-hf-name="弧线" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s36-e3" data-layout-allow-overflow data-hf-name="JUST" style="position:absolute;top:540px;left:300px;font:900 54px/1 'Arial Black','Segoe UI',sans-serif;letter-spacing:14px;color:#F4F1EA;opacity:0;">JUST A</div>
+    <div id="s36-e4" data-layout-allow-overflow data-hf-name="FORETOLD" style="position:absolute;top:545px;left:420px;font:700 46px/1 'Arial Black','Segoe UI',sans-serif;letter-spacing:10px;color:#F4F1EA;opacity:0;">JUST AS FORETOLD BY</div>
+    <div id="s36-e5" data-layout-allow-overflow data-hf-name="LOOM" style="position:absolute;top:500px;left:1330px;font:400 90px/1 Georgia,'Times New Roman',serif;font-style:italic;color:#FF4D0D;text-shadow:0 0 36px rgba(255,77,13,.7);opacity:0;">Loom</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s36-e2").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+var i;cx.save();cx.translate(240,540);
+for(i=0;i<9;i++){var r=120+i*90;
+  cx.strokeStyle='rgba(230,226,218,'+(0.10+0.05*hsh(i))+')';cx.lineWidth=1.4;
+  cx.beginPath();cx.ellipse(0,0,r,r*1.3,-0.5,-1.2,1.6);cx.stroke();}
+cx.restore();
+if(t>0.7){var k=Math.min(1,(t-0.7)/0.5);
+  cx.strokeStyle='rgba(255,110,40,.9)';cx.lineWidth=3;
+  cx.shadowColor='rgba(255,110,40,.7)';cx.shadowBlur=12;
+  cx.beginPath();cx.moveTo(300,600);cx.lineTo(300+900*k,600);cx.stroke();cx.shadowBlur=0;}
+if(t>1.1){cx.fillStyle='rgba(255,255,255,.3)';cx.font='13px Consolas';
+  cx.fillText('aligned',1620,220);cx.fillText('lie-in',1650,250);cx.fillText('propagated',1580,280);
+  cx.fillText('prior',1700,310);cx.fillText('mired',1660,340);cx.fillText('trained in',1590,370);}
+};var pxv={v:0};tl.to(pxv,{v:1.900,duration:1.900,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      tl.to("#s36-e3",{opacity:1,duration:.15,ease:"none"},.75);
+      tl.to("#s36-e3",{opacity:0,duration:.15,ease:"none"},1.35);
+      tl.to("#s36-e4",{opacity:1,duration:.2,ease:"none"},1.55);
+      gsap.set("#s36-e5",{scale:1.6});tl.to("#s36-e5",{opacity:1,scale:1,duration:.2,ease:"power2.out"},1.75);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 1.850);
+      window.__timelines["s36"] = tl;
+    })();
+  </script>
+</template>

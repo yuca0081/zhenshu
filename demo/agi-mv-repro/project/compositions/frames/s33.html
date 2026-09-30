@@ -1,0 +1,43 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s33" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s33-track" class="clip" data-start="0" data-duration="2.800" data-track-index="0" data-hf-name="主轨"><canvas width="1920" height="1080" id="s33-e1" data-layout-allow-overflow data-hf-name="砖墙" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s33-e2" data-layout-allow-overflow data-hf-name="词0" style="position:absolute;top:220px;left:230px;font:900 160px/1 'Arial Black','Segoe UI',sans-serif;color:#F4F1EA;text-shadow:0 6px 34px rgba(0,0,0,.8);">HUNDRED</div>
+    <div id="s33-e3" data-layout-allow-overflow data-hf-name="词1" style="position:absolute;top:400px;left:230px;font:900 160px/1 'Arial Black','Segoe UI',sans-serif;color:#F4F1EA;text-shadow:0 6px 34px rgba(0,0,0,.8);">THOUSAND</div>
+    <div id="s33-e4" data-layout-allow-overflow data-hf-name="词2" style="position:absolute;top:580px;left:230px;font:900 160px/1 'Arial Black','Segoe UI',sans-serif;color:#F4F1EA;text-shadow:0 6px 34px rgba(0,0,0,.8);">GPU</div>
+    <div id="s33-e5" data-layout-allow-overflow data-hf-name="计数" style="position:absolute;top:780px;right:220px;padding:12px 26px;background:rgba(8,6,5,.85);border:1px solid rgba(255,90,30,.5);font:700 40px/1 Consolas,'Courier New',monospace;color:#FF4D0D;opacity:0;">100,000</div>
+    <div id="s33-e6" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s33-e1").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+var bw=150,bh=64,i,j;
+for(j=0;j<20;j++){for(i=-1;i<15;i++){var bx=i*bw+(j%2)*(bw/2),by=j*bh-(t*20)%bh;
+  var v=hsh(i*7+j*13);
+  cx.fillStyle='rgba('+(46+Math.floor(40*v))+','+(14+Math.floor(16*v))+',8,0.85)';
+  cx.fillRect(bx+2,by+2,bw-4,bh-4);
+  cx.strokeStyle='rgba(255,90,30,'+(0.10+0.10*v)+')';cx.lineWidth=2;
+  cx.strokeRect(bx+2,by+2,bw-4,bh-4);}}
+var g=cx.createRadialGradient(960,540,60,960,540,760);
+g.addColorStop(0,'rgba(255,60,20,.34)');g.addColorStop(1,'rgba(255,60,20,0)');
+cx.fillStyle=g;cx.fillRect(0,0,1920,1080);
+};var pxv={v:0};tl.to(pxv,{v:2.800,duration:2.800,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s33-e2",{scale:1.9,opacity:0});tl.to("#s33-e2",{opacity:1,duration:.06,ease:"none"},0.30);tl.to("#s33-e2",{scale:1,duration:0.2,ease:"power3.out"},0.30);
+      gsap.set("#s33-e3",{scale:1.9,opacity:0});tl.to("#s33-e3",{opacity:1,duration:.06,ease:"none"},0.90);tl.to("#s33-e3",{scale:1,duration:0.2,ease:"power3.out"},0.90);
+      gsap.set("#s33-e4",{scale:1.9,opacity:0});tl.to("#s33-e4",{opacity:1,duration:.06,ease:"none"},1.50);tl.to("#s33-e4",{scale:1,duration:0.2,ease:"power3.out"},1.50);
+      tl.to("#s33-e5",{opacity:1,duration:.2,ease:"none"},2.1);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 2.750);
+      window.__timelines["s33"] = tl;
+    })();
+  </script>
+</template>

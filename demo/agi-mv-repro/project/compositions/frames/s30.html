@@ -1,0 +1,46 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s30" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s30-track" class="clip" data-start="0" data-duration="3.500" data-track-index="0" data-hf-name="主轨"><div id="s30-e1" data-layout-allow-overflow data-hf-name="底" style="position:absolute;inset:0;background:#070606;"></div>
+    <canvas width="1920" height="1080" id="s30-e2" data-layout-allow-overflow data-hf-name="散点" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s30-e3" data-layout-allow-overflow data-hf-name="论题" style="position:absolute;top:620px;left:270px;font:400 44px/1 'Segoe UI',Arial,sans-serif;color:#F4F1EA;letter-spacing:1px;">Orthogonality thesis</div>
+    <div id="s30-e4" data-layout-allow-overflow data-hf-name="BLUES" style="position:absolute;top:330px;left:0;width:1920px;text-align:center;font:400 160px/1 Georgia,'Times New Roman',serif;font-style:italic;color:#F4F1EA;text-shadow:0 0 40px rgba(255,255,255,.25);">blues</div>
+    <div id="s30-e5" data-layout-allow-overflow data-hf-name="幽灵" style="position:absolute;top:180px;left:1150px;font:14px/2 Consolas,'Courier New',monospace;color:rgba(255,255,255,.35);">the market · paperclips · chess<br>protein folding · bridge schedules<br>hedonistic egoism · let them fight</div>
+    <div id="s30-e6" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s30-e2").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+cx.strokeStyle='rgba(255,255,255,.35)';cx.lineWidth=2;
+cx.beginPath();cx.moveTo(220,880);cx.lineTo(220,140);cx.moveTo(220,880);cx.lineTo(1800,880);cx.stroke();
+cx.fillStyle='rgba(255,255,255,.5)';cx.font='15px Consolas';
+cx.fillText('GOALS ↑',150,130);cx.fillText('INTELLIGENCE →',1600,920);
+var i;for(i=0;i<70;i++){var x=260+hsh(i*7)*1480,y=200+hsh(i*13)*600;
+  var tw=0.3+0.5*Math.abs(Math.sin(t*2+i));
+  cx.fillStyle=(i%9==0)?'rgba(255,130,50,'+tw+')':'rgba(220,215,208,'+tw*0.8+')';
+  cx.beginPath();cx.arc(x,y,2.6,0,Math.PI*2);cx.fill();}
+if(t>1.1){var k=Math.min(1,(t-1.1)/0.7);
+  cx.strokeStyle='rgba(255,110,40,'+0.9*k+')';cx.lineWidth=2.4;
+  cx.beginPath();var j2;for(j2=0;j2<=30;j2++){var q2=j2/30;
+    var x2=300+q2*1300,y2=760-330*q2+50*Math.sin(q2*7);
+    if(j2==0)cx.moveTo(x2,y2);else cx.lineTo(x2,y2);}
+  cx.stroke();}
+};var pxv={v:0};tl.to(pxv,{v:3.500,duration:3.500,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s30-e3",{opacity:0});tl.to("#s30-e3",{opacity:1,duration:0.3,ease:"none"},0.60);
+      gsap.set("#s30-e4",{scale:1.3,opacity:0});tl.to("#s30-e4",{opacity:1,duration:.06,ease:"none"},1.40);tl.to("#s30-e4",{scale:1,duration:0.25,ease:"power3.out"},1.40);
+      gsap.set("#s30-e5",{opacity:0});tl.to("#s30-e5",{opacity:1,duration:0.4,ease:"none"},2.00);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 3.450);
+      window.__timelines["s30"] = tl;
+    })();
+  </script>
+</template>

@@ -1,0 +1,51 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s34" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s34-track" class="clip" data-start="0" data-duration="3.900" data-track-index="0" data-hf-name="主轨"><div id="s34-e1" data-layout-allow-overflow data-hf-name="底" style="position:absolute;inset:0;background:#070606;"></div>
+    <div id="s34-e2" data-layout-allow-overflow data-hf-name="RLHF" style="position:absolute;top:250px;left:170px;font:900 190px/1 'Arial Black','Segoe UI',sans-serif;color:#F4F1EA;">RLHF</div>
+    <div id="s34-e3" data-layout-allow-overflow data-hf-name="GOES" style="position:absolute;top:470px;left:180px;font:800 54px/1 'Segoe UI',Arial,sans-serif;letter-spacing:12px;color:#F4F1EA;opacity:0;">GOES</div>
+    <div id="s34-e4" data-layout-allow-overflow data-hf-name="ASKEW" style="position:absolute;top:530px;left:170px;font:900 170px/1 'Arial Black','Segoe UI',sans-serif;color:#FF4D0D;text-shadow:0 0 46px rgba(255,77,13,.55);transform:rotate(-8deg) skewX(-8deg);opacity:0;">ASKEW</div>
+    <div id="s34-e5" data-layout-allow-overflow data-hf-name="笑脸" style="position:absolute;top:300px;left:1240px;width:400px;height:400px;"><div style="position:absolute;inset:0;border-radius:50%;background:#F4F1EA;box-shadow:0 6px 40px rgba(0,0,0,.5);"></div><div style="position:absolute;left:27%;top:34%;width:9%;height:16%;border-radius:50%;background:#1A1815;"></div><div style="position:absolute;right:27%;top:34%;width:9%;height:16%;border-radius:50%;background:#1A1815;"></div><div style="position:absolute;left:26%;top:56%;width:48%;height:30%;border:solid #1A1815;border-width:0 0 7px 0;border-radius:0 0 90px 90px;"></div></div>
+    <canvas width="1920" height="1080" id="s34-e6" data-layout-allow-overflow data-hf-name="缠绕" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s34-e7" data-layout-allow-overflow data-hf-name="计数" style="position:absolute;top:90px;left:170px;font:15px/1.8 Consolas,'Courier New',monospace;color:#8D897F;letter-spacing:1px;">P(RM) <span style="color:#FF4D0D;">0.99</span><br>reward model: overheating</div>
+    <div id="s34-e8" data-layout-allow-overflow data-hf-name="计数2" style="position:absolute;top:90px;left:170px;font:15px/1.8 Consolas,'Courier New',monospace;color:#8D897F;letter-spacing:1px;opacity:0;">P(RM) <span style="color:#FF4D0D;">0.47</span><br>reward model: <span style="color:#FF3B2F;">askew</span></div>
+    <div id="s34-e9" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+    <div id="s34-e10" data-layout-allow-overflow data-hf-name="扫描纹" style="position:absolute;inset:0;pointer-events:none;opacity:.5;background:repeating-linear-gradient(0deg,rgba(255,255,255,.02) 0 1px,transparent 1px 3px);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      gsap.set("#s34-e2",{scale:1.4,opacity:0});tl.to("#s34-e2",{opacity:1,duration:.06,ease:"none"},0.40);tl.to("#s34-e2",{scale:1,duration:0.25,ease:"power3.out"},0.40);
+      gsap.set("#s34-e3",{opacity:0});tl.to("#s34-e3",{opacity:1,duration:0.2,ease:"none"},0.90);
+      gsap.set("#s34-e4",{scale:1.6});tl.to("#s34-e4",{opacity:1,scale:1,duration:.22,ease:"power3.out"},1.5);
+      gsap.set("#s34-e5",{opacity:0});tl.to("#s34-e5",{opacity:1,duration:0.3,ease:"none"},0.80);
+      tl.to("#s34-e5",{rotation:-24,x:60,duration:.5,ease:"power2.in"},2.2);
+      var cx=document.getElementById("s34-e6").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+if(t>2.2){var k=Math.min(1,(t-2.2)/0.8);
+  var i,j;cx.strokeStyle='rgba(22,20,18,.9)';cx.lineCap='round';
+  for(i=0;i<7;i++){cx.lineWidth=16-8*(i%3)/2;
+    cx.beginPath();var aa=i/7*Math.PI*2+2.2;
+    var cxr=1440+Math.cos(aa)*30,cyr=500+Math.sin(aa)*30;
+    cx.moveTo(cxr,cyr);
+    for(j=1;j<=9;j++){aa+=0.34;
+      var rr=40+j*30*k;
+      cx.lineTo(cxr+rr*Math.cos(aa)*0.9,cyr+rr*Math.sin(aa)*0.55);}
+    cx.stroke();}}
+};var pxv={v:0};tl.to(pxv,{v:3.900,duration:3.900,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s34-e7",{opacity:0});tl.to("#s34-e7",{opacity:1,duration:0.3,ease:"none"},0.50);
+      tl.to("#s34-e7",{opacity:0,duration:.2},2.40);
+      gsap.set("#s34-e8",{opacity:0});tl.to("#s34-e8",{opacity:1,duration:0.3,ease:"none"},2.50);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 3.850);
+      window.__timelines["s34"] = tl;
+    })();
+  </script>
+</template>

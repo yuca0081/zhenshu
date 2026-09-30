@@ -1,0 +1,51 @@
+<template>
+  <style>
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI',Arial,sans-serif;color:#F4F1EA;}
+.a-el{position:absolute;}
+</style>
+  <div data-composition-id="s29" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="s29-track" class="clip" data-start="0" data-duration="3.400" data-track-index="0" data-hf-name="主轨"><div id="s29-e1" data-layout-allow-overflow data-hf-name="底" style="position:absolute;inset:0;background:#070606;"></div>
+    <canvas width="1920" height="1080" id="s29-e2" data-layout-allow-overflow data-hf-name="引线" style="position:absolute;top:0;left:0;width:1920px;height:1080px;"></canvas>
+    <div id="s29-e3" data-layout-allow-overflow data-hf-name="词" style="position:absolute;top:420px;left:230px;font:600 52px/1 'Segoe UI',Arial,sans-serif;color:#F4F1EA;white-space:nowrap;"><span data-c style="display:inline-block;">T</span><span data-c style="display:inline-block;">o</span><span data-c style="display:inline-block;">o</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;color:#FF4D0D;">l</span><span data-c style="display:inline-block;color:#FF4D0D;">a</span><span data-c style="display:inline-block;color:#FF4D0D;">t</span><span data-c style="display:inline-block;color:#FF4D0D;">e</span><span data-c style="display:inline-block;width:.32em;color:#FF4D0D;">&nbsp;</span><span data-c style="display:inline-block;color:#FF4D0D;">n</span><span data-c style="display:inline-block;color:#FF4D0D;">o</span><span data-c style="display:inline-block;color:#FF4D0D;">w</span><span data-c style="display:inline-block;color:#FF4D0D;">,</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">w</span><span data-c style="display:inline-block;">e</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;color:#FF4D0D;">l</span><span data-c style="display:inline-block;color:#FF4D0D;">i</span><span data-c style="display:inline-block;color:#FF4D0D;">t</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">t</span><span data-c style="display:inline-block;">h</span><span data-c style="display:inline-block;">e</span><span data-c style="display:inline-block;width:.32em;">&nbsp;</span><span data-c style="display:inline-block;">f</span><span data-c style="display:inline-block;">u</span><span data-c style="display:inline-block;">s</span><span data-c style="display:inline-block;">e</span></div>
+    <div id="s29-e4" data-layout-allow-overflow data-hf-name="FUSE" style="position:absolute;top:330px;left:640px;font:900 300px/1 'Arial Black','Segoe UI',sans-serif;color:#FF4D0D;text-shadow:0 0 80px rgba(255,90,20,.8),0 0 20px rgba(255,140,60,.7);opacity:0;transform:rotate(-7deg);">fuse</div>
+    <div id="s29-e5" data-layout-allow-overflow data-hf-name="暗角" style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,0.42) 100%);"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var tl = gsap.timeline({ paused: true });
+      var cx=document.getElementById("s29-e2").getContext("2d");var drawF=function(t){cx.clearRect(0,0,1920,1080);function hsh(n){var s=Math.sin(n*127.1+311.7)*43758.5453;return s-Math.floor(s);}
+var P=[];var i;
+for(i=0;i<=40;i++){var q=i/40;
+  P.push([q*2100-90, 560+130*Math.sin(q*4.6+0.6)]);}
+function pAt(q){var idx=q*40,i2=Math.floor(idx),f2=idx-i2;
+  var A=P[Math.min(40,i2)],B=P[Math.min(40,i2+1)];
+  return [A[0]+(B[0]-A[0])*f2,A[1]+(B[1]-A[1])*f2];}
+cx.strokeStyle='rgba(160,155,148,.9)';cx.lineWidth=9;
+cx.beginPath();for(i=0;i<=40;i++){if(i==0)cx.moveTo(P[i][0],P[i][1]);else cx.lineTo(P[i][0],P[i][1]);}
+cx.stroke();
+cx.strokeStyle='rgba(60,56,52,.95)';cx.lineWidth=2.6;cx.setLineDash([9,11]);
+cx.beginPath();for(i=0;i<=40;i++){if(i==0)cx.moveTo(P[i][0],P[i][1]-5);else cx.lineTo(P[i][0],P[i][1]-5);}
+cx.stroke();cx.setLineDash([]);
+var hp=Math.min(1,t/2.2);
+var hpv=pAt(hp);
+var g=cx.createRadialGradient(hpv[0],hpv[1],2,hpv[0],hpv[1],60);
+g.addColorStop(0,'rgba(255,246,235,1)');g.addColorStop(.4,'rgba(255,160,70,.9)');g.addColorStop(1,'rgba(255,90,20,0)');
+cx.fillStyle=g;cx.beginPath();cx.arc(hpv[0],hpv[1],60,0,Math.PI*2);cx.fill();
+for(i=0;i<16;i++){var a=hsh(i+Math.floor(t*10))*Math.PI*2,dd=8+hsh(i*3+t)*40;
+  cx.fillStyle='rgba(255,190,110,.9)';
+  cx.beginPath();cx.arc(hpv[0]+dd*Math.cos(a),hpv[1]+dd*Math.sin(a),2.2,0,Math.PI*2);cx.fill();}
+};var pxv={v:0};tl.to(pxv,{v:3.400,duration:3.400,ease:"none",onUpdate:function(){drawF(pxv.v);}},0);
+      gsap.set("#s29-e3 [data-c]",{opacity:0,y:36});tl.to("#s29-e3 [data-c]",{opacity:1,y:0,duration:0.5,stagger:0.03,ease:"power2.out"},0.50);
+      gsap.set("#s29-e4",{scale:2.6});tl.to("#s29-e4",{opacity:1,scale:1,duration:.3,ease:"power3.out"},2.45);
+      tl.to("#s29-e3",{opacity:0,duration:0.2,ease:"none"},2.40);
+      
+      var pad = { v: 0 };
+      tl.to(pad, { v: 1, duration: 0.02 }, 3.350);
+      window.__timelines["s29"] = tl;
+    })();
+  </script>
+</template>
