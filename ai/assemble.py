@@ -97,10 +97,10 @@ def subtitle_blocks(scenes, meta_voices, slots, base=0.0):
             i0, i1 = int(rng[0]), int(rng[1])
             enline = ''
             if pi < len(en) and en[pi]:
-                enline = f'<div class="cap-en" data-layout-allow-overlap>{_esc_html(en[pi])}</div>'
-            spans = ''.join(f'<span class="cap-w" data-layout-allow-overlap data-sw="{i}">{_esc_html(words[i]["text"])}</span>'
+                enline = f'<div class="cap-en" data-layout-allow-overlap data-layout-allow-occlusion>{_esc_html(en[pi])}</div>'
+            spans = ''.join(f'<span class="cap-w" data-layout-allow-overlap data-layout-allow-occlusion data-sw="{i}">{_esc_html(words[i]["text"])}</span>'
                             for i in range(i0, i1 + 1))
-            ph_html.append(f'<div class="cap-ph" data-layout-allow-overlap data-sph="{pi}"><div class="cap-line">{spans}{enline}</div></div>')
+            ph_html.append(f'<div class="cap-ph" data-layout-allow-overlap data-layout-allow-occlusion data-sph="{pi}"><div class="cap-line">{spans}{enline}</div></div>')
         html_parts.append(
             f'<div id="cap-{sid}" class="clip" data-start="{start}" data-duration="{dur}" '
             f'data-track-index="8" data-hf-name="字幕带">\n'
