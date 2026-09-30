@@ -16,7 +16,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -258,9 +257,6 @@ func (r *Runner) sceneLintRun(html string) []string {
 	return errs
 }
 
-// wordLineRe 词序表行（sceneUserPrompt 生成用）。
-var wordLineRe = regexp.MustCompile(`^(\d+):(.*)@([\d.]+)s$`)
-
 // sceneUserPrompt 场景生成作业正文：契约摘要 + 段信息 + 风格/方法注入 + 词序表。
 func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback string, cv contract.Canvas, style, golden, sceneTpl, compMethods string) string {
 	var wb strings.Builder
@@ -286,7 +282,6 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
 	if golden != "" {
 		goldenBlock = "\n## 结构金样例（结构/时序/canvas 写法照这个模式；视觉内容必须按本段重写）\n```html\n" + golden + "\n```\n"
 	}
-	_ = wordLineRe // （词序表直接拼，见下；正则留给外部工具解析）
 	return fmt.Sprintf(`为这一段视频直接写场景文件 HTML（你是画面工程师，版式/动效/图形程序全部自己写）。
 
 ## 契约摘要（完整版 docs/contract.md；违反任意一条会被 lint 拒收）
@@ -321,7 +316,7 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
   段落适合铺氛围时优先写背景层（渐变/纹理/程序化画布），别停在纯色底
 %s
 %s
-## 输出（只输出 JSON，无围栏）
+## 输出（只输出一个 JSON 对象：第一个字符必须是 {、最后一个字符必须是 }，前后不许有任何字、标签、围栏或解释）
 {"note":"画面思路一句话","html":"<template>…整段场景文件…</template>","elements":[{"id":"元素DOM id","name":"人话名（与 data-hf-name 一致）"}]}
 `, seg.ID, int(cv.W), int(cv.H), seg.ID, v.DurationS+contract.SegTail, seg.Key, len(v.Words), v.DurationS, seg.Narration, briefLabel, seg.VisualBrief,
 		instrBlock, style, goldenBlock, sceneTpl, wb.String(), rules, compMethods, feedbackBlock(feedback))

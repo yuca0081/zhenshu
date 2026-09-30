@@ -117,7 +117,7 @@ func (p *Provider) generate(ctx context.Context, system string, userParts []open
 			continue
 		}
 		usage = resp.Usage
-		content := stripFence(resp.Choices[0].Message.Content)
+		content := extractJSON(stripFence(resp.Choices[0].Message.Content))
 		if err := json.Unmarshal([]byte(content), out); err != nil {
 			lastErr = fmt.Errorf("模型输出不是合法 JSON: %w（原文前 200 字: %.200s）", err, content)
 			continue
@@ -190,6 +190,43 @@ func cfg(p *Provider) openai.ClientConfig {
 	// 默认 http.Client 无超时：端点偶发挂住会把 Agent 循环/管线永久卡死
 	c.HTTPClient = &http.Client{Timeout: 3 * time.Minute}
 	return c
+}
+
+// extractJSON 从模型输出里捞第一个完整 JSON 对象（括号配平，跳过字符串字面量内的花括号）。
+// flash 级模型常在 JSON 前后夹标签词/解释句（实测 glm-5.3-flash 输出 "html\n{...}"），
+// ResponseFormat=JSONObject 也拦不住；纯 JSON 输出时本函数是恒等变换。
+func extractJSON(s string) string {
+	start := strings.IndexByte(s, '{')
+	if start < 0 {
+		return s
+	}
+	inStr, esc, depth := false, false, 0
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			switch {
+			case esc:
+				esc = false
+			case c == '\\':
+				esc = true
+			case c == '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return s[start:] // 未闭合：原样交给 Unmarshal 报出可读错误
 }
 
 func stripFence(s string) string {
