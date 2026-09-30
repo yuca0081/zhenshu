@@ -21,8 +21,8 @@ import (
 
 // TestSceneSurvivalBench M-C 首项：LLM 全自动产 scene 段成活率基准（链路闸验收 ≥7/10）。
 // SCENE_SURVIVAL=1 显式开启（真实 LLM 调用 + 渲染，全程 15-30 分钟）。
-// 流程：夹具项目（10 段数学/粒子类选题，合成词表+静音音频）→ genSpecs（全自动）→
-// renderSpecs → 落帧 → assemble → 逐段 hyperframes render → 抽帧像素统计 → 回放门禁。
+// 流程：夹具项目（10 段数学/粒子类选题，合成词表+静音音频）→ sceneGen（LLM 直写场景文件）→
+// 落帧 → assemble → 逐段 hyperframes render → 抽帧像素统计 → 回放门禁。
 // 成活 = 段渲出视频 + 中段画面非空 + 回放 diff=0。报告写 <proj>/reports/survival.md。
 func TestSceneSurvivalBench(t *testing.T) {
 	if os.Getenv("SCENE_SURVIVAL") != "1" {
@@ -45,16 +45,13 @@ func TestSceneSurvivalBench(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
 
-	instr := "本片是数学科普风格测试片（深空底+霓虹发光审美）。画面主体优先用 kind=scene 程序化画布" +
-		"（每段 1 个，全画幅 canvas 绘制），再叠 1 个 title（必要时加 formula）。不用 image 元素（离线无图源）。"
-	t.Log("① genSpecs（LLM 全自动，10 段并发 3）…")
-	if err := r.genSpecs(ctx, p, instr, "", ""); err != nil {
-		t.Fatalf("genSpecs: %v", err)
+	instr := "本片是数学科普风格测试片（深空底+霓虹发光审美）。画面主体优先用程序化画布" +
+		"（<canvas> + window.__draw_ 参数化绘制，每段 1 个，全画幅），再叠 1 个大字标题。纯代码画面，不引图片。"
+	t.Log("① sceneGen（LLM 直写场景文件，10 段并发 3）…")
+	if err := r.sceneGen(ctx, p, instr, "", ""); err != nil {
+		t.Fatalf("sceneGen: %v", err)
 	}
-	t.Log("② renderSpecs + 落帧 + assemble …")
-	if err := r.renderSpecs(ctx, p); err != nil {
-		t.Fatalf("renderSpecs: %v", err)
-	}
+	t.Log("② 落帧 + assemble …")
 	// 落帧（payload → compositions/frames）：不走 pipeline.Run（会从 manuscript 起全链重跑，
 	// 触碰 TTS 等重阶段）；stageCompositions 的提取逻辑等价内联。
 	for _, seg := range sbSegs(t, p) {
@@ -89,9 +86,8 @@ func TestSceneSurvivalBench(t *testing.T) {
 	var rows []row
 	for _, seg := range sb.Segments {
 		row := row{id: seg.ID, hasScene: specHasScene(p, seg.ID)}
-		specPath := p.Artifact("llm/comp-" + seg.ID + ".spec.json")
-		if !existsFile(specPath) {
-			row.note = "spec 缺失"
+		if !existsFile(p.Artifact("compositions/frames/" + seg.ID + ".html")) {
+			row.note = "场景文件缺失"
 			rows = append(rows, row)
 			continue
 		}

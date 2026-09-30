@@ -1,9 +1,9 @@
 // Package produce：制作任务运行器（确定性编排，LLM 只在需要的点上介入）。
 //
-// 链路：tts（python）→ 每段语义 spec（DeepSeek + 契约校验 + 修复一轮）
+// 链路（v2）：tts（python）→ 每段场景文件（LLM 直写 HTML + 契约 lint 门禁，
 //
-//	→ spec 渲染 HTML（python render_spec）→ 管线落盘合成物 → 组装（python assemble）
-//	→ check 门禁（失败带着报错重生成 spec 自修复，最多 2 轮）→ 渲染 → 成片。
+//	见 scenegen.go / docs/contract.md）→ 管线落盘合成物 → 组装（python assemble）
+//	→ check 门禁（失败带着报错回喂重生成，最多 2 轮）→ 渲染 → 成片。
 //
 // 每步 SSE 广播 stage 事件；产物落盘可从任意步重放（manifest 记账）。
 package produce
@@ -11,9 +11,7 @@ package produce
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,13 +31,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	openai "github.com/sashabaranov/go-openai"
-
-	"webpage-video-agent/server/internal/assetlib"
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/events"
 	"webpage-video-agent/server/internal/llm"
-	"webpage-video-agent/server/internal/methodlib"
 	"webpage-video-agent/server/internal/pipeline"
 )
 
@@ -298,17 +292,11 @@ func (r *Runner) runRework(ctx context.Context, p *pipeline.Project, segs []cont
 	r.Manifest(p, EventReworkStart, only+": "+firstLine(instruction, 80))
 	r.emit(id, "progress", "rework", "重做 "+strings.Join(labels, "、"))
 
-	// 1. 目标段画面重生成（删旧 spec 强制重出；其余段产物原样复用）
+	// 1. 目标段画面重生成（删旧场景文件强制重出；其余段产物原样复用）
 	r.emit(id, "stage", "compositions", "running")
 	// 用户改画要求走 instruction 位（最高优先级），修复轮（check/画面审查）也必须带上
 	instr := "用户对这一段画面的修改要求（必须落实）：\n" + instruction
-	if err := r.genSpecs(ctx, p, instr, "", only); err != nil {
-		return err
-	}
-	if err := r.fetchImages(ctx, p); err != nil {
-		return err
-	}
-	if err := r.renderSpecs(ctx, p); err != nil {
+	if err := r.sceneGen(ctx, p, instr, "", only); err != nil {
 		return err
 	}
 	r.clearFrames(p, only)
@@ -498,16 +486,10 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 	return nil
 }
 
-// compositions 生成/复用 spec → 搜图本地化 → 渲染 HTML → 清旧帧 → 管线落盘。
+// compositions 生成/复用场景文件 → 清旧帧 → 管线落盘。
 func (r *Runner) compositions(ctx context.Context, p *pipeline.Project) error {
 	r.emit(p.ID, "stage", "compositions", "running")
-	if err := r.genSpecs(ctx, p, "", "", ""); err != nil {
-		return err
-	}
-	if err := r.fetchImages(ctx, p); err != nil {
-		return err
-	}
-	if err := r.renderSpecs(ctx, p); err != nil {
+	if err := r.sceneGen(ctx, p, "", "", ""); err != nil {
 		return err
 	}
 	r.clearFrames(p, "")
@@ -519,7 +501,7 @@ func (r *Runner) compositions(ctx context.Context, p *pipeline.Project) error {
 }
 
 // checkWithRepair check 失败 → 报错回喂 → 重生成 spec → 重渲染 → 重查（最多 3 轮，plan §4.5）。
-// instruction 原样传给 genSpecs 的用户要求位（rework 时不能丢）。
+// instruction 原样传给 sceneGen 的用户要求位（rework 时不能丢）。
 // only 非空 = 修复范围限定该段（rework），空 = 全片（首次制作）。
 func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instruction, only string) error {
 	for attempt := 1; attempt <= 3; attempt++ {
@@ -577,13 +559,7 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 			"逐项修完再输出。"
 		r.emit(p.ID, "stage", "check", fmt.Sprintf("repair：重生成画面（段：%s）", repairOnly))
 		r.Manifest(p, "check.repair", tail(err.Error(), 10))
-		if err := r.genSpecs(ctx, p, instruction, feedback, repairOnly); err != nil {
-			return err
-		}
-		if err := r.fetchImages(ctx, p); err != nil {
-			return err
-		}
-		if err := r.renderSpecs(ctx, p); err != nil {
+		if err := r.sceneGen(ctx, p, instruction, feedback, repairOnly); err != nil {
 			return err
 		}
 		r.clearFrames(p, repairOnly)
@@ -627,8 +603,6 @@ func failingSegs(checkOut string) []string {
 	}
 	return order
 }
-
-// ── spec 生成（LLM 作业：语义布局）─────────────────────────────
 
 type voiceMeta struct {
 	ID        string       `json:"id"`
@@ -945,214 +919,6 @@ func toAnySlice(ss []string) []any {
 	return out
 }
 
-// specFingerprint 段级 spec 缓存键（内容指纹）。段 id 是 seg01.. 顺序编号，分镜
-// 重生成后 id 复用而旁白/画面提示已换——只看「spec 文件存在」跳过，会把旧分镜的
-// 画面静默复用进新成片（成片与 storyboard.json 各说各话）。指纹 = 段内容摘要。
-func specFingerprint(seg contract.Segment) string {
-	h := sha256.Sum256([]byte(seg.Key + "\x00" + seg.Narration + "\x00" + seg.VisualBrief + "\x00" + strconv.Itoa(int(seg.DurationHint))))
-	return hex.EncodeToString(h[:8])
-}
-
-// specSidecarPath 指纹旁车文件（llm/comp-segNN.spec.src）：spec 落盘时的输入指纹。
-// 缺旁车 = 升级前生成的旧 spec，视为过期（一次性重生成，宁可多烧一轮也不吃旧内容）。
-func specSidecarPath(p *pipeline.Project, segID string) string {
-	return p.Artifact("llm/comp-" + segID + ".spec.src")
-}
-
-// genSpecs 每段一份语义 spec（llm/comp-segNN.spec.json）。
-// instruction = 用户改画要求（最高优先级位，修复轮必须带上否则会丢）；
-// feedback = 校验/审查报错回喂（必须修正位）。only 非空 = 只处理该段（rework），空 = 全片。
-func (r *Runner) genSpecs(ctx context.Context, p *pipeline.Project, instruction, feedback, only string) error {
-	sb, err := p.LoadStoryboard()
-	if err != nil {
-		return fmt.Errorf("先完成 storyboard: %w", err)
-	}
-	voices, err := loadAudioMeta(p)
-	if err != nil {
-		return err
-	}
-	prov, perr := llm.FromEnv(llm.RoleVisual)
-	if perr != nil {
-		return fmt.Errorf("spec 生成需要 API 模式（LLM_API_KEY）: %w", perr)
-	}
-	cv := ProjectCanvas(p)
-	system := specSystemFor(p)
-	style := styleNoteFor(p, r.DataDir)
-	// 模板示例 spec（§12.3「方法库注入」起步形态）：项目选了模板且带示例时，
-	// 注入一份给 spec 仿写——皮肤定死、编排仿照、内容自由
-	example := templateExampleFor(p, r.DataDir)
-	icons := scanIcons(r.RootDir)
-	menu, kinds, err := elementRegistry(r.DataDir)
-	if err != nil {
-		return err
-	}
-	// 版式库：命中注册表风格的每段先指定一个构图版式（段号轮换），治布局单调
-	layouts := styleLayoutsFor(p, r.DataDir)
-	// 样张截图（ai/snap_samples.py，Edge 无头，mtime 缓存）→ spec 生成改走多模态：
-	// 模型看着真图写 spec，替代纯文字风格描述；截图失败不挡管线（退回纯文本）。
-	if err := r.python(ctx, "ai/snap_samples.py", p.Dir, time.Minute); err != nil {
-		r.emit(p.ID, "progress", "compositions", "样张截图失败，风格注入退回纯文本")
-	}
-	sampleImgs := styleSampleImages(p)
-	// NoThink：画面 spec 是结构化 HTML 作业，开思考单段 5–13 分钟（reasoning 占 1 万+ token）；
-	// 关思考后单段分钟级，配合段间并发把全片从半小时级压进几分钟。
-	gen := func(user string, out any) (openai.Usage, error) {
-		if len(sampleImgs) > 0 {
-			return prov.GenerateJSONVisionNoThink(ctx, system, user, sampleImgs, 0.7, out)
-		}
-		return prov.GenerateJSONNoThink(ctx, system, user, out)
-	}
-	if feedback != "" && only == "" { // 全片重生成：先清旧 spec
-		for _, seg := range sb.Segments {
-			_ = os.Remove(p.Artifact("llm/comp-" + seg.ID + ".spec.json"))
-		}
-	}
-	// 先筛出待生成段（已有产物跳过，重放语义），再并发填坑。
-	// only 逗号分隔多段（rework 主目标段 + check 报错段一起修）。
-	onlySet := map[string]bool{}
-	for _, id := range strings.Split(only, ",") {
-		if id = strings.TrimSpace(id); id != "" {
-			onlySet[id] = true
-		}
-	}
-	var todo []contract.Segment
-	for _, seg := range sb.Segments {
-		if len(onlySet) > 0 && !onlySet[seg.ID] {
-			continue
-		}
-		specPath := p.Artifact("llm/comp-" + seg.ID + ".spec.json")
-		if _, err := os.Stat(specPath); err == nil && feedback == "" && instruction == "" {
-			// 已有产物还要过指纹关：旁车指纹与当前段内容一致才复用。
-			// 分镜改稿后段 id 不变但旁白已换——指纹不符即重生成，这是
-			//「重新制作生效」的关键闸（否则成片念旧旁白、画面旧文案）。
-			if fp, ferr := os.ReadFile(specSidecarPath(p, seg.ID)); ferr == nil && string(fp) == specFingerprint(seg) {
-				continue
-			}
-		}
-		todo = append(todo, seg)
-	}
-	// 段间零依赖（输入只读、spec 各落各的文件）→ 有界并发；429/网络抖动由 provider 重试兜底
-	sem := make(chan struct{}, specConcurrency())
-	var wg sync.WaitGroup
-	var errMu sync.Mutex
-	firstErr := error(nil)
-	fail := func(err error) {
-		errMu.Lock()
-		if firstErr == nil {
-			firstErr = err
-		}
-		errMu.Unlock()
-	}
-	work := func(seg contract.Segment, specPath string) {
-		v := voices[seg.ID]
-		lb := layoutNote(layouts, seg.Idx)
-		sceneM, compM := methodsFor(r.RootDir, seg)
-		var spec contract.CompSpec
-		u1, err := gen(specUserPrompt(seg, v, instruction, feedback, cv, style, menu, lb, example, sceneM, compM), &spec)
-		if err != nil {
-			fail(fmt.Errorf("%s spec 生成失败: %w", seg.ID, err))
-			return
-		}
-		errs := contract.ValidateSpec(&spec, len(v.Words), cv)
-		errs = append(errs, iconErrors(&spec, icons)...)
-		for repair := 0; repair < 2 && len(errs) > 0; repair++ { // 修复：违规项回喂，最多 2 轮
-			fb := instruction + feedback + "\n上一版 spec 被契约校验拒绝，必须逐条修正：\n- " + strings.Join(errs, "\n- ")
-			var fixed contract.CompSpec
-			u2, err2 := gen(specUserPrompt(seg, v, "", fb, cv, style, menu, lb, example, sceneM, compM), &fixed)
-			if err2 != nil {
-				fail(fmt.Errorf("%s spec 修复失败: %w", seg.ID, err2))
-				return
-			}
-			u1, spec = u2, fixed
-			errs = contract.ValidateSpec(&spec, len(v.Words), cv)
-			errs = append(errs, iconErrors(&spec, icons)...)
-		}
-		if len(errs) > 0 { // 保底：确定性清洗（删未知 kind/删冲突/夹越界），不让整条任务死掉
-			remain := contract.SanitizeSpec(&spec, len(v.Words), cv)
-			// 清洗后元素所剩无几 = 该段画面已不成立（如模型整段漏填 kind）：
-			// 带着明确要求整段重出一次，仍不行才报错——空白段比失败更隐蔽。
-			if len(spec.Elements) < 3 {
-				r.emit(p.ID, "progress", "compositions", fmt.Sprintf("%s 清洗后仅 %d 元素，整段重出", seg.ID, len(spec.Elements)))
-					var retry contract.CompSpec
-				u2, err2 := gen(specUserPrompt(seg, v, instruction,
-					fmt.Sprintf("上一版几乎每个元素的 kind 都是空的或不认识的。kind 必须从可用元素菜单里逐字选取（%s），每个元素都必须有 kind。", kinds),
-					cv, style, menu, lb, example, sceneM, compM), &retry)
-				if err2 == nil {
-					errs2 := contract.ValidateSpec(&retry, len(v.Words), cv)
-					errs2 = append(errs2, iconErrors(&retry, icons)...)
-					if len(errs2) > 0 {
-						contract.SanitizeSpec(&retry, len(v.Words), cv)
-					}
-					if len(retry.Elements) >= 3 {
-						u1, spec = u2, retry
-						errs = nil
-					}
-				}
-			}
-			if len(errs) > 0 {
-				p.Manifest("spec.sanitized", fmt.Sprintf("%s: 清洗后剩余 %d 元素；遗留问题: %s", seg.ID, len(spec.Elements), strings.Join(remain, "; ")))
-			}
-		}
-		if len(spec.Elements) < 3 {
-			fail(fmt.Errorf("%s spec 元素不足 3 个（模型输出异常，重试后仍失败）", seg.ID))
-			return
-		}
-		b, _ := json.MarshalIndent(spec, "", "  ")
-		if err := pipeline.WriteFileAtomic(specPath, b, 0o644); err != nil {
-			fail(err)
-			return
-		}
-		// 指纹旁车紧随 spec 落盘（写失败按过期处理：下次重生成，宁重复不陈旧）
-		_ = os.WriteFile(specSidecarPath(p, seg.ID), []byte(specFingerprint(seg)), 0o644)
-		p.Manifest("llm.usage", fmt.Sprintf("spec %s prompt=%d completion=%d tokens", seg.ID, u1.PromptTokens, u1.CompletionTokens))
-		r.emit(p.ID, "progress", "compositions", fmt.Sprintf("%s 画面 spec ✓（%d 元素）", seg.ID, len(spec.Elements)))
-	}
-	for _, seg := range todo {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func() {
-			defer wg.Done()
-			defer func() { <-sem }()
-			if err := ctx.Err(); err != nil {
-				fail(err)
-				return
-			}
-			work(seg, p.Artifact("llm/comp-"+seg.ID+".spec.json"))
-		}()
-	}
-	wg.Wait()
-	return firstErr
-}
-
-// templateExampleFor 项目选用的模板 → 示例 spec 注入块（§12.3 编排仿照）。
-// 无模板/模板无示例返回 ""，行为与旧版一致。
-func templateExampleFor(p *pipeline.Project, dataDir string) string {
-	b, err := os.ReadFile(p.Artifact("project.json"))
-	if err != nil {
-		return ""
-	}
-	var meta struct {
-		StylePackID string `json:"stylepack_id"`
-	}
-	if json.Unmarshal(b, &meta) != nil || meta.StylePackID == "" {
-		return ""
-	}
-	pack, ok := methodlib.New(dataDir).Get(meta.StylePackID)
-	if !ok || !pack.Published || len(pack.ExampleSpecs) == 0 {
-		return ""
-	}
-	return pack.ExampleSpecs[0]
-}
-
-// specConcurrency spec 生成并发度（段间零依赖；GLM 编码套餐并发有限，默认 3，
-// 超限 429 由 provider 重试兜底；SPEC_CONCURRENCY 环境变量可调）。
-func specConcurrency() int {
-	if n, err := strconv.Atoi(os.Getenv("SPEC_CONCURRENCY")); err == nil && n >= 1 && n <= 9 {
-		return n
-	}
-	return 3
-}
-
 // 方法库（data/library/methods/，清单 methods.json）：spec 生成按段内容注入的领域参考。
 // scene 域 = 确定性画布参考实现（成活率靠仿写不靠自由发挥）；comp 域 = 高级感构图公式
 //（大留白单主体/暗底浅字/段间衔接，三篇参考片分析的沉淀）。清单驱动：加方法 =
@@ -1238,16 +1004,6 @@ func methodScore(m methodEntry, hay string) int {
 	return s
 }
 
-const specSystemFallback = "你是视频的画面设计师，只输出 JSON。风格：手绘叙事（纸面·马克笔）——米黄纸面、深灰线稿、彩色便签、楷体。"
-
-// specSystemFor 系统提示跟随项目已确认的风格方向（模板复用时随包走）。
-func specSystemFor(p *pipeline.Project) string {
-	var ss contract.StyleSamples
-	if b, err := os.ReadFile(p.Artifact("style/style_samples.json")); err == nil && json.Unmarshal(b, &ss) == nil && ss.Direction != "" {
-		return "你是视频的画面设计师，只输出 JSON。风格：" + ss.Direction + "。"
-	}
-	return specSystemFallback
-}
 
 // ProjectCanvas 项目画幅（project.json aspect；旧项目无字段按 16:9，与已渲成片一致）。
 func ProjectCanvas(p *pipeline.Project) contract.Canvas {
@@ -1263,149 +1019,6 @@ func ProjectCanvas(p *pipeline.Project) contract.Canvas {
 		meta.Aspect = "16:9"
 	}
 	return contract.CanvasFor(meta.Aspect)
-}
-
-// scanIcons 本地图标库清单（ai/assets/icons，lucide 全量）。
-func scanIcons(rootDir string) map[string]bool {
-	out := map[string]bool{}
-	entries, err := os.ReadDir(filepath.Join(rootDir, "ai", "assets", "icons"))
-	if err != nil {
-		return out
-	}
-	for _, e := range entries {
-		if name := strings.TrimSuffix(e.Name(), ".svg"); name != e.Name() {
-			out[name] = true
-		}
-	}
-	return out
-}
-
-// iconErrors 图标名不在本地库 → 校验错误（回喂换名；渲染层另有兜底）。
-func iconErrors(s *contract.CompSpec, icons map[string]bool) []string {
-	if len(icons) == 0 {
-		return nil
-	}
-	var errs []string
-	for i := range s.Elements {
-		e := &s.Elements[i]
-		if e.Kind == "icon" && e.Name != "" && !icons[e.Name] {
-			errs = append(errs, fmt.Sprintf("元素%d(icon): name %q 不在本地图标库，换一个", i+1, e.Name))
-		}
-	}
-	return errs
-}
-
-func specUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback string, cv contract.Canvas, style, menu, layout, example, sceneTpl, compMethods string) string {
-	var wb strings.Builder
-	for i, w := range v.Words {
-		if i > 0 && i%10 == 0 {
-			wb.WriteString("\n")
-		}
-		fmt.Fprintf(&wb, "%d:%s@%.1fs ", i, w.Text, w.Start)
-	}
-	// 布局规则随画幅：竖屏纵向铺排，横屏横向铺排
-	rules := "- 安全区 x∈[160,900]、y∈[120,1450]；底部 1594px 起是字幕带，禁放\n" +
-		"- 竖屏 1080 宽：元素横向少列（≤2 列），纵向多行铺排；主视觉放 y≈300–1200\n" +
-		"- 4–7 个元素；元素间距保守留 80px，禁止重叠"
-	if cv.Aspect == "16:9" {
-		rules = "- 安全区 x∈[160,1760]、y∈[120,850]；底部 896px 起是字幕带，禁放\n" +
-			"- 4–7 个元素；主视觉放 y≈260–560 一带；元素间距保守留 80px，禁止重叠"
-	}
-	instrBlock := ""
-	briefLabel := "画面提示"
-	if instruction != "" {
-		instrBlock = "\n## 用户修改要求（最高优先级——这是重画指令，与下方原画面提示冲突时一律以用户要求为准，逐字落实）\n" + instruction + "\n"
-		briefLabel = "原画面提示（旧版，仅参考）"
-	}
-	exBlock := ""
-	if example != "" {
-		exBlock = "\n## 模板示例 spec（仿其编排气质与元素用法——构图节奏/留白/层次；内容与坐标必须按本段重写，禁止照搬文案）\n" + example + "\n"
-	}
-	return fmt.Sprintf(`为这一段视频生成语义布局 spec JSON。
-%s
-## 段信息
-- 标题：%s
-- 旁白（%d 词，%.1f 秒）：%s
-- %s：%s
-%s
-%s
-%s
-## 可用元素（kind 与参数；坐标基于 %d×%d 画布%s）
-%s
-
-## 可用图标名（节选，语义匹配优先；必须是列表或其近似的名字）
-rocket cat dog sun moon star atom brain heart zap cloud flame droplet eye bone dna
-battery lightbulb cog wrench search book pen mail clock thermometer coins gift lock
-key phone laptop car plane house tree-deciduous tree-pine sprout flower fish bird
-coffee music camera mic wifi shield flag target users user map compass calendar
-hourglass microscope flask-conical test-tube stethoscope pill syringe leaf mountain
-waves wind snowflake umbrella globe graduation-cap calculator cpu database server
-satellite antenna fuel bug virus magnet telescope orbit trending-up trending-down
-cloud-rain-wind cloud-sun robot-arm baby person-circle-stop dices trophy medal crown
-scale ruler clipboard lightbulb-off zap-off anchor truck bike train bus ship send
-
-## 配图（image 元素的 query 与 source）
-- source="search"（默认/不写）：query 是 ≤12 字中文搜索词，配真实照片——动物/地标/物品/场景/产品
-- source="gen"：AI 生图，query 是一句完整画面描述（20–60 字中文，具体到主体/构图/配色），配插画/概念示意/抽象背景；描述尽量往风格样张的气质上靠
-- 真实存在的名人/品牌/产品/新闻实物禁止 gen（生图会编造事实），一律 search
-- 全幅背景：image 加 role="bg"（照片满画幅垫底+自动纸色压暗，每段最多 1 张；dim 控制压暗 0–1 默认 0.55，blur 0–12 毛玻璃）。用一张背景图撑住整段氛围，其余元素叠在上面；背景图 query 走 gen 描述大场景（如渐变宇宙/俯瞰城市/抽象流体），也放 elements 最前
-
-## scene 程序化画布（高表现力通道：粒子/弦图/线框3D/函数曲线/生成艺术）
-画面主体是数学/物理/抽象可视化时（粒子、星空、连线、曲线、旋转结构、生长演化），用 kind=scene：
-- 每段最多 1 个，全画幅垫底（在背景层之上、内容元素之下），该段元素数下限放宽到 1
-- code 是 __draw(t,ctx,W,H,rng) 的**函数体本身**（≤8000 字）——直接写语句，禁止写 function 声明或 __draw( 函数头（渲染层自动包壳）：t=段内秒、ctx=canvas 2D、W/H=画布像素、rng()=种子随机
-- 硬约束（回放门禁两轮截帧逐像素比对）：同一 t 必须画出同一画面——运动全部写成 t 的函数（正弦/线性插值/解析轨迹），随机只用 rng() 且逐粒固定抽取；禁 Math.random/Date/rAF/setTimeout/DOM/出网
-- 入场淡入渲染层自动加（0.3s）；scene 元素不支持 anim/exit/reveal
-- 深底+发光前景是推荐审美（ctx.globalCompositeOperation='lighter' 出辉光）；再叠 1–2 个 title/formula 元素做解说
-- seed 可选（0–99999，缺省 42）：换 seed 换一套随机布局
-%s
-## 词序表（reveal = 揭示时刻的词序号，0 起）
-%s
-
-## 布局硬规则（校验器会拒收）
-%s
-- reveal 按讲解顺序递增、铺满词序（别堆在开头；最大词号 %d）
-- 动效增强（可选）：元素可加 anim 换入场（pop/fade/rise/slide/wipe=左→右揭示/blur=失焦聚焦/chars=逐字，仅 title·big/none=直出）与 exit=词序号（讲完该词退场，给后续元素腾画面；须大于 reveal）；段级顶层可加 camera（zoom_in/zoom_out/pan_left/pan_right/drift）整屏缓推，一屏最多一个，信息密集段别用
-- 关键帧镜头（可选，比 camera 词表强的运镜叙事）：顶层 camera_spec={"from":{"zoom":1},"to":{"zoom":1.25,"pan_x":-40,"rot":2},"ease":"power2.inOut"}——起止值整段插值；zoom 1–1.6、pan ±120px、rot ±6°；与 camera 二选一（camera_spec 优先）
-- 语义呼应画面提示：主体物→image（实体名词首选）或 icon（抽象概念）；数据对比→chart_bar；趋势→chart_line；占比→chart_donut 或 chart_pie；对比→双色便签左右分置或 table；流程/步骤→timeline 或箭头串联；要点/卖点→checklist；金句/名言→quote；关键数字→stat 或 big；指向→barrow；向量/维度/批量→strip；分组圈注→zone(+bracket)；数学公式/物理方程/表达式→formula（tex=LaTeX 源码如 "e^{i\\pi}+1=0"，fs 24–160）；整屏氛围底→image role="bg"（照片背景）或 custom role="bg"（渐变/粒子/光斑特效底，每段各≤1）；斜切大字板/故障标题/纹理装饰→custom（每段≤3个，垫底放 elements 最前）；一屏最多一个图表（图表占主视觉位）
-- 画面丰富度（重要）：每屏至少一个视觉锚点（image / 大 icon / 图表 / big / panel / scene 之一），大小拉开层次（主体 300px+、次级 120–200px），禁止全屏小元素平铺；段落适合铺满氛围时优先给背景层（照片 bg 或特效底或 scene 画布），别让画面停在纯色底
-%s%s
-## 输出（只输出 JSON，无围栏）
-{"note":"布局思路一句话","camera":"（可选）zoom_in/zoom_out/pan_left/pan_right/drift","camera_spec":{（可选，与 camera 二选一）"from":{"zoom":1,"pan_x":0,"pan_y":0,"rot":0},"to":{…},"ease":"power1.inOut|power2.inOut|none"},"elements":[…]}
-`, instrBlock, seg.Key, len(v.Words), v.DurationS, seg.Narration, briefLabel, seg.VisualBrief, style, exBlock, layout,
-		int(cv.W), int(cv.H), map[bool]string{true: " 竖屏 9:16", false: ""}[cv.Aspect == "9:16"],
-		menu,
-		sceneTpl, wb.String(), rules, len(v.Words)-1, compMethods, feedbackBlock(feedback))
-}
-
-// elementRegistry 元素菜单与 kind 清单（data/library/registry/elements.json，元素库单一事实源；
-// spec.go 的 specKinds 由漂移测试 registry_test.go 强制对齐）。
-// 菜单行拼进 spec prompt；kind 清单用于「整段 kind 全空重出」的修复提示。
-func elementRegistry(dataDir string) (menu, kinds string, err error) {
-	b, err := os.ReadFile(filepath.Join(dataDir, "library", "registry", "elements.json"))
-	if err != nil {
-		return "", "", fmt.Errorf("元素注册表缺失（data/library/registry/elements.json）: %w", err)
-	}
-	var els []struct {
-		Kind string `json:"kind"`
-		Menu string `json:"menu"`
-	}
-	if err := json.Unmarshal(b, &els); err != nil {
-		return "", "", fmt.Errorf("elements.json 损坏: %w", err)
-	}
-	if len(els) == 0 {
-		return "", "", fmt.Errorf("elements.json 为空")
-	}
-	lines := make([]string, 0, len(els))
-	ks := make([]string, 0, len(els))
-	for _, e := range els {
-		if e.Kind == "" || e.Menu == "" {
-			return "", "", fmt.Errorf("elements.json 存在空 kind/menu 条目")
-		}
-		lines = append(lines, "- "+e.Kind+"："+e.Menu)
-		ks = append(ks, e.Kind)
-	}
-	return strings.Join(lines, "\n"), strings.Join(ks, "/"), nil
 }
 
 // styleLayout 风格版式（构图模式）：styles.json layouts 字段，描述本风格的标准构图，
@@ -1604,105 +1217,9 @@ func (r *Runner) python(ctx context.Context, script string, projDir string, time
 	return nil
 }
 
-// renderSpecs spec → llm/comp-segNN.json（确定性渲染层）。
-func (r *Runner) renderSpecs(ctx context.Context, p *pipeline.Project) error {
-	return r.python(ctx, "ai/render_spec.py", p.Dir, 2*time.Minute)
-}
-
-// fetchImages spec 里 image 元素的搜图本地化（必应 → Commons，失败便签兜底）：
-// python 暂存 .stage/ + spec 记 stage:<hash>，Go 侧再扫暂存区入素材库（catalog
-// 单一写者在本进程）并把 spec 引用改写为素材 id lib:<id>（§5 引用统一）。
-func (r *Runner) fetchImages(ctx context.Context, p *pipeline.Project) error {
-	if err := r.python(ctx, "ai/fetch_images.py", p.Dir, 10*time.Minute); err != nil {
-		return err
-	}
-	return r.ingestStagedImages(p)
-}
-
-// ingestStagedImages 暂存区 → 素材库。幂等：同内容 hash 直接复用已有条目；
-// spec 里遗留的 stage: 引用（上次进程中断）一并收尾。渲染层只认 lib:<id>。
-func (r *Runner) ingestStagedImages(p *pipeline.Project) error {
-	lib := assetlib.New(r.DataDir)
-	stageDir := filepath.Join(p.Dir, "assets", "img", ".stage")
-	sidecars, _ := filepath.Glob(filepath.Join(stageDir, "*.json"))
-	hashToID := map[string]string{}
-	for _, sc := range sidecars {
-		h := strings.TrimSuffix(filepath.Base(sc), ".json")
-		bins, _ := filepath.Glob(filepath.Join(stageDir, h+".*"))
-		var bin string
-		for _, b := range bins {
-			if !strings.HasSuffix(b, ".json") {
-				bin = b
-			}
-		}
-		var meta struct {
-			Query  string `json:"query"`
-			Page   string `json:"page"`
-			Origin string `json:"origin"`
-		}
-		if bin == "" {
-			_ = os.Remove(sc)
-			continue
-		}
-		if b, err := os.ReadFile(sc); err != nil || json.Unmarshal(b, &meta) != nil {
-			_ = os.Remove(sc)
-			_ = os.Remove(bin)
-			continue
-		}
-		desc := meta.Query
-		if meta.Page != "" && !strings.HasPrefix(meta.Page, "gen:") {
-			desc += "｜来源页：" + meta.Page
-		}
-		extra := map[string]any{}
-		if meta.Page != "" {
-			extra["page"] = meta.Page
-		}
-		e, err := lib.Ingest("image", bin, assetlib.TagsForQuery(meta.Query), desc, meta.Origin, extra)
-		if err != nil {
-			return fmt.Errorf("素材入库失败（%s）: %w", meta.Query, err)
-		}
-		hashToID[h] = e.ID
-		_ = os.Remove(bin)
-		_ = os.Remove(sc)
-		r.emit(p.ID, "progress", "assets", fmt.Sprintf("素材入库 %s「%s」", e.ID, meta.Query))
-	}
-	if len(hashToID) == 0 {
-		return nil
-	}
-	specs, _ := filepath.Glob(filepath.Join(p.Dir, "llm", "comp-*.spec.json"))
-	for _, sf := range specs {
-		b, err := os.ReadFile(sf)
-		if err != nil {
-			continue
-		}
-		var spec contract.CompSpec
-		if json.Unmarshal(b, &spec) != nil {
-			continue
-		}
-		changed := false
-		for i := range spec.Elements {
-			e := &spec.Elements[i]
-			if e.Src != "" && strings.HasPrefix(e.Src, "stage:") {
-				if id, ok := hashToID[strings.TrimPrefix(e.Src, "stage:")]; ok {
-					e.Src = "lib:" + id
-					changed = true
-				}
-			}
-		}
-		if !changed {
-			continue
-		}
-		nb, _ := json.MarshalIndent(spec, "", "  ")
-		if err := os.WriteFile(sf, nb, 0o644); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // clearFrames 清旧帧（落盘阶段只补缺失文件，不清不会重写）。
 // only 非空只清该段；空清全部。注意不动 llm/comp-*.json——那是
-// render_spec 的产物、compositions 落盘阶段的输入，删了会退化成等待人工。
+// sceneGen 的产物、compositions 落盘阶段的输入，删了会退化成等待人工。
 func (r *Runner) clearFrames(p *pipeline.Project, only string) {
 	if only != "" {
 		for _, id := range strings.Split(only, ",") {

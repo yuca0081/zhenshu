@@ -29,15 +29,3 @@ func TestSegTailMatchesTwinImplementations(t *testing.T) {
 	}
 }
 
-// SceneCodeMax 是 Go 校验（spec.go）与 Python 渲染限长（render_spec.py）的隐式契约：
-// 单方面改动会让「Go 放行、渲染层拒」或反向的死循环。
-func TestSceneCodeMaxMatchesPython(t *testing.T) {
-	py, err := os.ReadFile(filepath.Join("..", "..", "..", "ai", "render_spec.py"))
-	if err != nil {
-		t.Fatalf("render_spec.py 不可读: %v", err)
-	}
-	want := strconv.Itoa(SceneCodeMax)
-	if !regexp.MustCompile(`SCENE_CODE_MAX\s*=\s*` + want + `\b`).Match(py) {
-		t.Errorf("ai/render_spec.py 中 SCENE_CODE_MAX 与 contract.SceneCodeMax（%d）不一致：两处必须同值", SceneCodeMax)
-	}
-}

@@ -67,6 +67,76 @@ def fontface_css(*font_stacks):
     return '\n      '.join(out)
 
 
+def load_skin_slots(proj):
+    """读项目皮肤槽位（style/skin.json；字幕带配色/字体用它，与画面同源）。"""
+    try:
+        sk = json.load(open(proj / 'style' / 'skin.json', encoding='utf-8'))
+        return sk.get('slots') or {}
+    except Exception:
+        return {}
+
+
+def subtitle_blocks(scenes, meta_voices, slots, base=0.0):
+    """平台字幕带（v2：字幕=TTS 时间戳机械装配，模型永不写 cue）。
+    每段一个父级 clip（z=55，字幕带占底部 ~17%），短语硬切 + 词级渐亮，
+    时间轴挂主 tl（绝对时刻 = 段起点 + 词相对时刻；单段工程传 base 使段内归零）。
+    返回 (html 片段, 主 tl 的 JS 语句)，与 overlay_block 同一注入位。"""
+    per = {v['id']: v for v in meta_voices}
+    txt = slots.get('txt') or '#F2F2EA'
+    font = slots.get('font') or "'Segoe UI','Microsoft YaHei',sans-serif"
+    html_parts, js_parts = [], []
+    for sid, start, dur, adur in scenes:
+        v = per.get(sid)
+        if not v or not v.get('phrases'):
+            continue
+        words, phrases = v['words'], v['phrases']
+        en = v.get('phrases_en') or []
+        t0 = base + start
+        ph_html = []
+        for pi, rng in enumerate(phrases):
+            i0, i1 = int(rng[0]), int(rng[1])
+            enline = ''
+            if pi < len(en) and en[pi]:
+                enline = f'<div class="cap-en">{_esc_html(en[pi])}</div>'
+            spans = ''.join(f'<span class="cap-w" data-sw="{i}">{_esc_html(words[i]["text"])}</span>'
+                            for i in range(i0, i1 + 1))
+            ph_html.append(f'<div class="cap-ph" data-sph="{pi}"><div class="cap-line">{spans}{enline}</div></div>')
+        html_parts.append(
+            f'<div id="cap-{sid}" class="clip" data-start="{start}" data-duration="{dur}" '
+            f'data-track-index="8" data-hf-name="字幕带">\n'
+            f'  <style>\n'
+            f'    #cap-{sid} {{ position: absolute; inset: 0; pointer-events: none; z-index: 55; }}\n'
+            f'    #cap-{sid} .cap-zone {{ position: absolute; left: 0; right: 0; bottom: 0; height: 17%; '
+            f'display: flex; align-items: center; justify-content: center; }}\n'
+            f'    #cap-{sid} .cap-ph {{ position: absolute; inset: 0; display: flex; align-items: center; '
+            f'justify-content: center; opacity: 0; max-width: 90%; margin: 0 auto; }}\n'
+            f'    #cap-{sid} .cap-line {{ background: rgba(10,10,14,.62); border-radius: 14px; '
+            f'padding: 12px 40px; color: {txt}; font-family: {font}; font-size: 34px; line-height: 1.4; '
+            f'font-weight: 600; text-align: center; text-shadow: 0 1px 8px rgba(0,0,0,.5); }}\n'
+            f'    #cap-{sid} .cap-w {{ opacity: .3; margin: 0 2px; }}\n'
+            f'    #cap-{sid} .cap-en {{ font-size: .56em; font-style: italic; opacity: .72; '
+            f'font-family: Georgia, "Times New Roman", serif; letter-spacing: .04em; margin-top: .12em; }}\n'
+            f'  </style>\n'
+            f'  <div class="cap-zone"><div class="cap-line"><div class="cap-body">'
+            + ''.join(ph_html) + '</div></div></div>\n'
+            f'</div>')
+        js = [f"gsap.set('#cap-{sid} .cap-ph',{{opacity:0}});"]
+        for pi, rng in enumerate(phrases):
+            i0, i1 = int(rng[0]), int(rng[1])
+            a, b = words[i0]['start'], words[min(i1 + 1, len(words) - 1)]['start'] if i1 + 1 < len(words) else words[i1]['end']
+            js.append(f"tl.set('#cap-{sid} [data-sph=\"{pi}\"]',{{opacity:1}},{t0 + a:.3f});")
+            if b > a + 0.05:
+                js.append(f"tl.set('#cap-{sid} [data-sph=\"{pi}\"]',{{opacity:0}},{t0 + b:.3f});")
+            for i in range(i0, i1 + 1):
+                js.append(f"tl.to('#cap-{sid} [data-sw=\"{i}\"]',{{opacity:1,duration:.1,ease:'none'}},{t0 + words[i]['start']:.3f});")
+        js_parts.append('\n        '.join(js))
+    return '\n'.join(html_parts), '\n        '.join(js_parts)
+
+
+def _esc_html(s):
+    return (str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
+
+
 def main(proj_dir: str) -> int:
     proj = pathlib.Path(proj_dir)
     meta = json.load(open(proj / 'audio_meta.json', encoding='utf-8'))
@@ -88,8 +158,10 @@ def main(proj_dir: str) -> int:
     ovl, chapters, style_id = load_overlay(proj)
     tokens = load_style_tokens(style_id)
     # lint 合规：为 token/角标字体栈中的 OS 自带字体生成 @font-face local 声明
+    slots = load_skin_slots(proj)
     fontface = fontface_css(tokens.get('font') or '',
-                            "Georgia, 'Times New Roman', 'SimSun', serif")
+                            "Georgia, 'Times New Roman', 'SimSun', serif",
+                            slots.get('font') or '')
     # 章节刻度位置 = 章节切换段的全局起点（相邻同 chapter 合并）
     bounds = [0.0]
     for i, sid in enumerate(ids):
@@ -168,7 +240,7 @@ def main(proj_dir: str) -> int:
                 f'        data-start="{start}" data-duration="{adur}" data-track-index="10" data-volume="1"></audio>')
         return chr(10).join(out)
 
-    def project_html(w, h, total_dur, body, ovl_body='', ovl_js='', xfade=True):
+    def project_html(w, h, total_dur, body, ovl_body='', ovl_js='', cap_body='', cap_js='', xfade=True):
         # KaTeX 本地供给（formula 元素用；外链被禁，必须离线打包）
         katex_head = ''
         if (AI_DIR / 'assets' / 'katex' / 'katex.min.js').exists():
@@ -199,6 +271,7 @@ def main(proj_dir: str) -> int:
     <div id="root" data-composition-id="main" data-start="0" data-duration="{total_dur}" data-width="{w}" data-height="{h}">
 {body}
 {ovl_body}
+{cap_body}
 {xf_body}    </div>
     <script>
       window.__timelines = window.__timelines || {{}};
@@ -207,6 +280,7 @@ def main(proj_dir: str) -> int:
       (function () {{ var tl = window.__timelines["main"];
         tl.to({{}}, {{ duration: {total_dur} }}, 0);
         {ovl_js}
+        {cap_js}
         {xf_js}
       }})();
     </script>
@@ -220,10 +294,12 @@ def main(proj_dir: str) -> int:
     # （xfadeConcat），页内不能再叠黑场（双重变暗），故页内层只在 fade 时注入。
     trans = str(tokens.get('transition') or 'fade').strip().lower()
     xfade = trans == 'fade'
+    cap_body, cap_js = subtitle_blocks(
+        [(sid, starts[sid], scene[sid], durs[sid]) for sid in ids], meta['voices'], slots)
     (proj / 'index.html').write_text(
         project_html(W, H, total,
                      scenes_html([(sid, starts[sid], scene[sid], durs[sid]) for sid in ids]),
-                     *overlay_block(first_chapter, total, 0.0), xfade=xfade),
+                     *overlay_block(first_chapter, total, 0.0), cap_body, cap_js, xfade=xfade),
         encoding='utf-8')
 
     # 单段工程（段级局部重渲）：.hf-seg/segNN.html = 只含该段的 index，
@@ -237,7 +313,9 @@ def main(proj_dir: str) -> int:
         (segdir / f'{sid}.html').write_text(
             project_html(W, H, scene[sid],
                          scenes_html([(sid, 0, scene[sid], durs[sid])]),
-                         *overlay_block(chapters.get(sid, ''), scene[sid], starts[sid]), xfade=xfade),
+                         *overlay_block(chapters.get(sid, ''), scene[sid], starts[sid]),
+                         *subtitle_blocks([(sid, 0, scene[sid], durs[sid])], meta['voices'], slots),
+                         xfade=xfade),
             encoding='utf-8')
 
     (proj / 'assets').mkdir(exist_ok=True)
