@@ -8,8 +8,11 @@
 设计约束：只做零误报的机械判定；模糊问题（审美/密度）归 Tier1/Tier2，不进本文件。
 """
 import re
+import shutil
+import subprocess
 import sys
 import pathlib
+import tempfile
 
 # 段 id（F2/F3 一致性检查用）；从文件名或 data-composition-id 推断
 SEG_ID_RE = re.compile(r'seg\d{2,}')
@@ -91,6 +94,17 @@ def lint_text(html: str, seg_hint: str = '') -> list:
            and not re.search(r'window\.__draw_\w+\s*=\s*function\s*\(\s*t\b', html):
             errs.append(('T4', '有 <canvas> 但没有 window["__draw_…"]=function(t,…) 参数化绘制（draw 必须是 t 的纯函数）'))
 
+    # T9：CSS transform 的元素被 GSAP 补间引用（GSAP 覆盖整个 transform，
+    # CSS 里的 translateX(-50%) 居中等会被静默丢弃——bakeoff 实测模型高发）
+    css_ids = set()
+    for mm in re.finditer(r'#([A-Za-z][\w-]*)\s*\{[^}]*transform\s*:', html):
+        css_ids.add(mm.group(1))
+    if css_ids:
+        script = html[html.find('<script'):] if '<script' in html else ''
+        for eid in css_ids:
+            if re.search(r"['\"]#" + re.escape(eid) + r"['\"]", script):
+                errs.append(('T9', f'#{eid} 的 CSS transform 与 GSAP 补间混用（GSAP 会覆盖 CSS transform）；居中用 GSAP 的 xPercent/yPercent，CSS 里删掉 transform'))
+
     # A2：@font-face 存在性提示（弱规则：只在用了 font-family 且无任何声明时提示）
     ff_used = set(t.lower() for t in re.findall(r"font-family\s*:\s*['\"]([^'\"]+)['\"]", html))
     if ff_used and '@font-face' not in html:
@@ -101,6 +115,20 @@ def lint_text(html: str, seg_hint: str = '') -> list:
         if len(mm.group(1)) > 65536:
             errs.append(('A4', 'data-URI 图片超过 64KB（素材应入素材库，HTML 引 assets/img/ 路径）'))
             break
+
+    # J1：内联脚本 JS 语法校验（node --check；无 node 时跳过——渲染环境必有）
+    scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, flags=re.S)
+    if scripts and shutil.which('node'):
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
+            tf.write((';' + chr(10)).join(scripts))
+            tmpjs = tf.name
+        try:
+            r = subprocess.run(['node', '--check', tmpjs], capture_output=True, text=True)
+            if r.returncode != 0:
+                msg = (r.stderr or '').strip().splitlines()
+                errs.append(('J1', '内联脚本 JS 语法错误：' + (msg[-1] if msg else '未知')[:160]))
+        finally:
+            pathlib.Path(tmpjs).unlink(missing_ok=True)
 
     # 禁用 API 全量扫描
     for pat, rule, msg in BANNED_PATTERNS:

@@ -52,7 +52,8 @@
 | T5 | 禁 CSS `animation` / `@keyframes` / `transition`(合成器时钟,seek 不到) | lint |
 | T6 | 禁 Worker / SharedArrayBuffer / MessageChannel 参与画面状态(调度时序不确定) | lint |
 | T7 | 禁 `<video>` / `<audio>` 元素(音视频是平台层:音轨由 assemble 注入,视频素材走帧序列) | lint |
-| T8 | 确定性回放探针:同段同 t 两轮(不同历史路径)截帧像素一致(容差:通道差≤8、差异像素≤0.05%——GPU 光栅化 LSB 抖动) | 运行时(sceneReplayCheck) |
+| T8 | 确定性回放探针:同段同 t 两轮(不同历史路径)截帧像素一致
+| T9 | 禁 CSS transform 与 GSAP 补间同元素混用(GSAP 覆盖整个 transform,CSS 居中被静默丢弃);居中用 xPercent/yPercent(2026-09-30 补:bakeoff 实测模型高发) | lint |(容差:通道差≤8、差异像素≤0.05%——GPU 光栅化 LSB 抖动) | 运行时(sceneReplayCheck) |
 
 ## 3. 资产与环境
 

@@ -295,7 +295,8 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
    禁网络（fetch/XHR/WebSocket/外链 http(s)）；禁 Worker；禁 <video>/<audio>
 7. canvas 画布：绘制函数 = window["__draw_<id>"]=function(t,ctx,W,H,rng)——t 的纯函数，
    每帧从零重画；由 tl.to({},{duration,onUpdate:…调用 draw(t)…}},0) 驱动；运动一律写成 t 的函数
-8. 字体：本地字体栈 + @font-face{src:local()} 声明（引用即声明）
+8. 字体：本地字体栈 + @font-face{src:local()} 声明（引用即声明）；
+   禁止在 CSS transform 里做居中（translateX(-50%%) 等）再让 GSAP 补间同一元素——GSAP 会整体覆盖 CSS transform，居中必须用 GSAP 的 xPercent/yPercent
 9. 不写字幕——底部字幕带由平台注入；内容留在上 83%%，禁止出现 data-ph=/data-w= 标注
 10. 元素揭示随旁白节拍分布（对齐下方词序表，不前载不拖尾）；段总时长 %.3f 秒
 
