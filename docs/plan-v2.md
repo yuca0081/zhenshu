@@ -214,6 +214,17 @@ v1 冗杂的根源不是仓库选址,是增长方式——把"能力增长"做�
 
 ## 11. 里程碑
 
+### 执行记录(2026-09-30,M0'-a 已落地并首跑验收)
+
+- `docs/contract.md` 定稿(F/T/A/C 四组条款+执行映射+修复协议);`ai/scene_lint.py` Tier 0 静态门禁(自检+金样例全绿);`ai/contract-example/seg-golden.html` 金样例(参数化 draw(t)+种子 rng,自 v1 真实段帧改造)。
+- `server/internal/produce/scenegen.go`:sceneGen(LLM 直写场景文件,契约校验+外科修复≤2轮+指纹旁车缓存+段间并发);produce.go 的 genSpecs/renderSpecs/fetchImages/ingestStagedImages/spec prompts/元素菜单/图标校验全部拆除;checkWithRepair/runRework/frameQA 修复轮全部改走 sceneGen(提交 e483877,净 -1105 行)。
+- **字幕带上移为 assemble.py 平台层**(subtitle_blocks:短语硬切+词级渐亮,挂主 tl 绝对时刻,单段工程归零;双语次行;皮肤槽位配色):场景文件只写上 83% 内容,`data-ph=/data-w=` 列入 lint 禁标。冒烟七项全绿。
+- frameqa:specHasScene 改查帧 HTML `<canvas`;revealPlan(提前穿帮对照)随 spec 消亡暂时降级,M0'-b 从时间轴恢复;契约漂移测试 TestSceneCodeMaxMatchesPython 退役;删除 `ai/render_spec.py`(1198 行)。
+- **首跑验收(SCENE_SURVIVAL=1,glm-5.3-flash)**:sceneGen 直写 10/10 段全过契约 lint 并渲出、画面非空,**确定性回放门禁 PASS**,全链 8.3 分钟。首跑修出一个真 bug:flash 模型在 JSON 前吐标签词 → provider 加 extractJSON 括号配平容错榜取(纯 JSON 恒等,全链路受益)+ 输出指令收紧(e438790)。环境:.env / npm-cache(425M)自 v1 复制。
+- 验证:`go build`+`go vet`+produce/contract/pipeline/llm 单测全绿;scene_lint 自检+金样例绿;assemble.py 冒烟七项绿。
+- **未做**(M0'-b 起):design 独立阶段(现用 style_samples 皮肤做临时设计系统)、TTS 并行化+frac 比例时序、vendor 目录、同题 bake-off(质量评分,不止成活率)。阶段名(style_samples/compositions)未改——外部契约(web stageOrder/agent/m0)稳定优先,改名随 design 阶段一起做。
+
+
 1. **M0'-a 契约先行**:`docs/contract.md` 定稿 + lint 全绿(§3 十三条逐条落地);
 2. **M0'-b 同题 bake-off**:GGUF(BV1jcGF6dEwU)+ 斗拱(BV1DTaH6fEYr)两道题,新路径 vs v1 冻结基线;双指标=质量分(按 §1.1 rubric)/每分钟成片成本。赢不了就继续调,不动 v1;
 3. **M1' 端到端可用率追平**:10 次生成 ≥7 可用,真实创作者独立走完 输入→预览→修改→下载;
