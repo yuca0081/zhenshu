@@ -38,7 +38,7 @@
 ### 2.1 保留(行为不动)
 
 - 分镜稿上游 + 门1(用户确认内容);
-- TTS/逐词时间戳/单一时间基准(旁白驱动);
+- TTS/逐词时间戳/单一时间基准(旁白驱动)。**2026-09-30 修订**:时间权威不变,但 TTS 从 scene_gen 的前置降为质检/渲染的前置——scene_gen 按分镜估时先行,真 TTS 并行落地后机械解析(§2.4);
 - 确定性渲染下游:HyperFrames(无头浏览器逐帧截图)+ FFmpeg(编码/混音/stitch);
 - 段级一文件结构(失败隔离与段级重生成的安全网);
 - 门2(草稿确认 + 段级重生成)。
@@ -54,21 +54,58 @@
 
 **死掉的只有一件事**:用 JSON 槽位描述画面布局、再由引擎翻译成 HTML 这个翻译动作(斗拱剖面/水彩渲染器/点云在槽位体系里没有格子)。
 
-### 2.3 管线图(v2 目标态)
+### 2.3 管线图(v2 目标态,2026-09-30 修订:TTS 并行化)
 
 ```
-manuscript → storyboard(门1) → design【笼子二】 → scene_gen【笼子一内,逐段直写】
-  → 质检站(分级门禁+外科修复) → render(HyperFrames) → stitch(门2/段级重生成)
+manuscript → storyboard(门1) → design【笼子二】
+                                 ├─ scene_gen【笼子一,逐段直写,按估时】──┐
+                                 └─ tts(并行跑) → 时序解析(机械,比例→绝对) ─┤
+                                                                            └→ 质检站(分级门禁+外科修复) → render(HyperFrames) → stitch(门2/段级重生成)
 ```
 
-对应 v1 `pipeline.go Stages()` 八阶段的变化:`style_samples` 演化为 `design`;`compositions`(genSpecs)替换为 `scene_gen`;`check` 重造为分级质检站。
+对应 v1 `pipeline.go Stages()` 八阶段的变化:`style_samples` 演化为 `design`;`compositions`(genSpecs)替换为 `scene_gen`;`check` 重造为分级质检站;`tts` 不再阻塞 scene_gen(§2.4)。
+
+### 2.4 TTS 时序:先行条件与并行化(2026-09-30 定稿)
+
+**用户提案**:唯一先行条件=分镜+风格,TTS 放开。**裁定:生成顺序放开,时间权威不放开。**
+
+- 不放开的原因(物理性,v1 踩坑结论维持):旁白驱动品类配音是时间最终权威——TTS 语速不可自然伸缩,改画面远易于改配音;先画面后配音必时长错位。
+- 放开的机制(四条):
+  1. scene_gen 按分镜**估时**先行(字数÷语速+标点停顿,v1 M0 已有 CJK 估计器);先行条件=分镜+风格+估时;
+  2. 契约要求旁白驱动段用**段内比例时序**(data-in/out 写 0~1,不写绝对秒)→ 真 TTS 落地零重生成,比例自动伸缩;
+  3. TTS 并行执行,落地后**机械 pass** 把比例解析为绝对值(纯算术,非 LLM 作业);卡点/音乐驱动类维持音乐节拍先行(v1 timing_basis 不变);
+  4. 估时偏差 >25% 只重跑该段 scene_gen(段级隔离,便宜)。
+- 诚实边界:可看草稿(draft.mp4,含卡拉OK字幕)仍需等 TTS——字幕层=TTS 时间戳机械装配,模型永不手写字幕 cue。省的是串行等待,不是跳过 TTS。
+
+### 2.5 scene_gen 具体形态:段=自包含场景文件(2026-09-30 定稿)
+
+**不是"一口吃大量 HTML"**:60-90s 片 = 6-10 段 × 每段 150-500 行,每段独立生成(段间并发)、独立质检、独立重生成。量级由三样框住:段级切分、平台 shim、设计系统(风格决策已在 design 阶段完成)。
+
+| | 写什么 |
+|---|---|
+| 模型写(全部是创意) | 每片一次:design.md+tokens。每段:版式、动效编排、canvas/Three 图形程序、data-el 标注、自定义场景参数注册 |
+| 平台写(机械,模型永不碰) | 运行时 shim(~200行,读 data-* 驱动 GSAP)、tokens.css 注入、字幕层(TTS时间戳装配)、比例→绝对解析、lint/frameQA、render/stitch |
+
+场景文件形态示意(shim API 在 contract.md 定稿):
+
+```html
+<!-- seg03 | 旁白驱动 | 估时 11.2s -->
+<style> /* design.md 约束下的自由发挥 */ </style>
+<div class="stage" data-mode="frac">
+  <h1 class="clip" data-el="hook-title" data-in="0" data-out="0.35">干这么重的活,个头小不了</h1>
+  <canvas class="clip" data-el="dougong-section" data-in="0.10" data-out="1.00"></canvas>
+</div>
+<script>
+  HF.scene({ draw(t){ /* 参数化图形程序,f(t) */ }, params:{ floors:{...} } });
+</script>
+```
 
 ## 3. 笼子一:运行时契约(待建 `docs/contract.md`)
 
 管**什么样的代码有资格进渲染器**——技术合法性,硬法律,lint+沙箱机械执行。条款(每条必须可机械判定;模糊条款一律降级为报告项):
 
 1. 固定舞台元素、固定画幅,禁改舞台本身;
-2. 时序一律 `data-*` 属性声明,数值来自 TTS 真实时间戳;
+2. 时序一律 `data-*` 属性声明,**旁白驱动段用段内比例(0~1),卡点/音乐驱动段用绝对秒(来自节拍表)**;比例→绝对由平台机械解析(真 TTS 时长落地后),模型不写绝对秒(2026-09-30 修订,见 §2.4);
 3. `class="clip"` 标记剪辑单元;
 4. 字体仅限白名单本地字体,`@font-face` 声明(v1 gotcha:`src:local()`);
 5. 禁网络请求、禁外链资源,资产全部本地,附来源清单;
