@@ -73,11 +73,8 @@ def lint_text(html: str, seg_hint: str = '') -> list:
     if seg and f'window.__timelines["{seg}"]' not in html:
         errs.append(('F3', f'未注册 window.__timelines["{seg}"]（渲染器入口）'))
 
-    # F4/F5：clip 轨道层与语义标注计数（v1 惯例：clip 标全屏轨道层 ≥1；
-    # 内部元素由模型自己的时间轴编排，语义标注才是每个可见元素的硬要求）
-    n_clip = len(re.findall(r'class="[^"]*\bclip\b[^"]*"', html))
-    if n_clip < 1:
-        errs.append(('F4', '缺 class="clip" 轨道层（背景等全屏层需要 clip+data-start/duration/track-index）'))
+    # F5：语义标注计数（硬要求）。F4（clip 轨道层）2026-09-30 降级为指导：
+    # bakeoff 实测模型用 #root CSS 画底色是正当惯例，硬门禁造成修复死锁。
     n_name = len(re.findall(r'data-hf-name=', html))
     if n_name < 3:
         errs.append(('F5', f'data-hf-name 语义标注仅 {n_name} 处（<3；元素级指认依赖它）'))
