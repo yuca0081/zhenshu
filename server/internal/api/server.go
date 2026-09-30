@@ -257,7 +257,8 @@ func (s *Server) listProjects(c *gin.Context) {
 		CreatedAt string `json:"created_at"`
 		HasVideo  bool   `json:"has_video"`
 	}
-	var out []row
+	// 预分配非 nil：空列表必须序列化成 [] 而不是 null（前端读 .length 会崩）
+	out := make([]row, 0, len(entries))
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), "_") {
 			continue
@@ -888,6 +889,9 @@ func (s *Server) listLibrary(c *gin.Context) {
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
+	}
+	if packs == nil {
+		packs = []methodlib.StylePack{}
 	}
 	c.JSON(200, packs)
 }
