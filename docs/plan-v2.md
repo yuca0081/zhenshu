@@ -112,7 +112,7 @@ manuscript → storyboard(门1) → design【笼子二】
 4. 字体仅限白名单本地字体,`@font-face` 声明(v1 gotcha:`src:local()`);
 5. 禁网络请求、禁外链资源,资产全部本地,附来源清单;
 6. 禁实时时钟 API;随机数必须带种子;
-7. **所有运动必须走 GSAP 时间轴/适配器**;CSS keyframes/WAAPI/自走 rAF 禁用于运动(它们跑在合成器时钟上,seek 不到,逐帧截图=随机噪声);
+7. **平台时钟是唯一时钟(2026-09-30 修订:框架任意,时钟唯一)**——一切运动状态由平台主时间轴驱动(GSAP seek 与 `draw(t)` 同一时刻),框架全是时钟的奴隶;禁框架自带 ticker/loop 自走(Three `setAnimationLoop`、PixiJS Ticker 等);CSS `@keyframes`/`animation:`/`transition:` 禁用于运动(合成器时钟,seek 不到);框架文件必须来自平台 vendor 目录本地内联,禁 CDN;禁 Worker 参与影响状态的计算(调度时序不确定,同帧异路径渲染会分叉);
 8. 运动一律**参数化** `f(t)`,禁逐帧累积状态(物理积分必须闭式化或从0重放);
 9. 一段一个文件,文件名即段号;
 10. 每个逻辑元素带 `data-el` 语义标注(见 §7);
@@ -154,6 +154,7 @@ manuscript → storyboard(门1) → design【笼子二】
 - **Three.js 正确姿势**:禁 `setAnimationLoop` 自转;render-on-demand( seek 到哪渲染哪);运动参数化;随机种子;`preserveDrawingBuffer`。GSAP 驱动代理对象,`onUpdate` 更新场景+手动 `renderer.render()`。
 - **确定性=同机同配置**,不承诺跨 GPU 逐像素一致(抗锯齿/浮点差异)。对"同集群出片/改稿重渲/批量变体"够用,对外话术别过度承诺。
 - **成本分工**:90% 画面(科普卡片/字幕/图表)用 DOM/SVG/Canvas2D,快且稳;Three.js/WebGL 留给每部片 1-2 个装置镜头(点云/晶格/三维剖面)——是 8 分和 6 分的分水岭,但不必全片都是它。4K WebGL 按天算渲染成本,段级并发缓解。
+- **框架任意,时钟唯一(2026-09-30 补)**:模型为质量可选任意框架——契约不设框架白名单,只管渲染模型。三档待遇:**Blessed**(HyperFrames 七适配器覆盖:GSAP/Three/Lottie/anime.js/WAAPI/FLIP,各配 methods 方法页)/ **允许**(平台 vendor 目录内、纪律自查、确定性探针实测背书——探针对框架不可知,只测可观察性质)/ **禁止**(需网络、Worker 影响状态、CSS 动画用于运动)。依据:11 条爆片的质量突破全是"选对工具"的功劳且工具各异(Three+GLSL/Canvas2D+WebGL2/光线步进),写死框架=重蹈"槽位不够"覆辙,只是换个名字叫"框架槽位"。
 
 ## 8. 模型策略
 
@@ -191,7 +192,7 @@ manuscript → storyboard(门1) → design【笼子二】
 
 ### 9.4 新建
 
-`docs/contract.md`(笼子一全文)→ design 阶段 → scene_gen → 分级质检站 → 自定义场景插件接口(methods/scene 升级)→ benchmark 工具。
+`docs/contract.md`(笼子一全文)→ design 阶段 → scene_gen → 分级质检站 → 自定义场景插件接口(methods/scene 升级)→ benchmark 工具 → **本地框架 vendor 目录**(catalog 锁版本:three/pixi/d3/matter 等;新框架走"提案→确定性审查→进目录",属数据增长)。
 
 ## 10. 防冗杂宪法(新仓库第一天生效)
 
