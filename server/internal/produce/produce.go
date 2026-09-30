@@ -302,6 +302,7 @@ func (r *Runner) runRework(ctx context.Context, p *pipeline.Project, segs []cont
 
 	// 1. 目标段画面重生成（删旧场景文件强制重出；其余段产物原样复用）
 	r.emit(id, "stage", "compositions", "running")
+	r.Manifest(p, "stage.start", "compositions")
 	// 用户改画要求走 instruction 位（最高优先级），修复轮（check/画面审查）也必须带上
 	instr := "用户对这一段画面的修改要求（必须落实）：\n" + instruction
 	if err := r.sceneGen(ctx, p, instr, "", only); err != nil {
@@ -312,19 +313,23 @@ func (r *Runner) runRework(ctx context.Context, p *pipeline.Project, segs []cont
 		return fmt.Errorf("合成物落盘失败: %w", err)
 	}
 	r.emit(id, "stage", "compositions", "done")
+	r.Manifest(p, "stage.finish", "compositions")
 
 	// 2. 重组装（时间轴不变）+ 检查（失败只修目标段）
 	r.emit(id, "stage", "assemble", "running")
+	r.Manifest(p, "stage.start", "assemble")
 	if err := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); err != nil {
 		return fmt.Errorf("组装失败: %w", err)
 	}
 	r.emit(id, "stage", "assemble", "done")
+	r.Manifest(p, "stage.finish", "assemble")
 	if err := r.checkWithRepair(ctx, p, instr, only); err != nil {
 		return err
 	}
 
 	// 3. 段级局部重渲：只删/重渲目标段段片，其余段复用，再 concat 出成片
 	r.emit(id, "stage", "render", "running")
+	r.Manifest(p, "stage.start", "render")
 	for _, seg := range segs {
 		if err := os.Remove(p.Artifact("renders/segs/" + seg.ID + ".mp4")); err != nil && !os.IsNotExist(err) {
 			return err
@@ -337,6 +342,7 @@ func (r *Runner) runRework(ctx context.Context, p *pipeline.Project, segs []cont
 		return err
 	}
 	r.emit(id, "stage", "render", "done")
+	r.Manifest(p, "stage.finish", "render")
 
 	// 4. 画面审查：只审重做段，不过带要求重出（用户要求经 instr 一路带到修复轮）
 	if err := r.frameQA(ctx, p, instr, only); err != nil {
@@ -466,10 +472,12 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 
 	// ── 1. TTS + 词级对齐（幂等：缺什么补什么）─────────────────
 	r.emit(id, "stage", "tts", "running")
+	r.Manifest(p, "stage.start", "tts")
 	if err := r.python(ctx, "ai/tts_align.py", p.Dir, 30*time.Minute); err != nil {
 		return fmt.Errorf("TTS/对齐失败: %w", err)
 	}
 	r.emit(id, "stage", "tts", "done")
+	r.Manifest(p, "stage.finish", "tts")
 	r.Manifest(p, "produce.tts", "done")
 
 	// ── 1.5 双语字幕（可选，M-C）：短语级英文翻译 → audio_meta（幂等；失败不挡片）
@@ -484,10 +492,12 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 
 	// ── 3. 组装 ─────────────────────────────────────────────
 	r.emit(id, "stage", "assemble", "running")
+	r.Manifest(p, "stage.start", "assemble")
 	if err := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); err != nil {
 		return fmt.Errorf("组装失败: %w", err)
 	}
 	r.emit(id, "stage", "assemble", "done")
+	r.Manifest(p, "stage.finish", "assemble")
 
 	// ── 4. check 门禁（自修复：报错回喂重生成 spec）────────────
 	if err := r.checkWithRepair(ctx, p, "", ""); err != nil {
@@ -496,6 +506,7 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 
 	// ── 5. 渲染成片（按段增量渲 + concat，段片复用见 stageRender）──
 	r.emit(id, "stage", "render", "running")
+	r.Manifest(p, "stage.start", "render")
 	if err := pipeline.Run(ctx, p, "render"); err != nil {
 		return fmt.Errorf("渲染失败: %w", err)
 	}
@@ -503,6 +514,7 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 		return err
 	}
 	r.emit(id, "stage", "render", "done")
+	r.Manifest(p, "stage.finish", "render")
 
 	// ── 6. 画面审查（抽帧+视觉模型，自修复见 frameQA）────────────
 	if err := r.frameQA(ctx, p, "", ""); err != nil {
@@ -520,6 +532,7 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 // compositions 生成/复用场景文件 → 清旧帧 → 管线落盘。
 func (r *Runner) compositions(ctx context.Context, p *pipeline.Project) error {
 	r.emit(p.ID, "stage", "compositions", "running")
+	r.Manifest(p, "stage.start", "compositions")
 	if err := r.sceneGen(ctx, p, "", "", ""); err != nil {
 		return err
 	}
@@ -528,6 +541,7 @@ func (r *Runner) compositions(ctx context.Context, p *pipeline.Project) error {
 		return fmt.Errorf("合成物落盘失败: %w", err)
 	}
 	r.emit(p.ID, "stage", "compositions", "done")
+	r.Manifest(p, "stage.finish", "compositions")
 	return nil
 }
 
@@ -540,6 +554,7 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 			return ctx.Err()
 		}
 		r.emit(p.ID, "stage", "check", fmt.Sprintf("running（第 %d 次）", attempt))
+		r.Manifest(p, "stage.start", "check")
 		_ = os.Remove(p.Artifact(".hyperframes-ok"))
 		err := pipeline.Run(ctx, p, "check")
 		if err == nil {
@@ -547,10 +562,11 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 			// 含 scene 的段同 t 两轮截帧像素必须一致；失败按 check 失败进同一修复轮。
 			if rerr := r.sceneReplayCheck(ctx, p); rerr != nil {
 				err = rerr
-			} else {
-				r.emit(p.ID, "stage", "check", "done")
-				return nil
-			}
+				} else {
+					r.emit(p.ID, "stage", "check", "done")
+					r.Manifest(p, "stage.finish", "check")
+					return nil
+				}
 		}
 		if ctx.Err() != nil { // 用户取消 ≠ check 失败，别进修复轮
 			return ctx.Err()
@@ -563,6 +579,7 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 			if err := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); err == nil {
 				if pipeline.Run(ctx, p, "check") == nil {
 					r.emit(p.ID, "stage", "check", "done")
+					r.Manifest(p, "stage.finish", "check")
 					return nil
 				}
 			}
@@ -570,6 +587,7 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 		}
 		if attempt == 3 {
 			r.emit(p.ID, "stage", "check", "error: "+err.Error())
+			r.Manifest(p, "stage.finish", "check")
 			return fmt.Errorf("check 三轮未过: %w", err)
 		}
 		// 修复目标 = 重做段（可逗号多段）∪ 本轮报错涉及的段：check 是全片门禁，
@@ -588,6 +606,8 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 			"文字压在照片/深色底上一律改极浅色（#EFE9DA、#E3E3E3 级），浅色底上用深色（#2D2D2D 级）；" +
 			"中灰（#616161、#9E9E9E）做正文/标注色直接不达标，禁用。\n" +
 			"逐项修完再输出。"
+		// 本轮 check 失败收口（计时），修复轮重生成的时间不计入 check
+		r.Manifest(p, "stage.finish", "check")
 		r.emit(p.ID, "stage", "check", fmt.Sprintf("repair：重生成画面（段：%s）", repairOnly))
 		r.Manifest(p, "check.repair", tail(err.Error(), 10))
 		if err := r.sceneGen(ctx, p, instruction, feedback, repairOnly); err != nil {
