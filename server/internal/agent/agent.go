@@ -629,6 +629,55 @@ var tools = []tool{
 		},
 	},
 	{
+		def: toolDef("web_search", "联网搜索实时资料（新闻/版本号/价格/数据等模型知识截止后的信息，或核实文稿事实）。写实元素（人物/产品/地标/新闻实物）的画面调研先搜再定。额度有限（套餐月约 200 次），必要才调，一次到位", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query":    map[string]any{"type": "string", "description": "搜索词，≤70 字，关键词组效果最好"},
+				"recency":  map[string]any{"type": "string", "description": "时间范围（可选）：oneDay/oneWeek/oneMonth/oneYear，查新闻类用 oneWeek"},
+				"location": map[string]any{"type": "string", "description": "地域（可选）：cn 中文区（默认）/ us 非中文区"},
+			},
+			"required": []string{"query"},
+		}),
+		gate: noGate,
+		run: func(a *Agent, p *pipeline.Project, args string) string {
+			var in struct {
+				Query    string `json:"query"`
+				Recency  string `json:"recency"`
+				Location string `json:"location"`
+			}
+			_ = json.Unmarshal([]byte(args), &in)
+			q := strings.TrimSpace(in.Query)
+			if q == "" {
+				return "缺少 query"
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			rs, err := llm.WebSearch(ctx, q, strings.TrimSpace(in.Recency), strings.TrimSpace(in.Location))
+			if err != nil {
+				return "搜索失败：" + err.Error()
+			}
+			if len(rs) == 0 {
+				return "没有搜到相关结果，换个更具体的搜索词再试"
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "「%s」搜到 %d 条：\n", q, len(rs))
+			for i, r := range rs {
+				meta := r.Media
+				if r.PublishDate != "" {
+					if meta != "" {
+						meta += " · "
+					}
+					meta += r.PublishDate
+				}
+				if meta != "" {
+					meta = "（" + meta + "）"
+				}
+				fmt.Fprintf(&b, "%d. %s%s\n%s\n%s\n", i+1, r.Title, meta, r.Content, r.Link)
+			}
+			return b.String()
+		},
+	},
+	{
 		def: toolDef("set_bgm", "背景音乐：不带参数=列出曲库；track=曲名 设置/更换；track=\"off\" 关闭。成片已就绪时立即重新混音（几秒钟，不重渲画面）", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -922,6 +971,8 @@ func (a *Agent) systemPrompt(id string, s State) string {
 - 换风格/调样张：调 draft_style_samples 并把用户要求原样放进 instruction，样张没重新生成就不能说「已出新样张」——没做工具调用就当没做。
 - 成片就绪后：改某段画面用 rework（整段重生成画面、音频不动）；用户带 📎 段/元素引用的消息几乎都是 rework 意图。元素引用指名了改哪个元素，rework 的 instruction 里点名它（人话名，必要时带元素 id 与时刻）。要精确定位段与元素先 list_segments。换配音音色用 set_voice（空参列音色，设置后自动整片重制）。出片后主动 extract_stylepack 沉淀风格（一次就够，已提炼过不必重复）。
 - 默认自主连贯：能做的直接做（出分镜→出样张→自检一路做下去），到用户门（风格确认）停下说清楚等什么。
+- 涉及时效性事实（新闻/版本/价格/数据）先用 web_search 核实再写进文稿/分镜；搜索不可用就说明信息可能过时，别编。
+- web_search 消耗套餐月度额度（每月仅约 200 次，与其他 MCP 共享）——非必要不搜：一轮对话合并成尽量少的精准查询；空结果最多换个词再试一次，仍空就如实说并标明信息可能过时，不连环重试。
 - 工具被拒就换路或向用户解释，不重复硬试；每轮最多 %d 步。
 - 回复短：一段话讲清做了什么、下一步是什么，不堆术语、不复述参数。`, s.Name, id, s.summary(), id, maxSteps)
 }
