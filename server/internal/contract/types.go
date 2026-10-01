@@ -115,18 +115,86 @@ func ValidateStoryboard(sb *Storyboard) error {
 	return nil
 }
 
-// StyleSamples 风格样张：唯一必须用户确认的前置件（不好看只有人能判断）。
+// StyleSamples 风格样张 + 本片设计系统（plan-v2 §4 笼子二）：唯一必须用户确认的前置件
+// （不好看只有人能判断）。v2 design 阶段：模型通读全部分镜为本片**发明**设计系统
+// ——皮肤（1–2 套）/字体角色/动效语言/贯穿装置/版式网格/负面清单，样张是它的视觉预览。
+// 旧字段 Skin（单皮肤）保留读兼容；设计 tokens 即本文件本体（style/style_samples.json），
+// 确认后机械渲染出 style/design.md（人读 + 门2）与 style/skin.json（引擎件）。
 type StyleSamples struct {
-	Direction string   `json:"direction"` // 如「手绘叙事（纸面·马克笔）」
-	Samples   []Sample `json:"samples"`   // 1–3 张
-	Skin      *Skin    `json:"skin,omitempty"` // 风格文件（§12.2：样张阶段 LLM 同步产出，确认时锁定为 style/skin.json）
+	StyleID   string   `json:"style_id,omitempty"` // 风格库条目 id（全链路锚点：场景/拼接/再提炼按它查库）
+	Direction string   `json:"direction"`          // 如「手绘叙事（纸面·马克笔）」
+	Desc      string   `json:"desc,omitempty"`
+	Concept   string   `json:"concept,omitempty"` // 一句话：本片视觉概念，为什么这套系统配这部片
+	Samples   []Sample `json:"samples"`           // 1–3 张（用主皮肤渲出的所见即所得预览）
+	Skin      *Skin    `json:"skin,omitempty"`    // 旧字段（单皮肤，读兼容；EffectiveSkins 统一读口）
+	Skins     []Skin   `json:"skins,omitempty"`   // 1–2 套；双皮肤是穆阿蒂布式加分项（黑霓虹×米色图版按乐段交替）
+	SkinRule  string   `json:"skin_rule,omitempty"` // 双皮肤切换规则（哪类段/哪个节拍穿哪套）
+
+	Fonts  *FontRoles     `json:"fonts,omitempty"`         // 字体三角色分工（禁一栈到底）
+	Motion *MotionLang    `json:"motion,omitempty"`        // 动效语言（缓动族+时长档+错峰+转场词汇）
+	Device *DeviceSpec    `json:"device,omitempty"`        // 贯穿装置（全片反复出现、随内容变奏的招牌画面）
+	Layouts []DesignLayout `json:"layouts,omitempty"`      // 本片版式网格（段轮换的优先来源，注册表降为兜底）
+	AntiPatterns []string `json:"anti_patterns,omitempty"` // 本片负面清单（出现即返工的俗手）
+
 	Confirmed bool     `json:"confirmed"` // 硬门：用户点头后才允许开工
+}
+
+// EffectiveSkins 新旧两种落法的统一读口：Skins 优先，退回旧 Skin 字段。
+func (ss *StyleSamples) EffectiveSkins() []Skin {
+	if len(ss.Skins) > 0 {
+		return ss.Skins
+	}
+	if ss.Skin != nil {
+		return []Skin{*ss.Skin}
+	}
+	return nil
 }
 
 type Sample struct {
 	Tag  string `json:"tag"`  // 「样张 A · 标题帧」
 	Desc string `json:"desc"` // 一句话说明
 	HTML string `json:"html"` // 样张内容（与成片同一套风格 token，所见即所得）
+}
+
+// FontRole 单一字体角色：字体栈 + 字重 + 字距（三模型对比评审：字距普遍拉开是高档片签名）。
+type FontRole struct {
+	Stack    string `json:"stack"`              // CSS font-family，必须含中文字体
+	Weight   string `json:"weight,omitempty"`   // 如 400/700/900
+	Tracking string `json:"tracking,omitempty"` // CSS letter-spacing，如 0.06em / normal
+}
+
+// FontRoles 字体角色分工：大标题/正文/数据各管各的（穆阿蒂布签名：终端等宽+金色衬线大字+重无衬线）。
+type FontRoles struct {
+	Display FontRole `json:"display"`        // 大标题/大数字
+	Body    FontRole `json:"body"`           // 正文/说明
+	Data    FontRole `json:"data,omitempty"` // 数据/标签/代码（等宽优先；缺省退 body）
+}
+
+// MotionLang 动效语言：缓动族 + 时长档 + 错峰间隔 + 一句话性格。
+// 三模型对比评审结论「决定档次的是动效原理与时间表工程，不是代码行数」——
+// 全片统一时长档/缓动族是段间节奏一致性的来源。软约束：只注入 prompt，不 lint。
+// 物理边界（hf 白名单）：可补间属性只有 opacity/x/y/scale/rotation 系——动效语言必须在这个物理内设计。
+type MotionLang struct {
+	Ease      string  `json:"ease"`       // 本片缓动族，如 power3.out
+	DurIn     float64 `json:"dur_in"`     // 元素进场时长档（秒）
+	DurSettle float64 `json:"dur_settle"` // 落定/强调时长档（秒）
+	Stagger   float64 `json:"stagger"`    // 同组元素错峰间隔（秒）
+	Notes     string  `json:"notes"`      // 本片动效语言：什么怎么动、禁什么动（含转场习惯）
+}
+
+// DeviceSpec 贯穿装置：全片反复出现、随内容变奏的招牌画面机制
+// （列LEN访客卡×5、西西弗斯单版式状态机）——段间呼应正是风格本身（plan §2.5）。
+type DeviceSpec struct {
+	Name   string `json:"name"`    // 装置名，如「访客卡片」
+	Desc   string `json:"desc"`    // 装置是什么、观众为什么会记住它
+	PerSeg string `json:"per_seg"` // 逐段运用方式：怎么重复/变奏/演变
+}
+
+// DesignLayout 本片版式（设计阶段现场发明，段轮换的优先来源；注册表 layouts 降为兜底）。
+type DesignLayout struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Desc string `json:"desc"` // 构图描述：主体位置/元素铺排/留白方向
 }
 
 // Skin 风格文件（§12.2 风格自由化）：必填槽位（插座）+ 自由 CSS。
@@ -208,8 +276,10 @@ func hasCJKFont(font string) bool {
 }
 
 // ValidateStyleSamples 落定校验：结构合法 + 用户确认（硬门）。
+// 宽松档——旧项目/库内风格包（applyPack 直写 confirmed 文件）没有设计系统块也能过，
+// 兜底路径不因 v2 升级被堵死；新生成的设计在草稿档（ValidateStyleSamplesDraft）已严格过闸。
 func ValidateStyleSamples(ss *StyleSamples) error {
-	if err := ValidateStyleSamplesDraft(ss); err != nil {
+	if err := ValidateStyleSamplesBase(ss); err != nil {
 		return err
 	}
 	if !ss.Confirmed {
@@ -218,9 +288,9 @@ func ValidateStyleSamples(ss *StyleSamples) error {
 	return nil
 }
 
-// ValidateStyleSamplesDraft 草稿校验（不含确认门）：LLM 刚生成的样张
-// confirmed 必为 false（等用户在舞台点头），只查结构 + skin 实测校验（§12.2）。
-func ValidateStyleSamplesDraft(ss *StyleSamples) error {
+// ValidateStyleSamplesBase 结构校验（不含确认门、不要求设计系统块）：
+// direction、样张、皮肤（新旧两种落法都查）。落定文件与库内包走这档。
+func ValidateStyleSamplesBase(ss *StyleSamples) error {
 	if ss.Direction == "" {
 		return fmt.Errorf("direction 为空")
 	}
@@ -232,8 +302,76 @@ func ValidateStyleSamplesDraft(ss *StyleSamples) error {
 			return fmt.Errorf("样张 %d 缺少 HTML 内容", i+1)
 		}
 	}
-	if err := ValidateSkin(ss.Skin); err != nil {
-		return fmt.Errorf("风格文件不合格：%w", err)
+	skins := ss.EffectiveSkins()
+	if len(skins) == 0 {
+		return fmt.Errorf("缺皮肤（skins 或 skin）")
+	}
+	for i := range skins {
+		if err := ValidateSkin(&skins[i]); err != nil {
+			return fmt.Errorf("皮肤 %d 不合格：%w", i+1, err)
+		}
+	}
+	return nil
+}
+
+// ValidateStyleSamplesDraft 草稿校验（设计阶段 LLM 新产出专用，最严档）：
+// Base 全项 + 设计系统四件套齐备（字体角色/动效语言/贯穿装置 + concept）。
+// 缺任何一件 = 模型只交了 v1 水平的配色卡，打回重出（修复轮回喂缺项）。
+func ValidateStyleSamplesDraft(ss *StyleSamples) error {
+	if err := ValidateStyleSamplesBase(ss); err != nil {
+		return err
+	}
+	if strings.TrimSpace(ss.Concept) == "" {
+		return fmt.Errorf("concept 为空——设计系统必须写明「为什么这套系统配这部片」")
+	}
+	skins := ss.EffectiveSkins()
+	if len(skins) > 2 {
+		return fmt.Errorf("skins 最多 2 套（双皮肤封顶，多了是拼盘）")
+	}
+	if len(skins) == 2 && strings.TrimSpace(ss.SkinRule) == "" {
+		return fmt.Errorf("双皮肤必须给 skin_rule（哪类段/哪个节拍穿哪套，可机械执行）")
+	}
+	if ss.Fonts == nil {
+		return fmt.Errorf("缺 fonts（字体三角色 display/body/data 分工）")
+	}
+	for _, r := range []struct {
+		name string
+		fr   FontRole
+	}{{"display", ss.Fonts.Display}, {"body", ss.Fonts.Body}} {
+		if strings.TrimSpace(r.fr.Stack) == "" {
+			return fmt.Errorf("fonts.%s 字体栈为空", r.name)
+		}
+		if !hasCJKFont(r.fr.Stack) {
+			return fmt.Errorf("fonts.%s 字体栈 %q 未包含中文字体（渲染端中文会豆腐块）", r.name, r.fr.Stack)
+		}
+	}
+	if d := ss.Fonts.Data; strings.TrimSpace(d.Stack) != "" && !hasCJKFont(d.Stack) {
+		return fmt.Errorf("fonts.data 字体栈 %q 未包含中文字体（数据标签也有中文，栈尾必须带 CJK 回退）", d.Stack)
+	}
+	if ss.Motion == nil {
+		return fmt.Errorf("缺 motion（动效语言：缓动族/时长档/错峰/性格）")
+	}
+	if strings.TrimSpace(ss.Motion.Ease) == "" || strings.TrimSpace(ss.Motion.Notes) == "" {
+		return fmt.Errorf("motion.ease 与 motion.notes 不能为空（缓动族 + 动效性格一句话）")
+	}
+	if ss.Motion.DurIn < 0.1 || ss.Motion.DurIn > 1.5 {
+		return fmt.Errorf("motion.dur_in=%.2f 超范围 0.1–1.5 秒", ss.Motion.DurIn)
+	}
+	if ss.Motion.DurSettle < 0.05 || ss.Motion.DurSettle > 1.0 {
+		return fmt.Errorf("motion.dur_settle=%.2f 超范围 0.05–1.0 秒", ss.Motion.DurSettle)
+	}
+	if ss.Motion.Stagger < 0 || ss.Motion.Stagger > 0.5 {
+		return fmt.Errorf("motion.stagger=%.2f 超范围 0–0.5 秒", ss.Motion.Stagger)
+	}
+	if ss.Device == nil || strings.TrimSpace(ss.Device.Name) == "" ||
+		strings.TrimSpace(ss.Device.Desc) == "" || strings.TrimSpace(ss.Device.PerSeg) == "" {
+		return fmt.Errorf("缺 device（贯穿装置：名称/是什么/逐段运用方式三件齐）")
+	}
+	if len(ss.Layouts) > 0 && len(ss.Layouts) < 2 {
+		return fmt.Errorf("layouts 给了就至少 2 个（段轮换需要变化，1 个等于没给）")
+	}
+	if n := len(ss.AntiPatterns); n > 8 {
+		return fmt.Errorf("anti_patterns %d 条超上限（≤8，负面清单是缰绳不是清单文学）", n)
 	}
 	return nil
 }

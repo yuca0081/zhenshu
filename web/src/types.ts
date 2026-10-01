@@ -88,19 +88,28 @@ export interface Msg {
   created_at: string
 }
 
-export interface StylePack {
+// 风格库条目（data/library/styles.json，唯一风格事实源）：
+// 身份（id/name/desc/genre/keywords）+ 外观（tokens/layouts）+ 证据（samples）+ 复用件（skin）
+export interface Style {
   id: string
   name: string
   direction: string
-  desc: string
-  sample_html: string
-  sample_tag: string
-  origin_project: string
+  desc?: string
+  genre?: string
+  keywords?: string[]
+  tokens?: StyleTokens
+  layouts?: RefVideoLayout[]
+  samples?: StyleLibrarySample[]
+  skin?: Skin          // 风格文件（应用时拷进项目）
+  origin_project?: string
   published: boolean
   created_at: string
-  skin?: Skin          // 风格文件（v2 模板：应用时拷进项目）
-  example_specs?: string[] // 示例 spec（spec 阶段注入仿写）
-  assets?: string[]    // 配套素材 id 清单
+}
+
+export interface StyleLibrarySample {
+  tag: string
+  desc?: string
+  html: string
 }
 
 // 音频对齐产物（audio/audio_meta.json）：时间轴字幕/音频轨的数据源
@@ -134,26 +143,6 @@ export interface ChatRef {
   elementName?: string // 人话名（如 箭头：蓝光弹开）
 }
 
-// 素材中心：元素注册表条目（ai/registry/elements.json）
-export interface ElementInfo {
-  kind: string
-  name: string
-  category: string
-  scene: string
-  menu: string // LLM prompt 菜单行（kind 与参数约束的权威文本）
-}
-
-// 素材中心：风格注册表条目（registry 端点带 tokens/layouts 全量，详情抽屉 join 用）
-export interface StyleInfo {
-  id: string
-  direction: string
-  genre: string
-  keywords: string[]
-  photo: string
-  tokens?: StyleTokens
-  layouts?: RefVideoLayout[]
-}
-
 // styles.json tokens 透传的已知字段（缺字段引擎走缺省，前端同样可缺省渲染）
 export interface StyleTokens {
   font?: string
@@ -177,18 +166,7 @@ export interface StyleTokens {
   img?: { frame?: string; shadow?: string }
 }
 
-// ── 素材库 catalog（asset-library.md §4 统一条目）────────────
-export interface AssetEntry {
-  id: string
-  type: 'image' | 'audio' | 'video'
-  file: string
-  tags: string[]
-  desc: string
-  origin: string // fetch | gen | upload | builtin | film
-  meta?: Record<string, unknown>
-}
-
-// ── 参考视频解析（素材中心）────────────────────────────────
+// ── 参考视频解析（风格库页）────────────────────────────────
 export interface RefVideoLayout {
   id: string
   name: string
@@ -215,15 +193,14 @@ export interface RefVideo {
   style?: RefVideoStyle
 }
 
-// ── 素材中心详情抽屉（模板库/视频解析卡片点开共用）────────────
-// 两个 tab 各自把数据规范化成这个结构（模板包按 direction 对注册表 join 补 tokens/layouts）
+// ── 风格详情抽屉（风格库/视频解析卡片点开共用）──────────────
+// 两个 tab 各自把数据规范化成这个结构（风格条目本体已带 tokens/layouts，无需 join）
 export interface TemplateDetailData {
   title: string
   status: { label: string; type: 'success' | 'warning' | 'error' | 'default' }
   direction?: string
   genre?: string
   keywords?: string[]
-  photo?: string
   layouts?: RefVideoLayout[]
   tokens?: StyleTokens | null
   samples: { tag: string; desc?: string; html: string }[]
@@ -232,8 +209,7 @@ export interface TemplateDetailData {
   createdAt?: string
   desc?: string
   extraTags?: string[]
-  registryStyleId?: string // 命中注册表才有 → 元素库联动按钮
-  packId?: string // 模板包：草稿态给「入库」
+  packId?: string // 风格库条目：草稿态给「入库」
   published?: boolean
   refId?: string // 参考引用：抽帧截图 + 原视频；未入库给「入库」
   confirmed?: boolean

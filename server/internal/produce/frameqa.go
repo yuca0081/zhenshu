@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -156,11 +157,16 @@ func (r *Runner) reviewSegments(ctx context.Context, p *pipeline.Project, only s
 			return
 		}
 		var vd frameVerdict
-		// high：逐段审查调用量大，max 的深思考成本×段数不划算；max 留给 storyboard 这类每片一次的深规划
+		// high：逐段审查调用量大，max 的深思考成本×段数不划算；max 留给 storyboard 这类每片一次的深规划。
+		// 样张附在四帧之后（图5+）：风格一致性同场评审——笼子二的回路（plan-v2 §4 Tier1 报告项）。
+		imgs := []string{dataURL(sf.first), dataURL(sf.open), dataURL(sf.last), dataURL(sf.final)}
+		if samples := styleSampleImages(p); len(samples) > 0 {
+			imgs = append(imgs, samples...)
+		}
 		_, rerr := prov.GenerateJSONVisionEffort(ctx,
 			"你是科普视频的画面质检员，只输出 JSON。",
 			reviewPrompt(p, seg, voices[seg.ID]),
-			[]string{dataURL(sf.first), dataURL(sf.open), dataURL(sf.last), dataURL(sf.final)}, 0.2, &vd, llm.EffortHigh)
+			imgs, 0.2, &vd, llm.EffortHigh)
 		if rerr != nil {
 			r.Manifest(p, "frameqa.review_error", seg.ID+": "+rerr.Error())
 			return
@@ -293,17 +299,23 @@ func specHasScene(p *pipeline.Project, segID string) bool {
 
 // reviewPrompt 四帧一调（省钱且模型可对照）：首帧查提前穿帮，开场帧查清单外提前
 // 出现，落定帧查布局全项，尾帧查退场残留。图片按 图1=首帧、图2=开场帧、
-// 图3=落定帧、图4=尾帧 顺序附在消息里。
+// 图3=落定帧、图4=尾帧 顺序附在消息里；有已确认样张时图5+ 是风格样张（笼子二回路）。
 func reviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta) string {
+	samples := styleSampleImages(p)
+	styleBlock := styleCheckBlock(designOf(p), len(samples))
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf(`这是同一段视频的四帧渲染画面（底部字幕带是画面一部分，字幕文字不算元素）。
+	header := "这是同一段视频的四帧渲染画面（底部字幕带是画面一部分，字幕文字不算元素）。"
+	if len(samples) > 0 {
+		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张已确认的风格样张（底部字幕带是画面一部分，字幕文字不算元素）。", len(samples))
+	}
+	b.WriteString(fmt.Sprintf(`%s
 图1 = 首帧（0s，段的第一帧）；图2 = 开场帧（约 0.8s，开场元素刚落定）；
 图3 = 落定帧（段尾稍前，元素齐全）；图4 = 尾帧（段最后一帧）。
 
 ## 段信息
 - 标题：%s
 - 旁白：%s
-`, seg.Key, seg.Narration))
+`, header, seg.Key, seg.Narration))
 	// scene 段（P1-1）：全画幅画布构图——大片深底/留白/暗调层次是设计不是缺陷，
 	// 卡片式「空白>25%/重心失衡」判定整组关闭；canvas 像素不参与 DOM 检查。
 	if specHasScene(p, seg.ID) {
@@ -329,13 +341,9 @@ func reviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta) string
 1. 退场失败：应已退场清单里的元素仍可见
 2. 画面空洞：大片元素消失后无内容承接（只剩字幕带）
 通用：动效中间态（半透明/位移中）不算问题；背景纹理/纯色底/装饰线/canvas 绘制内容不算「元素」；轻微审美偏好不算问题。
-
-## 输出 JSON
-{"pass": true/false, "issues": [{"frame": "first|open|last|final", "severity": "high|medium|low", "element": "哪个元素", "problem": "什么问题", "suggestion": "怎么改"}]}
-pass 标准：无 high 问题即 true；medium/low 记录但不算失败。`)
-		return b.String()
-	}
-	b.WriteString(`
+`)
+	} else {
+		b.WriteString(`
 ## 检查（宁严勿松，只报画面上真实可见的问题）
 图1 首帧：
 1. 提前穿帮：清单外的元素在首帧就清晰可见（内容元素开场即在画面 = high）
@@ -351,16 +359,46 @@ pass 标准：无 high 问题即 true；medium/low 记录但不算失败。`)
 1. 退场失败：应已退场清单里的元素仍可见
 2. 画面空洞：大片元素消失后无内容承接（只剩字幕带）
 通用：动效中间态（半透明/位移中）不算问题；背景纹理/纯色底/装饰线不算元素；轻微审美偏好不算问题。
-
+`)
+	}
+	b.WriteString(styleBlock)
+	b.WriteString(`
 ## 输出 JSON
-{"pass": true/false, "issues": [{"frame": "first|open|last|final", "severity": "high|medium|low", "element": "哪个元素", "problem": "什么问题", "suggestion": "怎么改"}]}
+{"pass": true/false, "issues": [{"frame": "first|open|last|final|sample", "severity": "high|medium|low", "element": "哪个元素", "problem": "什么问题", "suggestion": "怎么改"}]}
 pass 标准：无 high 问题即 true；medium/low 记录但不算失败。`)
 	return b.String()
 }
 
+// styleCheckBlock 风格一致性检查块（图5+ = 已确认样张）：笼子二的回路，Tier1 是非题——
+// 「这段和样张像不像同一部片」。只报「像另一部片」级漂移（medium，报告项不阻断，
+// plan-v2 §4）；双皮肤与任一皮肤气质一致即算一致。无样张返回 ""。
+func styleCheckBlock(ss *contract.StyleSamples, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n## 风格一致性（对照样张，图5–图%d）\n最后 %d 张是本片确认过的风格样张。判断本段画面与样张是否**明显偏离**——配色/字体/整体气质像不像同一部片：\n", 4+n, n)
+	if ss != nil && len(ss.EffectiveSkins()) == 2 && strings.TrimSpace(ss.SkinRule) != "" {
+		b.WriteString("- 本片是双皮肤（切换规则：" + ss.SkinRule + "）；与任一皮肤气质一致即算一致\n")
+	}
+	b.WriteString(`- 只有「像另一部片」程度才报：frame="sample"、element="风格漂移"、severity="medium"，problem 写偏在哪（色系/字体/质感），suggestion 写怎么靠回样张
+- 正常设计内变化不算：同色系深浅、版式差异、背景纹理不同、内容不同带来的密度差异
+`)
+	return b.String()
+}
+
+// designOf 项目设计系统（style_samples.json；缺失/未出返回 nil——风格检查静默跳过）。
+func designOf(p *pipeline.Project) *contract.StyleSamples {
+	var ss contract.StyleSamples
+	if b, err := os.ReadFile(p.Artifact("style/style_samples.json")); err == nil && json.Unmarshal(b, &ss) == nil {
+		return &ss
+	}
+	return nil
+}
+
 // issuesFeedback high/medium 问题 → 回喂 sceneGen 的修正要求（low 噪音不回喂）。
 func issuesFeedback(v frameVerdict) string {
-	frameNames := map[string]string{"first": "首帧", "open": "开场帧", "last": "落定帧", "final": "尾帧"}
+	frameNames := map[string]string{"first": "首帧", "open": "开场帧", "last": "落定帧", "final": "尾帧", "sample": "风格样张对照"}
 	var b strings.Builder
 	b.WriteString("渲染后的画面审查发现以下问题，重出 spec 时必须逐条修正（调整坐标/大小/删减元素/给提前可见的元素安排入场动画）:\n")
 	for _, i := range v.Issues {

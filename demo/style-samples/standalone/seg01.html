@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1920, height=1080" />
+<script src="assets/gsap.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; width: 1920px; height: 1080px; overflow: hidden; }
+</style>
+</head>
+<body>
+<script>window.__timelines = window.__timelines || {};</script>
+
+  <style>
+@font-face{font-family:"Segoe UI";src:local("Segoe UI");}
+@font-face{font-family:"Microsoft YaHei";src:local("Microsoft YaHei");}
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI','Microsoft YaHei',sans-serif;color:#E8EDF5;}
+.s-clip{position:absolute;inset:0;}
+.s-paper{position:absolute;inset:0;background-color:#0C1524;background-image:
+  radial-gradient(ellipse at 50% 42%,transparent 50%,rgba(0,0,0,.5) 100%),
+  radial-gradient(40% 40% at 78% 20%,rgba(127,168,255,.08) 0%,transparent 70%),
+  linear-gradient(175deg,#0C1524 0%,#101E33 58%,#0A1120 100%);}
+.s-el{position:absolute;}
+.s-title{position:absolute;top:168px;left:300px;font-size:132px;font-weight:900;
+  letter-spacing:10px;color:#E8EDF5;white-space:nowrap;}
+.s-title span{display:inline-block;}
+.s-label{position:absolute;top:346px;left:308px;font-size:34px;font-weight:600;
+  letter-spacing:7px;color:#8FA3BE;white-space:nowrap;}
+.s-chip{position:absolute;top:758px;left:1318px;background:rgba(127,168,255,.14);
+  border:1px solid rgba(143,163,190,.45);border-radius:26px;padding:12px 30px;
+  font-size:32px;font-weight:800;letter-spacing:3px;color:#CBDCF5;white-space:nowrap;}
+  </style>
+  <div data-composition-id="seg01" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="seg01-paper" class="s-clip clip s-paper" data-start="0" data-duration="10.35" data-track-index="0" data-hf-name="背景纸面:墨蓝夜色"></div>
+      <div id="seg01-cam" data-layout-allow-overflow style="position:absolute;inset:0;">
+        <svg data-hf-name="一笔山河:单线勾画月山湖印" style="position:absolute;left:0;top:0;" width="1920" height="1080" viewBox="0 0 1920 1080" fill="none">
+          <path id="seg01-glow" data-hf-name="单线辉光层" d="M1350,350 a110,110 0 1,1 0,-220 a110,110 0 1,1 0,220 L1272,462 L1168,418 L1010,568 L884,492 L742,610 L612,540 L470,648 L338,585 L185,652 Q275,674 372,662 T570,662 L830,662 L1050,658 L1284,650 a46,46 0 1,1 0,-92 a46,46 0 1,1 0,92 L1470,592" stroke="#7FA8FF" stroke-opacity="0.16" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+          <path id="seg01-ink" data-hf-name="主线:月-山-湖-印" d="M1350,350 a110,110 0 1,1 0,-220 a110,110 0 1,1 0,220 L1272,462 L1168,418 L1010,568 L884,492 L742,610 L612,540 L470,648 L338,585 L185,652 Q275,674 372,662 T570,662 L830,662 L1050,658 L1284,650 a46,46 0 1,1 0,-92 a46,46 0 1,1 0,92 L1470,592" stroke="#E8EDF5" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div id="seg01-title" class="s-title" data-hf-name="标题:一笔山河"><span data-c>一</span><span data-c>笔</span><span data-c>山</span><span data-c>河</span></div>
+        <div id="seg01-label" class="s-label" data-hf-name="副标:ONE STROKE 线条动画样片">ONE STROKE · 线条动画样片</div>
+        <div id="seg01-chip" class="s-chip" data-hf-name="角标:样片01 LINE ART">样片 01 · LINE ART</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var tl = gsap.timeline({ paused: true });
+      var strokes = [document.getElementById('seg01-glow'), document.getElementById('seg01-ink')];
+      var lens = strokes.map(function (p) {
+        var L = p.getTotalLength();
+        p.style.strokeDasharray = L + ' ' + L;
+        p.style.strokeDashoffset = L;
+        return L;
+      });
+      gsap.set('#seg01-paper', { opacity: 0 });
+      tl.to('#seg01-paper', { opacity: 1, duration: 0.45, ease: 'none' }, 0);
+      strokes.forEach(function (p, i) {
+        tl.fromTo(p, { strokeDashoffset: lens[i] }, { strokeDashoffset: 0, duration: 7.6, ease: 'none' }, 0.5);
+      });
+      gsap.set('#seg01-title [data-c]', { opacity: 0, y: 46 });
+      tl.to('#seg01-title [data-c]', { opacity: 1, y: 0, duration: 0.5, stagger: 0.14, ease: 'power3.out' }, 7.9);
+      gsap.set('#seg01-label', { opacity: 0, x: -24 });
+      tl.to('#seg01-label', { opacity: 1, x: 0, duration: 0.45, ease: 'power2.out' }, 8.75);
+      gsap.set('#seg01-chip', { opacity: 0, y: 26, scale: 0.92 });
+      tl.to('#seg01-chip', { opacity: 1, y: 0, scale: 1, duration: 0.4, ease: 'back.out(1.6)' }, 9.35);
+      tl.fromTo('#seg01-cam', { scale: 1, x: 0 }, { scale: 1.03, x: -16, duration: 10.35, ease: 'none' }, 0);
+      window.__timelines["seg01"] = tl;
+    })();
+  </script>
+
+</body>
+</html>

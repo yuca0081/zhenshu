@@ -214,6 +214,18 @@ v1 冗杂的根源不是仓库选址,是增长方式——把"能力增长"做�
 
 ## 11. 里程碑
 
+### 执行记录(2026-10-01,笼子二 design 阶段落地——tokens 四块扩充 + 注入 + 版本戳 + 风格一致性回路)
+
+- **contract**:StyleSamples 扩为完整设计系统(§4 落地):concept/skins(1–2 套+skin_rule)/fonts(display/body/data 三角色)/motion(缓动族+dur_in/dur_settle/stagger 档位+性格)/device(贯穿装置+逐段运用)/layouts/anti_patterns。校验三档:Base(宽松,落定/库内老包)/Draft(严格,新产出必须四件套齐备,双皮肤必须有可执行切换规则)/Final(Base+确认门)。`ValidateSkin` 纹丝未动,引擎件兼容。
+- **tokens 载体裁定**:`style/style_samples.json` 本体即 tokens,不另立 tokens.json(防双源漂移,宪法 #1);确认后机械渲染 `style/design.md`(人读+门2+scene_gen 注入源)与 `style/skin.json`(引擎件=主皮肤,assemble 配色消费)。design 阶段作业 prompt 在 `pipeline/design.go`(分镜全量注入,样张=主皮肤预览不变,960×540)。
+- **生成**:stageStyleSamples API 直调带修复循环(≤2 轮缺项回喂)——产出比 v1 大,one-shot 拒收风险对冲。
+- **注入**:produce `designNoteFor` 有设计块 → `DesignDoc` 机械渲染逐段注入(本段版式指派按段号内联,取代注册表 layoutNote;注册表降为无设计块时的兜底);sceneSystemFor 带贯穿装置一句话。
+- **版本戳**:`designFingerprint`(style_samples.json 文件哈希)并入段级旁车指纹(`segFp:designFp`)——设计一改,按旧版画的段自动过期重生成;设计不变缓存照常命中。旧旁车无冒号后缀,首跑全量刷新一次(预期行为)。
+- **风格一致性回路**(§4 Tier1 报告项落地):frameQA 把确认样张(≤3 张)附在四帧后同场评审,「像不像同一部片」是非题,漂移报 medium(frame=sample)——报告不阻断,门2 人审决定 rework;双皮肤与任一皮肤一致即算一致。
+- **确认端点**:confirmStyle 升级为严格档(设计四件套齐备才许确认)+ LockDesign 统一落盘;旧项目无设计块会被拒,重出样张即迁移(一次性成本,验收于 dev 期)。
+- 兼容:web UI 只读 direction/samples/skin/confirmed,新增字段零破坏;agent `draft_style_samples` 工具描述更新,regenerateStyle 增清 design.md。
+- 新增单测:contract 设计三档校验(完整通过/14 种缺项拒绝/宽松档放行老包/EffectiveSkins 读兼容)全绿。
+
 ### 执行记录(2026-09-30,M0'-a 已落地并首跑验收)
 
 - `docs/contract.md` 定稿(F/T/A/C 四组条款+执行映射+修复协议);`ai/scene_lint.py` Tier 0 静态门禁(自检+金样例全绿);`ai/contract-example/seg-golden.html` 金样例(参数化 draw(t)+种子 rng,自 v1 真实段帧改造)。

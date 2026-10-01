@@ -359,7 +359,8 @@ func storyboardUserPromptNotes(article, notes string) string {
 ---%s`, utf8.RuneCountInString(article), article, noteBlock)
 }
 
-// stageStyleSamples 风格样张（LLM 作业 #2）：必须 confirmed=true 才放行（硬门）。
+// stageStyleSamples 风格样张 + 本片设计系统（LLM 作业 #2，v2 笼子二，见 design.go）：
+// 必须 confirmed=true 才放行（硬门）。
 // input/style_notes.txt 存在时按用户修改要求重生成（draft_style_samples 带 instruction 写入）。
 func stageStyleSamples(p *Project) error {
 	final := p.Artifact("style/style_samples.json")
@@ -368,7 +369,10 @@ func stageStyleSamples(p *Project) error {
 		if err := readJSON(final, &ss); err != nil {
 			return err
 		}
-		return contract.ValidateStyleSamples(&ss)
+		if err := contract.ValidateStyleSamples(&ss); err != nil {
+			return err
+		}
+		return LockDesign(p, &ss)
 	}
 	out := p.LLMOutput("style_samples")
 	if exists(out) {
@@ -383,37 +387,47 @@ func stageStyleSamples(p *Project) error {
 			return err
 		}
 		p.Manifest("style.confirmed", ss.Direction)
-		return nil
+		return LockDesign(p, &ss)
 	}
 
-	// API 模式：直出样张（confirmed 置 false，等用户在舞台确认——硬门由 final 落定校验把守）。
-	// NoThink：样张是纯 CSS 作业，开思考会烧上万 reasoning token、拖到分钟级。
+	// API 模式：直出设计系统（confirmed 置 false，等用户在舞台确认——硬门由 final 落定校验把守）。
+	// NoThink：设计+样张是结构化 CSS 作业，开思考烧上万 reasoning token、拖到分钟级。
+	// 产出比 v1 大（皮肤×2+三角色+动效+装置+样张），草稿校验带修复循环（缺项回喂重出，≤2 轮）。
+	sb, err := p.LoadStoryboard()
+	if err != nil {
+		return fmt.Errorf("先完成 storyboard: %w", err)
+	}
 	prov, perr := llm.FromEnv(llm.RolePlan)
 	if perr == nil {
 		var ss contract.StyleSamples
-		usage, gerr := prov.GenerateJSONNoThink(pctx(p),
-			"你是视频视觉设计师。只输出 JSON。",
-			styleUserPrompt(p), &ss)
-		if gerr == nil {
-			if verr := contract.ValidateStyleSamplesDraft(&ss); verr != nil {
-				p.Manifest("style_samples.api.rejected", verr.Error())
-				return fmt.Errorf("API 样张被自检拒绝: %w", verr)
+		prompt := designUserPrompt(p, sb)
+		var lastErr error
+		for round := 0; round < 3; round++ {
+			usage, gerr := prov.GenerateJSONNoThink(pctx(p), designSystemPrompt, prompt, &ss)
+			if gerr != nil {
+				lastErr = gerr
+				break
 			}
-			ss.Confirmed = false
-			if err := writeFile("", final, mustJSON(ss)); err != nil {
-				return err
+			verr := contract.ValidateStyleSamplesDraft(&ss)
+			if verr == nil {
+				ss.Confirmed = false
+				if err := writeFile("", final, mustJSON(ss)); err != nil {
+					return err
+				}
+				p.Manifest("llm.usage", fmt.Sprintf("style_samples prompt=%d completion=%d tokens",
+					usage.PromptTokens, usage.CompletionTokens))
+				p.Manifest("style.drafted", ss.Direction)
+				p.Manifest("style_samples.api", prov.Name+"/"+prov.Model)
+				return nil
 			}
-			p.Manifest("llm.usage", fmt.Sprintf("style_samples prompt=%d completion=%d tokens",
-				usage.PromptTokens, usage.CompletionTokens))
-			p.Manifest("style.drafted", ss.Direction)
-			p.Manifest("style_samples.api", prov.Name+"/"+prov.Model)
-			return nil
+			lastErr = verr
+			prompt = designUserPrompt(p, sb) + "\n\n## 上一版被设计校验拒绝（缺项/越界必须补齐，其余保持不变）\n" + verr.Error()
 		}
-		p.Manifest("style_samples.api.error", gerr.Error())
+		p.Manifest("style_samples.api.error", lastErr.Error())
 	}
 
 	req := p.LLMRequest("style_samples")
-	if err := writeFile("", req, styleRequest(p, out)); err != nil {
+	if err := writeFile("", req, designRequest(p, sb, out)); err != nil {
 		return err
 	}
 	return &ErrAwaitLLM{RequestPath: req, OutputPath: out, Note: "样张 JSON 中 confirmed 置 true 代表用户已确认（硬门）"}
@@ -670,9 +684,8 @@ func transitionFor(p *Project) string {
 			}
 		}
 	}
-	sb, err := p.LoadStoryboard()
-	if err == nil && strings.TrimSpace(sb.StyleID) != "" {
-		if v := styleStr(sb.StyleID, "transition", ""); v != "" {
+	if id := ProjectStyleID(p); id != "" {
+		if v := styleStr(id, "transition", ""); v != "" {
 			return v
 		}
 	}
@@ -700,32 +713,59 @@ func PostFor(p *Project) *PostFXExport {
 
 // styleStr registry tokens 字符串值（styleBool 的字符串版）。
 func styleStr(styleID, key, def string) string {
-	if dataDir == "" || strings.TrimSpace(styleID) == "" {
+	t, ok := styleTokens(styleID)
+	if !ok {
 		return def
 	}
-	b, err := os.ReadFile(filepath.Join(dataDir, "library", "registry", "styles.json"))
+	if s, _ := t[key].(string); strings.TrimSpace(s) != "" {
+		return strings.ToLower(strings.TrimSpace(s))
+	}
+	return def
+}
+
+// ProjectStyleID 项目的风格库锚点：style_samples.style_id 优先（选库/冷启动落盘），
+// storyboard.style_id 兜底（老项目分镜 LLM 填写）。
+func ProjectStyleID(p *Project) string {
+	if b, err := os.ReadFile(p.Artifact("style/style_samples.json")); err == nil {
+		var ss struct {
+			StyleID string `json:"style_id"`
+		}
+		if json.Unmarshal(b, &ss) == nil && strings.TrimSpace(ss.StyleID) != "" {
+			return strings.TrimSpace(ss.StyleID)
+		}
+	}
+	if sb, err := p.LoadStoryboard(); err == nil {
+		return strings.TrimSpace(sb.StyleID)
+	}
+	return ""
+}
+
+// styleTokens 风格库条目 tokens（library/styles.json；id 大小写不敏感）。
+func styleTokens(styleID string) (map[string]any, bool) {
+	if dataDir == "" || strings.TrimSpace(styleID) == "" {
+		return nil, false
+	}
+	b, err := os.ReadFile(filepath.Join(dataDir, "library", "styles.json"))
 	if err != nil {
-		return def
+		return nil, false
 	}
 	var entries []struct {
 		ID     string          `json:"id"`
 		Tokens json.RawMessage `json:"tokens"`
 	}
 	if json.Unmarshal(b, &entries) != nil {
-		return def
+		return nil, false
 	}
 	for _, e := range entries {
 		if strings.EqualFold(e.ID, styleID) {
 			var t map[string]any
 			if json.Unmarshal(e.Tokens, &t) != nil {
-				return def
+				return nil, false
 			}
-			if s, _ := t[key].(string); strings.TrimSpace(s) != "" {
-				return strings.ToLower(strings.TrimSpace(s))
-			}
+			return t, true
 		}
 	}
-	return def
+	return nil, false
 }
 
 // timelineRow xfade 成片的实际段边界（sfx 布点/前端时间轴对齐的权威口径）。
@@ -1079,40 +1119,17 @@ func sfxFor(p *Project) bool {
 			return *meta.TransitionSFX
 		}
 	}
-	styleID := ""
-	if sb, err := p.LoadStoryboard(); err == nil {
-		styleID = sb.StyleID
-	}
-	return styleBool(styleID, "transition_sfx")
+	return styleBool(ProjectStyleID(p), "transition_sfx")
 }
 
 // styleBool 风格条目 tokens 里的布尔开关（styles.json；id 大小写不敏感）。
 func styleBool(styleID, key string) bool {
-	if dataDir == "" || strings.TrimSpace(styleID) == "" {
+	t, ok := styleTokens(styleID)
+	if !ok {
 		return false
 	}
-	b, err := os.ReadFile(filepath.Join(dataDir, "library", "registry", "styles.json"))
-	if err != nil {
-		return false
-	}
-	var entries []struct {
-		ID     string          `json:"id"`
-		Tokens json.RawMessage `json:"tokens"`
-	}
-	if json.Unmarshal(b, &entries) != nil {
-		return false
-	}
-	for _, e := range entries {
-		if strings.EqualFold(e.ID, styleID) {
-			var t map[string]any
-			if json.Unmarshal(e.Tokens, &t) != nil {
-				return false
-			}
-			on, _ := t[key].(bool)
-			return on
-		}
-	}
-	return false
+	on, _ := t[key].(bool)
+	return on
 }
 
 // SetTransitionSFX 写 project.json 的 transition_sfx 字段（agent 工具 set_sfx 落点）。
@@ -1323,11 +1340,7 @@ func postFor(p *Project) *postFX {
 			}
 		}
 	}
-	styleID := ""
-	if sb, err := p.LoadStoryboard(); err == nil {
-		styleID = sb.StyleID
-	}
-	if fx := stylePost(styleID); fx != nil {
+	if fx := stylePost(ProjectStyleID(p)); fx != nil {
 		return fx
 	}
 	d := defaultPostFX
@@ -1336,31 +1349,22 @@ func postFor(p *Project) *postFX {
 
 // stylePost 风格条目 tokens.post（styles.json；id 大小写不敏感，未配返回 nil）。
 func stylePost(styleID string) *postFX {
-	if dataDir == "" || strings.TrimSpace(styleID) == "" {
+	t, ok := styleTokens(styleID)
+	if !ok {
 		return nil
 	}
-	b, err := os.ReadFile(filepath.Join(dataDir, "library", "registry", "styles.json"))
-	if err != nil {
-		return nil
-	}
-	var entries []struct {
-		ID     string          `json:"id"`
-		Tokens json.RawMessage `json:"tokens"`
-	}
-	if json.Unmarshal(b, &entries) != nil {
-		return nil
-	}
-	for _, e := range entries {
-		if !strings.EqualFold(e.ID, styleID) {
-			continue
+	raw, _ := t["post"].(string)
+	if raw == "" {
+		if m, _ := t["post"].(map[string]any); m == nil {
+			return nil
 		}
-		var t struct {
-			Post *postFX `json:"post"`
+	}
+	var fx postFX
+	if b, err := json.Marshal(t["post"]); err == nil && json.Unmarshal(b, &fx) == nil {
+		if fx.off() {
+			return nil
 		}
-		if json.Unmarshal(e.Tokens, &t) == nil {
-			return t.Post
-		}
-		return nil
+		return &fx
 	}
 	return nil
 }
@@ -1795,79 +1799,6 @@ func storyboardRequest(p *Project, article, out string) string {
 - segments 非空；每段 narration、duration_hint > 0；id 从 seg01 连续编号
 - 总时长 ≤ 900；旁白只能来自文稿内容
 `, utf8.RuneCountInString(article), article, out)
-}
-
-// styleBrief 样张作业正文（API 直调与会话请求共用一份，防两处漂移）。
-// input/style_notes.txt 存在时追加用户修改要求（draft_style_samples 带 instruction 写入）。
-// 画布硬定 960×540：舞台 SampleFrame 缩放与 ai/snap_samples.py 截图都按此假设，违反必被裁切。
-// 2026-09-27 §12.2 风格自由化：样张与风格文件（skin）同产——样张用 skin 槽位渲出，
-// 确认样张 = 确认风格文件，渲染期 9 段共用一份皮肤，段间零漂移。
-func styleBrief(p *Project) string {
-	notes := ""
-	if b, err := os.ReadFile(p.Artifact("input/style_notes.txt")); err == nil && len(strings.TrimSpace(string(b))) > 0 {
-		notes = "\n\n## 用户修改要求（优先满足；未提及的方面保持连贯，不要推倒重来）\n" + string(b) + "\n"
-	}
-	return fmt.Sprintf(`你是视频视觉设计师。按文稿气质提议一个风格方向，产出**风格文件（skin）+ 1–3 张 HTML 样张**。
-
-## 风格文件（skin）——本片皮肤，一次定死、全片共用
-- 必填槽位（引擎给标准件上色只认这四个插座）：
-  - bg 底色 / txt 文字色 / accent 强调色（#RRGGBB；txt 落 bg 上对比度必须 ≥4.5:1，实测校验会拒）
-  - font 字体栈（CSS font-family 写法；必须含中文字体，如 "KaiTi","SimHei","Microsoft YaHei","SimSun","FangSong" 之一在前）
-- 可选槽位：mute 次级文字色 / surface 卡片底色 / panel_txt 面板文字色 / radius 圆角0–40 / border_w 描边0–6 / img_rot 配图旋转-8~8
-- css 自由 CSS（≤4000 字符）：纹理/质感/装饰/特效底——这是风格差异化的主战场，认真写。
-  可用稳定挂点：.skin-root（根容器）、.skin-paper（满画幅背景层，纹理叠这里）、CSS 变量 var(--bg/--txt/--accent/--mute)。
-  禁：animation/transition/@keyframes（确定性渲染）、url()外链/@import、vw/vh 视口单位、position:fixed。
-  动效质感用静态多层渐变/噪点/边框模拟（vignette 暗角、纸纹、网格、光斑、色带、拼贴底）。
-
-## 样张 = 用上面 skin 渲出的静态小画面（所见即所得）
-- 样张 HTML 里的颜色/字体必须来自 skin 槽位（色值逐字一致）——样张即皮肤预览，两处不一致会被打回
-- 不要用图片/网络资源，纯 CSS
-- 多张样张的构图版式必须明显不同（如：大字海报 / 主视觉分栏 / 数据焦点 / 满幅底图+侧栏各取其一），不要每张都排成「标题+元素网格」；每张 desc 写明用了哪种版式
-
-## 画布硬约束（违反必被裁切）
-- 每张样张的 html 是完整自包含文档，画布固定 960×540：html,body{width:960px;height:540px;overflow:hidden}
-- 内容全部落在画布内，不依赖滚动；禁止 vw/vh；大字标题留边距，不得溢出画布
-- CSS 紧凑：内联一个 <style> 块，每张 html 控制在 2000 字符内%s`, notes)
-}
-
-func styleJSONShape() string {
-	return `{
-  "direction": "风格方向名（如：黑金史诗·交界地挽歌）",
-  "skin": {
-    "name": "皮肤名",
-    "slots": {
-      "bg": "#0D0A07", "txt": "#E8DCC0", "accent": "#C9A227",
-      "font": "'SimSun','Microsoft YaHei',serif",
-      "mute": "#9C8F72", "surface": "#1A1410", "panel_txt": "#EFE6CF",
-      "radius": 0, "border_w": 1, "img_rot": 0
-    },
-    "css": "/* 自由 CSS：纹理/特效/装饰，挂 .skin-paper / .skin-root，用 var(--bg) 等 */"
-  },
-  "samples": [
-    { "tag": "样张 A · 标题帧", "desc": "说明这张展示什么", "html": "<!doctype html>…整文档…" },
-    { "tag": "样张 B · 数据帧", "desc": "…", "html": "…" }
-  ],
-  "confirmed": false
-}`
-}
-
-func styleUserPrompt(p *Project) string {
-	return styleBrief(p) + "\n\n## 输出要求\n只输出 JSON，无 markdown 围栏：\n" + styleJSONShape()
-}
-
-func styleRequest(p *Project, out string) string {
-	return fmt.Sprintf(`# 作业：风格样张（帧述 M0 · LLM 作业 #2）
-
-%s
-
-## 输出要求
-把 JSON 写到: %s（confirmed 先置 false，用户确认后由管线改为 true——这是硬门）
-
-%s
-
-## 校验
-- direction 非空；samples 1–3 张；每张 html 非空
-`, styleBrief(p), out, styleJSONShape())
 }
 
 func compRequest(p *Project, seg contract.Segment, direction, out string) string {

@@ -40,6 +40,24 @@ func sceneSidecarPath(p *pipeline.Project, segID string) string {
 	return p.Artifact("llm/comp-" + segID + ".scene.src")
 }
 
+// sceneSidecarFingerprint 段内容指纹 + 设计系统版本（笼子二版本戳）：
+// 设计一改（确认重出/字段变化）designFingerprint 变 → 按旧版画的段自动过期重生成；
+// 设计未变时指纹不变，缓存照常命中。旧旁车（无冒号后缀）与新格式必然不等 → 首跑全量刷新一次。
+func sceneSidecarFingerprint(p *pipeline.Project, seg contract.Segment) string {
+	return sceneFingerprint(seg) + ":" + designFingerprint(p)
+}
+
+// designFingerprint 设计系统内容指纹（style/style_samples.json 文件字节哈希）。
+// 文件缺失返回 "-"——样张落地后指纹变化，任何已生成段自然过期。
+func designFingerprint(p *pipeline.Project) string {
+	b, err := os.ReadFile(p.Artifact("style/style_samples.json"))
+	if err != nil {
+		return "-"
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:4])
+}
+
 // sceneConcurrency 场景生成并发度（段间零依赖；默认 3，SCENE_CONCURRENCY/SPEC_CONCURRENCY 可调）。
 func sceneConcurrency() int {
 	for _, key := range []string{"SCENE_CONCURRENCY", "SPEC_CONCURRENCY"} {
@@ -66,7 +84,6 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		return fmt.Errorf("场景生成需要 API 模式（LLM_API_KEY）: %w", perr)
 	}
 	cv := ProjectCanvas(p)
-	style := styleNoteFor(p, r.DataDir)
 	golden := goldenExample(r.RootDir)
 	// 样张截图（ai/snap_samples.py）→ 多模态注入：模型看着真图写画面（失败退纯文本）。
 	if err := r.python(ctx, "ai/snap_samples.py", p.Dir, time.Minute); err != nil {
@@ -99,8 +116,9 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		}
 		out := p.Artifact("llm/comp-" + seg.ID + ".json")
 		if _, err := os.Stat(out); err == nil && feedback == "" && instruction == "" {
-			// 已有产物还要过指纹关：旁车指纹与当前段内容一致才复用（分镜改稿生效的关键闸）。
-			if fp, ferr := os.ReadFile(sceneSidecarPath(p, seg.ID)); ferr == nil && string(fp) == sceneFingerprint(seg) {
+			// 已有产物还要过指纹关：旁车指纹（段内容+设计版本）与当前一致才复用
+			// （分镜改稿/设计改稿生效的关键闸）。
+			if fp, ferr := os.ReadFile(sceneSidecarPath(p, seg.ID)); ferr == nil && string(fp) == sceneSidecarFingerprint(p, seg) {
 				continue
 			}
 		}
@@ -120,6 +138,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	work := func(seg contract.Segment) {
 		v := voices[seg.ID]
 		sceneM, compM := methodsFor(r.RootDir, seg)
+		style := designNoteFor(p, r.DataDir, seg.Idx)
 		user := sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM)
 		var payload struct {
 			HTML     string                  `json:"html"`
@@ -137,7 +156,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 				HTML     string                  `json:"html"`
 				Elements []contract.NamedElement `json:"elements"`
 			}
-			u2, err2 := gen(sceneUserPrompt(seg, v, "", fb, cv, style, golden, sceneM, compM), &fixed)
+			u2, err2 := gen(sceneUserPrompt(seg, v, "", fb, cv, designNoteFor(p, r.DataDir, seg.Idx), golden, sceneM, compM), &fixed)
 			if err2 != nil {
 				fail(fmt.Errorf("%s 场景修复失败: %w", seg.ID, err2))
 				return
@@ -159,7 +178,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			return
 		}
 		// 指纹旁车紧随产物落盘（写失败按过期处理：下次重生成，宁重复不陈旧）。
-		_ = os.WriteFile(sceneSidecarPath(p, seg.ID), []byte(sceneFingerprint(seg)), 0o644)
+		_ = os.WriteFile(sceneSidecarPath(p, seg.ID), []byte(sceneSidecarFingerprint(p, seg)), 0o644)
 		p.Manifest("llm.usage", fmt.Sprintf("scene %s prompt=%d completion=%d tokens", seg.ID, u1.PromptTokens, u1.CompletionTokens))
 		r.emit(p.ID, "progress", "compositions", fmt.Sprintf("%s 场景文件 ✓（%d 元素）", seg.ID, len(payload.Elements)))
 	}
@@ -180,12 +199,16 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	return firstErr
 }
 
-// sceneSystemFor 系统提示跟随项目已确认的风格方向（M0'-a 用皮肤做临时设计系统；
-// M0'-b 升级为独立 design 阶段的 design.md + tokens 注入）。
+// sceneSystemFor 系统提示跟随项目已确认的设计系统（笼子二：方向 + 贯穿装置一句话，
+// 细则由 designNoteFor 注入正文；无设计文件的老项目退回手绘缺省）。
 func sceneSystemFor(p *pipeline.Project) string {
 	var ss contract.StyleSamples
 	if b, err := os.ReadFile(p.Artifact("style/style_samples.json")); err == nil && json.Unmarshal(b, &ss) == nil && ss.Direction != "" {
-		return "你是视频的画面工程师，直接写可渲染的场景 HTML。只输出 JSON。风格：" + ss.Direction + "。"
+		s := "你是视频的画面工程师，直接写可渲染的场景 HTML。只输出 JSON。风格：" + ss.Direction + "。"
+		if ss.Device != nil && ss.Device.Name != "" {
+			s += "贯穿装置「" + ss.Device.Name + "」是全片签名，本段按注入的设计系统细则呼应它。"
+		}
+		return s
 	}
 	return "你是视频的画面工程师，直接写可渲染的场景 HTML。只输出 JSON。风格：手绘叙事（纸面·马克笔）——米黄纸面、深灰线稿、彩色便签、楷体。"
 }

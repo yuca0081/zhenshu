@@ -25,11 +25,10 @@ import (
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/events"
 	"webpage-video-agent/server/internal/llm"
-	"webpage-video-agent/server/internal/methodlib"
 	"webpage-video-agent/server/internal/pipeline"
 	"webpage-video-agent/server/internal/produce"
 	"webpage-video-agent/server/internal/store"
-	"webpage-video-agent/server/internal/assetlib"
+	"webpage-video-agent/server/internal/stylelib"
 	"webpage-video-agent/server/internal/styleref"
 )
 
@@ -40,9 +39,8 @@ type Server struct {
 	Hub      *events.Hub
 	Agent    *agent.Agent
 	Producer *produce.Runner
-	Lib      *methodlib.Library
+	Lib      *stylelib.Library
 	Refs     *styleref.Store
-	Assets   *assetlib.Library
 
 	// APIToken 非空时全部 /api 路由要求 X-API-Token 头（SSE 另收 ?token=）。
 	// 部署侧公网暴露（Dockerfile ADDR=:8080）必须配置；本机默认回环可留空。
@@ -81,11 +79,6 @@ func (s *Server) Router() *gin.Engine {
 	api.GET("/projects/:id/assets/*filepath", s.asset)
 	api.GET("/library", s.listLibrary)
 	api.POST("/library/:id/publish", s.publishPack)
-	api.GET("/assets", s.assets)
-	api.GET("/assets/:id/file", s.assetFile)
-	api.GET("/registry", s.registry)
-	api.GET("/gallery", s.gallery)
-	api.GET("/gallery/:style/:file", s.galleryFile)
 	api.POST("/references", s.uploadReference)
 	api.GET("/references", s.listReferences)
 	api.GET("/references/:id/frames", s.referenceFrames)
@@ -384,19 +377,24 @@ func (s *Server) saveManuscript(c *gin.Context) {
 // 同时把选定包记入 project.json，后续 extract_stylepack / 复用链路读同一字段。
 func (s *Server) applyStyle(c *gin.Context) {
 	var in struct {
-		StylePackID string `json:"stylepack_id"`
+		StyleID     string `json:"style_id"`
+		StylePackID string `json:"stylepack_id"` // 旧字段名，前端过渡期兼容
 	}
-	if err := c.ShouldBindJSON(&in); err != nil || strings.TrimSpace(in.StylePackID) == "" {
-		c.JSON(400, gin.H{"error": "缺少 stylepack_id"})
+	if err := c.ShouldBindJSON(&in); err != nil || (strings.TrimSpace(in.StyleID) == "" && strings.TrimSpace(in.StylePackID) == "") {
+		c.JSON(400, gin.H{"error": "缺少 style_id"})
 		return
 	}
-	pack, ok := s.Lib.Get(strings.TrimSpace(in.StylePackID))
+	id := strings.TrimSpace(in.StyleID)
+	if id == "" {
+		id = strings.TrimSpace(in.StylePackID)
+	}
+	pack, ok := s.Lib.Get(id)
 	if !ok || !pack.Published {
-		c.JSON(400, gin.H{"error": "风格包不存在或未发布"})
+		c.JSON(400, gin.H{"error": "风格不存在或未入库"})
 		return
 	}
-	id := c.Param("id")
-	p := pipeline.NewProject(s.DataDir, id)
+	projID := c.Param("id")
+	p := pipeline.NewProject(s.DataDir, projID)
 	if _, err := os.Stat(p.Dir); err != nil {
 		c.JSON(404, gin.H{"error": "项目不存在"})
 		return
@@ -427,7 +425,7 @@ func (s *Server) applyStyle(c *gin.Context) {
 	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil {
 		var meta map[string]any
 		if json.Unmarshal(b, &meta) == nil {
-			meta["stylepack_id"] = pack.ID
+			meta["style_id"] = pack.ID
 			_ = pipeline.WriteFileAtomic(p.Artifact("project.json"), mustJSON(meta), 0o644)
 		}
 	}
@@ -459,6 +457,8 @@ func (s *Server) style(c *gin.Context) {
 
 // confirmStyle 用户在舞台点头确认风格——三前置硬门的唯一用户门。
 // §12.2：确认样张 = 确认风格文件，skin 锁定落盘 style/skin.json（渲染只读它）。
+// v2 笼子二：确认的是完整设计系统（皮肤/字体角色/动效/装置），lockDesign 机械
+// 渲染 design.md 并记版本指纹——设计一改，按旧版画的段自动过期。
 func (s *Server) confirmStyle(c *gin.Context) {
 	id := c.Param("id")
 	p := pipeline.NewProject(s.DataDir, id)
@@ -473,8 +473,9 @@ func (s *Server) confirmStyle(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	if verr := contract.ValidateSkin(ss.Skin); verr != nil {
-		c.JSON(400, gin.H{"error": "风格文件不合格，请重新生成样张：" + verr.Error()})
+	// 严格档（设计系统四件套齐备）：老项目没有设计块的会被拒，重出样张即迁移。
+	if verr := contract.ValidateStyleSamplesDraft(&ss); verr != nil {
+		c.JSON(400, gin.H{"error": "设计系统不合格，请重新生成样张：" + verr.Error()})
 		return
 	}
 	ss.Confirmed = true
@@ -482,13 +483,9 @@ func (s *Server) confirmStyle(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	if ss.Skin != nil {
-		if sb, merr := json.MarshalIndent(ss.Skin, "", "  "); merr == nil {
-			if werr := os.WriteFile(p.Artifact("style/skin.json"), sb, 0o644); werr != nil {
-				c.JSON(500, gin.H{"error": werr.Error()})
-				return
-			}
-		}
+	if err := pipeline.LockDesign(p, &ss); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
 	}
 	p.Manifest("style.confirmed", ss.Direction)
 	s.updateStatus(id, "style")
@@ -882,18 +879,18 @@ func isSegID(s string) bool {
 	return true
 }
 
-// ── 方法库（plan.md §4.6：起草自动 + 入库确认）───────────────
+// ── 风格库（起草自动 + 入库确认）─────────────────────────────
 
 func (s *Server) listLibrary(c *gin.Context) {
-	packs, err := s.Lib.List()
+	styles, err := s.Lib.List()
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	if packs == nil {
-		packs = []methodlib.StylePack{}
+	if styles == nil {
+		styles = []stylelib.Style{}
 	}
-	c.JSON(200, packs)
+	c.JSON(200, styles)
 }
 
 func (s *Server) publishPack(c *gin.Context) {
@@ -903,104 +900,6 @@ func (s *Server) publishPack(c *gin.Context) {
 		return
 	}
 	c.JSON(200, pack)
-}
-
-// ── 素材中心（素材库 catalog / 元素注册表 / 风格注册表 / 样张矩阵）──
-
-// assets 素材库统一检索（asset-library.md §5：type 圈范围 + tags/desc 匹配）。
-func (s *Server) assets(c *gin.Context) {
-	if s.Assets == nil {
-		c.JSON(500, gin.H{"error": "素材库未初始化"})
-		return
-	}
-	entries := s.Assets.Search(c.Query("type"), c.Query("q"), 300)
-	if entries == nil {
-		entries = []assetlib.Entry{}
-	}
-	c.JSON(200, gin.H{"entries": entries})
-}
-
-// assetFile 素材本体（路径只出自 catalog 条目，无遍历面）。
-func (s *Server) assetFile(c *gin.Context) {
-	e, ok := s.Assets.Get(c.Param("id"))
-	if !ok {
-		c.JSON(404, gin.H{"error": "素材不存在"})
-		return
-	}
-	c.File(filepath.Join(s.Assets.Root(), filepath.FromSlash(e.File)))
-}
-
-// registry 元素 + 风格注册表（styles 带 tokens/layouts 全量——素材中心详情抽屉
-// 按 direction join 模板包用；elements 原样透传）。
-func (s *Server) registry(c *gin.Context) {
-	eb, err := os.ReadFile(filepath.Join(s.DataDir, "library", "registry", "elements.json"))
-	if err != nil {
-		c.JSON(500, gin.H{"error": "元素注册表缺失：" + err.Error()})
-		return
-	}
-	sb, err := os.ReadFile(filepath.Join(s.DataDir, "library", "registry", "styles.json"))
-	if err != nil {
-		c.JSON(500, gin.H{"error": "风格注册表缺失：" + err.Error()})
-		return
-	}
-	var styles []struct {
-		ID        string          `json:"id"`
-		Direction string          `json:"direction"`
-		Genre     string          `json:"genre"`
-		Keywords  []string        `json:"keywords"`
-		Photo     string          `json:"photo"`
-		Tokens    json.RawMessage `json:"tokens"`
-		Layouts   []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-			Desc string `json:"desc"`
-		} `json:"layouts"`
-	}
-	if err := json.Unmarshal(sb, &styles); err != nil {
-		c.JSON(500, gin.H{"error": "styles.json 损坏：" + err.Error()})
-		return
-	}
-	c.JSON(200, gin.H{"elements": json.RawMessage(eb), "styles": styles})
-}
-
-// gallery 样张矩阵清单：{styleId: [kind...]}（_overview 也计入，前端作风格封面）。
-func (s *Server) gallery(c *gin.Context) {
-	dir := filepath.Join(s.DataDir, "library", "registry", "gallery")
-	out := map[string][]string{}
-	entries, _ := os.ReadDir(dir)
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		var kinds []string
-		files, _ := os.ReadDir(filepath.Join(dir, e.Name()))
-		for _, f := range files {
-			if name := strings.TrimSuffix(f.Name(), ".png"); name != f.Name() && name != "" {
-				kinds = append(kinds, name)
-			}
-		}
-		if len(kinds) > 0 {
-			out[e.Name()] = kinds
-		}
-	}
-	c.JSON(200, out)
-}
-
-// galleryFile 样张 PNG（重生成即换内容，短缓存即可）。
-func (s *Server) galleryFile(c *gin.Context) {
-	style, file := c.Param("style"), c.Param("file")
-	if !isSlug(style) || !isPngName(file) {
-		c.JSON(400, gin.H{"error": "非法路径"})
-		return
-	}
-	f, err := os.Open(filepath.Join(s.DataDir, "library", "registry", "gallery", style, file))
-	if err != nil {
-		c.JSON(404, gin.H{"error": "样张不存在"})
-		return
-	}
-	defer f.Close()
-	c.Header("Cache-Control", "max-age=60")
-	http.ServeContent(c.Writer, c.Request, file, time.Now(), f)
 }
 
 func isSlug(s string) bool {
@@ -1086,7 +985,7 @@ func mustOpen(path string) *os.File {
 	return f
 }
 
-// ── 参考视频解析（素材中心「视频解析」）────────────────────────
+// ── 参考视频解析（风格库「视频解析」）────────────────────────
 
 // uploadReference 上传视频 → 落盘登记 → 立即异步解析。
 func (s *Server) uploadReference(c *gin.Context) {
@@ -1154,19 +1053,22 @@ func (s *Server) confirmReference(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "还没解析完成，不能入库"})
 		return
 	}
-	regID := styleref.RegistryID(ref.ID)
-	if err := styleref.AppendRegistry(s.DataDir, regID, ref.Style); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
+	desc := "从参考视频「" + ref.Name + "」解析提炼"
+	if ref.Style.Genre != "" {
+		desc += "；" + ref.Style.Genre
 	}
-	desc := ref.Style.Genre
-	if desc != "" {
-		desc = "从参考视频「" + ref.Name + "」解析提炼；" + desc
-	} else {
-		desc = "从参考视频「" + ref.Name + "」解析提炼"
+	var samples []stylelib.Sample
+	for _, smp := range ref.Style.Samples {
+		samples = append(samples, stylelib.Sample{Tag: smp.Tag, Desc: smp.Desc, HTML: smp.HTML})
 	}
-	pack, err := s.Lib.AddVideoPack(ref.ID, ref.Style.Direction, ref.Style.Direction, desc,
-		ref.Style.Samples[0].HTML, ref.Style.Samples[0].Tag)
+	var tokens map[string]any
+	_ = json.Unmarshal(ref.Style.Tokens, &tokens)
+	var layouts []stylelib.Layout
+	for _, l := range ref.Style.Layouts {
+		layouts = append(layouts, stylelib.Layout{ID: l.ID, Name: l.Name, Desc: l.Desc})
+	}
+	st, err := s.Lib.IngestVideoRef(ref.ID, ref.Style.Direction, ref.Style.Genre, ref.Style.Keywords,
+		tokens, layouts, samples, desc)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -1175,7 +1077,7 @@ func (s *Server) confirmReference(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"ok": true, "registry_id": regID, "pack": pack})
+	c.JSON(200, gin.H{"ok": true, "style_id": st.ID})
 }
 
 // referenceFrames 参考视频抽帧截图清单（详情抽屉展示原片长相用）。目录扫 frame-*.png，

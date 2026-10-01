@@ -5,12 +5,11 @@ import SampleFrame from './SampleFrame.vue'
 import { api, referenceMediaURL } from '../api'
 import type { StyleTokens, TemplateDetailData } from '../types'
 
-// 素材中心详情抽屉：模板库/视频解析卡片点开共用。纯展示——数据由父组件
+// 风格详情抽屉：风格库/视频解析卡片点开共用。纯展示——数据由父组件
 // 规范化成 TemplateDetailData（tokens/layouts 已 join 好），这里只渲染与联动。
 const props = defineProps<{ show: boolean; detail: TemplateDetailData | null }>()
 const emit = defineEmits<{
   close: []
-  'browse-elements': [styleId: string]
   publish: [packId: string]
   ingest: [refId: string]
 }>()
@@ -155,10 +154,9 @@ async function copyHex(hex: string) {
         </section>
 
         <!-- 关键词 / 题材 / 配图 -->
-        <section v-if="detail.genre || detail.keywords?.length || detail.photo" class="sec">
+        <section v-if="detail.genre || detail.keywords?.length" class="sec">
           <h3>题材与关键词</h3>
           <p v-if="detail.genre" class="kv"><label>适用题材</label>{{ detail.genre }}</p>
-          <p v-if="detail.photo" class="kv"><label>配图调性</label>{{ detail.photo }}</p>
           <div v-if="detail.keywords?.length" class="chips kw">
             <NTag v-for="k in detail.keywords" :key="k" size="small" :bordered="false">{{ k }}</NTag>
           </div>
@@ -175,12 +173,6 @@ async function copyHex(hex: string) {
             controls preload="none" />
         </section>
 
-        <!-- 元素库联动 -->
-        <section v-if="detail.registryStyleId" class="sec">
-          <NButton size="small" ghost @click="emit('browse-elements', detail.registryStyleId!)">
-            去元素库看这套风格的元素样张 →
-          </NButton>
-        </section>
       </template>
     </NDrawerContent>
   </NDrawer>

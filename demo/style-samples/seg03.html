@@ -1,0 +1,130 @@
+<template>
+  <style>
+@font-face{font-family:"Segoe UI";src:local("Segoe UI");}
+@font-face{font-family:"Microsoft YaHei";src:local("Microsoft YaHei");}
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI','Microsoft YaHei',sans-serif;}
+.s-clip{position:absolute;inset:0;}
+.s-sky{position:absolute;inset:0;background:linear-gradient(180deg,#0B0221 0%,#22054E 40%,#5B0E6E 74%,#A1136C 100%);}
+.s-stars{position:absolute;inset:0;}
+.s-sunglow{position:absolute;left:560px;top:330px;width:800px;height:520px;
+  background:radial-gradient(ellipse at 50% 58%,rgba(255,94,140,.55) 0%,rgba(255,94,140,0) 62%);}
+.s-sunsvg{position:absolute;left:750px;top:370px;}
+.s-horizglow{position:absolute;left:0;top:596px;width:1920px;height:110px;
+  background:radial-gradient(ellipse at 50% 50%,rgba(255,110,190,.6) 0%,rgba(255,110,190,0) 68%);}
+.s-mts{position:absolute;left:0;top:0;}
+.s-persp{position:absolute;left:0;top:640px;width:1920px;height:440px;perspective:520px;overflow:hidden;}
+.s-plane{position:absolute;left:-720px;top:0;width:3360px;height:1400px;background:
+  repeating-linear-gradient(90deg,rgba(255,60,190,.8) 0 4px,transparent 4px 140px),
+  repeating-linear-gradient(180deg,rgba(84,222,255,.6) 0 4px,transparent 4px 140px);}
+.s-palm{position:absolute;}
+.s-title{position:absolute;left:0;top:236px;width:1920px;text-align:center;font-size:148px;
+  font-weight:900;font-style:italic;letter-spacing:6px;white-space:nowrap;}
+.s-title span{display:inline-block;background-image:linear-gradient(180deg,#FFF6D8 0%,#FFD319 42%,#FF2975 76%,#B429FF 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  text-shadow:0 0 26px rgba(255,60,190,.55);}
+.s-sub{position:absolute;left:0;top:452px;width:1920px;text-align:center;font-size:40px;font-weight:800;
+  letter-spacing:16px;color:#FFD9EC;text-shadow:0 0 18px rgba(255,60,190,.6);white-space:nowrap;}
+.s-chip{position:absolute;top:758px;left:1298px;background:rgba(255,217,236,.1);
+  border:1px solid rgba(255,120,200,.5);border-radius:26px;padding:12px 30px;
+  font-size:32px;font-weight:800;letter-spacing:3px;color:#FFE9F5;white-space:nowrap;}
+.s-scan{position:absolute;inset:0;background:repeating-linear-gradient(180deg,rgba(0,0,0,.13) 0 2px,transparent 2px 5px);}
+  </style>
+  <div data-composition-id="seg03" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="seg03-paper" class="s-clip clip s-sky" data-start="0" data-duration="10.35" data-track-index="0" data-hf-name="背景:暮紫天穹"></div>
+      <div id="seg03-cam" data-layout-allow-overflow style="position:absolute;inset:0;">
+        <div id="seg03-stars" class="s-stars" data-hf-name="星野"></div>
+        <div id="seg03-sunglow" class="s-sunglow" data-hf-name="落日辉光"></div>
+        <svg id="seg03-sun" class="s-sunsvg" data-hf-name="条纹落日" width="420" height="420" viewBox="0 0 420 420">
+          <defs>
+            <linearGradient id="seg03-sung" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#FFE29A"/><stop offset="0.38" stop-color="#FFC93C"/>
+              <stop offset="0.72" stop-color="#FF5E62"/><stop offset="1" stop-color="#FF2E63"/>
+            </linearGradient>
+            <mask id="seg03-sunm">
+              <rect x="0" y="0" width="420" height="420" fill="#fff"/>
+              <rect x="0" y="268" width="420" height="10" fill="#000"/>
+              <rect x="0" y="292" width="420" height="13" fill="#000"/>
+              <rect x="0" y="320" width="420" height="17" fill="#000"/>
+              <rect x="0" y="352" width="420" height="22" fill="#000"/>
+              <rect x="0" y="390" width="420" height="28" fill="#000"/>
+            </mask>
+          </defs>
+          <circle cx="210" cy="210" r="190" fill="url(#seg03-sung)" mask="url(#seg03-sunm)"/>
+        </svg>
+        <div id="seg03-horizglow" class="s-horizglow" data-hf-name="地平线辉光"></div>
+        <svg id="seg03-mts" class="s-mts" data-hf-name="群山剪影" width="1920" height="660" viewBox="0 0 1920 660">
+          <polygon fill="#1B0740" points="0,660 0,560 190,470 360,590 520,500 700,620 880,520 1050,610 1230,480 1420,600 1600,510 1780,610 1920,540 1920,660"/>
+          <polygon fill="#0E0324" points="0,660 0,610 240,540 430,630 640,550 860,645 1080,565 1300,650 1520,575 1740,645 1920,590 1920,660"/>
+        </svg>
+        <div id="seg03-grid" class="s-persp" data-hf-name="透视霓虹网格">
+          <div id="seg03-plane" class="s-plane"></div>
+        </div>
+        <svg id="seg03-palmL" class="s-palm" data-hf-name="棕榈剪影:左" style="left:218px;top:352px;" width="260" height="300" viewBox="0 0 260 300">
+          <path fill="#0A011C" d="M132,300 C126,220 128,160 138,108 C120,84 96,74 66,78 C96,60 124,62 142,78 C138,52 124,32 100,18 C128,26 146,48 150,76 C158,50 176,32 204,26 C182,44 168,66 162,88 C182,72 210,68 238,78 C210,80 188,92 174,110 C186,112 200,118 210,128 C192,124 176,126 162,134 C154,180 148,240 150,300 Z"/>
+        </svg>
+        <svg id="seg03-palmR" class="s-palm" data-hf-name="棕榈剪影:右" style="left:1462px;top:392px;" width="230" height="262" viewBox="0 0 260 300">
+          <path fill="#0A011C" d="M128,300 C124,232 122,180 130,132 C114,112 92,104 66,108 C92,92 116,94 132,108 C128,86 116,68 96,56 C120,62 136,80 140,104 C148,82 164,66 188,60 C170,76 158,94 152,114 C170,100 194,96 218,104 C194,106 176,116 164,132 C174,136 186,142 194,150 C178,146 164,148 152,154 C146,200 142,250 146,300 Z"/>
+        </svg>
+        <div id="seg03-title" class="s-title" data-hf-name="镀铬标题:NEON HORIZON"><span data-c>N</span><span data-c>E</span><span data-c>O</span><span data-c>N</span><span data-c style="width:44px;"></span><span data-c>H</span><span data-c>O</span><span data-c>R</span><span data-c>I</span><span data-c>Z</span><span data-c>O</span><span data-c>N</span></div>
+        <div id="seg03-sub" class="s-sub" data-hf-name="副标:霓虹地平线">霓虹地平线 · RETROWAVE 样片</div>
+        <div id="seg03-chip" class="s-chip" data-hf-name="角标:样片03 SYNTHWAVE">样片 03 · SYNTHWAVE</div>
+        <div id="seg03-scan" class="s-scan" data-hf-name="扫描线覆层"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var tl = gsap.timeline({ paused: true });
+      var __rng32 = function (a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; var t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; };
+      var starBox = document.getElementById('seg03-stars');
+      var stars = [], rng = __rng32(20261001);
+      for (var i = 0; i < 46; i++) {
+        var c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        c.setAttribute('cx', (rng() * 1920).toFixed(1));
+        c.setAttribute('cy', (rng() * 470).toFixed(1));
+        c.setAttribute('r', (0.8 + rng() * 1.6).toFixed(2));
+        c.setAttribute('fill', '#FFE9F5');
+        starBox.appendChild(c);
+        stars.push({ el: c, ph: rng() * 6.28, sp: 0.9 + rng() * 1.6, base: 0.25 + rng() * 0.4 });
+      }
+      gsap.set('#seg03-paper', { opacity: 0 });
+      tl.to('#seg03-paper', { opacity: 1, duration: 0.4, ease: 'none' }, 0);
+      tl.to({}, { duration: 10.35, ease: 'none', onUpdate: function () {
+        var t = tl.time();
+        for (var i = 0; i < stars.length; i++) {
+          var s = stars[i];
+          s.el.setAttribute('opacity', (s.base + 0.5 * Math.max(0, Math.sin(t * s.sp + s.ph))).toFixed(3));
+        }
+      } }, 0);
+      gsap.set('#seg03-sunglow', { opacity: 0 });
+      tl.to('#seg03-sunglow', { opacity: 0.9, duration: 1.6, ease: 'power1.out' }, 0.3);
+      gsap.set('#seg03-sun', { y: 185 });
+      tl.to('#seg03-sun', { y: -32, duration: 2.8, ease: 'power2.out' }, 0.3);
+      gsap.set('#seg03-horizglow', { opacity: 0 });
+      tl.to('#seg03-horizglow', { opacity: 1, duration: 1.4, ease: 'power1.out' }, 1.5);
+      tl.to('#seg03-horizglow', { opacity: 0.55, duration: 0.07, ease: 'none' }, 3.1);
+      tl.to('#seg03-horizglow', { opacity: 1, duration: 0.07, ease: 'none' }, 3.2);
+      gsap.set('#seg03-mts', { opacity: 0 });
+      tl.to('#seg03-mts', { opacity: 1, duration: 0.9, ease: 'none' }, 2.4);
+      gsap.set('#seg03-plane', { transformOrigin: '50% 0%', rotationX: 62, scale: 1.15, backgroundPosition: '0px 0px' });
+      tl.fromTo('#seg03-grid', { opacity: 0 }, { opacity: 1, duration: 0.5, ease: 'none' }, 0.9);
+      tl.fromTo('#seg03-plane', { backgroundPosition: '0px 0px' }, { backgroundPosition: '0px 560px', duration: 10.35, ease: 'none' }, 0);
+      gsap.set('#seg03-palmL', { opacity: 0, y: 46 });
+      gsap.set('#seg03-palmR', { opacity: 0, y: 46 });
+      tl.to('#seg03-palmL', { opacity: 1, y: 0, duration: 0.6, ease: 'power3.out' }, 4.2);
+      tl.to('#seg03-palmR', { opacity: 1, y: 0, duration: 0.6, ease: 'power3.out' }, 4.45);
+      gsap.set('#seg03-title [data-c]', { opacity: 0, y: 64 });
+      tl.to('#seg03-title [data-c]', { opacity: 1, y: 0, duration: 0.6, stagger: 0.07, ease: 'power4.out' }, 5.4);
+      tl.to('#seg03-title', { opacity: 0.72, duration: 0.06, ease: 'none' }, 6.85);
+      tl.to('#seg03-title', { opacity: 1, duration: 0.06, ease: 'none' }, 6.94);
+      gsap.set('#seg03-sub', { opacity: 0, letterSpacing: '30px' });
+      tl.to('#seg03-sub', { opacity: 1, letterSpacing: '16px', duration: 0.7, ease: 'power3.out' }, 7.1);
+      gsap.set('#seg03-chip', { opacity: 0, y: 24, scale: 0.92 });
+      tl.to('#seg03-chip', { opacity: 1, y: 0, scale: 1, duration: 0.4, ease: 'back.out(1.6)' }, 9.35);
+      tl.fromTo('#seg03-cam', { scale: 1.04, x: 10 }, { scale: 1, x: 0, duration: 10.35, ease: 'none' }, 0);
+      window.__timelines["seg03"] = tl;
+    })();
+  </script>
+</template>

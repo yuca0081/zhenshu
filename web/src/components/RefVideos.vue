@@ -4,10 +4,10 @@ import { NButton, NTag } from 'naive-ui'
 import SampleFrame from './SampleFrame.vue'
 import TemplateDetail from './TemplateDetail.vue'
 import { api } from '../api'
-import type { RefVideo, StyleInfo, TemplateDetailData } from '../types'
+import type { RefVideo, Style, TemplateDetailData } from '../types'
 
-const props = defineProps<{ registryStyles: StyleInfo[] }>()
-const emit = defineEmits<{ ingested: []; 'browse-elements': [styleId: string] }>()
+const props = defineProps<{ styles: Style[] }>()
+const emit = defineEmits<{ ingested: [] }>()
 
 const refs = ref<RefVideo[]>([])
 const uploading = ref(false)
@@ -52,7 +52,7 @@ async function ingest(r: RefVideo) {
     await api.confirmReference(r.id)
     await refresh()
     show.value = false // 入库后 refs 刷新，关抽屉避免状态过期
-    emit('ingested') // 新风格包出现在「模板库」tab
+    emit('ingested') // 新风格出现在「风格库」tab
   } catch (e) {
     alert(`入库失败：${(e as Error).message}`)
   }
@@ -67,7 +67,6 @@ function bvURL(name: string): { label: string; href: string } | null {
 }
 function open(r: RefVideo) {
   if (r.status !== 'done' || !r.style) return
-  const reg = props.registryStyles.find(s => s.direction === r.style!.direction)
   const bv = bvURL(r.name)
   const status = { done: { label: '已解析', type: 'success' }, error: { label: '失败', type: 'error' } } as const
   detail.value = {
@@ -76,15 +75,13 @@ function open(r: RefVideo) {
     direction: r.style.direction,
     genre: r.style.genre,
     keywords: r.style.keywords,
-    photo: r.style.photo,
     layouts: r.style.layouts,
-    tokens: r.style.tokens ?? reg?.tokens ?? null,
+    tokens: r.style.tokens ?? null,
     samples: r.style.samples,
     originLabel: bv?.label ?? r.name,
     originHref: bv?.href,
     createdAt: new Date(r.created_at).toLocaleString(),
     desc: `从参考视频「${r.name}」解析提炼`,
-    registryStyleId: reg?.id,
     refId: r.id,
     confirmed: r.confirmed,
   }
@@ -97,7 +94,7 @@ function open(r: RefVideo) {
     <header class="head">
       <div>
         <h2>视频解析</h2>
-        <p>上传一支参考视频，AI 抽帧分析构图/色彩/节奏，提炼成风格包——确认入库后新建项目可选。点击卡片看完整风格与原片抽帧。</p>
+        <p>上传一支参考视频，AI 抽帧分析构图/色彩/节奏，提炼成风格——确认入库后新建项目可选。点击卡片看完整风格与原片抽帧。</p>
       </div>
       <NButton type="primary" :loading="uploading" @click="pick">上传视频</NButton>
       <input ref="fileEl" type="file" accept="video/*" hidden @change="onFile" />
@@ -141,8 +138,7 @@ function open(r: RefVideo) {
     </div>
 
     <TemplateDetail :show="show" :detail="detail" @close="show = false"
-      @ingest="id => { const r = refs.find(x => x.id === id); if (r) ingest(r) }"
-      @browse-elements="sid => emit('browse-elements', sid)" />
+      @ingest="id => { const r = refs.find(x => x.id === id); if (r) ingest(r) }" />
   </section>
 </template>
 

@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"webpage-video-agent/server/internal/config"
-	"webpage-video-agent/server/internal/methodlib"
 	"webpage-video-agent/server/internal/pipeline"
+	"webpage-video-agent/server/internal/stylelib"
 )
 
 // 手工端到端验证（打真实 LLM，平时跳过）：
@@ -39,7 +39,7 @@ func TestManualStyleRegen(t *testing.T) {
 	a := &Agent{
 		DataDir: cfg.DataDir,
 		RootDir: root,
-		Lib:     methodlib.New(cfg.DataDir),
+		Lib:     stylelib.New(cfg.DataDir),
 		Emit:    func(projectID, typ, stage, detail string) {},
 		OnEvent: func(projectID, event, detail string) { t.Logf("event %s: %s", event, detail) },
 	}

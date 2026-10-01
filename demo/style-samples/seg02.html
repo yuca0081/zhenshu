@@ -1,0 +1,84 @@
+<template>
+  <style>
+@font-face{font-family:"Segoe UI";src:local("Segoe UI");}
+@font-face{font-family:"Microsoft YaHei";src:local("Microsoft YaHei");}
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI','Microsoft YaHei',sans-serif;color:#1F1F1F;}
+.s-clip{position:absolute;inset:0;}
+.s-paper{position:absolute;inset:0;background-color:#F1EBDD;background-image:
+  linear-gradient(rgba(31,31,31,.055) 1px,transparent 1px),
+  linear-gradient(90deg,rgba(31,31,31,.055) 1px,transparent 1px),
+  linear-gradient(160deg,#F4EFE3 0%,#EDE5D2 100%);background-size:80px 80px,80px 80px,100% 100%;}
+.s-bar{position:absolute;left:160px;width:1600px;height:8px;background:#1F1F1F;}
+.s-index{position:absolute;top:108px;left:170px;font-size:172px;font-weight:900;color:transparent;
+  -webkit-text-stroke:3px #1F1F1F;letter-spacing:6px;white-space:nowrap;line-height:1;}
+.s-shape{position:absolute;}
+.s-circle{left:860px;top:330px;width:340px;height:340px;border-radius:50%;background:#D93025;}
+.s-tri{left:420px;top:430px;width:300px;height:270px;background:#F4B400;
+  clip-path:polygon(50% 0,0 100%,100% 100%);}
+.s-rect{left:1350px;top:300px;width:170px;height:380px;background:#1A56C4;}
+.s-semi{left:640px;top:250px;width:200px;height:100px;border-radius:100px 100px 0 0;background:#1F1F1F;}
+.s-cross-h{left:1148px;top:221px;width:64px;height:3px;background:#1F1F1F;}
+.s-cross-v{left:1178px;top:192px;width:3px;height:64px;background:#1F1F1F;}
+.s-vtitle{position:absolute;top:132px;left:1656px;writing-mode:vertical-rl;font-size:92px;
+  font-weight:900;letter-spacing:26px;color:#1F1F1F;white-space:nowrap;}
+.s-vtitle span{display:inline-block;}
+.s-caption{position:absolute;top:730px;left:170px;font-size:30px;font-weight:700;
+  letter-spacing:9px;color:#1F1F1F;white-space:nowrap;}
+  </style>
+  <div data-composition-id="seg02" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="seg02-paper" class="s-clip clip s-paper" data-start="0" data-duration="10.35" data-track-index="0" data-hf-name="背景纸面:米色网格制图纸"></div>
+      <div id="seg02-cam" data-layout-allow-overflow style="position:absolute;inset:0;">
+        <div id="seg02-bart" class="s-bar" data-hf-name="上注册条" style="top:70px;"></div>
+        <div id="seg02-barb" class="s-bar" data-hf-name="下注册条" style="top:806px;"></div>
+        <div id="seg02-index" class="s-index" data-hf-name="序号:02 空心字">02</div>
+        <div id="seg02-semi" class="s-shape s-semi" data-hf-name="黑半圆"></div>
+        <div id="seg02-circle" class="s-shape s-circle" data-hf-name="红圆"></div>
+        <div id="seg02-tri" class="s-shape s-tri" data-hf-name="黄三角"></div>
+        <div id="seg02-rect" class="s-shape s-rect" data-hf-name="蓝矩形"></div>
+        <div id="seg02-crossh" class="s-shape s-cross-h" data-hf-name="十字准星横线"></div>
+        <div id="seg02-crossv" class="s-shape s-cross-v" data-hf-name="十字准星竖线"></div>
+        <div id="seg02-vtitle" class="s-vtitle" data-hf-name="竖排标题:包豪斯"><span data-c>包</span><span data-c>豪</span><span data-c>斯</span></div>
+        <div id="seg02-caption" class="s-caption" data-hf-name="脚注:GEOMETRIC COMPOSITION 几何构成">GEOMETRIC COMPOSITION · 几何构成样片</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var tl = gsap.timeline({ paused: true });
+      gsap.set('#seg02-paper', { opacity: 0 });
+      tl.to('#seg02-paper', { opacity: 1, duration: 0.4, ease: 'none' }, 0);
+      gsap.set('#seg02-bart', { scaleX: 0, transformOrigin: 'left center' });
+      gsap.set('#seg02-barb', { scaleX: 0, transformOrigin: 'right center' });
+      tl.to('#seg02-bart', { scaleX: 1, duration: 0.6, ease: 'power4.out' }, 0.25);
+      tl.to('#seg02-barb', { scaleX: 1, duration: 0.6, ease: 'power4.out' }, 0.4);
+      gsap.set('#seg02-index', { opacity: 0, y: 60 });
+      tl.to('#seg02-index', { opacity: 1, y: 0, duration: 0.55, ease: 'power3.out' }, 0.65);
+      gsap.set('#seg02-circle', { scale: 0 });
+      tl.to('#seg02-circle', { scale: 1, duration: 0.7, ease: 'back.out(1.5)' }, 1.15);
+      gsap.set('#seg02-tri', { rotation: 140, scale: 0.6, opacity: 0 });
+      tl.to('#seg02-tri', { rotation: 0, scale: 1, opacity: 1, duration: 0.75, ease: 'power4.out' }, 1.95);
+      gsap.set('#seg02-rect', { y: 240, opacity: 0 });
+      tl.to('#seg02-rect', { y: 0, opacity: 1, duration: 0.7, ease: 'power4.out' }, 2.75);
+      gsap.set('#seg02-semi', { y: -90, opacity: 0 });
+      tl.to('#seg02-semi', { y: 0, opacity: 1, duration: 0.6, ease: 'power4.out' }, 3.5);
+      gsap.set('#seg02-crossh', { rotation: 90, opacity: 0 });
+      gsap.set('#seg02-crossv', { rotation: 90, opacity: 0 });
+      tl.to('#seg02-crossh', { rotation: 0, opacity: 1, duration: 0.5, ease: 'back.out(1.8)' }, 4.15);
+      tl.to('#seg02-crossv', { rotation: 0, opacity: 1, duration: 0.5, ease: 'back.out(1.8)' }, 4.3);
+      gsap.set('#seg02-vtitle [data-c]', { opacity: 0, y: 36 });
+      tl.to('#seg02-vtitle [data-c]', { opacity: 1, y: 0, duration: 0.45, stagger: 0.16, ease: 'power3.out' }, 4.55);
+      gsap.set('#seg02-caption', { opacity: 0 });
+      tl.to('#seg02-caption', { opacity: 0.78, duration: 0.5, ease: 'none' }, 5.5);
+      tl.to('#seg02-circle', { x: -330, y: -30, scale: 0.78, duration: 0.9, ease: 'power4.inOut' }, 6.4);
+      tl.to('#seg02-tri', { x: 520, y: -130, rotation: 180, duration: 0.9, ease: 'power4.inOut' }, 6.48);
+      tl.to('#seg02-rect', { x: -430, rotation: 90, duration: 0.9, ease: 'power4.inOut' }, 6.56);
+      tl.to('#seg02-semi', { x: 280, y: -60, duration: 0.9, ease: 'power4.inOut' }, 6.64);
+      tl.to('#seg02-crossh', { x: 250, y: 430, duration: 0.9, ease: 'power4.inOut' }, 6.72);
+      tl.to('#seg02-crossv', { x: 250, y: 430, duration: 0.9, ease: 'power4.inOut' }, 6.72);
+      tl.fromTo('#seg02-cam', { scale: 1, x: 0 }, { scale: 1.025, x: 14, duration: 10.35, ease: 'none' }, 0);
+      window.__timelines["seg02"] = tl;
+    })();
+  </script>
+</template>

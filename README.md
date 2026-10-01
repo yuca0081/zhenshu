@@ -18,4 +18,4 @@ AI 视频生产平台的第二代架构:**模型当创意总监,平台当工厂�
 
 ## 目录
 
-`server/` Go 管线编排 · `ai/` 渲染引擎资产与 Python 工具 · `web/` 三栏工作台 UI · `data/library/` 风格/模板/方法库(few-shot) · `docs/` 方案与拆解笔记(`docs/v2-analysis/` = 11 条 Opus5.5 爆片逐帧评审)
+`server/` Go 管线编排 · `ai/` 渲染引擎资产与 Python 工具 · `web/` 三栏工作台 UI · `data/library/` 风格库(styles.json 单一事实源)/方法库(few-shot)/BGM 曲库 · `docs/` 方案与拆解笔记(`docs/v2-analysis/` = 11 条 Opus5.5 爆片逐帧评审)

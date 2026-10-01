@@ -1,0 +1,118 @@
+<!doctype html>
+<!-- 开发预览器:平台侧角色,不受场景契约约束(这里的 rAF 只属于预览层)。
+     必须走本地静态服务打开(file:// 下 fetch 被浏览器禁止):
+       cd demo/style-samples && python -m http.server 8123
+       打开 http://localhost:8123/preview.html                                    -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>风格打样预览 · style-samples</title>
+<style>
+  body{margin:0;height:100vh;display:flex;flex-direction:column;background:#101014;color:#E5E7EB;
+       font-family:'Segoe UI','Microsoft YaHei',sans-serif;overflow:hidden}
+  header{display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid #26262e}
+  header b{margin-right:8px;font-size:15px}
+  button.seg{padding:7px 18px;border-radius:8px;border:1px solid #3f3f4a;background:#1b1b22;
+       color:#c9c9d4;font-size:14px;cursor:pointer}
+  button.seg.on{background:#4f46e5;border-color:#4f46e5;color:#fff}
+  header .hint{margin-left:auto;font-size:12px;color:#7c7c8a}
+  .stage{position:relative;flex:1;overflow:hidden}
+  #framebox{position:absolute;left:50%;top:50%;transform-origin:center}
+  iframe{width:1920px;height:1080px;border:0;background:#000;display:block}
+  .bar{display:flex;gap:12px;align-items:center;padding:10px 16px;border-top:1px solid #26262e}
+  #play{width:64px;padding:7px 0;font-size:16px;border-radius:8px;border:1px solid #3f3f4a;
+       background:#1b1b22;color:#fff;cursor:pointer}
+  #seek{flex:1;accent-color:#4f46e5}
+  .t{font-variant-numeric:tabular-nums;font-size:13px;color:#a8a8b4;min-width:110px;text-align:center}
+  label{font-size:13px;color:#a8a8b4;display:flex;gap:5px;align-items:center;cursor:pointer}
+  .err{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+       background:#101014e6;z-index:9;text-align:center;line-height:2;font-size:15px}
+  .err code{background:#1b1b22;padding:3px 10px;border-radius:6px;color:#a5b4fc}
+</style>
+</head>
+<body>
+<header>
+  <b>风格打样预览</b>
+  <button class="seg" data-seg="seg01">01 线条动画</button>
+  <button class="seg" data-seg="seg02">02 包豪斯</button>
+  <button class="seg" data-seg="seg03">03 Synthwave</button>
+  <button class="seg" data-seg="seg04">04 拼贴剪贴</button>
+  <span class="hint">预览 = rAF 驱动 paused timeline;成片以 renders/*.mp4 为准</span>
+</header>
+<div class="stage">
+  <div id="framebox"><iframe id="frame"></iframe></div>
+  <div class="err" id="err">
+    <div>fetch 失败:file:// 直接打开受浏览器限制。<br>
+    请用本地服务:<code>cd demo/style-samples &amp;&amp; python -m http.server 8123</code><br>
+    然后访问 <code>http://localhost:8123/preview.html</code></div>
+  </div>
+</div>
+<div class="bar">
+  <button id="play">▶</button>
+  <input id="seek" type="range" min="0" max="10.35" step="0.001" value="0" />
+  <span class="t" id="tcur">0.000 / 10.350 s</span>
+  <label><input id="loop" type="checkbox" checked />循环</label>
+</div>
+<script>
+const SEGS = ['seg01', 'seg02', 'seg03', 'seg04'];
+const frame = document.getElementById('frame'), framebox = document.getElementById('framebox');
+const playBtn = document.getElementById('play'), seek = document.getElementById('seek');
+const tcur = document.getElementById('tcur'), loopBox = document.getElementById('loop');
+let tl = null, cur = null, dur = 10.35, t = 0, playing = false, last = 0;
+
+function fit() {
+  const s = Math.min((innerWidth - 24) / 1920, (innerHeight - 140) / 1080);
+  framebox.style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+}
+addEventListener('resize', fit); fit();
+
+function setPlay(p) { playing = p; playBtn.textContent = p ? '⏸' : '▶'; }
+function sync() { seek.value = t; tcur.textContent = t.toFixed(3) + ' / ' + dur.toFixed(3) + ' s'; }
+
+async function load(id) {
+  document.querySelectorAll('button.seg').forEach(b =>
+    b.classList.toggle('on', b.dataset.seg === id));
+  tl = null; cur = id; t = 0; setPlay(false); sync();
+  let html;
+  try {
+    const r = await fetch('standalone/' + id + '.html');
+    if (!r.ok) throw new Error(r.status);
+    html = await r.text();
+  } catch (e) { document.getElementById('err').style.display = 'flex'; return; }
+  document.getElementById('err').style.display = 'none';
+  frame.srcdoc = html;
+  let tries = 0;
+  const timer = setInterval(() => {
+    const w = frame.contentWindow;
+    if (w && w.__timelines && w.__timelines[id]) {
+      clearInterval(timer);
+      tl = w.__timelines[id];
+      const clip = frame.contentDocument.querySelector('.clip');
+      if (clip && clip.dataset.duration) dur = parseFloat(clip.dataset.duration);
+      seek.max = dur; tl.time(0); sync();
+    } else if (++tries > 50) clearInterval(timer);
+  }, 100);
+}
+
+document.querySelectorAll('button.seg').forEach(b =>
+  b.addEventListener('click', () => load(b.dataset.seg)));
+playBtn.addEventListener('click', () => tl && setPlay(!playing));
+seek.addEventListener('input', () => { t = parseFloat(seek.value); if (tl) tl.time(t); sync(); });
+loopBox.addEventListener('change', () => {});
+
+requestAnimationFrame(function tick(ts) {
+  requestAnimationFrame(tick);
+  if (!tl) { last = ts; return; }
+  if (playing) {
+    const dt = Math.min(0.05, (ts - last) / 1000);
+    t += dt;
+    if (t >= dur) { if (loopBox.checked) { t = 0; } else { t = dur; setPlay(false); } }
+    tl.time(t); sync();
+  }
+  last = ts;
+});
+
+load('seg01');
+</script>
+</body>
+</html>

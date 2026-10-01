@@ -19,14 +19,13 @@ import (
 
 	"webpage-video-agent/server/internal/agent"
 	"webpage-video-agent/server/internal/api"
-	"webpage-video-agent/server/internal/assetlib"
 	"webpage-video-agent/server/internal/config"
 	"webpage-video-agent/server/internal/events"
-	"webpage-video-agent/server/internal/methodlib"
 	"webpage-video-agent/server/internal/pipeline"
-	"webpage-video-agent/server/internal/styleref"
 	"webpage-video-agent/server/internal/produce"
 	"webpage-video-agent/server/internal/store"
+	"webpage-video-agent/server/internal/stylelib"
+	"webpage-video-agent/server/internal/styleref"
 )
 
 func main() {
@@ -48,28 +47,7 @@ func main() {
 		log.Fatal(err)
 	}
 	hub := events.NewHub()
-	lib := methodlib.New(cfg.DataDir)
-	assets := assetlib.New(cfg.DataDir)
-	if err := assets.SeedBGM(); err != nil {
-		log.Printf("BGM 曲库入 catalog 失败（不挡启动）: %v", err)
-	}
-	// 素材库远程镜像：PG+MinIO 都配了才启用；连不上降级纯本地（镜像只是
-	// 冗余，不是事实源——与案卷库的 fail-fast 不同），下次启动对账补齐。
-	if cfg.PGDSN != "" && cfg.MinIO.Endpoint != "" {
-		r, err := assetlib.OpenRemote(assetlib.RemoteConfig{
-			DSN: cfg.PGDSN, Endpoint: cfg.MinIO.Endpoint,
-			AccessKey: cfg.MinIO.AccessKey, SecretKey: cfg.MinIO.SecretKey,
-			Bucket: cfg.MinIO.Bucket, Region: cfg.MinIO.Region, Secure: cfg.MinIO.Secure,
-		})
-		if err != nil {
-			log.Printf("素材库远程镜像未启用（纯本地运行）: %v", err)
-		} else {
-			assets.SetRemote(r)
-			if err := assets.SyncRemote(); err != nil {
-				log.Printf("素材库镜像对账失败（不挡启动，下次补）: %v", err)
-			}
-		}
-	}
+	lib := stylelib.New(cfg.DataDir)
 	producer := &produce.Runner{
 		DataDir: cfg.DataDir, RootDir: root, Hub: hub, Store: st,
 	}
@@ -84,7 +62,7 @@ func main() {
 	producer.Reconcile()
 	refs := styleref.NewStore(cfg.DataDir, root)
 	srv := &api.Server{
-		DataDir: cfg.DataDir, RootDir: root, Store: st, Hub: hub, Agent: ag, Producer: producer, Lib: lib, Refs: refs, Assets: assets,
+		DataDir: cfg.DataDir, RootDir: root, Store: st, Hub: hub, Agent: ag, Producer: producer, Lib: lib, Refs: refs,
 		APIToken: os.Getenv("API_TOKEN"),
 	}
 
@@ -104,7 +82,7 @@ func main() {
 		}
 	}
 	httpSrv := &http.Server{
-		Addr: addr,
+		Addr:    addr,
 		Handler: srv.Router(),
 		// 慢速攻击防线：头部 15s 内必须到齐；空闲连接 2 分钟回收。不设 WriteTimeout
 		// ——SSE 长连接靠心跳保活，写超时会把它们全数掐断。

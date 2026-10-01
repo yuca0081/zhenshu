@@ -1,4 +1,4 @@
-import type { AssetEntry, AudioMeta, ChatRef, ElementInfo, Msg, ProjectRow, ProjectView, RefVideo, Storyboard, StyleInfo, StylePack, StyleSamples } from './types'
+import type { AudioMeta, ChatRef, Msg, ProjectRow, ProjectView, RefVideo, Storyboard, Style, StyleSamples } from './types'
 
 // ── API token（服务端 .env 配了 API_TOKEN 时启用）──────────────
 // 401 时提示输入一次，存 localStorage；之后所有请求带头，媒体 URL 带 ?token=
@@ -66,12 +66,12 @@ export const api = {
       body: JSON.stringify({ content }),
     }).then(r => j<{ ok: boolean; word_count: number; storyboard_stale: boolean }>(r)),
 
-  // 风格弹窗选定库内风格包（预览后显式确认 = 硬门通过）
-  applyStyle: (id: string, stylepackId: string) =>
+  // 风格弹窗选定库内风格（预览后显式确认 = 硬门通过）
+  applyStyle: (id: string, styleId: string) =>
     authFetch(`/api/projects/${id}/style/apply`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stylepack_id: stylepackId }),
+      body: JSON.stringify({ style_id: styleId }),
     }).then(r => j<{ ok: boolean; direction: string }>(r)),
 
   style: (id: string) => authFetch(`/api/projects/${id}/style`).then(r => j<StyleSamples>(r)),
@@ -128,19 +128,10 @@ export const api = {
   cancel: (id: string) =>
     authFetch(`/api/projects/${id}/cancel`, { method: 'POST' }).then(r => j<{ ok: boolean }>(r)),
 
-  listLibrary: () => authFetch('/api/library').then(r => j<StylePack[]>(r)),
+  listLibrary: () => authFetch('/api/library').then(r => j<Style[]>(r)),
 
   publishPack: (id: string) =>
-    authFetch(`/api/library/${id}/publish`, { method: 'POST' }).then(r => j<StylePack>(r)),
-
-  registry: () => authFetch('/api/registry').then(r => j<{ elements: ElementInfo[]; styles: StyleInfo[] }>(r)),
-
-  gallery: () => authFetch('/api/gallery').then(r => j<Record<string, string[]>>(r)),
-
-  // ── 素材库 catalog（§5 统一检索：type 圈范围 + tags/desc 匹配）──
-  assets: (type = '', q = '') =>
-    authFetch(`/api/assets?type=${encodeURIComponent(type)}&q=${encodeURIComponent(q)}`)
-      .then(r => j<{ entries: AssetEntry[] }>(r)),
+    authFetch(`/api/library/${id}/publish`, { method: 'POST' }).then(r => j<Style>(r)),
 
   // ── 参考视频解析 ──
   uploadReference: (file: File) => {
@@ -154,16 +145,12 @@ export const api = {
   analyzeReference: (id: string) =>
     authFetch(`/api/references/${id}/analyze`, { method: 'POST' }).then(r => j<{ ok: boolean }>(r)),
   confirmReference: (id: string) =>
-    authFetch(`/api/references/${id}/confirm`, { method: 'POST' }).then(r => j<{ ok: boolean; registry_id: string }>(r)),
+    authFetch(`/api/references/${id}/confirm`, { method: 'POST' }).then(r => j<{ ok: boolean; style_id: string }>(r)),
 }
 
 // rev = 成片代次（重做完成后递增）：同 URL 会被 <video> 惰性复用，重做完必须换 URL 才能看到新画面
 export const videoURL = (id: string, rev = 0) => withToken(`/api/projects/${id}/video/main.mp4${rev ? `?v=${rev}` : ''}`)
 // 活合成物壳的确定性依赖：项目内本地 gsap（与渲染引擎同一份，无 CDN）
 export const assetURL = (id: string, p: string) => withToken(`/api/projects/${id}/assets/${p}`)
-// 素材中心样张：data/gallery/<style>/<kind>.png
-export const galleryURL = (style: string, kind: string) => withToken(`/api/gallery/${style}/${kind}.png`)
-// 素材本体（路径只出自 catalog 条目）
-export const assetFileURL = (id: string) => withToken(`/api/assets/${id}/file`)
 // 参考引用媒体（抽帧 frame-*.png / 原视频 video.mp4；详情抽屉用）
 export const referenceMediaURL = (id: string, file: string) => withToken(`/api/references/${id}/media/${file}`)

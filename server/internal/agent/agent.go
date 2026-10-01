@@ -17,10 +17,10 @@ import (
 
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
-	"webpage-video-agent/server/internal/methodlib"
 	"webpage-video-agent/server/internal/pipeline"
 	"webpage-video-agent/server/internal/produce"
 	"webpage-video-agent/server/internal/store"
+	"webpage-video-agent/server/internal/stylelib"
 )
 
 type Producer interface {
@@ -33,7 +33,7 @@ type Agent struct {
 	DataDir  string
 	RootDir  string // 仓库根（ai/ 脚本）
 	Store    store.Store
-	Lib      *methodlib.Library
+	Lib      *stylelib.Library
 	Emit     func(projectID, typ, stage, detail string)
 	Producer Producer
 	OnEvent  func(projectID, event, detail string) // 状态回写钩子（storyboard/style 等里程碑）
@@ -161,23 +161,32 @@ func lastProduceResult(p *pipeline.Project) (event, detail, ts string) {
 	return event, detail, ts
 }
 
-// selectedPack 建项目时选定的模板库条目（project.json stylepack_id）。
-func (a *Agent) selectedPack(p *pipeline.Project) *methodlib.StylePack {
+// selectedStyle 建项目时选定的风格库条目（project.json style_id，旧字段 stylepack_id 兜底）。
+func (a *Agent) selectedStyle(p *pipeline.Project) *stylelib.Style {
 	b, err := os.ReadFile(p.Artifact("project.json"))
 	if err != nil {
 		return nil
 	}
 	var meta struct {
+		StyleID string `json:"style_id"`
+		// StylePackID 旧字段名，老项目兼容读取
 		StylePackID string `json:"stylepack_id"`
 	}
-	if json.Unmarshal(b, &meta) != nil || meta.StylePackID == "" {
+	if json.Unmarshal(b, &meta) != nil {
 		return nil
 	}
-	pack, ok := a.Lib.Get(meta.StylePackID)
-	if !ok || !pack.Published {
+	id := meta.StyleID
+	if id == "" {
+		id = meta.StylePackID
+	}
+	if id == "" {
 		return nil
 	}
-	return pack
+	st, ok := a.Lib.Get(id)
+	if !ok || !st.Published {
+		return nil
+	}
+	return st
 }
 
 // regenerateStyle 按用户修改要求重新出样张：旧样张备份防翻车，要求写 input/style_notes.txt，
@@ -211,7 +220,8 @@ func (a *Agent) regenerateStyle(p *pipeline.Project, instruction, out string) st
 	for i := 0; i < 3; i++ { // 截图缓存一并清掉，防 produce 把旧图配新样张
 		_ = os.Remove(p.Artifact(fmt.Sprintf("style/sample-%d.png", i)))
 	}
-	_ = os.Remove(p.Artifact("style/skin.json")) // 旧皮肤随旧样张作废，确认新样张时重落
+	_ = os.Remove(p.Artifact("style/skin.json"))   // 旧皮肤随旧样张作废，确认新样张时重落
+	_ = os.Remove(p.Artifact("style/design.md"))   // 旧设计系统文档同样作废（确认新样张时机械重渲）
 	notes := "原风格方向：" + prevDir + "\n用户修改要求：" + instruction
 	if err := os.MkdirAll(filepath.Dir(p.Artifact("input/style_notes.txt")), 0o755); err != nil {
 		return restore(err)
@@ -298,7 +308,7 @@ func (a *Agent) resolveSegment(p *pipeline.Project, ref string) (id, label strin
 
 type tool struct {
 	def  openai.Tool
-	gate func(s State) string      // 返回空串 = 放行；否则拒绝原因（回喂）
+	gate func(s State) string // 返回空串 = 放行；否则拒绝原因（回喂）
 	run  func(a *Agent, p *pipeline.Project, args string) string
 }
 
@@ -394,7 +404,7 @@ var tools = []tool{
 		},
 	},
 	{
-		def: toolDef("draft_style_samples", "产出风格样张与风格文件（skin）：首次出样张（模板库或默认包冷启动）；样张已存在时必须带 instruction 按用户要求重新生成", map[string]any{
+		def: toolDef("draft_style_samples", "产出本片设计系统与风格样张（皮肤1-2套/字体角色/动效语言/贯穿装置/版式/负面清单 + 1-3张样张）：首次出样张（风格库或默认包冷启动）；样张已存在时必须带 instruction 按用户要求重新生成", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"instruction": map[string]any{"type": "string", "description": "用户对风格的修改/新方向要求（如：更暖色调、加猫爪猫耳Q版点缀；换全新方向也写在这）。首次出样张可省略"},
@@ -420,26 +430,29 @@ var tools = []tool{
 			if _, err := os.Stat(out); err == nil {
 				return "风格样张已出，等用户在舞台点击「确认风格」；用户想改风格就带着要求调 instruction 重新生成"
 			}
-			// 来源优先级：项目选定的模板 → 默认风格包（冷启动）
-			if pack := a.selectedPack(p); pack != nil {
+			// 来源优先级：项目选定的风格库条目 → 默认风格包（冷启动）
+			if st := a.selectedStyle(p); st != nil {
 				if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 					return err.Error()
 				}
-				if err := os.WriteFile(out, pack.StyleSamplesJSON(), 0o644); err != nil {
+				if err := os.WriteFile(out, st.StyleSamplesJSON(), 0o644); err != nil {
 					return err.Error()
 				}
 				if a.OnEvent != nil {
-					a.OnEvent(p.ID, "style_draft", pack.Direction)
+					a.OnEvent(p.ID, "style_draft", st.Direction)
 				}
-				return fmt.Sprintf("风格样张已出（复用模板「%s」，origin=%s）。硬门——用户在舞台点头确认后才能开工", pack.Name, pack.OriginProject)
+				return fmt.Sprintf("风格样张已出（复用风格库「%s」，origin=%s）。硬门——用户在舞台点头确认后才能开工", st.Name, st.OriginProject)
 			}
-			b, err := os.ReadFile(filepath.Join(a.DataDir, "library", "registry", "style_samples_default.json"))
+			b, err := os.ReadFile(filepath.Join(a.DataDir, "library", "style_samples_default.json"))
 			if err != nil {
 				return "默认风格包缺失：" + err.Error()
 			}
 			var ss contract.StyleSamples
 			if err := json.Unmarshal(b, &ss); err != nil {
 				return "默认风格包损坏：" + err.Error()
+			}
+			if st, ok := a.Lib.ByDirection(ss.Direction); ok {
+				ss.StyleID = st.ID // 方向命中库条目即锚定：转场/后期/再提炼按 id 查库
 			}
 			ss.Confirmed = false // 硬门：必须用户确认
 			b, _ = json.MarshalIndent(ss, "", "  ")
@@ -456,7 +469,7 @@ var tools = []tool{
 		},
 	},
 	{
-		def: toolDef("run_selfcheck", "自检三前置硬门（文稿/分镜/风格确认）", nil),
+		def:  toolDef("run_selfcheck", "自检三前置硬门（文稿/分镜/风格确认）", nil),
 		gate: noGate,
 		run: func(a *Agent, p *pipeline.Project, _ string) string {
 			s := a.State(p.ID)
@@ -580,7 +593,7 @@ var tools = []tool{
 		},
 	},
 	{
-		def: toolDef("extract_stylepack", "把本片风格提炼成模板草稿（风格文件/样张/示例 spec/素材清单；成片出片后自动做，用户在素材中心确认入库后可复用）", nil),
+		def: toolDef("extract_stylepack", "把本片风格提炼成风格库草稿（风格文件+全套样张；成片出片后自动做，用户在风格库确认入库后可复用）", nil),
 		gate: func(s State) string {
 			if !s.HasVideo {
 				return "成片未就绪，出片后再提炼"
@@ -593,39 +606,70 @@ var tools = []tool{
 				return "提炼失败：" + err.Error()
 			}
 			if pack.Published {
-				return fmt.Sprintf("「%s」已在方法库（已发布）", pack.Name)
+				return fmt.Sprintf("「%s」已在风格库（已发布）", pack.Name)
 			}
-			return fmt.Sprintf("风格包「%s」已起草（草稿）。用户在首页方法库点「入库」确认后，之后新建项目可直接复用", pack.Name)
+			return fmt.Sprintf("风格「%s」已起草（草稿）。用户在风格库页点「入库」确认后，之后新建项目可直接复用", pack.Name)
 		},
 	},
 	{
-		def: toolDef("read_project", "查看项目当前状态与产物", nil),
+		def:  toolDef("read_project", "查看项目当前状态与产物", nil),
 		gate: noGate,
-		run: func(a *Agent, p *pipeline.Project, _ string) string { return a.State(p.ID).summary() },
+		run:  func(a *Agent, p *pipeline.Project, _ string) string { return a.State(p.ID).summary() },
 	},
 	{
-		def: toolDef("search_method_library", "检索方法库（StylePack：可复用风格）", map[string]any{
+		def: toolDef("search_styles", "检索风格库（可复用的视觉风格：色板/版式/样张）。新建项目选风格、用户问「有什么风格」、或用户描述的气质可能命中库内条目时先查这里；命中后引导用户在风格门/风格库里选它（报 id）", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"query": map[string]any{"type": "string"},
+				"query": map[string]any{"type": "string", "description": "题材/气质关键词（如 宇宙 黑板 科普 数据）"},
 			},
 			"required": []string{"query"},
 		}),
 		gate: noGate,
 		run: func(a *Agent, p *pipeline.Project, args string) string {
-			packs, err := a.Lib.List()
+			styles, err := a.Lib.List()
 			if err != nil {
-				return "方法库读取失败：" + err.Error()
+				return "风格库读取失败：" + err.Error()
+			}
+			q := strings.ToLower(strings.TrimSpace(args))
+			key := func(ss stylelib.Style) string {
+				return strings.ToLower(strings.Join(append([]string{ss.ID, ss.Name, ss.Direction, ss.Genre}, ss.Keywords...), " "))
 			}
 			var lines []string
-			for _, pk := range packs {
-				state := map[bool]string{true: "已发布", false: "草稿待入库"}[pk.Published]
-				lines = append(lines, fmt.Sprintf("- %s（%s，来源 %s）", pk.Name, state, pk.OriginProject))
+			for _, ss := range styles {
+				if q != "" && !strings.Contains(key(ss), q) {
+					continue
+				}
+				state := map[bool]string{true: "已入库", false: "草稿待入库"}[ss.Published]
+				line := fmt.Sprintf("- %s | %s | %s", ss.ID, ss.Name, state)
+				if ss.Genre != "" {
+					line += " | 题材:" + ss.Genre
+				}
+				if len(ss.Keywords) > 0 {
+					line += " | 词:" + strings.Join(ss.Keywords, ",")
+				}
+				if pal := produce.PaletteNote(ss.Tokens); pal != "" {
+					line += " | " + pal
+				}
+				if len(ss.Layouts) > 0 {
+					line += fmt.Sprintf(" | 版式×%d", len(ss.Layouts))
+				}
+				if len(ss.Samples) > 0 {
+					line += fmt.Sprintf(" | 样张×%d", len(ss.Samples))
+				}
+				lines = append(lines, line)
 			}
 			if len(lines) == 0 {
-				return "方法库为空（冷启动零预置）：出片后我会自动起草风格包，用户确认入库"
+				if q != "" {
+					full, _ := a.Lib.List()
+					if len(full) == 0 {
+						return "风格库为空：出片后我会自动起草风格，用户确认入库"
+					}
+					return "没有命中「" + q + "」的风格。库里现有 " + fmt.Sprintf("%d", len(full)) + " 条，重调一次可放宽或换关键词"
+				}
+				return "风格库为空：出片后我会自动起草风格，用户确认入库"
 			}
-			return "方法库现有：\n" + strings.Join(lines, "\n")
+			return fmt.Sprintf("风格库 %d 条：\n", len(lines)) + strings.Join(lines, "\n") +
+				"\n选用：风格门弹窗点卡片，或让我把 id 记入 project（style_id）"
 		},
 	},
 	{
@@ -996,9 +1040,8 @@ func (a *Agent) Run(projectID, userText string, refs []store.Ref) {
 		msgs = append(msgs, h)
 	}
 	// 实时状态随最新 user 消息注入（模型对最新消息权重最高，防聊天历史锚定幻觉）
-	msgs = append(msgs, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content:
-		fmt.Sprintf("［系统·实时项目状态，以此为准］\n%s\n%s\n用户消息：%s",
-			a.State(projectID).summary(), a.formatRefs(p, refs), userText)})
+	msgs = append(msgs, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf("［系统·实时项目状态，以此为准］\n%s\n%s\n用户消息：%s",
+		a.State(projectID).summary(), a.formatRefs(p, refs), userText)})
 
 	// 对话轮级时限：卡死的 LLM 调用（上游挂住时 10min×3 重试）会把 turnMu 下的
 	// 后续对话轮全部拖成沉默；超时给用户明确交代

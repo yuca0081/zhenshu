@@ -1,4 +1,4 @@
-// Package styleref：参考视频 → 风格包（素材中心「视频解析」后端）。
+// Package styleref：参考视频 → 风格（风格库「视频解析」后端）。
 //
 // 链路：上传视频存 data/references/<id>/ → ai/extract_video_features.py 抽帧+取色
 // （确定性，不碰 LLM）→ Go 侧 GLM vision 分批读帧析构图 → 合成风格 JSON

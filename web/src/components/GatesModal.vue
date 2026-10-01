@@ -3,12 +3,12 @@ import { computed, ref, watch } from 'vue'
 import { NButton, NInput, NModal, NRadioButton, NRadioGroup, NSelect } from 'naive-ui'
 import { api } from '../api'
 import SampleFrame from './SampleFrame.vue'
-import type { ProjectView, Storyboard, StylePack } from '../types'
+import type { ProjectView, Storyboard, Style } from '../types'
 
 // 三前置硬门弹窗（点对话栏上方的 文稿/分镜/风格 标签打开）：
 // - 文稿：编辑保存（PUT manuscript，article.txt 为真源）+ AI 按主题起草
 // - 分镜：只读展示整份分镜文档（改分镜走对话让 AI 重新生成）
-// - 风格：库内风格包（预览后确认，即时亮灯）或文字描述（交给对话里的 AI 出样张）
+// - 风格：库内风格（预览后确认，即时亮灯）或文字描述（交给对话里的 AI 出样张）
 const props = defineProps<{ projectId: string; gate: 'manuscript' | 'storyboard' | 'style' | null; view: ProjectView | null }>()
 const emit = defineEmits<{ close: []; saved: []; 'chat-sent': [] }>()
 
@@ -78,7 +78,7 @@ async function save() {
 const sb = ref<Storyboard | null>(null)
 
 // ── 风格 ─────────────────────────────────────────────
-const packs = ref<StylePack[]>([])
+const packs = ref<Style[]>([])
 const picked = ref('')
 const applying = ref(false)
 const direction = ref('')
@@ -122,7 +122,7 @@ watch(() => props.gate, async g => {
   } else if (g === 'storyboard') {
     sb.value = await api.storyboard(props.projectId).catch(() => null)
   } else {
-    packs.value = (await api.listLibrary().catch(() => [] as StylePack[])).filter(p => p.published)
+    packs.value = (await api.listLibrary().catch(() => [] as Style[])).filter(p => p.published)
     picked.value = ''
     direction.value = ''
   }
@@ -184,20 +184,20 @@ watch(() => props.gate, async g => {
 
     <!-- 风格：库内直选 / 文字描述 -->
     <div v-else-if="gate === 'style'" class="body">
-      <div class="sec-label">从素材区风格库选（预览即所得）</div>
+      <div class="sec-label">从风格库选（预览即所得）</div>
       <div v-if="packs.length" class="style-cards">
         <button
           v-for="p in packs" :key="p.id" type="button"
           class="style-card" :class="{ on: picked === p.id }" @click="picked = p.id"
         >
-          <SampleFrame :html="p.sample_html" />
+          <SampleFrame :html="p.samples?.[0]?.html ?? ''" />
           <div class="meta">
             <b>{{ p.name }}</b>
-            <span>{{ p.direction }}</span>
+            <span>{{ p.genre || p.direction }}</span>
           </div>
         </button>
       </div>
-      <div v-else class="hint">风格库还是空的——可以去「素材区」看看，或直接用文字描述。</div>
+      <div v-else class="hint">风格库还是空的——出一条片后 Agent 会自动起草风格，或直接用文字描述。</div>
       <div class="foot">
         <span class="hint">选中后点确认，风格门立即亮灯</span>
         <NButton type="primary" :disabled="!picked" :loading="applying" @click="apply">确认使用</NButton>

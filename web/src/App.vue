@@ -11,12 +11,12 @@ import NewProjectModal from './components/NewProjectModal.vue'
 import MaterialCenter from './components/MaterialCenter.vue'
 import HomeView from './components/HomeView.vue'
 import { api, sseURL, videoURL } from './api'
-import type { AudioMeta, ChatRef, Msg, ProjectRow, ProjectView, Storyboard, StylePack, StyleSamples } from './types'
+import type { AudioMeta, ChatRef, Msg, ProjectRow, ProjectView, Storyboard, Style, StyleSamples } from './types'
 import { segAt, segTable } from './segtime'
 
 const projects = ref<ProjectRow[]>([])
 const current = ref<string>('')
-// 三页导航：首页（落地+快速开始）/ 工作区（项目三栏）/ 素材区（风格+元素库）
+// 三页导航：首页（落地+快速开始）/ 工作区（项目三栏）/ 风格库（风格+视频解析）
 const page = ref<'home' | 'workspace' | 'materials'>('home')
 const view = ref<ProjectView | null>(null)
 const storyboard = ref<Storyboard | null>(null)
@@ -29,7 +29,7 @@ const audioMeta = ref<AudioMeta | null>(null) // 时间轴字幕/配音轨数据
 // 制作管线各段状态：'' | running | done | error
 const stageState = ref<Record<string, string>>({})
 const agentBusy = ref(false)
-const library = ref<StylePack[]>([])
+const library = ref<Style[]>([])
 const inspect = ref(false) // 检视模式（标题行按钮触发，StagePanel 消费）
 const videoRev = ref(0) // 成片代次：done 后递增 → video 换 URL 强制重载（重做完立刻看到新画面）
 const progressLine = ref('') // 制作/重做细粒度进度（SSE progress，瞬时态不入聊天史）
@@ -205,7 +205,7 @@ const themeOverrides = {
           </div>
           <div class="nb-tabs">
             <button
-              v-for="t in [{ id: 'home', label: '首页' }, { id: 'workspace', label: '工作区' }, { id: 'materials', label: '素材区' }]"
+              v-for="t in [{ id: 'home', label: '首页' }, { id: 'workspace', label: '工作区' }, { id: 'materials', label: '风格库' }]"
               :key="t.id" class="nb-tab" :class="{ on: page === t.id }" @click="page = t.id as any"
             >{{ t.label }}</button>
           </div>
@@ -218,7 +218,7 @@ const themeOverrides = {
           @new="showNew = true" @open="selectProject" @materials="page = 'materials'"
         />
 
-        <!-- 素材区：风格库 + 元素库 -->
+        <!-- 风格库页：风格 + 视频解析 -->
         <MaterialCenter
           v-else-if="page === 'materials'" :packs="library" @publish="publishPack" @ingested="loadLibrary"
         />

@@ -31,9 +31,7 @@ bash deploy/deploy.sh         # 日常发版
   （词级→字级均分）。模型首次运行时经 hf-mirror 下载（medium，约 1.5GB）。
 - **数据**：`/opt/zhenshu/data/projects` + `/opt/zhenshu/data/library` + `/opt/zhenshu/data/references`
   （参考视频库）+ `/opt/zhenshu/data/hf`（whisper 模型缓存，重建容器不重下）宿主卷，
-  项目产物与素材库本地缓存跨发版保留；migrations 幂等，按文件名序每次部署重跑（psql 容器内执行）。
-- **素材库远程镜像**（2026-09-28）：`.env` 配 `PG_DSN` + `MINIO_*`（同指本机回环，
-  `--env` 上传时 47.94.247.12 全局改写已覆盖）即启用——PG `assets` 表存目录镜像、
-  MinIO `zhenshu` 桶存媒体对象；入库双写、启动双向对账（容器重建自动拉回，见
-  `server/internal/assetlib/remote.go`）。磁盘仍是渲染事实源，镜像连不上只 warn 不挡业务。
+  项目产物与风格库/方法库跨发版保留；migrations 幂等，按文件名序每次部署重跑（psql 容器内执行）。
+- ~~素材库远程镜像~~（2026-10-01 退役）：素材库已随元素库/素材库退役一并移除
+  （catalog/MinIO 镜像，见 `server/internal/stylelib`——风格库为唯一风格事实源）。
 - **发版物**：开发机交叉编译 linux 静态二进制 + web/dist + ai/（引擎+素材+注册表同在此包）→ tar 流传输。

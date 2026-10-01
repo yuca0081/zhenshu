@@ -11,7 +11,7 @@ import (
 // TestPostResolve postFor 解析回环：project.json 覆盖/关闭 → 风格 tokens.post → 默认轻后期。
 func TestPostResolve(t *testing.T) {
 	root, _ := filepath.Abs(filepath.Join("..", "..", ".."))
-	if _, err := os.Stat(filepath.Join(root, "data", "library", "registry", "styles.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "data", "library", "styles.json")); err != nil {
 		t.Skipf("styles.json 不存在，跳过: %v", err)
 	}
 	old := dataDir
@@ -66,7 +66,7 @@ func TestPostResolve(t *testing.T) {
 			Post *postFX `json:"post"`
 		} `json:"tokens"`
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "data", "library", "registry", "styles.json"))
+	raw, err := os.ReadFile(filepath.Join(root, "data", "library", "styles.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -35,6 +35,7 @@ import (
 	"webpage-video-agent/server/internal/events"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
+	"webpage-video-agent/server/internal/stylelib"
 	"webpage-video-agent/server/internal/store"
 )
 
@@ -1073,23 +1074,6 @@ func ProjectCanvas(p *pipeline.Project) contract.Canvas {
 	return contract.CanvasFor(meta.Aspect)
 }
 
-// styleLayout 风格版式（构图模式）：styles.json layouts 字段，描述本风格的标准构图，
-// spec 生成每段先选一个版式再填元素——治"整齐网格 PPT 感"。
-type styleLayout struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Desc string `json:"desc"`
-}
-
-// styleRegEntry styles.json 条目（Go 侧只消费方向/题材/配图调性/版式）。
-type styleRegEntry struct {
-	Direction string        `json:"direction"`
-	Genre     string        `json:"genre"`
-	Keywords  []string      `json:"keywords"`
-	Photo     string        `json:"photo"`
-	Layouts   []styleLayout `json:"layouts"`
-}
-
 // projectDirection 项目已确认/已起草的风格方向（style_samples.json）。
 func projectDirection(p *pipeline.Project) string {
 	var ss struct {
@@ -1100,63 +1084,6 @@ func projectDirection(p *pipeline.Project) string {
 		return ss.Direction
 	}
 	return ""
-}
-
-// matchStyleReg 方向名 → 注册表条目。两轮匹配：完整方向名子串优先，再关键词最长命中
-// （与 ai/engines/stylepack_generic.py match 同语义）。未命中返回 nil。
-func matchStyleReg(direction, dataDir string) *styleRegEntry {
-	if direction == "" {
-		return nil
-	}
-	b, err := os.ReadFile(filepath.Join(dataDir, "library", "registry", "styles.json"))
-	if err != nil {
-		return nil
-	}
-	var styles []styleRegEntry
-	if json.Unmarshal(b, &styles) != nil {
-		return nil
-	}
-	for i := range styles {
-		if styles[i].Direction != "" && strings.Contains(direction, styles[i].Direction) {
-			return &styles[i]
-		}
-	}
-	best, bestLen := -1, 0
-	for i := range styles {
-		for _, kw := range styles[i].Keywords {
-			n := len([]rune(kw))
-			if kw != "" && strings.Contains(direction, kw) && n > bestLen {
-				best, bestLen = i, n
-			}
-		}
-	}
-	if best >= 0 {
-		return &styles[best]
-	}
-	return nil
-}
-
-// styleNoteFor 项目风格方向 → spec 提示里的风格说明。
-// 皮肤文件（§12.2）优先注入槽位摘要（spec 的配色/字体措辞向皮肤收敛），
-// 注册表命中再补题材 + 配图调性（两者不互斥）。
-func styleNoteFor(p *pipeline.Project, dataDir string) string {
-	direction := projectDirection(p)
-	if direction == "" {
-		return ""
-	}
-	note := "\n## 本片风格\n- 方向：" + direction
-	note += skinNote(p)
-	st := matchStyleReg(direction, dataDir)
-	if st == nil {
-		return note
-	}
-	if st.Genre != "" {
-		note += "\n- 适用题材：" + st.Genre
-	}
-	if st.Photo != "" {
-		note += "\n- 配图 query 调性：" + st.Photo + "（image 的 query 往这个调性上靠）"
-	}
-	return note
 }
 
 // skinNote 皮肤槽位摘要：spec 措辞向槽位收敛（色名/字体名直接写进画面语言）。
@@ -1178,18 +1105,9 @@ func skinNote(p *pipeline.Project) string {
 	return note
 }
 
-// styleLayoutsFor 项目风格 → 注册表命中的版式列表（未命中/老注册表返回 nil）。
-func styleLayoutsFor(p *pipeline.Project, dataDir string) []styleLayout {
-	st := matchStyleReg(projectDirection(p), dataDir)
-	if st == nil {
-		return nil
-	}
-	return st.Layouts
-}
-
 // layoutNote 本段版式注入块：指定版式（按段号轮换，相邻段天然不同）+ 全表可改选。
 // layouts 为空返回 ""，行为与旧版一致。校验硬底线（≥3 元素、不重叠）不放松。
-func layoutNote(layouts []styleLayout, segIdx int) string {
+func layoutNote(layouts []stylelib.Layout, segIdx int) string {
 	if len(layouts) == 0 {
 		return ""
 	}

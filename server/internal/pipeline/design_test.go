@@ -1,0 +1,95 @@
+package pipeline
+
+import (
+	"strings"
+	"testing"
+
+	"webpage-video-agent/server/internal/contract"
+)
+
+func designFixture() *contract.StyleSamples {
+	sk := contract.Skin{
+		Name:  "黑金史诗",
+		Slots: contract.SkinSlots{BG: "#0D0A07", TXT: "#E8DCC0", Accent: "#C9A227", Font: "'SimSun','Microsoft YaHei',serif"},
+		CSS:   ".skin-paper{background:radial-gradient(#1A1410,#0D0A07);}",
+	}
+	return &contract.StyleSamples{
+		Direction: "黑金史诗·交界地挽歌",
+		Concept:   "低饱和黑金配衬线大字——为文明兴衰的厚重感服务",
+		Skins:     []contract.Skin{sk, sk},
+		SkinRule:  "机制讲解段穿主皮肤（黑），史实叙事段穿副皮肤（米色）",
+		Fonts: &contract.FontRoles{
+			Display: contract.FontRole{Stack: "'SimHei','Microsoft YaHei',sans-serif", Weight: "900", Tracking: "0.06em"},
+			Body:    contract.FontRole{Stack: "'KaiTi','Microsoft YaHei',serif"},
+			Data:    contract.FontRole{Stack: "Consolas,'Microsoft YaHei',monospace", Weight: "700"},
+		},
+		Motion: &contract.MotionLang{Ease: "power3.out", DurIn: 0.5, DurSettle: 0.25, Stagger: 0.08, Notes: "大字浮入，禁弹跳"},
+		Device: &contract.DeviceSpec{Name: "章节门牌", Desc: "每章开场的金属铭牌", PerSeg: "seg01 亮相，此后每章复现并换章名"},
+		Layouts: []contract.DesignLayout{
+			{ID: "hero-title", Name: "大字海报", Desc: "主体居中偏左"},
+			{ID: "data-focus", Name: "数据焦点", Desc: "大数字右置"},
+		},
+		AntiPatterns: []string{"大面积辉光", "右半空版式"},
+	}
+}
+
+func TestDesignDocFull(t *testing.T) {
+	doc := DesignDoc(designFixture(), 2)
+	for _, want := range []string{
+		"黑金史诗·交界地挽歌",
+		"低饱和黑金",               // concept
+		"### 主皮肤：黑金史诗",        // skins[0]
+		"### 副皮肤：黑金史诗",        // skins[1]
+		"皮肤切换规则", "机制讲解段穿主皮肤", // 双皮肤规则
+		"大标题/大数字 display", "0.06em", // 字体角色
+		"缓动族 power3.out", "0.50s", "0.08s", // 动效档位
+		"贯穿装置：章节门牌", "seg01 亮相", // 装置
+		"**本段指定版式：data-focus", // segIdx=2 → layouts[(2-1)%2]=第2个
+		"大面积辉光",               // 负面清单
+		"hf.count",            // 动效物理提示
+	} {
+		if !strings.Contains(doc, want) {
+			t.Fatalf("DesignDoc 缺 %q\n---\n%s", want, doc)
+		}
+	}
+}
+
+func TestDesignDocSegRotation(t *testing.T) {
+	ss := designFixture()
+	if !strings.Contains(DesignDoc(ss, 1), "本段指定版式：hero-title") {
+		t.Fatalf("segIdx=1 应指派第 1 个版式")
+	}
+	if !strings.Contains(DesignDoc(ss, 3), "本段指定版式：hero-title") {
+		t.Fatalf("segIdx=3 应轮换回第 1 个版式")
+	}
+}
+
+func TestDesignDocLegacy(t *testing.T) {
+	// 库内老包/旧项目：只有 direction+skin，渲染不炸、只出已有部分
+	ss := &contract.StyleSamples{
+		Direction: "旧方向",
+		Skin: &contract.Skin{
+			Name:  "旧皮肤",
+			Slots: contract.SkinSlots{BG: "#111111", TXT: "#EEEEEE", Accent: "#FF0000", Font: "'SimHei',sans-serif"},
+		},
+	}
+	doc := DesignDoc(ss, 0)
+	if !strings.Contains(doc, "旧方向") || !strings.Contains(doc, "旧皮肤") {
+		t.Fatalf("legacy 渲染缺方向/皮肤：%s", doc)
+	}
+	if strings.Contains(doc, "本段指定版式") || strings.Contains(doc, "贯穿装置") {
+		t.Fatalf("legacy 不应渲染设计系统块：%s", doc)
+	}
+}
+
+func TestDesignVersionStableAndSensitive(t *testing.T) {
+	ss := designFixture()
+	v1 := designVersion(ss)
+	if v1 != designVersion(ss) {
+		t.Fatalf("同内容版本指纹应稳定")
+	}
+	ss.Motion.Ease = "back.out(1.7)"
+	if v1 == designVersion(ss) {
+		t.Fatalf("设计变更后版本指纹必须变化（段级过期的根基）")
+	}
+}
