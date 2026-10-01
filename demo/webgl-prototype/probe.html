@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <script src="assets/three.min.js"></script>
+  <script src="assets/gsap.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 1920px; height: 1080px; overflow: hidden; background: #05070F; }
+    #root { position: relative; width: 1920px; height: 1080px; overflow: hidden; }
+    #gl { position: absolute; inset: 0; width: 1920px; height: 1080px; }
+    #hud { position: absolute; left: 48px; top: 40px; color: #FBBE00; font-size: 26px;
+      font-family: Consolas, monospace; line-height: 1.7; }
+    #fail { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+      color: #FF5E62; font-size: 64px; font-family: Consolas, monospace; background: #101014; }
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="main" data-start="0" data-duration="6" data-width="1920" data-height="1080">
+    <canvas id="gl" width="1920" height="1080"></canvas>
+    <div id="hud">probing…</div>
+    <div id="fail">WEBGL CONTEXT FAILED</div>
+  </div>
+  <script>
+    // ── WebGL 软渲染探针(docs/vend-stage.md §7.1)──
+    // 判据:① three.js 在 headless --disable-gpu 下能建上下文并出画面
+    //       ② 同 t 两轮渲染逐像素一致(契约 T 系的 WebGL 版)
+    // 驱动方式与真实场景契约一致:唯一 paused timeline,onUpdate 里 draw(t),
+    // draw 是 t 的纯函数(每次全量重渲,无逐帧累积状态)。
+    var canvas = document.getElementById('gl');
+    var hud = document.getElementById('hud');
+    var renderer = null, info = '';
+    try {
+      renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, preserveDrawingBuffer: true });
+      renderer.setPixelRatio(1);
+      renderer.setSize(1920, 1080, false);
+      info = 'context=' + (renderer.capabilities.isWebGL2 ? 'webgl2' : 'webgl1') +
+             ' renderer=' + renderer.getContext().getParameter(renderer.getContext().RENDERER);
+    } catch (e) {
+      document.getElementById('fail').style.display = 'flex';
+      hud.textContent = 'ERR: ' + e.message;
+      var tlFail = gsap.timeline({ paused: true });
+      tlFail.to({}, { duration: 6, ease: 'none' }, 0);
+      window.__timelines = { main: tlFail };
+      throw e;
+    }
+
+    var scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0b0f1a);
+    scene.fog = new THREE.Fog(0x0b0f1a, 8, 18);
+    var camera = new THREE.PerspectiveCamera(50, 1920 / 1080, 0.1, 100);
+    camera.position.set(0, 1.6, 7);
+    camera.lookAt(0, 0, 0);
+
+    var knot = new THREE.Mesh(
+      new THREE.TorusKnotGeometry(1.7, 0.52, 180, 28),
+      new THREE.MeshStandardMaterial({ color: 0xd93025, metalness: 0.4, roughness: 0.28 })
+    );
+    scene.add(knot);
+    var floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(40, 40),
+      new THREE.MeshStandardMaterial({ color: 0x141a2b, metalness: 0.1, roughness: 0.9 })
+    );
+    floor.rotation.x = -Math.PI / 2; floor.position.y = -2.6;
+    scene.add(floor);
+    var grid = new THREE.GridHelper(40, 40, 0x7c3aed, 0x1e2a4a);
+    grid.position.y = -2.58;
+    scene.add(grid);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+    var key = new THREE.DirectionalLight(0xfff2d8, 1.5); key.position.set(4, 6, 5); scene.add(key);
+    var rim = new THREE.DirectionalLight(0x5460ff, 0.9); rim.position.set(-5, 2, -4); scene.add(rim);
+
+    window.__draw = function (t) {
+      knot.rotation.x = t * 0.7;
+      knot.rotation.y = t * 1.1;
+      knot.position.y = Math.sin(t * 1.4) * 0.35;
+      camera.position.x = Math.sin(t * 0.35) * 1.2;
+      camera.lookAt(0, 0, 0);
+      renderer.render(scene, camera);
+    };
+
+    var tl = gsap.timeline({ paused: true });
+    tl.to({}, { duration: 6, ease: 'none', onUpdate: function () { window.__draw(tl.time()); } }, 0);
+    window.__draw(0); // 首帧先画出画面,避免截图前画布为空
+    window.__timelines = { main: tl };
+    hud.textContent = 'WEBGL OK | ' + info;
+  </script>
+</body>
+</html>

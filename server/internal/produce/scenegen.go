@@ -16,6 +16,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -244,7 +246,7 @@ func sceneValidate(r *Runner, html, segID string) []string {
 	if strings.Contains(html, "data-ph=") || strings.Contains(html, "data-w=") {
 		errs = append(errs, "禁止字幕标注（data-ph/data-w）——字幕带由平台按 TTS 时间戳机械装配，内容留在上 83%")
 	}
-	errs = append(errs, r.sceneLintRun(html)...)
+	errs = append(errs, r.sceneLintWithVend(html)...)
 	return errs
 }
 
@@ -278,6 +280,73 @@ func (r *Runner) sceneLintRun(html string) []string {
 		errs = append(errs, "scene_lint 异常: "+firstLine(string(out), 3))
 	}
 	return errs
+}
+
+// ── vend 自动闭环（docs/vend-stage.md §3）：模型只有申请权（场景内 <!-- vend: lib@ver -->），
+// lint 报缺库 → 平台代码代为采购（npm 钉版+验收入册）→ 复检放行；采购失败按"路的问题"
+// 原样上抛转人工（§5），不伪装成场景违规回喂模型。
+
+var vendMu sync.Mutex // 段间并发（SCENE_CONCURRENCY）采购串行化：manifest 写与 tarball 落盘防竞态
+
+var missingLibRe = regexp.MustCompile(`缺库:([A-Za-z0-9_.\-]+)@([A-Za-z0-9_.\-]+)\s`)
+
+// missingLibSpecs 从 lint 违规清单提取缺库申请单（A3），去重排序（采购顺序确定）。
+func missingLibSpecs(errs []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, e := range errs {
+		if m := missingLibRe.FindStringSubmatch(e); m != nil {
+			spec := m[1] + "@" + m[2]
+			if !seen[spec] {
+				seen[spec] = true
+				out = append(out, spec)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// vendorEnsure 跑 ai/vendor_tool.py ensure（确定性代码执行；成员文件由 npm 元数据自动定位）。
+func (r *Runner) vendorEnsure(spec string, timeout time.Duration) error {
+	vendMu.Lock()
+	defer vendMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, pythonExe(), filepath.Join(r.RootDir, "ai", "vendor_tool.py"),
+		"ensure", spec, "--allow-pending-replay")
+	cmd.Dir = r.RootDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s", firstLine(string(out), 2))
+	}
+	return nil
+}
+
+// sceneLintWithVend = lint + 缺库自动采购：申请单全数采到 → 复检放行（以复检为准）；
+// 有采购失败 → 非缺库违规 + 采购失败一起返回（转人工，不静默）。
+func (r *Runner) sceneLintWithVend(html string) []string {
+	errs := r.sceneLintRun(html)
+	specs := missingLibSpecs(errs)
+	if len(specs) == 0 {
+		return errs
+	}
+	var nonLib []string
+	for _, e := range errs {
+		if !strings.Contains(e, "缺库:") {
+			nonLib = append(nonLib, e)
+		}
+	}
+	var buyErrs []string
+	for _, spec := range specs {
+		if err := r.vendorEnsure(spec, 3*time.Minute); err != nil {
+			buyErrs = append(buyErrs, "vend 采购失败 "+spec+": "+err.Error())
+		}
+	}
+	if len(buyErrs) > 0 {
+		return append(nonLib, buyErrs...)
+	}
+	return r.sceneLintRun(html)
 }
 
 // sceneUserPrompt 场景生成作业正文：契约摘要 + 段信息 + 风格/方法注入 + 词序表。
@@ -324,6 +393,8 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
    禁止在 CSS transform 里做居中（translateX(-50%%) 等）再让 GSAP 补间同一元素——GSAP 会整体覆盖 CSS transform，居中必须用 GSAP 的 xPercent/yPercent
 9. 不写字幕——底部字幕带由平台注入；内容留在上 83%%，禁止出现 data-ph=/data-w= 标注
 10. 元素揭示随旁白节拍分布（对齐下方词序表，不前载不拖尾）；段总时长 %.3f 秒
+11. 需要新框架（如 three.js）：在 <template> 内写注释声明 `+"`<!-- vend: 包名@精确版本 -->`"+`，
+    平台自动采购并注入（模型不写任何 <script> 标签，含本地路径也不行）
 
 ## 段信息
 - 标题：%s

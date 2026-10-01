@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1920, height=1080" />
+<script src="assets/gsap.min.js"></script>
+
+<style>
+  html, body { margin: 0; padding: 0; width: 1920px; height: 1080px; overflow: hidden; }
+</style>
+</head>
+<body>
+<script>window.__timelines = window.__timelines || {};</script>
+
+  <style>
+@font-face{font-family:"Segoe UI";src:local("Segoe UI");}
+@font-face{font-family:"Microsoft YaHei";src:local("Microsoft YaHei");}
+@font-face{font-family:"Georgia";src:local("Georgia");}
+@font-face{font-family:"Segoe Script";src:local("Segoe Script");}
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI','Microsoft YaHei',sans-serif;color:#26221B;}
+.s-clip{position:absolute;inset:0;}
+.s-desk{position:absolute;inset:0;background-color:#B0905C;background-image:
+  radial-gradient(ellipse at 50% 40%,transparent 46%,rgba(62,42,16,.42) 100%),
+  radial-gradient(30% 26% at 16% 84%,rgba(62,42,16,.2) 0%,transparent 70%),
+  radial-gradient(34% 30% at 86% 12%,rgba(255,232,180,.16) 0%,transparent 70%),
+  linear-gradient(168deg,#BFA06A 0%,#A8874F 58%,#977641 100%);}
+.s-scrap{position:absolute;}
+.s-scrap img{display:block;width:100%;height:auto;filter:drop-shadow(7px 11px 16px rgba(50,30,8,.4));}
+.s-halftone{position:absolute;background-color:#E4D9BC;background-image:radial-gradient(rgba(38,34,27,.22) 1.1px,transparent 1.6px);
+  background-size:7px 7px;box-shadow:6px 10px 18px rgba(50,30,8,.38);}
+.s-halftone b{position:absolute;left:50%;top:46%;font-family:Georgia,serif;font-size:150px;
+  font-weight:900;color:#26221B;opacity:.85;}
+.s-tape{position:absolute;width:150px;height:36px;background:rgba(238,224,176,.8);
+  box-shadow:2px 4px 8px rgba(50,30,8,.25);
+  clip-path:polygon(0 12%,5% 0,95% 4%,100% 14%,98% 88%,94% 100%,4% 96%,0 86%);}
+.s-ring{position:absolute;left:170px;top:648px;width:190px;height:190px;border-radius:50%;
+  border:17px solid rgba(96,64,28,.16);}
+.s-shape{position:absolute;filter:drop-shadow(4px 7px 8px rgba(50,30,8,.35));}
+.s-portrait{position:absolute;left:720px;top:170px;width:236px;}
+.s-portrait img{display:block;width:100%;height:auto;
+  filter:drop-shadow(7px 11px 15px rgba(50,30,8,.42));}
+.s-ransom{position:absolute;top:636px;left:398px;width:900px;height:124px;}
+.s-ransom span{position:absolute;top:0;display:inline-block;height:112px;line-height:112px;
+  text-align:center;font-weight:900;box-shadow:4px 8px 12px rgba(50,30,8,.4);}
+.s-strip{position:absolute;top:782px;left:400px;background:#F1E9D6;color:#26221B;
+  padding:8px 30px;font-size:24px;font-weight:800;letter-spacing:4px;white-space:nowrap;
+  box-shadow:4px 8px 12px rgba(50,30,8,.35);
+  clip-path:polygon(1% 8%,99% 0,100% 70%,98% 100%,2% 94%,0 30%);}
+.s-stamp{position:absolute;left:1436px;top:296px;width:330px;height:132px;border:6px double #C3272B;
+  border-radius:10px;color:#C3272B;text-align:center;opacity:.9;}
+.s-stamp b{display:block;font-size:52px;font-weight:900;letter-spacing:14px;margin-top:14px;}
+.s-stamp i{display:block;font-style:normal;font-size:19px;font-weight:800;letter-spacing:6px;margin-top:2px;}
+.s-chip{position:absolute;top:758px;left:1298px;background:rgba(241,233,214,.16);
+  border:1px solid rgba(241,233,214,.5);border-radius:26px;padding:12px 30px;
+  font-size:32px;font-weight:800;letter-spacing:3px;color:#F5EFE0;white-space:nowrap;}
+  </style>
+  <div data-composition-id="seg05" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="seg05-desk" class="s-clip clip s-desk" data-start="0" data-duration="10.35" data-track-index="0" data-hf-name="台面:牛皮纸桌"></div>
+      <div id="seg05-cam" data-layout-allow-overflow style="position:absolute;inset:0;">
+        <div id="seg05-ring" class="s-ring" data-hf-name="咖啡杯印"></div>
+        <div id="seg05-scrapL" class="s-scrap" data-hf-name="撕块:1861 哈泼斯插画(真扫描件)" style="left:120px;top:148px;width:560px;transform:rotate(-2deg);">
+          <img src="assets/img/scrap_engrave.png" alt=""/>
+        </div>
+        <div id="seg05-scrapR" class="s-scrap" data-hf-name="撕块:哈泼斯报头(真扫描件)" style="left:1330px;top:176px;width:622px;transform:rotate(2.5deg);">
+          <img src="assets/img/scrap_masthead.png" alt=""/>
+        </div>
+        <div id="seg05-halftone" class="s-halftone" data-hf-name="网点剪块" style="left:1160px;top:568px;width:300px;height:210px;"><b>!</b></div>
+        <div id="seg05-tapeL" class="s-tape" data-hf-name="胶带:左上" style="left:96px;top:126px;"></div>
+        <div id="seg05-tapeR" class="s-tape" data-hf-name="胶带:右上" style="left:1520px;top:150px;"></div>
+        <svg id="seg05-circle" class="s-shape" data-hf-name="锯齿红圆:剪刀剪出" style="left:640px;top:230px;" width="380" height="378" viewBox="0 0 412 410">
+          <path fill="#C3272B" d="M406,204 L380,285 L337,360 L257,393 L171,404 L95,362 L32,304 L12,221 L14,134 L69,67 L137,14 L223,26 L309,32 L364,93 L404,169 Z"/>
+        </svg>
+        <div id="seg05-portrait" class="s-portrait" data-hf-name="人像贴纸:1860s 络腮胡男子(真照片+白边)">
+          <img src="assets/img/sticker_portrait.png" alt=""/>
+        </div>
+        <svg id="seg05-pin" class="s-shape" data-hf-name="图钉" style="left:902px;top:204px;" width="30" height="46" viewBox="0 0 30 46">
+          <line x1="15" y1="18" x2="15" y2="42" stroke="#26221B" stroke-width="3"/>
+          <circle cx="15" cy="14" r="10" fill="#E8B93B" stroke="#8A6A16" stroke-width="2"/>
+        </svg>
+        <svg id="seg05-bulb" class="s-shape" data-hf-name="纸片:灯泡" style="left:1118px;top:150px;" width="120" height="150" viewBox="0 0 120 150">
+          <path fill="#F4B400" d="M60,4 C92,4 112,28 112,58 C112,80 98,94 88,108 C82,116 80,124 80,132 L40,132 C40,124 38,116 32,108 C22,94 8,80 8,58 C8,28 28,4 60,4 Z"/>
+          <rect x="42" y="136" width="36" height="10" fill="#26221B"/>
+        </svg>
+        <svg id="seg05-star" class="s-shape" data-hf-name="纸片:五角星" style="left:962px;top:96px;" width="110" height="106" viewBox="0 0 110 106">
+          <path fill="#1A56C4" d="M55,2 L68,38 L106,40 L76,63 L87,101 L55,79 L23,101 L34,63 L4,40 L42,38 Z"/>
+        </svg>
+        <svg id="seg05-bolt" class="s-shape" data-hf-name="纸片:闪电" style="left:582px;top:130px;" width="90" height="140" viewBox="0 0 90 140">
+          <path fill="#F4B400" d="M54,2 L14,64 L40,64 L22,138 L78,52 L48,52 L74,2 Z"/>
+        </svg>
+        <svg id="seg05-cloud" class="s-shape" data-hf-name="纸片:云朵" style="left:408px;top:238px;" width="150" height="96" viewBox="0 0 150 96">
+          <path fill="#EFE6CF" d="M36,92 C14,92 4,76 10,60 C2,44 16,26 34,30 C40,10 68,2 84,14 C96,2 122,6 128,24 C146,24 152,44 142,56 C150,74 136,92 116,92 Z"/>
+        </svg>
+        <div id="seg05-q" class="s-shape" data-hf-name="纸片:问号" style="left:742px;top:112px;font-family:'Segoe Script',cursive;font-size:120px;font-weight:900;color:#2E7D32;">?</div>
+        <svg data-hf-name="粉笔涂鸦圈" style="position:absolute;left:0;top:0;" width="1920" height="1080" viewBox="0 0 1920 1080" fill="none">
+          <path id="seg05-scribble" transform="translate(-8,-74)" d="M1040,300 C1120,380 1110,520 1010,590 C900,660 740,660 660,580 C580,500 600,330 720,270 C800,230 950,230 1030,290" stroke="#F5EFE0" stroke-width="5" stroke-linecap="round"/>
+        </svg>
+        <div id="seg05-ransom" class="s-ransom" data-hf-name="烂字头标题:灵感大爆炸">
+          <span data-hf-name="字:灵" style="left:0;width:160px;background:#EFE6CF;font-family:Georgia,'Microsoft YaHei',serif;font-size:88px;">灵</span>
+          <span data-hf-name="字:感" style="left:172px;width:160px;background:#C3272B;color:#F5EFE0;font-family:'Microsoft YaHei',sans-serif;font-size:88px;">感</span>
+          <span data-hf-name="字:大" style="left:344px;width:160px;background:#F4B400;font-family:Georgia,serif;font-size:88px;">大</span>
+          <span data-hf-name="字:爆" style="left:516px;width:160px;background:#1A56C4;color:#F5EFE0;font-family:'Microsoft YaHei',sans-serif;font-size:88px;">爆</span>
+          <span data-hf-name="字:炸" style="left:688px;width:170px;background:#EFE6CF;font-family:Georgia,'Microsoft YaHei',serif;font-size:88px;">炸</span>
+        </div>
+        <div id="seg05-strip" class="s-strip" data-hf-name="撕纸条:灵感从哪来">WHERE IDEAS COME FROM · 灵感从哪来</div>
+        <div id="seg05-stamp" class="s-stamp" data-hf-name="红色印章:拼贴 CUT PASTE"><b>拼贴</b><i>CUT &amp; PASTE</i></div>
+        <svg data-hf-name="裁切虚线与剪刀" style="position:absolute;left:0;top:0;" width="1920" height="1080" viewBox="0 0 1920 1080" fill="none">
+          <clipPath id="seg05-cutclip"><rect id="seg05-cutrect" x="100" y="830" width="0" height="36"/></clipPath>
+          <line id="seg05-cutline" x1="120" y1="848" x2="1820" y2="848" stroke="#F5EFE0" stroke-width="3" stroke-dasharray="14 10" clip-path="url(#seg05-cutclip)"/>
+          <g id="seg05-scissors" data-hf-name="剪刀">
+            <g id="seg05-bladeA"><path d="M20,0 L88,-18 L28,10 Z" fill="#26221B"/></g>
+            <g id="seg05-bladeB"><path d="M20,0 L88,18 L28,-10 Z" fill="#26221B"/></g>
+            <circle cx="-4" cy="-15" r="12" stroke="#26221B" stroke-width="5"/>
+            <circle cx="-4" cy="15" r="12" stroke="#26221B" stroke-width="5"/>
+          </g>
+        </svg>
+        <div id="seg05-chip" class="s-chip" data-hf-name="角标:样片05 COLLAGE REAL">样片 05 · COLLAGE REAL</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var tl = gsap.timeline({ paused: true });
+      var scrib = document.getElementById('seg05-scribble');
+      var Ls = scrib.getTotalLength();
+      scrib.style.strokeDasharray = Ls + ' ' + Ls; scrib.style.strokeDashoffset = Ls;
+      gsap.set('#seg05-desk', { opacity: 0 });
+      tl.to('#seg05-desk', { opacity: 1, duration: 0.4, ease: 'none' }, 0);
+      gsap.set('#seg05-ring', { opacity: 0, scale: 0.6 });
+      tl.to('#seg05-ring', { opacity: 1, scale: 1, duration: 0.5, ease: 'back.out(1.6)' }, 0.5);
+      gsap.set('#seg05-scrapL', { opacity: 0, y: -36, scale: 0.94 });
+      gsap.set('#seg05-scrapR', { opacity: 0, y: -36, scale: 0.94 });
+      gsap.set('#seg05-halftone', { opacity: 0, y: -30, scale: 0.94 });
+      tl.to('#seg05-scrapL', { opacity: 1, y: 0, scale: 1, duration: 0.45, ease: 'back.out(1.4)' }, 0.65);
+      tl.to('#seg05-scrapR', { opacity: 1, y: 0, scale: 1, duration: 0.45, ease: 'back.out(1.4)' }, 0.9);
+      tl.to('#seg05-halftone', { opacity: 1, y: 0, scale: 1, duration: 0.45, ease: 'back.out(1.4)' }, 1.15);
+      gsap.set('#seg05-tapeL', { opacity: 0, rotation: -32 });
+      gsap.set('#seg05-tapeR', { opacity: 0, rotation: 28 });
+      tl.to('#seg05-tapeL', { opacity: 1, duration: 0.3, ease: 'power1.out' }, 1.3);
+      tl.to('#seg05-tapeR', { opacity: 1, duration: 0.3, ease: 'power1.out' }, 1.42);
+      gsap.set('#seg05-circle', { scale: 0, rotation: -6, transformOrigin: '50% 50%' });
+      tl.to('#seg05-circle', { scale: 1, rotation: 0, duration: 0.55, ease: 'back.out(1.6)' }, 1.85);
+      gsap.set('#seg05-portrait', { y: -430, opacity: 0, rotation: -4, transformOrigin: '50% 88%' });
+      tl.to('#seg05-portrait', { opacity: 1, duration: 0.01, ease: 'none' }, 2.54);
+      tl.to('#seg05-portrait', { y: 0, rotation: 0, duration: 0.75, ease: 'bounce.out' }, 2.55);
+      gsap.set('#seg05-pin', { opacity: 0, y: -60, scale: 0.8 });
+      tl.to('#seg05-pin', { opacity: 1, y: 0, scale: 1, duration: 0.35, ease: 'power4.in' }, 3.05);
+      tl.fromTo(scrib, { strokeDashoffset: Ls }, { strokeDashoffset: 0, duration: 0.6, ease: 'none' }, 3.35);
+      gsap.set('#seg05-bulb', { scale: 0, x: -260, y: 130, rotation: -30 });
+      gsap.set('#seg05-star', { scale: 0, x: -120, y: 190, rotation: 20 });
+      gsap.set('#seg05-bolt', { scale: 0, x: 150, y: 180, rotation: 30 });
+      gsap.set('#seg05-cloud', { scale: 0, x: 300, y: 120, rotation: -20 });
+      gsap.set('#seg05-q', { scale: 0, x: 40, y: 200, rotation: 15 });
+      tl.to('#seg05-bulb', { scale: 1, x: 0, y: 0, rotation: 0, duration: 0.5, ease: 'back.out(1.8)' }, 4.0);
+      tl.to('#seg05-star', { scale: 1, x: 0, y: 0, rotation: 0, duration: 0.5, ease: 'back.out(1.8)' }, 4.18);
+      tl.to('#seg05-bolt', { scale: 1, x: 0, y: 0, rotation: 0, duration: 0.5, ease: 'back.out(1.8)' }, 4.36);
+      tl.to('#seg05-cloud', { scale: 1, x: 0, y: 0, rotation: 0, duration: 0.5, ease: 'back.out(1.8)' }, 4.54);
+      tl.to('#seg05-q', { scale: 1, x: 0, y: 0, rotation: 0, duration: 0.5, ease: 'back.out(1.8)' }, 4.72);
+      tl.to('#seg05-bulb', { y: -10, duration: 0.5, ease: 'sine.inOut', yoyo: true, repeat: 5 }, 4.5);
+      tl.to('#seg05-star', { y: -12, duration: 0.46, ease: 'sine.inOut', yoyo: true, repeat: 5 }, 4.68);
+      tl.to('#seg05-cloud', { y: -9, duration: 0.54, ease: 'sine.inOut', yoyo: true, repeat: 4 }, 5.04);
+      var rx = [0, 172, 344, 516, 688], rr = [-4, 3, -2, 5, -3];
+      gsap.set('#seg05-ransom span', { opacity: 0, scale: 1.7 });
+      rx.forEach(function (x, i) {
+        tl.to('#seg05-ransom span:nth-child(' + (i + 1) + ')',
+          { opacity: 1, scale: 1, rotation: rr[i], duration: 0.3, ease: 'power4.in' }, 5.35 + i * 0.13);
+      });
+      gsap.set('#seg05-strip', { opacity: 0, x: -60, rotation: -1.5 });
+      tl.to('#seg05-strip', { opacity: 1, x: 0, duration: 0.4, ease: 'power3.out' }, 6.15);
+      gsap.set('#seg05-stamp', { opacity: 0, scale: 2.4, rotation: -20 });
+      tl.to('#seg05-stamp', { opacity: 0.92, scale: 1, rotation: -8, duration: 0.3, ease: 'power4.in' }, 6.7);
+      gsap.set('#seg05-scissors', { x: 120, y: 848, opacity: 0, rotation: -4, transformOrigin: '20px 0px' });
+      tl.to('#seg05-scissors', { opacity: 1, duration: 0.25, ease: 'none' }, 7.35);
+      tl.to('#seg05-scissors', { x: 1680, duration: 1.7, ease: 'none' }, 7.45);
+      tl.to('#seg05-cutrect', { attr: { width: 1740 }, duration: 1.7, ease: 'none' }, 7.45);
+      gsap.set('#seg05-bladeA', { rotation: 8, transformOrigin: '20px 0px' });
+      gsap.set('#seg05-bladeB', { rotation: -8, transformOrigin: '20px 0px' });
+      tl.to('#seg05-bladeA', { rotation: -6, duration: 0.22, ease: 'sine.inOut', yoyo: true, repeat: 7 }, 7.45);
+      tl.to('#seg05-bladeB', { rotation: 6, duration: 0.22, ease: 'sine.inOut', yoyo: true, repeat: 7 }, 7.45);
+      gsap.set('#seg05-chip', { opacity: 0, y: 24, scale: 0.92 });
+      tl.to('#seg05-chip', { opacity: 1, y: 0, scale: 1, duration: 0.4, ease: 'back.out(1.6)' }, 9.35);
+      tl.fromTo('#seg05-cam', { scale: 1, x: 0 }, { scale: 1.03, x: -14, duration: 10.35, ease: 'none' }, 0);
+      window.__timelines["seg05"] = tl;
+    })();
+  </script>
+
+</body>
+</html>

@@ -7,6 +7,7 @@
 退出码：0=全过；1=有 ✗ 违规（输出逐条，供回喂修复）。
 设计约束：只做零误报的机械判定；模糊问题（审美/密度）归 Tier1/Tier2，不进本文件。
 """
+import json
 import re
 import shutil
 import subprocess
@@ -16,6 +17,19 @@ import tempfile
 
 # 段 id（F2/F3 一致性检查用）；从文件名或 data-composition-id 推断
 SEG_ID_RE = re.compile(r'seg\d{2,}')
+
+# vendor manifest（vend-stage.md §3;A3 缺库检查的数据源）
+VENDOR_MANIFEST = pathlib.Path(__file__).resolve().parent.parent / 'data' / 'library' / 'vendor' / 'manifest.json'
+
+VEND_RE = re.compile(r'<!--\s*vend:\s*([A-Za-z0-9_.-]+)@([^\s>]+?)\s*-->')
+
+
+def vendor_has(lib: str, ver: str) -> bool:
+    try:
+        m = json.loads(VENDOR_MANIFEST.read_text(encoding='utf-8'))
+        return bool(m.get('libs', {}).get(lib, {}).get(ver))
+    except Exception:
+        return False
 
 # T2/T3/T6/A1：禁用 API（字符串出现即违规；注释里写也不行——注释里的逃生口最危险）
 BANNED_PATTERNS = [
@@ -39,6 +53,7 @@ BANNED_PATTERNS = [
     (r'<audio\b', 'T7', '禁 <audio> 元素（音轨是平台层，assemble 注入）'),
     (r'<iframe\b', 'A1', '禁 <iframe>（外部内容）'),
     (r'<script[^>]+src\s*=\s*["\']https?://', 'A1', '禁外链脚本（CDN）'),
+    (r'<script[^>]+src\s*=', 'A3', '禁场景内引脚本（框架库由 wrapper 注入；需要新库用 <!-- vend: lib@ver --> 声明）'),
     (r'<link[^>]+href\s*=\s*["\']https?://', 'A1', '禁外链样式'),
     (r'url\s*\(\s*["\']?https?://', 'A1', '禁外链资源 url()'),
     (r'@import\b', 'A1', '禁 @import（外部样式）'),
@@ -116,6 +131,14 @@ def lint_text(html: str, seg_hint: str = '') -> list:
             errs.append(('A4', 'data-URI 图片超过 64KB（素材应入素材库，HTML 引 assets/img/ 路径）'))
             break
 
+    # A3：vend 声明（vend-stage.md §3）——模型只有申请权：
+    # 已登记库放行；未登记库报缺库（消息即采购申请单，由平台/人跑 vendor_tool 采购）
+    for mm in VEND_RE.finditer(html):
+        lib, ver = mm.group(1), mm.group(2)
+        if not vendor_has(lib, ver):
+            errs.append(('A3', f'缺库:{lib}@{ver} 未入 vendor manifest——'
+                         f'运行 python ai/vendor_tool.py ensure {lib}@{ver} --file <tarball内路径> 采购'))
+
     # J1：内联脚本 JS 语法校验（node --check；无 node 时跳过——渲染环境必有）
     scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, flags=re.S)
     if scripts and shutil.which('node'):
@@ -175,6 +198,8 @@ def selftest() -> int:
         ('requestAnimationFrame(', 'T2'), ('<video ', 'T7'), ('data-ph="0"', 'F7'),
         ('transition: all', 'T5'), ('@keyframes x', 'T5'), ('fetch(', 'A1'),
         ('new Worker(', 'T6'), ('<canvas id="c"></canvas>', 'T4'),
+        ('<script src="assets/x.js"></script>', 'A3'),
+        ('<!-- vend: nonexistent-lib@1.0.0 -->', 'A3'),
     ]
     for probe, rule in probes:
         errs = lint_text(ok + probe, 'seg01')

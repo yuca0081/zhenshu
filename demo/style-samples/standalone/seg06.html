@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1920, height=1080" />
+<script src="assets/gsap.min.js"></script>
+<script src="assets/vendor/three-0.152.2.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; width: 1920px; height: 1080px; overflow: hidden; }
+</style>
+</head>
+<body>
+<script>window.__timelines = window.__timelines || {};</script>
+
+  <!-- vend: three@0.152.2 -->
+  <style>
+@font-face{font-family:"Segoe UI";src:local("Segoe UI");}
+@font-face{font-family:"Microsoft YaHei";src:local("Microsoft YaHei");}
+#root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
+  font-family:'Segoe UI','Microsoft YaHei',sans-serif;color:#4A3B44;}
+.s-clip{position:absolute;inset:0;}
+.s-el{position:absolute;}
+.s-title{position:absolute;left:0;top:196px;width:1920px;text-align:center;font-size:128px;
+  font-weight:900;letter-spacing:12px;color:#4A3B44;white-space:nowrap;}
+.s-title span{display:inline-block;text-shadow:0 4px 22px rgba(122,80,110,.25);}
+.s-sub{position:absolute;left:0;top:384px;width:1920px;text-align:center;font-size:34px;
+  font-weight:800;letter-spacing:9px;color:#7A5E6E;white-space:nowrap;}
+.s-stat{position:absolute;left:0;top:856px;width:1920px;text-align:center;font-size:26px;
+  font-weight:700;letter-spacing:5px;color:#8A6E7E;white-space:nowrap;}
+.s-chip{position:absolute;top:758px;left:1298px;background:rgba(255,252,248,.55);
+  border:1px solid rgba(122,94,110,.4);border-radius:26px;padding:12px 30px;
+  font-size:32px;font-weight:800;letter-spacing:3px;color:#4A3B44;white-space:nowrap;}
+  </style>
+  <div data-composition-id="seg06" data-width="1920" data-height="1080">
+    <div id="root">
+      <div id="seg06-cam" class="s-clip clip" data-start="0" data-duration="10.35" data-track-index="0" data-hf-name="3D 舞台:vend three 注入">
+        <canvas id="seg06-scene" width="1920" height="1080" data-hf-name="three.js 画布:珠光原野" style="position:absolute;left:0;top:0;width:1920px;height:1080px;"></canvas>
+        <div id="seg06-title" class="s-title s-el" data-hf-name="标题:珠光原野"><span data-c>珠</span><span data-c>光</span><span data-c>原</span><span data-c>野</span></div>
+        <div id="seg06-sub" class="s-sub s-el" data-hf-name="副标:PEARL FIELD">PEARL FIELD · 3D RENDER 样片</div>
+        <div id="seg06-stat" class="s-stat s-el" data-hf-name="数据行:2400 粒 PBR">2,400 粒 · PBR 软光 · 由 vend three 驱动</div>
+        <div id="seg06-chip" class="s-chip s-el" data-hf-name="角标:样片06 3D RENDER">样片 06 · 3D RENDER</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var tl = gsap.timeline({ paused: true });
+      var __rng32 = function (a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; var t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; };
+
+      // ── three.js 场景(初始化一次,种子化;draw(t) 纯函数全量更新)──
+      var renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('seg06-scene'), antialias: true, preserveDrawingBuffer: true });
+      renderer.setPixelRatio(1);
+      renderer.setSize(1920, 1080, false);
+      var scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xf3e6de);
+      scene.fog = new THREE.Fog(0xf3e6de, 9, 22);
+      var camera = new THREE.PerspectiveCamera(45, 1920 / 1080, 0.1, 60);
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+      var key = new THREE.DirectionalLight(0xfff0e0, 1.15); key.position.set(5, 8, 4); scene.add(key);
+      var fill = new THREE.DirectionalLight(0xd8c8f0, 0.55); fill.position.set(-6, 3, -5); scene.add(fill);
+
+      var PALETTE = [0xf6c9c0, 0xf2dcc8, 0xe9d6f0, 0xdcc8ee, 0xf4bcc6, 0xf7e8dd];
+      var rng = __rng32(20261006);
+      var COLS = 60, ROWS = 40, GAP = 0.34;
+      var N = COLS * ROWS;
+      var geo = new THREE.SphereGeometry(0.175, 12, 8);
+      var mat = new THREE.MeshStandardMaterial({ roughness: 0.32, metalness: 0.05 });
+      var field = new THREE.InstancedMesh(geo, mat, N);
+      var baseH = new Float32Array(N), phase = new Float32Array(N), scale = new Float32Array(N);
+      var dummy = new THREE.Object3D();
+      var color = new THREE.Color();
+      var k = 0;
+      for (var i = 0; i < COLS; i++) {
+        for (var j = 0; j < ROWS; j++) {
+          var x = (i - COLS / 2 + 0.5) * GAP;
+          var z = (j - ROWS / 2 + 0.5) * GAP;
+          var d = Math.sqrt(x * x + z * z);
+          baseH[k] = 0.35 * Math.sin(d * 0.55) + 0.5 * rng() * rng();
+          phase[k] = rng() * 6.2832;
+          scale[k] = 0.8 + rng() * 0.5;
+          field.setColorAt(k, color.setHex(PALETTE[(rng() * PALETTE.length) | 0]));
+          dummy.position.set(x, 0, z);
+          dummy.updateMatrix();
+          field.setMatrixAt(k, dummy.matrix);
+          k++;
+        }
+      }
+      scene.add(field);
+      if (field.instanceColor) field.instanceColor.needsUpdate = true;
+      var pearl = new THREE.Mesh(
+        new THREE.SphereGeometry(0.95, 48, 32),
+        new THREE.MeshStandardMaterial({ color: 0xfff7f2, roughness: 0.16, metalness: 0.12 })
+      );
+      pearl.position.set(0, 1.5, 0);
+      scene.add(pearl);
+      var ring = new THREE.Mesh(
+        new THREE.TorusGeometry(1.55, 0.055, 12, 96),
+        new THREE.MeshStandardMaterial({ color: 0xe8c87e, roughness: 0.25, metalness: 0.6 })
+      );
+      ring.rotation.x = 1.15;
+      scene.add(ring);
+
+      // T4:draw(t) 纯函数——每帧全量更新矩阵/相机并重渲,无逐帧累积状态
+      window["__draw_seg06-scene"] = function (t, ctx, W, H, rng2) {
+        for (var n = 0; n < N; n++) {
+          var ix = n % COLS, iz = (n / COLS) | 0;
+          var x = (ix - COLS / 2 + 0.5) * GAP;
+          var z = (iz - ROWS / 2 + 0.5) * GAP;
+          dummy.position.set(x, baseH[n] + 0.16 * Math.sin(t * 1.2 + phase[n]), z);
+          var s = scale[n] * (1 + 0.06 * Math.sin(t * 1.6 + phase[n] * 2));
+          dummy.scale.set(s, s, s);
+          dummy.updateMatrix();
+          field.setMatrixAt(n, dummy.matrix);
+        }
+        field.instanceMatrix.needsUpdate = true;
+        pearl.position.y = 1.5 + 0.24 * Math.sin(t * 0.9);
+        ring.rotation.z = t * 0.5;
+        ring.position.y = pearl.position.y;
+        var ang = -0.5 + t * 0.05;
+        camera.position.set(Math.sin(ang) * 9.6, 4.4 - t * 0.06, Math.cos(ang) * 9.6);
+        camera.lookAt(0, 0.5, 0);
+        renderer.render(scene, camera);
+      };
+
+      gsap.set('#seg06-scene', { opacity: 0 });
+      tl.to('#seg06-scene', { opacity: 1, duration: 0.5, ease: 'none' }, 0);
+      tl.to({ }, { duration: 10.35, ease: 'none', onUpdate: function () {
+        window["__draw_seg06-scene"](tl.time(), null, 1920, 1080, __rng32(6));
+      } }, 0);
+      gsap.set('#seg06-title [data-c]', { opacity: 0, y: 52 });
+      tl.to('#seg06-title [data-c]', { opacity: 1, y: 0, duration: 0.55, stagger: 0.15, ease: 'power3.out' }, 5.4);
+      gsap.set('#seg06-sub', { opacity: 0, letterSpacing: '18px' });
+      tl.to('#seg06-sub', { opacity: 1, letterSpacing: '9px', duration: 0.7, ease: 'power3.out' }, 7.1);
+      gsap.set('#seg06-stat', { opacity: 0 });
+      tl.to('#seg06-stat', { opacity: 0.9, duration: 0.5, ease: 'none' }, 7.9);
+      gsap.set('#seg06-chip', { opacity: 0, y: 24, scale: 0.92 });
+      tl.to('#seg06-chip', { opacity: 1, y: 0, scale: 1, duration: 0.4, ease: 'back.out(1.6)' }, 9.35);
+      window.__timelines["seg06"] = tl;
+    })();
+  </script>
+
+</body>
+</html>

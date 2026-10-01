@@ -61,7 +61,7 @@
 |---|---|---|
 | A1 | 禁一切网络:`fetch` / `XMLHttpRequest` / `WebSocket` / `EventSource` / 外链 `http(s)://`(脚本、样式、图片、字体) | lint |
 | A2 | 字体:只用本地可得的字体栈,且引用即声明(`@font-face{…src:local(…)}`);OS 自带中文字体(宋/黑/楷/仿宋/雅黑/Noto SC)按 assemble.py 的 local 声明惯例 | lint+check |
-| A3 | 框架库文件必须来自平台 vendor 目录本地内联(现阶段:gsap 由 wrapper 提供,场景内不引 `<script src>`;新框架走"提案→确定性审查→进目录") | lint |
+| A3 | 框架库文件必须来自平台 vendor 本地内联(现阶段:gsap 由 wrapper 提供,场景内不引 `<script src>`);需新框架时场景内声明 `<!-- vend: lib@x.y.z -->`,lint 对 manifest 已登记库放行、未登记库报缺库(即采购申请单);采购/验收/台账见 docs/vend-stage.md,vendor 卷 = `data/library/vendor` | lint |
 | A4 | 图片:只能引用 `assets/img/` 下的本地素材(素材库 lib:<id> 解析后的落盘路径);禁 data-URI 大图(>64KB 视为素材,应入库) | lint |
 
 ## 4. 时序数值

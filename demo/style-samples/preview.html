@@ -37,6 +37,8 @@
   <button class="seg" data-seg="seg02">02 包豪斯</button>
   <button class="seg" data-seg="seg03">03 Synthwave</button>
   <button class="seg" data-seg="seg04">04 拼贴剪贴</button>
+  <button class="seg" data-seg="seg05">05 拼贴·真素材</button>
+  <button class="seg" data-seg="seg06">06 3D 渲染</button>
   <span class="hint">预览 = rAF 驱动 paused timeline;成片以 renders/*.mp4 为准</span>
 </header>
 <div class="stage">
@@ -54,7 +56,7 @@
   <label><input id="loop" type="checkbox" checked />循环</label>
 </div>
 <script>
-const SEGS = ['seg01', 'seg02', 'seg03', 'seg04'];
+const SEGS = ['seg01', 'seg02', 'seg03', 'seg04', 'seg05', 'seg06'];
 const frame = document.getElementById('frame'), framebox = document.getElementById('framebox');
 const playBtn = document.getElementById('play'), seek = document.getElementById('seek');
 const tcur = document.getElementById('tcur'), loopBox = document.getElementById('loop');
