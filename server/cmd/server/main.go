@@ -48,6 +48,9 @@ func main() {
 	}
 	hub := events.NewHub()
 	lib := stylelib.New(cfg.DataDir)
+	// 视频来源老风格的原片/抽帧回填（入库一次性，新条目在 confirm 时快照；
+	// 原片不在本机则静默跳过，详情抽屉届时回退 references 目录）
+	go lib.BackfillMedia(filepath.Join(cfg.DataDir, "references"))
 	producer := &produce.Runner{
 		DataDir: cfg.DataDir, RootDir: root, Hub: hub, Store: st,
 	}

@@ -29,6 +29,7 @@ function open(s: Style) {
       s.layouts?.length ? `版式×${s.layouts.length}` : '',
       s.tokens ? '色板' : '',
     ].filter(Boolean),
+    libMediaId: s.origin_project?.startsWith('video:') ? s.id : undefined,
     packId: s.id,
     published: s.published,
   }

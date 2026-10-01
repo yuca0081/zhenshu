@@ -212,5 +212,6 @@ export interface TemplateDetailData {
   packId?: string // 风格库条目：草稿态给「入库」
   published?: boolean
   refId?: string // 参考引用：抽帧截图 + 原视频；未入库给「入库」
+  libMediaId?: string // 风格条目自带媒体（video: 来源）：走 /api/library/:id/media
   confirmed?: boolean
 }

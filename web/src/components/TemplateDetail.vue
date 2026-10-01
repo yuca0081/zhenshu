@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { NButton, NDrawer, NDrawerContent, NModal, NTag } from 'naive-ui'
 import SampleFrame from './SampleFrame.vue'
-import { api, referenceMediaURL } from '../api'
+import { api, libraryMediaURL, referenceMediaURL } from '../api'
 import type { StyleTokens, TemplateDetailData } from '../types'
 
 // 风格详情抽屉：风格库/视频解析卡片点开共用。纯展示——数据由父组件
@@ -14,16 +14,21 @@ const emit = defineEmits<{
   ingest: [refId: string]
 }>()
 
-// 抽帧截图：refId 有值才拉（解析产物目录里的 frame-*.png）
+// 抽帧截图：风格自带媒体（libMediaId）优先，参考引用（refId）次之
 const frames = ref<string[]>([])
 const hasVideo = ref(false)
+const mediaURL = computed(() =>
+  props.detail?.libMediaId ? libraryMediaURL : referenceMediaURL,
+)
 watch(
-  () => [props.show, props.detail?.refId] as const,
-  async ([show, refId]) => {
+  () => [props.show, props.detail?.libMediaId, props.detail?.refId] as const,
+  async ([show, libId, refId]) => {
     frames.value = []
     hasVideo.value = false
-    if (!show || !refId) return
-    const r = await api.referenceFrames(refId).catch(() => null)
+    if (!show || (!libId && !refId)) return
+    const r = libId
+      ? await api.libraryFrames(libId).catch(() => null)
+      : await api.referenceFrames(refId!).catch(() => null)
     if (r) { frames.value = r.frames; hasVideo.value = r.has_video }
   },
   { immediate: true },
@@ -163,13 +168,13 @@ async function copyHex(hex: string) {
         </section>
 
         <!-- 参考片抽帧 + 原片 -->
-        <section v-if="detail.refId" class="sec">
+        <section v-if="detail.refId || detail.libMediaId" class="sec">
           <h3>参考片抽帧{{ frames.length ? ` ×${frames.length}` : '' }}</h3>
           <div v-if="frames.length" class="frames">
-            <img v-for="f in frames" :key="f" :src="referenceMediaURL(detail.refId, f)" loading="lazy" alt="" />
+            <img v-for="f in frames" :key="f" :src="mediaURL(detail.libMediaId ?? detail.refId!, f)" loading="lazy" alt="" />
           </div>
           <p v-else class="degrade">抽帧文件缺失。</p>
-          <video v-if="hasVideo" class="ref-video" :src="referenceMediaURL(detail.refId, 'video.mp4')"
+          <video v-if="hasVideo" class="ref-video" :src="mediaURL(detail.libMediaId ?? detail.refId!, 'video.mp4')"
             controls preload="none" />
         </section>
 

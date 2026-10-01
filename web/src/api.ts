@@ -133,6 +133,10 @@ export const api = {
   publishPack: (id: string) =>
     authFetch(`/api/library/${id}/publish`, { method: 'POST' }).then(r => j<Style>(r)),
 
+  // 风格媒体（视频解析入库的原片+抽帧快照；老条目服务端自动回退 references 目录）
+  libraryFrames: (id: string) =>
+    authFetch(`/api/library/${id}/frames`).then(r => j<{ frames: string[]; has_video: boolean }>(r)),
+
   // ── 参考视频解析 ──
   uploadReference: (file: File) => {
     const fd = new FormData()
@@ -154,3 +158,5 @@ export const videoURL = (id: string, rev = 0) => withToken(`/api/projects/${id}/
 export const assetURL = (id: string, p: string) => withToken(`/api/projects/${id}/assets/${p}`)
 // 参考引用媒体（抽帧 frame-*.png / 原视频 video.mp4；详情抽屉用）
 export const referenceMediaURL = (id: string, file: string) => withToken(`/api/references/${id}/media/${file}`)
+// 风格库媒体（入库快照；详情抽屉用）
+export const libraryMediaURL = (id: string, file: string) => withToken(`/api/library/${id}/media/${file}`)

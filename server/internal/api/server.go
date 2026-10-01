@@ -77,6 +77,8 @@ func (s *Server) Router() *gin.Engine {
 	api.GET("/projects/:id/frames/:seg", s.frame)
 	api.GET("/projects/:id/assets/*filepath", s.asset)
 	api.GET("/library", s.listLibrary)
+	api.GET("/library/:id/frames", s.libraryFrames)
+	api.GET("/library/:id/media/:file", s.libraryMedia)
 	api.POST("/library/:id/publish", s.publishPack)
 	api.POST("/references", s.uploadReference)
 	api.GET("/references", s.listReferences)
@@ -1017,6 +1019,11 @@ func (s *Server) confirmReference(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
+	// 原片+抽帧快照进风格目录：参考视频库删除后风格详情仍可回看（失败不挡入库，
+	// 详情抽屉对老条目/缺快照自动回退 references 目录）
+	if serr := s.Lib.SnapshotMedia(st.ID, filepath.Join(s.DataDir, "references", ref.ID)); serr != nil {
+		c.Header("X-Media-Snapshot", "failed")
+	}
 	if err := s.Refs.MarkConfirmed(ref.ID); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -1053,6 +1060,94 @@ func (s *Server) referenceFrames(c *gin.Context) {
 		}
 	}
 	c.JSON(200, gin.H{"frames": frames, "has_video": hasVideo})
+}
+
+// styleMediaResolve 风格媒体定位：快照目录（style_media/<id>）优先，
+// 缺文件回退参考视频目录（origin_project="video:<refID>" 的老条目）。
+// 返回 (文件路径, ok)；ok=false 时调用方回 404。
+func (s *Server) styleMediaResolve(styleID, name string) (string, bool) {
+	if !isSlug(styleID) {
+		return "", false
+	}
+	allowed := isPngName(name) && strings.HasPrefix(name, "frame-")
+	allowed = allowed || name == "video.mp4"
+	if !allowed {
+		return "", false
+	}
+	if p := filepath.Join(s.Lib.MediaDir(styleID), name); fileExists(p) {
+		return p, true
+	}
+	st, ok := s.Lib.Get(styleID)
+	if !ok || !strings.HasPrefix(st.OriginProject, "video:") {
+		return "", false
+	}
+	refID := strings.TrimPrefix(st.OriginProject, "video:")
+	p := filepath.Join(s.DataDir, "references", refID, name)
+	return p, fileExists(p)
+}
+
+// libraryFrames 风格媒体抽帧清单：快照目录（style_media/<id>）优先，
+// 空（老条目/快照失败）回退 origin 指向的参考视频目录。
+func (s *Server) libraryFrames(c *gin.Context) {
+	id := c.Param("id")
+	if !isSlug(id) {
+		c.JSON(400, gin.H{"error": "非法路径"})
+		return
+	}
+	scan := func(dir string) (frames []string, hasVideo bool) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, false
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			switch name := e.Name(); {
+			case isPngName(name) && strings.HasPrefix(name, "frame-"):
+				frames = append(frames, name)
+			case name == "video.mp4":
+				hasVideo = true
+			}
+		}
+		return frames, hasVideo
+	}
+	frames, hasVideo := scan(s.Lib.MediaDir(id))
+	if len(frames) == 0 { // 抽帧缺失就回退（快照只带 video 时也要能列出参考抽帧）
+		if st, ok := s.Lib.Get(id); ok && strings.HasPrefix(st.OriginProject, "video:") {
+			frames2, hv2 := scan(filepath.Join(s.DataDir, "references", strings.TrimPrefix(st.OriginProject, "video:")))
+			frames = frames2
+			if !hasVideo {
+				hasVideo = hv2
+			}
+		}
+	}
+	if frames == nil {
+		frames = []string{}
+	}
+	c.JSON(200, gin.H{"frames": frames, "has_video": hasVideo})
+}
+
+// libraryMedia 风格媒体本体（路径只出自快照/参考目录拼装，无遍历面）。
+func (s *Server) libraryMedia(c *gin.Context) {
+	p, ok := s.styleMediaResolve(c.Param("id"), c.Param("file"))
+	if !ok {
+		c.JSON(404, gin.H{"error": "文件不存在"})
+		return
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		c.JSON(404, gin.H{"error": "文件不存在"})
+		return
+	}
+	defer f.Close()
+	c.Header("Cache-Control", "max-age=3600")
+	http.ServeContent(c.Writer, c.Request, filepath.Base(p), time.Now(), f)
+}
+
+func fileExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
 }
 
 // referenceMedia 参考引用媒体文件（抽帧 png / 原视频 mp4，白名单文件名防目录穿越）。
