@@ -44,6 +44,15 @@ function subline(s: Style): string {
   const kw = (s.keywords ?? []).slice(0, 3).join(' · ')
   return [s.genre, kw].filter(Boolean).join('　')
 }
+
+// 无样张条目（纯注册表/老包）的封面回退：tokens 渐变打底 + 风格名，避免空白卡面
+function coverStyle(s: Style): string {
+  const bg = (s.tokens?.bg as { from?: string; to?: string; angle?: number } | undefined) ?? null
+  const from = bg?.from || (typeof s.tokens?.bg === 'string' ? (s.tokens?.bg as string) : '') || '#1a1a22'
+  const to = bg?.to || from
+  const ang = bg?.angle ?? 135
+  return `background: linear-gradient(${ang}deg, ${from}, ${to})`
+}
 </script>
 
 <template>
@@ -57,7 +66,10 @@ function subline(s: Style): string {
     </div>
     <div v-else class="grid">
       <figure v-for="s in packs" :key="s.id" class="card" :class="{ draft: !s.published }" @click="open(s)">
-        <SampleFrame :html="s.samples?.[0]?.html ?? ''" />
+        <SampleFrame v-if="s.samples?.[0]?.html" :html="s.samples![0].html" />
+        <div v-else class="cover" :style="coverStyle(s)">
+          <b>{{ s.name }}</b>
+        </div>
         <figcaption>
           <div class="row1">
             <b>{{ s.name }}</b>
@@ -106,4 +118,8 @@ figcaption { padding: 10px 12px 12px; display: flex; flex-direction: column; gap
 .meta { display: flex; gap: 6px; flex-wrap: wrap; }
 .row2 { display: flex; align-items: center; justify-content: space-between; }
 .origin { font-size: 11px; color: #55555f; font-family: monospace; }
+.cover {
+  height: 169px; display: grid; place-items: center; padding: 0 18px; text-align: center;
+}
+.cover b { color: #fff; font-size: 16px; letter-spacing: 1px; text-shadow: 0 1px 6px rgba(0,0,0,.45); }
 </style>

@@ -76,8 +76,8 @@ func TestScanManifest(t *testing.T) {
 func TestScanManifestRunning(t *testing.T) {
 	now := time.Now()
 	lines := []string{
-		`{"event":"produce.start","detail":"","ts":"` + now.Add(-90 * time.Second).Format(time.RFC3339) + `"}`,
-		`{"event":"stage.start","detail":"render","ts":"` + now.Add(-40 * time.Second).Format(time.RFC3339) + `"}`,
+		`{"event":"produce.start","detail":"","ts":"` + now.Add(-90*time.Second).Format(time.RFC3339) + `"}`,
+		`{"event":"stage.start","detail":"render","ts":"` + now.Add(-40*time.Second).Format(time.RFC3339) + `"}`,
 	}
 	_, run, durations, _ := scanManifest([]byte(joinLines(lines)))
 	if run == nil || run.State != "running" {

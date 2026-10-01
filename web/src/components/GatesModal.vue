@@ -79,6 +79,15 @@ const sb = ref<Storyboard | null>(null)
 
 // ── 风格 ─────────────────────────────────────────────
 const packs = ref<Style[]>([])
+
+// 无样张条目的封面回退：tokens 渐变打底（与风格库卡片同款）
+function coverStyle(s: Style): string {
+  const bg = (s.tokens?.bg as { from?: string; to?: string; angle?: number } | string | undefined) ?? null
+  const from = typeof bg === 'string' ? bg : bg?.from || '#1a1a22'
+  const to = typeof bg === 'string' ? bg : bg?.to || from
+  const ang = typeof bg === 'object' && bg ? (bg.angle ?? 135) : 135
+  return `background: linear-gradient(${ang}deg, ${from}, ${to})`
+}
 const picked = ref('')
 const applying = ref(false)
 const direction = ref('')
@@ -190,7 +199,8 @@ watch(() => props.gate, async g => {
           v-for="p in packs" :key="p.id" type="button"
           class="style-card" :class="{ on: picked === p.id }" @click="picked = p.id"
         >
-          <SampleFrame :html="p.samples?.[0]?.html ?? ''" />
+          <SampleFrame v-if="p.samples?.[0]?.html" :html="p.samples![0].html" />
+          <div v-else class="cover" :style="coverStyle(p)"><b>{{ p.name }}</b></div>
           <div class="meta">
             <b>{{ p.name }}</b>
             <span>{{ p.genre || p.direction }}</span>
@@ -272,4 +282,6 @@ watch(() => props.gate, async g => {
   font-size: 10.5px; color: #6f6f7c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .style-card.on .meta b { color: #f0c674; }
+.cover { height: 100%; min-height: 96px; display: grid; place-items: center; padding: 0 12px; }
+.cover b { color: #fff; font-size: 14px; text-align: center; text-shadow: 0 1px 6px rgba(0,0,0,.45); }
 </style>

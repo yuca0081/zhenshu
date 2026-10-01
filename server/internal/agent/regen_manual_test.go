@@ -11,8 +11,9 @@ import (
 )
 
 // 手工端到端验证（打真实 LLM，平时跳过）：
-// REGEN_PROJ=p20260926-140432 REGEN_INSTRUCTION="更暖色调，加猫爪猫耳Q版点缀" \
-//   go test ./internal/agent -run TestManualStyleRegen -v
+//
+//	REGEN_PROJ=p20260926-140432 REGEN_INSTRUCTION="更暖色调，加猫爪猫耳Q版点缀" \
+//	  go test ./internal/agent -run TestManualStyleRegen -v
 func TestManualStyleRegen(t *testing.T) {
 	projID := os.Getenv("REGEN_PROJ")
 	if projID == "" {

@@ -220,8 +220,8 @@ func (a *Agent) regenerateStyle(p *pipeline.Project, instruction, out string) st
 	for i := 0; i < 3; i++ { // 截图缓存一并清掉，防 produce 把旧图配新样张
 		_ = os.Remove(p.Artifact(fmt.Sprintf("style/sample-%d.png", i)))
 	}
-	_ = os.Remove(p.Artifact("style/skin.json"))   // 旧皮肤随旧样张作废，确认新样张时重落
-	_ = os.Remove(p.Artifact("style/design.md"))   // 旧设计系统文档同样作废（确认新样张时机械重渲）
+	_ = os.Remove(p.Artifact("style/skin.json")) // 旧皮肤随旧样张作废，确认新样张时重落
+	_ = os.Remove(p.Artifact("style/design.md")) // 旧设计系统文档同样作废（确认新样张时机械重渲）
 	notes := "原风格方向：" + prevDir + "\n用户修改要求：" + instruction
 	if err := os.MkdirAll(filepath.Dir(p.Artifact("input/style_notes.txt")), 0o755); err != nil {
 		return restore(err)
