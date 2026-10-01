@@ -5,11 +5,10 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -19,7 +18,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/go-shiori/go-readability"
 
 	"webpage-video-agent/server/internal/agent"
 	"webpage-video-agent/server/internal/contract"
@@ -30,6 +28,7 @@ import (
 	"webpage-video-agent/server/internal/store"
 	"webpage-video-agent/server/internal/stylelib"
 	"webpage-video-agent/server/internal/styleref"
+	"webpage-video-agent/server/internal/webfetch"
 )
 
 type Server struct {
@@ -721,78 +720,23 @@ func (s *Server) extractLink(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "链接不能为空"})
 		return
 	}
-	u, err := url.Parse(strings.TrimSpace(in.URL))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		c.JSON(400, gin.H{"error": "只支持 http/https 链接"})
-		return
-	}
-	if badHost(u.Hostname()) {
-		c.JSON(400, gin.H{"error": "不允许的地址"})
-		return
-	}
-	client := &http.Client{
-		Timeout: 20 * time.Second,
-		// 逐跳校验重定向目标：默认客户端会跟满 10 跳且不复查，公网 302 → 127.0.0.1 即绕过
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 3 {
-				return fmt.Errorf("重定向过多")
-			}
-			if badHost(req.URL.Hostname()) {
-				return fmt.Errorf("重定向到不允许的地址")
-			}
-			return nil
-		},
-	}
-	req, _ := http.NewRequestWithContext(c.Request.Context(), "GET", u.String(), nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ZhenshuBot/1.0; +link-import)")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml")
-	resp, err := client.Do(req)
+	art, err := webfetch.Fetch(c.Request.Context(), in.URL)
 	if err != nil {
-		c.JSON(502, gin.H{"error": "抓取失败：" + err.Error()})
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		c.JSON(502, gin.H{"error": fmt.Sprintf("目标站返回 %d", resp.StatusCode)})
-		return
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		c.JSON(502, gin.H{"error": "读取失败：" + err.Error()})
-		return
-	}
-	art, err := readability.FromReader(strings.NewReader(string(body)), u)
-	if err != nil {
-		c.JSON(422, gin.H{"error": "正文提取失败（该页面可能不是文章页），请直接粘贴"})
-		return
-	}
-	content := strings.TrimSpace(art.TextContent)
-	if len([]rune(content)) < 100 {
-		c.JSON(422, gin.H{"error": "提取到的正文太短（可能不是文章页），请直接粘贴"})
-		return
-	}
-	c.JSON(200, gin.H{"title": strings.TrimSpace(art.Title), "content": content, "words": len([]rune(content))})
-}
-
-// badHost SSRF 防线：字面量检查 + DNS 解析复核。只查字面量拦不住自建域名 A 记录指向
-// 内网（云 metadata 169.254.169.254 / host 网络下的宿主回环服务）——必须解析后再验。
-func badHost(host string) bool {
-	if host == "" || strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
-	}
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return true // 解析失败一律拒绝（防靠 NXDOMAIN 行为差异绕过）
-	}
-	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
-			return true
+		code := 502
+		switch {
+		case errors.Is(err, webfetch.ErrBadURL):
+			code = 400
+		case errors.Is(err, webfetch.ErrUnreadable):
+			code = 422
 		}
+		msg := err.Error()
+		if code == 422 {
+			msg += "，请直接粘贴"
+		}
+		c.JSON(code, gin.H{"error": msg})
+		return
 	}
-	return false
+	c.JSON(200, gin.H{"title": art.Title, "content": art.Content, "words": art.Words})
 }
 
 // audioMeta 时间轴数据源：每段配音时长 + 字级时间戳（TTS 对齐产物），供前端画字幕/音频轨。

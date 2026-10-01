@@ -21,6 +21,7 @@ import (
 	"webpage-video-agent/server/internal/produce"
 	"webpage-video-agent/server/internal/store"
 	"webpage-video-agent/server/internal/stylelib"
+	"webpage-video-agent/server/internal/webfetch"
 )
 
 type Producer interface {
@@ -673,7 +674,7 @@ var tools = []tool{
 		},
 	},
 	{
-		def: toolDef("web_search", "联网搜索实时资料（新闻/版本号/价格/数据等模型知识截止后的信息，或核实文稿事实）。写实元素（人物/产品/地标/新闻实物）的画面调研先搜再定。额度有限（套餐月约 200 次），必要才调，一次到位", map[string]any{
+		def: toolDef("web_search", "联网搜索实时资料（新闻/版本号/价格/数据等模型知识截止后的信息，或核实文稿事实）。写实元素（人物/产品/地标/新闻实物）的画面调研先搜再定。额度有限（套餐月约 200 次），必要才调，一次到位；要细读某条结果用 fetch_url（免费）", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"query":    map[string]any{"type": "string", "description": "搜索词，≤70 字，关键词组效果最好"},
@@ -719,6 +720,33 @@ var tools = []tool{
 				fmt.Fprintf(&b, "%d. %s%s\n%s\n%s\n", i+1, r.Title, meta, r.Content, r.Link)
 			}
 			return b.String()
+		},
+	},
+	{
+		def: toolDef("fetch_url", "读取一个网页的正文（纯文本，免费不占搜索额度）。用户贴了链接想让你看内容、或 web_search 结果里有要细看的条目时用它。只抓静态页面（文章/文档/博客/wiki），不执行 JS，重前端页面会读不到正文", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"url": map[string]any{"type": "string", "description": "要读取的网页地址（http/https）"},
+			},
+			"required": []string{"url"},
+		}),
+		gate: noGate,
+		run: func(a *Agent, p *pipeline.Project, args string) string {
+			var in struct {
+				URL string `json:"url"`
+			}
+			_ = json.Unmarshal([]byte(args), &in)
+			u := strings.TrimSpace(in.URL)
+			if u == "" {
+				return "缺少 url"
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			art, err := webfetch.Fetch(ctx, u)
+			if err != nil {
+				return "网页读取失败：" + err.Error()
+			}
+			return formatArticle(art)
 		},
 	},
 	{
@@ -973,6 +1001,20 @@ var tools = []tool{
 	},
 }
 
+// formatArticle 网页正文整理成回喂文本：超长截断，防一次读取撑爆上下文。
+func formatArticle(art *webfetch.Article) string {
+	head := ""
+	if art.Title != "" {
+		head = "《" + art.Title + "》\n"
+	}
+	const maxRunes = 15000
+	content := []rune(art.Content)
+	if len(content) > maxRunes {
+		return fmt.Sprintf("已读取网页（共 %d 字）：\n%s%s\n\n（正文过长，只保留前 %d 字）", art.Words, head, string(content[:maxRunes]), maxRunes)
+	}
+	return fmt.Sprintf("已读取网页（%d 字）：\n%s%s", art.Words, head, art.Content)
+}
+
 func toolDef(name, desc string, params map[string]any) openai.Tool {
 	if params == nil {
 		params = map[string]any{"type": "object", "properties": map[string]any{}}
@@ -1017,6 +1059,7 @@ func (a *Agent) systemPrompt(id string, s State) string {
 - 默认自主连贯：能做的直接做（出分镜→出样张→自检一路做下去），到用户门（风格确认）停下说清楚等什么。
 - 涉及时效性事实（新闻/版本/价格/数据）先用 web_search 核实再写进文稿/分镜；搜索不可用就说明信息可能过时，别编。
 - web_search 消耗套餐月度额度（每月仅约 200 次，与其他 MCP 共享）——非必要不搜：一轮对话合并成尽量少的精准查询；空结果最多换个词再试一次，仍空就如实说并标明信息可能过时，不连环重试。
+- 用户贴了链接、或要细读某条搜索结果时用 fetch_url 抓网页正文——它免费不占额度，能用它就别为看内容再搜一次；读不到正文就如实说，让用户直接粘贴。
 - 工具被拒就换路或向用户解释，不重复硬试；每轮最多 %d 步。
 - 回复短：一段话讲清做了什么、下一步是什么，不堆术语、不复述参数。`, s.Name, id, s.summary(), id, maxSteps)
 }
