@@ -1,17 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { dateOf, statusLabel } from '../format'
 import type { ProjectRow } from '../types'
 
 // 首页：品牌落地 + 快速开始（新建/继续最近项目/逛风格库）
 const props = defineProps<{ projects: ProjectRow[] }>()
 const emit = defineEmits<{ new: []; open: [id: string]; materials: [] }>()
 
-const statusLabel: Record<string, string> = {
-  created: '已创建', manuscript: '有文稿', storyboard: '有分镜', style: '风格定',
-  producing: '制作中', video: '有成片',
-}
 const recent = computed(() => props.projects.slice(0, 6))
-const dateOf = (iso: string) => (iso ?? '').slice(5, 10).replace('-', '/')
 </script>
 
 <template>

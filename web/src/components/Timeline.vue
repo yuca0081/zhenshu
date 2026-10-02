@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AudioMeta, Storyboard } from '../types'
-import { segTable } from '../segtime'
+import { segTable, type SegCol } from '../segtime'
 
 // 多轨时间轴：标尺（可点/拖擦洗）+ 分镜/字幕/配音三轨 + 播放头。
 // 数据：分镜 duration_hint；有 audio_meta 时用真实配音时长（+0.35 尾垫，与 MP4 拼接口径一致）
@@ -20,7 +20,6 @@ const emit = defineEmits<{ seek: [t: number]; pick: [idx: number, key: string]; 
 const PUNCT = '，。！？；、：,.!?;:…—·'
 const hasPunct = (s: string) => [...s].some(ch => PUNCT.includes(ch))
 
-interface SegCol { idx: number; segId: string; key: string; dur: number; start: number }
 interface Phrase { idx: number; key: string; start: number; dur: number; text: string }
 
 const segs = computed<SegCol[]>(() => segTable(props.storyboard, props.audioMeta))

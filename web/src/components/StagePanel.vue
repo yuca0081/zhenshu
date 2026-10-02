@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { NButton, NInput, NModal, NScrollbar, NSpin, NTag } from 'naive-ui'
-import type { AudioMeta, ChatRef, ProjectView, Storyboard, StyleSamples } from '../types'
+import { useMessage, NButton, NInput, NModal, NScrollbar, NSpin, NTag } from 'naive-ui'
+import type { AudioMeta, ChatRef, Manuscript, ProjectView, Storyboard, StyleSamples } from '../types'
 import { fmtClock, segAt, segTable } from '../segtime'
 import { api, videoURL } from '../api'
 import Timeline from './Timeline.vue'
@@ -12,7 +12,7 @@ const props = defineProps<{
   view: ProjectView | null
   storyboard: Storyboard | null
   styleSamples: StyleSamples | null
-  manuscript: { content: string; word_count: number } | null
+  manuscript: Manuscript | null
   stageSummary: { key: string; state: string }[] | null
   videoId: string
   audioMeta: AudioMeta | null
@@ -65,6 +65,8 @@ const skinChips = computed(() => {
 })
 
 const segsT = computed(() => segTable(props.storyboard, props.audioMeta))
+// tts 显示「配音不动」：重做/复用链路跳过配音，后续阶段已有动静时 tts 恒 pending
+const ttsIdle = computed(() => !!props.stageSummary?.some(x => x.state !== 'pending'))
 const inspectCol = computed(() => segsT.value.find(s => s.segId === inspectSegId.value) ?? null)
 const inspectLocalT = computed(() => {
   const c = inspectCol.value
@@ -118,6 +120,7 @@ watch(() => props.videoRev, () => {
 const reworkShow = ref(false)
 const reworkInstr = ref('')
 const reworkBusy = ref(false)
+const message = useMessage()
 async function openRework() {
   reworkInstr.value = ''
   if (inspectSegId.value) {
@@ -134,7 +137,7 @@ async function confirmRework() {
     reworkShow.value = false
     emit('rework-started') // REST 直连不经 agent：让 App 重拉 view（producing 态/停止按钮）
   } catch (e) {
-    alert((e as Error).message)
+    message.error((e as Error).message)
   } finally {
     reworkBusy.value = false
   }
@@ -221,9 +224,9 @@ async function confirmRework() {
         <div v-if="stageSummary" class="rework-strip">
           <div
             v-for="st in stageSummary" :key="st.key" class="pstage"
-            :data-state="st.state" :data-skip="st.key === 'tts' && st.state === 'pending' && stageSummary.some(x => x.state !== 'pending')"
+            :data-state="st.state" :data-skip="st.key === 'tts' && st.state === 'pending' && ttsIdle"
           >
-            <span class="dot" />{{ st.key === 'tts' && st.state === 'pending' && stageSummary.some(x => x.state !== 'pending') ? '配音不动' : stageName[st.key] ?? st.key }}
+            <span class="dot" />{{ st.key === 'tts' && st.state === 'pending' && ttsIdle ? '配音不动' : stageName[st.key] ?? st.key }}
           </div>
           <span class="rework-hint">段级重做中</span>
           <button v-if="view.producing" class="stop-btn" @click="emit('cancel')">■ 停止</button>

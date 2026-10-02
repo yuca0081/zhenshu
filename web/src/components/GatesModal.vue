@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { NButton, NInput, NModal, NRadioButton, NRadioGroup, NSelect } from 'naive-ui'
+import { NButton, NInput, NModal, NSelect } from 'naive-ui'
 import { api } from '../api'
+import { coverStyle } from '../format'
 import SampleFrame from './SampleFrame.vue'
 import type { ProjectView, Storyboard, Style } from '../types'
 
@@ -80,14 +81,6 @@ const sb = ref<Storyboard | null>(null)
 // ── 风格 ─────────────────────────────────────────────
 const packs = ref<Style[]>([])
 
-// 无样张条目的封面回退：tokens 渐变打底（与风格库卡片同款）
-function coverStyle(s: Style): string {
-  const bg = (s.tokens?.bg as { from?: string; to?: string; angle?: number } | string | undefined) ?? null
-  const from = typeof bg === 'string' ? bg : bg?.from || '#1a1a22'
-  const to = typeof bg === 'string' ? bg : bg?.to || from
-  const ang = typeof bg === 'object' && bg ? (bg.angle ?? 135) : 135
-  return `background: linear-gradient(${ang}deg, ${from}, ${to})`
-}
 const picked = ref('')
 const applying = ref(false)
 const direction = ref('')
@@ -140,7 +133,7 @@ watch(() => props.gate, async g => {
 
 <template>
   <NModal
-    :show="!!gate" preset="card" :title="title" class="gm-modal"
+    :show="!!gate" preset="card" :title="title" class="app-modal gm-modal"
     @update:show="(v: boolean) => { if (!v) emit('close') }"
   >
     <!-- 文稿：编辑 + AI 起草 -->
@@ -229,18 +222,9 @@ watch(() => props.gate, async g => {
 </template>
 
 <style>
-.gm-modal {
-  width: 680px; background: #14141a; border: 1px solid #26262e; border-radius: 14px;
-  --n-padding-left: 22px; --n-padding-right: 22px; --n-padding-top: 20px; --n-padding-bottom: 20px;
-}
-.gm-modal .n-card-header { padding: 18px 22px 0; }
-.gm-modal .n-card-header__main { font-weight: 700; letter-spacing: 2px; color: #f0c674; font-size: 15px; }
-.gm-modal .n-card__content { padding: 14px 22px 20px; max-height: 72vh; overflow: auto; }
-.gm-modal .n-base-close { color: #7c7c88; top: 16px; right: 16px; }
-.gm-modal .n-base-close:hover { color: #e6e6ea; }
-.gm-modal .n-input { background: #101016; border: 1px solid #232329; border-radius: 10px; }
-.gm-modal .n-input:hover { border-color: #3a3a45; }
-.gm-modal .n-input--focus { border-color: rgba(240, 198, 116, .55); }
+/* 通用皮在 App.vue 的 .app-modal；此处只留三前置弹窗的尺寸差异 */
+.gm-modal { width: 680px; }
+.gm-modal .n-card__content { max-height: 72vh; overflow: auto; }
 </style>
 
 <style scoped>

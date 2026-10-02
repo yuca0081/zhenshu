@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
-import { NButton, NInput, NScrollbar, NSpin } from 'naive-ui'
+import { useMessage, NButton, NInput, NScrollbar, NSpin } from 'naive-ui'
 import { api } from '../api'
 import { fmtClock } from '../segtime'
 import type { ChatRef, Msg, ProjectView } from '../types'
@@ -9,7 +9,7 @@ const props = defineProps<{ projectId: string; msgs: Msg[]; busy: boolean; refs:
 const draft = defineModel<string>('draft')
 const emit = defineEmits<{ sent: []; 'remove-ref': [ref: ChatRef]; 'clear-refs': []; 'open-gate': [g: 'manuscript' | 'storyboard' | 'style'] }>()
 
-const inputRef = ref<InstanceType<typeof NInput> | null>(null)
+const message = useMessage()
 const listRef = ref<InstanceType<typeof NScrollbar> | null>(null)
 
 async function send() {
@@ -20,7 +20,7 @@ async function send() {
   try {
     await api.chat(props.projectId, text, props.refs)
   } catch (e) {
-    alert(`发送失败：${e instanceof Error ? e.message : e}\n内容仍保留在输入框`)
+    message.error(`发送失败：${e instanceof Error ? e.message : e}（内容仍保留在输入框）`)
     return
   }
   draft.value = ''
@@ -94,7 +94,7 @@ const refKey = (r: ChatRef) => r.elementId ?? (r.t != null ? `s${r.idx}t${r.t}` 
     </div>
     <div class="input">
       <NInput
-        ref="inputRef" v-model:value="draft" type="textarea" :rows="3" :maxlength="4000"
+        v-model:value="draft" type="textarea" :rows="3" :maxlength="4000"
         placeholder="对话或下指令（Enter 发送）｜Ctrl+点时间轴加引用"
         @keydown.enter.exact.prevent="send"
       />

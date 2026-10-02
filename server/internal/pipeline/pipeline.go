@@ -58,9 +58,11 @@ func NewProject(dataDir, id string) *Project {
 	return &Project{ID: id, Dir: filepath.Join(dataDir, "projects", id)}
 }
 
-func (p *Project) Artifact(rel string) string     { return filepath.Join(p.Dir, rel) }
-func (p *Project) LLMRequest(name string) string  { return filepath.Join(p.Dir, "llm", name+".request.md") }
-func (p *Project) LLMOutput(name string) string   { return filepath.Join(p.Dir, "llm", name+".json") }
+func (p *Project) Artifact(rel string) string { return filepath.Join(p.Dir, rel) }
+func (p *Project) LLMRequest(name string) string {
+	return filepath.Join(p.Dir, "llm", name+".request.md")
+}
+func (p *Project) LLMOutput(name string) string { return filepath.Join(p.Dir, "llm", name+".json") }
 func (p *Project) LoadStoryboard() (*contract.Storyboard, error) {
 	b, err := os.ReadFile(p.Artifact("storyboards/storyboard.json"))
 	if err != nil {
@@ -999,7 +1001,7 @@ func bgmFor(p *Project) (name, file string) {
 }
 
 // mixBGM 人声母版 + 循环 BGM（-stream_loop 无限铺底）→ sidechain 闪避
-//（音乐听人声的话自动压低）→ amix（不归一化，人声原样；sfx 垫同入终混）。
+// （音乐听人声的话自动压低）→ amix（不归一化，人声原样；sfx 垫同入终混）。
 // 视频流直拷。母版永不改动，产物写临时文件后原子转正——重复执行无二次混音风险。
 func mixBGM(p *Project, voice, track, sfx, out string) error {
 	fade := ""
@@ -1136,17 +1138,7 @@ func styleBool(styleID, key string) bool {
 // on/off 都显式落值：风格默认开的片子也能被项目级 false 压掉（与 post:false 同语义）。
 // TransitionSFXOn 供 agent 查询当前状态（含风格默认）。
 func SetTransitionSFX(p *Project, on bool) error {
-	b, err := os.ReadFile(p.Artifact("project.json"))
-	if err != nil {
-		return err
-	}
-	var meta map[string]any
-	if err := json.Unmarshal(b, &meta); err != nil {
-		return fmt.Errorf("project.json 解析失败: %w", err)
-	}
-	meta["transition_sfx"] = on
-	nb, _ := json.MarshalIndent(meta, "", "  ")
-	return WriteFileAtomic(p.Artifact("project.json"), nb, 0o644)
+	return SetProjectField(p, "transition_sfx", on)
 }
 
 // TransitionSFXOn agent 查询转场音效当前状态（含风格默认）。
@@ -1370,7 +1362,7 @@ func stylePost(styleID string) *postFX {
 }
 
 // videoChain 后期视频滤镜链（空 = 无滤镜）。顺序：色差 → 暗角 → 颗粒
-//（镜头色散在最前、感光颗粒在最后，贴近物理成像次序）。
+// （镜头色散在最前、感光颗粒在最后，贴近物理成像次序）。
 func (fx *postFX) videoChain() string {
 	if fx.off() {
 		return ""
@@ -1381,7 +1373,7 @@ func (fx *postFX) videoChain() string {
 		parts = append(parts, fmt.Sprintf("rgbashift=rh=-%d:bh=%d", r, r))
 	}
 	if fx.Vignette > 0 && hasFFmpegFilter("vignette") {
-		s := math.Min(math.Max(fx.Vignette, 0), 0.92)      // 钳制：angle ≤ PI/3.2，防黑边
+		s := math.Min(math.Max(fx.Vignette, 0), 0.92) // 钳制：angle ≤ PI/3.2，防黑边
 		parts = append(parts, fmt.Sprintf("vignette=angle=%.4f", math.Pi/(5.5-2.5*s)))
 	}
 	if fx.Grain > 0 && hasFFmpegFilter("noise") {
@@ -1590,62 +1582,26 @@ func SetBGM(p *Project, track string) error {
 			return fmt.Errorf("曲名 %q 不在曲库（可用：%s）", want, ListBGM())
 		}
 	}
-	b, err := os.ReadFile(p.Artifact("project.json"))
-	if err != nil {
-		return err
-	}
-	var meta map[string]any
-	if err := json.Unmarshal(b, &meta); err != nil {
-		return fmt.Errorf("project.json 解析失败: %w", err)
-	}
 	if want == "" || strings.EqualFold(want, "off") {
-		delete(meta, "bgm")
-	} else {
-		meta["bgm"] = strings.ToLower(want)
+		return SetProjectField(p, "bgm", nil)
 	}
-	nb, _ := json.MarshalIndent(meta, "", "  ")
-	return WriteFileAtomic(p.Artifact("project.json"), nb, 0o644)
+	return SetProjectField(p, "bgm", strings.ToLower(want))
 }
 
 // SetBiSubtitle 双语字幕开关（M-C）：project.json bi_subtitle=true 开启。
 // 翻译在制作流程 1.5 步（TTS 后）幂等补做，字幕渲染在段帧——开关后需整片重制。
 func SetBiSubtitle(p *Project, on bool) error {
-	b, err := os.ReadFile(p.Artifact("project.json"))
-	if err != nil {
-		return err
-	}
-	var meta map[string]any
-	if err := json.Unmarshal(b, &meta); err != nil {
-		return fmt.Errorf("project.json 解析失败: %w", err)
-	}
-	if on {
-		meta["bi_subtitle"] = true
-	} else {
-		delete(meta, "bi_subtitle")
-	}
-	nb, _ := json.MarshalIndent(meta, "", "  ")
-	return WriteFileAtomic(p.Artifact("project.json"), nb, 0o644)
+	return SetProjectField(p, "bi_subtitle", on)
 }
 
 // SetVoice 写 project.json 的 voice 字段（旁白音色，Edge TTS 音色 id；空串清除回落默认）。
 // 音色变化时 tts_align.py 检测 audio_meta.json 的 voice 字段不符会全量重配音。
 func SetVoice(p *Project, voice string) error {
 	want := strings.TrimSpace(voice)
-	b, err := os.ReadFile(p.Artifact("project.json"))
-	if err != nil {
-		return err
-	}
-	var meta map[string]any
-	if err := json.Unmarshal(b, &meta); err != nil {
-		return fmt.Errorf("project.json 解析失败: %w", err)
-	}
 	if want == "" {
-		delete(meta, "voice")
-	} else {
-		meta["voice"] = want
+		return SetProjectField(p, "voice", nil)
 	}
-	nb, _ := json.MarshalIndent(meta, "", "  ")
-	return WriteFileAtomic(p.Artifact("project.json"), nb, 0o644)
+	return SetProjectField(p, "voice", want)
 }
 
 // extraPATH 额外 PATH（如 winget 安装的 FFmpeg bin），由宿主进程注入。
@@ -1757,6 +1713,33 @@ func mustJSON(v any) string {
 
 // MustJSON 供 produce 包复用（双语字幕翻译的输入序列化）。
 func MustJSON(v any) string { return mustJSON(v) }
+
+func mustJSONBytes(v any) []byte {
+	b, _ := json.MarshalIndent(v, "", "  ")
+	return b
+}
+
+// MustJSONBytes 供 agent/api 复用（此前两包各持一份同义 mustJSON）。
+func MustJSONBytes(v any) []byte { return mustJSONBytes(v) }
+
+// SetProjectField 写 project.json 单字段（val=nil 删除该键），读-改-原子写。
+// BGM/音色/字幕/sfx 开关与状态回写共用——此前同一样板在三个包手抄了七份。
+func SetProjectField(p *Project, key string, val any) error {
+	b, err := os.ReadFile(p.Artifact("project.json"))
+	if err != nil {
+		return err
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(b, &meta); err != nil {
+		return fmt.Errorf("project.json 解析失败: %w", err)
+	}
+	if val == nil {
+		delete(meta, key)
+	} else {
+		meta[key] = val
+	}
+	return WriteFileAtomic(p.Artifact("project.json"), mustJSONBytes(meta), 0o644)
+}
 
 // ── LLM 请求模板（prompt 库 v0 · 会话模式即产物契约）─────────────
 

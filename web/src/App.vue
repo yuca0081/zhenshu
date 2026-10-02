@@ -11,17 +11,21 @@ import NewProjectModal from './components/NewProjectModal.vue'
 import MaterialCenter from './components/MaterialCenter.vue'
 import HomeView from './components/HomeView.vue'
 import { api, sseURL, videoURL } from './api'
-import type { AudioMeta, ChatRef, Msg, ProjectRow, ProjectView, Storyboard, Style, StyleSamples } from './types'
+import type { AudioMeta, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, Storyboard, Style, StyleSamples } from './types'
 import { segAt, segTable } from './segtime'
 
 const projects = ref<ProjectRow[]>([])
 const current = ref<string>('')
 // 三页导航：首页（落地+快速开始）/ 工作区（项目三栏）/ 风格库（风格+视频解析）
-const page = ref<'home' | 'workspace' | 'materials'>('home')
+type PageID = 'home' | 'workspace' | 'materials'
+const tabs = [
+  { id: 'home', label: '首页' }, { id: 'workspace', label: '工作区' }, { id: 'materials', label: '风格库' },
+] as const
+const page = ref<PageID>('home')
 const view = ref<ProjectView | null>(null)
 const storyboard = ref<Storyboard | null>(null)
 const style = ref<StyleSamples | null>(null)
-const manuscript = ref<{ content: string; word_count: number } | null>(null)
+const manuscript = ref<Manuscript | null>(null)
 const msgs = ref<Msg[]>([])
 const chatDraft = ref('')
 const chatRefs = ref<ChatRef[]>([]) // 引用列表（时间轴/分镜点选加入，输入框上方展示）
@@ -205,8 +209,7 @@ const themeOverrides = {
           </div>
           <div class="nb-tabs">
             <button
-              v-for="t in [{ id: 'home', label: '首页' }, { id: 'workspace', label: '工作区' }, { id: 'materials', label: '风格库' }]"
-              :key="t.id" class="nb-tab" :class="{ on: page === t.id }" @click="page = t.id as any"
+              v-for="t in tabs" :key="t.id" class="nb-tab" :class="{ on: page === t.id }" @click="page = t.id"
             >{{ t.label }}</button>
           </div>
           <button class="nb-new" @click="showNew = true">＋ 新建</button>
@@ -332,4 +335,19 @@ body {
 .empty-ws { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; color: #55555f; }
 .link { border: 0; background: transparent; color: #8fc7ff; cursor: pointer; font-size: 14px; }
 .link:hover { text-decoration: underline; }
+
+/* ── 弹窗通用皮（NModal teleport 到 body，必须全局）：GatesModal/NewProjectModal 共用，
+      各自只留宽高等差异 ── */
+.app-modal {
+  background: #14141a; border: 1px solid #26262e; border-radius: 14px;
+  --n-padding-left: 22px; --n-padding-right: 22px; --n-padding-top: 20px; --n-padding-bottom: 20px;
+}
+.app-modal .n-card-header { padding: 18px 22px 0; }
+.app-modal .n-card-header__main { font-weight: 700; letter-spacing: 2px; color: #f0c674; font-size: 15px; }
+.app-modal .n-card__content { padding: 14px 22px 20px; }
+.app-modal .n-base-close { color: #7c7c88; top: 16px; right: 16px; }
+.app-modal .n-base-close:hover { color: #e6e6ea; }
+.app-modal .n-input { background: #101016; border: 1px solid #232329; border-radius: 10px; }
+.app-modal .n-input:hover { border-color: #3a3a45; }
+.app-modal .n-input--focus { border-color: rgba(240, 198, 116, .55); }
 </style>

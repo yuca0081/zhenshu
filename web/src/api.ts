@@ -1,4 +1,4 @@
-import type { AudioMeta, ChatRef, Msg, ProjectRow, ProjectView, RefVideo, Storyboard, Style, StyleSamples } from './types'
+import type { AudioMeta, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, RefVideo, Storyboard, Style, StyleSamples } from './types'
 
 // ── API token（服务端 .env 配了 API_TOKEN 时启用）──────────────
 // 401 时提示输入一次，存 localStorage；之后所有请求带头，媒体 URL 带 ?token=
@@ -39,52 +39,48 @@ async function j<T>(res: Response): Promise<T> {
   return res.json()
 }
 
+// req/post = authFetch + JSON 解包一步到位（此前 23 处 .then(r => j<T>(r)) 样板）
+async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
+  return j<T>(await authFetch(input, init))
+}
+function post<T>(input: RequestInfo, body?: unknown): Promise<T> {
+  return req<T>(input, body === undefined
+    ? { method: 'POST' }
+    : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+}
+
 export const api = {
-  listProjects: () => authFetch('/api/projects').then(r => j<ProjectRow[]>(r)),
+  listProjects: () => req<ProjectRow[]>('/api/projects'),
 
   createProject: (name: string, topic: string, aspect = '9:16') =>
-    authFetch('/api/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, topic, aspect }),
-    }).then(r => j<{ id: string; name: string }>(r)),
+    post<{ id: string; name: string }>('/api/projects', { name, topic, aspect }),
 
-  project: (id: string) => authFetch(`/api/projects/${id}`).then(r => j<ProjectView>(r)),
+  project: (id: string) => req<ProjectView>(`/api/projects/${id}`),
 
-  storyboard: (id: string) => authFetch(`/api/projects/${id}/storyboard`).then(r => j<Storyboard>(r)),
+  storyboard: (id: string) => req<Storyboard>(`/api/projects/${id}/storyboard`),
 
-  audioMeta: (id: string) => authFetch(`/api/projects/${id}/audio_meta`).then(r => j<AudioMeta>(r)),
+  audioMeta: (id: string) => req<AudioMeta>(`/api/projects/${id}/audio_meta`),
 
-  manuscript: (id: string) =>
-    authFetch(`/api/projects/${id}/manuscript`).then(r => j<{ content: string; word_count: number }>(r)),
+  manuscript: (id: string) => req<Manuscript>(`/api/projects/${id}/manuscript`),
 
   // 文稿弹窗保存（article.txt 为真源；storyboard_stale=分镜基于旧稿需重新生成）
   saveManuscript: (id: string, content: string) =>
-    authFetch(`/api/projects/${id}/manuscript`, {
+    req<{ ok: boolean; word_count: number; storyboard_stale: boolean }>(`/api/projects/${id}/manuscript`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
-    }).then(r => j<{ ok: boolean; word_count: number; storyboard_stale: boolean }>(r)),
+    }),
 
   // 风格弹窗选定库内风格（预览后显式确认 = 硬门通过）
   applyStyle: (id: string, styleId: string) =>
-    authFetch(`/api/projects/${id}/style/apply`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ style_id: styleId }),
-    }).then(r => j<{ ok: boolean; direction: string }>(r)),
+    post<{ ok: boolean; direction: string }>(`/api/projects/${id}/style/apply`, { style_id: styleId }),
 
-  style: (id: string) => authFetch(`/api/projects/${id}/style`).then(r => j<StyleSamples>(r)),
+  style: (id: string) => req<StyleSamples>(`/api/projects/${id}/style`),
 
-  confirmStyle: (id: string) =>
-    authFetch(`/api/projects/${id}/style/confirm`, { method: 'POST' }).then(r => j<{ ok: boolean }>(r)),
+  confirmStyle: (id: string) => post<{ ok: boolean }>(`/api/projects/${id}/style/confirm`),
 
   chat: (id: string, content: string, refs: ChatRef[] = []) =>
-    authFetch(`/api/projects/${id}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, refs }),
-    }).then(r => j<{ ok: boolean }>(r)),
+    post<{ ok: boolean }>(`/api/projects/${id}/chat`, { content, refs }),
 
   frameText: (id: string, seg: string) =>
     authFetch(`/api/projects/${id}/frames/${seg}`).then(r => {
@@ -93,63 +89,45 @@ export const api = {
     }),
 
   draftManuscript: (topic: string, minutes = 1) =>
-    authFetch('/api/draft/manuscript', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, minutes }),
-    }).then(r => j<{ content: string }>(r)),
+    post<{ content: string }>('/api/draft/manuscript', { topic, minutes }),
 
   // 链接导入（readability 正文提取，文稿弹窗用）
   extractLink: (url: string) =>
-    authFetch('/api/extract_link', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
-    }).then(r => j<{ title: string; content: string; words: number }>(r)),
+    post<{ title: string; content: string; words: number }>('/api/extract_link', { url }),
 
-  messages: (id: string, after = 0) =>
-    authFetch(`/api/projects/${id}/messages?after=${after}`).then(r => j<Msg[]>(r)),
+  messages: (id: string, after = 0) => req<Msg[]>(`/api/projects/${id}/messages?after=${after}`),
 
-  produce: (id: string) =>
-    authFetch(`/api/projects/${id}/produce`, { method: 'POST' }).then(r => j<{ ok: boolean }>(r)),
+  produce: (id: string) => post<{ ok: boolean }>(`/api/projects/${id}/produce`),
 
   // 一键段级重做（检视态按钮直连；instruction 空 = 服务端复用该段上次指令）
   reworkStart: (id: string, segments: string[], instruction = '') =>
-    authFetch(`/api/projects/${id}/rework`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ segments, instruction }),
-    }).then(r => j<{ ok: boolean; labels: string[]; instruction: string }>(r)),
+    post<{ ok: boolean; labels: string[]; instruction: string }>(`/api/projects/${id}/rework`, { segments, instruction }),
 
   reworkLast: (id: string, seg: string) =>
-    authFetch(`/api/projects/${id}/rework/last?seg=${encodeURIComponent(seg)}`)
-      .then(r => j<{ instruction: string }>(r)),
+    req<{ instruction: string }>(`/api/projects/${id}/rework/last?seg=${encodeURIComponent(seg)}`),
 
-  cancel: (id: string) =>
-    authFetch(`/api/projects/${id}/cancel`, { method: 'POST' }).then(r => j<{ ok: boolean }>(r)),
+  cancel: (id: string) => post<{ ok: boolean }>(`/api/projects/${id}/cancel`),
 
-  listLibrary: () => authFetch('/api/library').then(r => j<Style[]>(r)),
+  listLibrary: () => req<Style[]>('/api/library'),
 
-  publishPack: (id: string) =>
-    authFetch(`/api/library/${id}/publish`, { method: 'POST' }).then(r => j<Style>(r)),
+  publishPack: (id: string) => post<Style>(`/api/library/${id}/publish`),
 
   // 风格媒体（视频解析入库的原片+抽帧快照；老条目服务端自动回退 references 目录）
   libraryFrames: (id: string) =>
-    authFetch(`/api/library/${id}/frames`).then(r => j<{ frames: string[]; has_video: boolean }>(r)),
+    req<{ frames: string[]; has_video: boolean }>(`/api/library/${id}/frames`),
 
   // ── 参考视频解析 ──
   uploadReference: (file: File) => {
     const fd = new FormData()
     fd.append('video', file)
-    return authFetch('/api/references', { method: 'POST', body: fd }).then(r => j<RefVideo>(r))
+    return req<RefVideo>('/api/references', { method: 'POST', body: fd })
   },
-  listReferences: () => authFetch('/api/references').then(r => j<RefVideo[]>(r)),
+  listReferences: () => req<RefVideo[]>('/api/references'),
   referenceFrames: (id: string) =>
-    authFetch(`/api/references/${id}/frames`).then(r => j<{ frames: string[]; has_video: boolean }>(r)),
-  analyzeReference: (id: string) =>
-    authFetch(`/api/references/${id}/analyze`, { method: 'POST' }).then(r => j<{ ok: boolean }>(r)),
+    req<{ frames: string[]; has_video: boolean }>(`/api/references/${id}/frames`),
+  analyzeReference: (id: string) => post<{ ok: boolean }>(`/api/references/${id}/analyze`),
   confirmReference: (id: string) =>
-    authFetch(`/api/references/${id}/confirm`, { method: 'POST' }).then(r => j<{ ok: boolean; style_id: string }>(r)),
+    post<{ ok: boolean; style_id: string }>(`/api/references/${id}/confirm`),
 }
 
 // rev = 成片代次（重做完成后递增）：同 URL 会被 <video> 惰性复用，重做完必须换 URL 才能看到新画面

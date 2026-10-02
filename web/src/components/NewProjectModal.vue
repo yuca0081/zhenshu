@@ -35,7 +35,7 @@ async function create() {
 </script>
 
 <template>
-  <NModal v-model:show="show" preset="card" title="新建视频" class="np-modal" :mask-closable="!creating">
+  <NModal v-model:show="show" preset="card" title="新建视频" class="app-modal np-modal" :mask-closable="!creating">
     <div class="body">
       <div class="field">
         <span class="label">主题 <em>一句话说清要讲什么——文稿、分镜都从它长出来</em></span>
@@ -67,27 +67,5 @@ async function create() {
 
 <!-- modal 挂在 body 下，样式需全局作用域 -->
 <style>
-.np-modal {
-  width: 560px; background: #14141a; border: 1px solid #26262e; border-radius: 14px;
-  --n-padding-left: 22px; --n-padding-right: 22px; --n-padding-top: 20px; --n-padding-bottom: 20px;
-}
-.np-modal .n-card-header { padding: 18px 22px 0; }
-.np-modal .n-card-header__main { font-weight: 700; letter-spacing: 2px; color: #f0c674; font-size: 15px; }
-.np-modal .n-card__content { padding: 14px 22px 20px; }
-.np-modal .n-base-close { color: #7c7c88; top: 16px; right: 16px; }
-.np-modal .n-base-close:hover { color: #e6e6ea; }
-.np-modal .n-input { background: #101016; border: 1px solid #232329; border-radius: 10px; }
-.np-modal .n-input:hover { border-color: #3a3a45; }
-.np-modal .n-input--focus { border-color: rgba(240, 198, 116, .55); }
-</style>
-
-<style scoped>
-.body { display: flex; flex-direction: column; gap: 14px; }
-.field { display: flex; flex-direction: column; gap: 6px; }
-.label { font-size: 12px; color: #9a9aa6; display: flex; align-items: baseline; gap: 8px; }
-.label em { font-style: normal; font-size: 11px; color: #55555f; }
-.opts { display: flex; align-items: center; gap: 12px; }
-.err { color: #ff9d9d; font-size: 13px; }
-.foot { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; gap: 12px; }
-.hint { color: #55555f; font-size: 11.5px; line-height: 1.5; }
+.np-modal { width: 560px; }
 </style>

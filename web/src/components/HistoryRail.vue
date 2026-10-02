@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { NPopover, NScrollbar } from 'naive-ui'
+import { dateOf, statusDotCls, statusLabel } from '../format'
 import type { ProjectRow } from '../types'
 
 defineProps<{ projects: ProjectRow[]; current: string }>()
@@ -13,16 +14,7 @@ function toggle() {
   localStorage.setItem('rail-collapsed', collapsed.value ? '1' : '0')
 }
 
-const statusMap: Record<string, { label: string; cls: string }> = {
-  created: { label: '已创建', cls: '' },
-  manuscript: { label: '有文稿', cls: '' },
-  storyboard: { label: '有分镜', cls: 's-draft' },
-  style: { label: '风格定', cls: 's-draft' },
-  producing: { label: '制作中', cls: 's-run' },
-  video: { label: '有成片', cls: 's-done' },
-}
-const statusOf = (s: string) => statusMap[s] ?? { label: s, cls: '' }
-const dateOf = (iso: string) => iso.slice(5, 10).replace('-', '/')
+const statusOf = (s: string) => ({ label: statusLabel[s] ?? s, cls: statusDotCls[s] ?? '' })
 </script>
 
 <template>
@@ -108,6 +100,4 @@ const dateOf = (iso: string) => iso.slice(5, 10).replace('-', '/')
 .pop { max-width: 220px; }
 .pop-name { font-size: 13px; font-weight: 600; }
 .pop-meta { font-size: 11px; color: #888; margin-top: 2px; }
-.fade-enter-active, .fade-leave-active { transition: opacity .12s; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>

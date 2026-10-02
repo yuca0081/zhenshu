@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { NButton, NTag } from 'naive-ui'
+import { coverStyle } from '../format'
 import SampleFrame from './SampleFrame.vue'
 import TemplateDetail from './TemplateDetail.vue'
 import type { Style, TemplateDetailData } from '../types'
@@ -44,15 +45,6 @@ function onPublish(id: string) {
 function subline(s: Style): string {
   const kw = (s.keywords ?? []).slice(0, 3).join(' · ')
   return [s.genre, kw].filter(Boolean).join('　')
-}
-
-// 无样张条目（纯注册表/老包）的封面回退：tokens 渐变打底 + 风格名，避免空白卡面
-function coverStyle(s: Style): string {
-  const bg = (s.tokens?.bg as { from?: string; to?: string; angle?: number } | undefined) ?? null
-  const from = bg?.from || (typeof s.tokens?.bg === 'string' ? (s.tokens?.bg as string) : '') || '#1a1a22'
-  const to = bg?.to || from
-  const ang = bg?.angle ?? 135
-  return `background: linear-gradient(${ang}deg, ${from}, ${to})`
 }
 </script>
 

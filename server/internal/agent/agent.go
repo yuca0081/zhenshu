@@ -235,16 +235,11 @@ func (a *Agent) regenerateStyle(p *pipeline.Project, instruction, out string) st
 	}
 	_ = os.Remove(bak)
 	// 自拟重生成后不再指向库内风格包（样张已不是那一包的）
-	if b, rerr := os.ReadFile(p.Artifact("project.json")); rerr == nil {
-		var meta map[string]any
-		if json.Unmarshal(b, &meta) == nil {
-			if id, ok := meta["stylepack_id"].(string); ok && id != "" {
-				meta["stylepack_id"] = ""
-				if nb, merr := json.MarshalIndent(meta, "", "  "); merr == nil {
-					_ = pipeline.WriteFileAtomic(p.Artifact("project.json"), nb, 0o644)
-				}
-			}
-		}
+	var pj struct {
+		StylePackID string `json:"stylepack_id"`
+	}
+	if b, rerr := os.ReadFile(p.Artifact("project.json")); rerr == nil && json.Unmarshal(b, &pj) == nil && pj.StylePackID != "" {
+		_ = pipeline.SetProjectField(p, "stylepack_id", "")
 	}
 	dir := prevDir
 	var ss contract.StyleSamples
@@ -1213,20 +1208,8 @@ func (a *Agent) finish(projectID, content, typ string) {
 
 // setDoneStatus 终态落两处：project.json（磁盘事实源，projectView 读它）+ PG 行（首页列表读它）。
 func (a *Agent) setDoneStatus(projectID, status string) {
-	p := pipeline.NewProject(a.DataDir, projectID)
-	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil {
-		var meta map[string]any
-		if json.Unmarshal(b, &meta) == nil {
-			meta["status"] = status
-			_ = pipeline.WriteFileAtomic(p.Artifact("project.json"), mustJSONIndent(meta), 0o644)
-		}
-	}
+	_ = pipeline.SetProjectField(pipeline.NewProject(a.DataDir, projectID), "status", status)
 	_ = a.Store.UpdateStatus(projectID, status)
-}
-
-func mustJSONIndent(v any) []byte {
-	b, _ := json.MarshalIndent(v, "", "  ")
-	return b
 }
 
 // NotifyResult 制作管线终态回聊天。制作/重做是对话轮结束后异步跑的，

@@ -6,6 +6,12 @@ export interface ProjectRow {
   has_video: boolean
 }
 
+// 文稿（GET/PUT /manuscript；api.ts / App.vue / StagePanel 共用）
+export interface Manuscript {
+  content: string
+  word_count: number
+}
+
 export interface ProjectView {
   id: string
   name: string
