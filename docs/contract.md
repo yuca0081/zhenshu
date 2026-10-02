@@ -89,7 +89,7 @@
 
 ## 7. 与 v1 的差异备忘
 
-- v1 的 spec→render_spec 路径已拆除:语义槽位、元素菜单(elements.json)、图标校验、搜图本地化(fetch_images)不再出现在主路径;`ai/render_spec.py` 已删,`ai/engines/`(皮肤/字幕引擎)保留——subtitle.py 由 assemble.py 作平台字幕层复用。
+- v1 的 spec→render_spec 路径已拆除:语义槽位、元素菜单(elements.json)、图标校验、搜图本地化(fetch_images)不再出现在主路径;`ai/render_spec.py` 与 `ai/engines/`(皮肤/字幕引擎)均已删——字幕层由 assemble.py 的 subtitle_blocks() 平台层实现,v1 引擎仅存于 demo/ak-pv-repro(随 v1-baseline 冻结)。
 - 字幕带从"帧内 render_spec 生成"上移为 assemble 平台层(与音轨/overlay 同级):场景文件只写上 83% 内容。
 - `data-hf-name` 语义标注保留(v1 已有,元素点击/检视指认基础设施不变)。
 - 确定性回放探针、对比度廉价修复(applyContrastFixes)、段片增量渲染、xfade——v1 资产原样保留。

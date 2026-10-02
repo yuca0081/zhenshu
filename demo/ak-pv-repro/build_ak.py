@@ -9,7 +9,7 @@ v1 是"静帧 + 缓推 + 硬切"；v2 把每段拆成图层逐元素做动效（
 无随机数——伪随机用下标算术）。
 
 不复用 13 个注册风格，直接产出 llm/comp-segNN.json（{html, elements}），
-契约形状与 ai/engines/stylepack.py 的 wrap() 一致（hyperframes check 已验证）。
+契约形状与同目录 stylepack.py 的 wrap() 一致（hyperframes check 已验证）。
 
 用法：python demo/ak-pv-repro/build_ak.py <项目目录>
 """
@@ -19,8 +19,9 @@ import pathlib
 import re
 import sys
 
-AI_DIR = pathlib.Path(__file__).resolve().parents[2] / 'ai'
-sys.path.insert(0, str(AI_DIR / 'engines'))
+# stylepack 三件套（stylepack/subtitle/colorutil）已随 v2 拆除 ai/engines/ 迁入本目录
+# （本 demo 随 v1-baseline 冻结，引擎只服务它）。
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import stylepack as sp  # noqa: E402  复用 load()/动效片段生成器
 
 W, H = 1920, 1080

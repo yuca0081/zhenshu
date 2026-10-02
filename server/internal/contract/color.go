@@ -1,5 +1,5 @@
-// Package contract 颜色工具：与 ai/engines/colorutil.py 同一套 WCAG 公式
-// （skin 槽位对比度门禁在 Go 侧复算，公式两边一致才有效）。
+// Package contract 颜色工具：WCAG 相对亮度/对比度公式
+// （skin 槽位对比度门禁：txt 落 bg 上 ≥4.5:1 才放行）。
 package contract
 
 import (

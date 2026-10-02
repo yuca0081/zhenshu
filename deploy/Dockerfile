@@ -15,12 +15,11 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 RUN npm i -g hyperframes@0.8.55
 
 # ai/ 管线 Python 依赖（requirements.txt 单一来源；jieba/soundfile 缺失曾致容器内
-# TTS 对齐必崩。funasr+torch 约 2GB 不装，走 faster-whisper 降级档；
-# rembg+onnxruntime 为素材工位依赖，镜像 +约180MB，可接受——vend-stage.md §4）
+# TTS 对齐必崩。funasr+torch 约 2GB 不装，走 faster-whisper 降级档）
+# （贴纸工位 make_stickers.py 已迁 demo/style-samples，rembg/onnxruntime+u2netp
+#  不再进生产镜像，镜像 -约180MB）
 COPY ai/requirements.txt /tmp/requirements.txt
 RUN pip3 install --break-system-packages -r /tmp/requirements.txt && rm -f /tmp/requirements.txt
-# u2netp 模型（4.7MB）构建期预下，运行期零下载（模型下载是最易断的环节）
-RUN python3 -c "from rembg import new_session; new_session('u2netp')"
 ENV HF_ENDPOINT=https://hf-mirror.com
 # whisper 模型缓存落数据卷（compose 挂 /app/data/hf），重建容器不重下 ~1.5GB
 ENV HF_HOME=/app/data/hf

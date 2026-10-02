@@ -198,7 +198,7 @@ manuscript → storyboard(门1) → design【笼子二】
 | `server/internal/styleref/styleref.go` | 降级:从"入库确认链路"变为 few-shot 分析工具 |
 | `ai/inspect_check.py` | 降级为开发期工具(§5) |
 | `server/internal/produce/frameqa.go` | 保留,问题集收窄为 Tier1 是非题 |
-| `ai/seed_styles.py` / `style_test_harness.py` / `element_gallery.py` / `snap_samples.py` / `extract_video_features.py` | 保留为工具 |
+| `ai/snap_samples.py` / `extract_video_features.py` | 保留为工具（生产管线在用）；`style_test_harness.py` 与 v1 引擎 `ai/engines/` 已于 2026-10 拆除（依赖 render_spec.py，早失效） |
 
 ### 9.4 新建
 
