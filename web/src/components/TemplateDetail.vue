@@ -147,6 +147,38 @@ async function copyHex(hex: string) {
           <p class="degrade">此包未挂注册表 tokens（项目提炼的旧包），以样张气质为准。</p>
         </section>
 
+        <!-- 设计系统（视频解析新条目才有——神似心得：概念/字体三角色/动效/装置/负面清单） -->
+        <section v-if="detail.concept || detail.fonts || detail.motion || detail.device || detail.anti_patterns?.length" class="sec">
+          <h3>设计系统</h3>
+          <p v-if="detail.concept" class="concept">{{ detail.concept }}</p>
+          <div v-if="detail.fonts" class="tok-rows">
+            <div v-if="detail.fonts.display?.stack" class="tok-row"><label>大标题</label>
+              <code :style="{ fontFamily: detail.fonts.display.stack }">{{ detail.fonts.display.stack }}</code>
+            </div>
+            <div v-if="detail.fonts.body?.stack" class="tok-row"><label>正文</label>
+              <code :style="{ fontFamily: detail.fonts.body.stack }">{{ detail.fonts.body.stack }}</code>
+            </div>
+            <div v-if="detail.fonts.data?.stack" class="tok-row"><label>数据</label>
+              <code :style="{ fontFamily: detail.fonts.data.stack }">{{ detail.fonts.data.stack }}</code>
+            </div>
+          </div>
+          <div v-if="detail.motion" class="tok-rows">
+            <div class="tok-row"><label>动效语言</label>
+              <code class="mini">{{ detail.motion.ease }} · 进场 {{ detail.motion.dur_in }}s / 落定 {{ detail.motion.dur_settle }}s / 错峰 {{ detail.motion.stagger }}s</code>
+            </div>
+          </div>
+          <p v-if="detail.motion?.notes" class="notes">{{ detail.motion.notes }}</p>
+          <div v-if="detail.device" class="device">
+            <p class="device-name">贯穿装置 · {{ detail.device.name }}</p>
+            <p v-if="detail.device.desc" class="device-desc">{{ detail.device.desc }}</p>
+            <p v-if="detail.device.per_seg" class="device-desc">逐段：{{ detail.device.per_seg }}</p>
+          </div>
+          <div v-if="detail.anti_patterns?.length" class="tok-row anti-row">
+            <label>负面清单</label>
+            <NTag v-for="a in detail.anti_patterns" :key="a" size="tiny" :bordered="false" type="warning">{{ a }}</NTag>
+          </div>
+        </section>
+
         <!-- 版式 -->
         <section v-if="detail.layouts?.length" class="sec">
           <h3>构图版式 ×{{ detail.layouts.length }}</h3>
@@ -237,6 +269,13 @@ async function copyHex(hex: string) {
 .layouts li { display: flex; gap: 10px; font-size: 12px; align-items: baseline; }
 .layouts li b { flex: none; color: #d9d9e0; min-width: 72px; }
 .layouts li span { color: #8a8a96; }
+
+.concept { font-size: 12.5px; color: #c9c9d1; margin: 0; line-height: 1.6; }
+.notes { font-size: 12px; color: #8a8a96; margin: 6px 0 0; line-height: 1.6; }
+.device { background: #14141a; border: 1px solid #232329; border-radius: 8px; padding: 10px 12px; margin-top: 10px; }
+.device-name { margin: 0; font-size: 12.5px; color: #e0c985; }
+.device-desc { margin: 4px 0 0; font-size: 12px; color: #8a8a96; line-height: 1.6; }
+.anti-row { flex-wrap: wrap; margin-top: 10px; }
 .kv { display: flex; gap: 10px; font-size: 12.5px; margin: 0 0 6px; color: #c9c9d1; }
 .kv label { flex: none; width: 58px; color: #6f6f7c; }
 .chips.kw { margin-top: 4px; }

@@ -167,9 +167,36 @@ onBeforeUnmount(() => {
   if (busyTimer) clearTimeout(busyTimer)
 })
 
-// 初始：加载列表，落首页（最近项目在首页展示，点了再进工作区）
+// 初始：加载列表，按 URL hash 恢复页面
 loadProjects()
 loadLibrary()
+
+// ── 页面状态 ↔ URL hash：刷新/前进后退/分享链接不再弹回首页 ──────────
+// #/home（缺省）/ #/materials / #/workspace/<项目id>
+function hashTarget(): string {
+  if (page.value === 'workspace') return current.value ? `#/workspace/${current.value}` : '#/workspace'
+  if (page.value === 'materials') return '#/materials'
+  return '#/home'
+}
+watch([page, current], () => {
+  const t = hashTarget()
+  if (location.hash !== t) location.hash = t
+})
+function applyHash() {
+  const h = location.hash
+  if (h.startsWith('#/materials')) {
+    page.value = 'materials'
+  } else if (h.startsWith('#/workspace')) {
+    const id = /^#\/workspace\/([A-Za-z0-9_-]+)/.exec(h)?.[1] ?? ''
+    // 同项目只切页不重载（重载会清聊天/阶段态）；异项目走完整选择流程
+    if (id && id !== current.value) selectProject(id)
+    else page.value = 'workspace'
+  } else {
+    page.value = 'home'
+  }
+}
+window.addEventListener('hashchange', applyHash)
+applyHash()
 
 const showNew = ref(false)
 // 三前置弹窗：文稿/分镜/风格（点对话栏标签打开）

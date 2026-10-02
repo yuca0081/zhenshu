@@ -107,6 +107,12 @@ export interface Style {
   layouts?: RefVideoLayout[]
   samples?: StyleLibrarySample[]
   skin?: Skin          // 风格文件（应用时拷进项目）
+  concept?: string
+  fonts?: DesignFonts
+  motion?: DesignMotion
+  device?: DesignDevice
+  anti_patterns?: string[]
+  keyframes?: string[] // 真迹关键帧文件名（style_media/<id>/ 下的 frame-*.png 子集）
   origin_project?: string
   published: boolean
   created_at: string
@@ -172,6 +178,12 @@ export interface StyleTokens {
   img?: { frame?: string; shadow?: string }
 }
 
+// ── 设计系统五件套（视频解析新条目才有；与后端 contract.StyleSamples 同构）──
+export interface DesignFontRole { stack: string; weight?: string; tracking?: string }
+export interface DesignFonts { display: DesignFontRole; body: DesignFontRole; data?: DesignFontRole }
+export interface DesignMotion { ease: string; dur_in: number; dur_settle: number; stagger: number; notes?: string }
+export interface DesignDevice { name: string; desc?: string; per_seg?: string }
+
 // ── 参考视频解析（风格库页）────────────────────────────────
 export interface RefVideoLayout {
   id: string
@@ -184,6 +196,11 @@ export interface RefVideoStyle {
   genre: string
   keywords: string[]
   photo: string
+  concept?: string
+  fonts?: DesignFonts
+  motion?: DesignMotion
+  device?: DesignDevice
+  anti_patterns?: string[]
   layouts: RefVideoLayout[]
   samples: { tag: string; desc: string; html: string }[]
   tokens?: StyleTokens // ref.json 原样透传（listReferences 已返回）
@@ -209,6 +226,11 @@ export interface TemplateDetailData {
   keywords?: string[]
   layouts?: RefVideoLayout[]
   tokens?: StyleTokens | null
+  concept?: string
+  fonts?: DesignFonts
+  motion?: DesignMotion
+  device?: DesignDevice
+  anti_patterns?: string[]
   samples: { tag: string; desc?: string; html: string }[]
   originLabel: string
   originHref?: string
