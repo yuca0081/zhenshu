@@ -1,8 +1,14 @@
 package produce
 
 import (
+	"bytes"
+	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"webpage-video-agent/server/internal/contract"
@@ -17,7 +23,16 @@ import (
 func designNoteFor(p *pipeline.Project, dataDir string, segIdx int) string {
 	var ss contract.StyleSamples
 	if b, err := os.ReadFile(p.Artifact("style/style_samples.json")); err == nil && json.Unmarshal(b, &ss) == nil && hasDesignSystem(&ss) {
-		return "\n" + pipeline.DesignDoc(&ss, segIdx)
+		doc := pipeline.DesignDoc(&ss, segIdx)
+		// 库条目（视频解析）无皮肤：DesignDoc 没有槽位色可渲染，色板 tokens 是唯一配色事实源
+		if len(ss.EffectiveSkins()) == 0 {
+			if st := projectStyle(p, dataDir); st != nil {
+				if pal := PaletteNote(st.Tokens); pal != "" {
+					doc += "- 色板（画面配色以此为准）：" + pal + "\n"
+				}
+			}
+		}
+		return "\n" + doc
 	}
 	return styleNoteFor(p, dataDir) + layoutNote(projectLayouts(p, dataDir), segIdx)
 }
@@ -75,6 +90,46 @@ func styleNoteFor(p *pipeline.Project, dataDir string) string {
 		note += "\n- 色板（画面配色以此为准）：" + pal
 	}
 	return note
+}
+
+// styleKeyframeImages 项目锚定风格的原片真迹关键帧 → data URL（≤5 张）。
+// 每张先经 ffmpeg 压成 1280 宽 JPEG 缓存进项目 style/（key-<条目id>-<帧名>.jpg，
+// 与段渲染抽帧同规格），压图/读图失败单张跳过——真迹是加分项，缺失不挡出片。
+func styleKeyframeImages(ctx context.Context, dataDir string, p *pipeline.Project) []string {
+	st := projectStyle(p, dataDir)
+	if st == nil {
+		return nil
+	}
+	ff, err := pipeline.FFmpegPath()
+	if err != nil {
+		return nil
+	}
+	var urls []string
+	for _, src := range stylelib.New(dataDir).KeyframePaths(st.ID, 5) {
+		dst := p.Artifact("style/key-" + st.ID + "-" + filepath.Base(src) + ".jpg")
+		if _, err := os.Stat(dst); err != nil {
+			var buf bytes.Buffer
+			cmd := exec.CommandContext(ctx, ff, "-y", "-i", src, "-vf", "scale=1280:-2", "-q:v", "5", dst)
+			cmd.Stdout, cmd.Stderr = &buf, &buf
+			if err := cmd.Run(); err != nil {
+				continue
+			}
+		}
+		b, err := os.ReadFile(dst)
+		if err != nil {
+			continue
+		}
+		urls = append(urls, "data:image/jpeg;base64,"+base64.StdEncoding.EncodeToString(b))
+	}
+	return urls
+}
+
+// keyframeNote 场景生成提示里的真迹说明（真迹附在样张截图之后）。
+func keyframeNote(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n- 附图最后 %d 张是本风格来源视频的原片真迹（关键帧）：画面气质/质感/构图语感以真迹为准，设计系统与样张是它的网页转译——冲突时在不破坏契约物理边界的前提下向真迹靠\n", n)
 }
 
 // PaletteNote 风格库 tokens → 一行人话色板（底/主字/墨/accent/面板/字体）。

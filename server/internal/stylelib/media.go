@@ -17,6 +17,57 @@ func (l *Library) MediaDir(id string) string {
 	return filepath.Join(l.dir, "style_media", id)
 }
 
+// PickKeyframes 从按时间序排列的帧文件名里均匀挑 ≤n 张代表帧（首尾必含，间隔均匀）。
+// 纯几何挑法不问内容——风格快照要的是分布，不是单张最佳。
+func PickKeyframes(names []string, n int) []string {
+	if n > len(names) {
+		n = len(names)
+	}
+	if n <= 0 {
+		return nil
+	}
+	if n == 1 {
+		return []string{names[0]}
+	}
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, names[i*(len(names)-1)/(n-1)])
+	}
+	return out
+}
+
+// KeyframePaths 条目真迹关键帧的绝对路径清单（≤n 张）。优先条目登记的 Keyframes
+// 清单；老条目无清单则回退扫描媒体目录 frame-*.png 均匀补挑。无媒体返回 nil。
+func (l *Library) KeyframePaths(id string, n int) []string {
+	dir := l.MediaDir(id)
+	var names []string
+	if st, ok := l.Get(id); ok {
+		names = st.Keyframes
+	}
+	var existing []string
+	for _, name := range names {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			existing = append(existing, name)
+		}
+	}
+	if len(existing) == 0 { // 老条目无清单/清单全失效：扫目录兜底
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return nil
+		}
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasPrefix(e.Name(), "frame-") && strings.HasSuffix(e.Name(), ".png") {
+				existing = append(existing, e.Name())
+			}
+		}
+	}
+	var out []string
+	for _, name := range PickKeyframes(existing, n) {
+		out = append(out, filepath.Join(dir, name))
+	}
+	return out
+}
+
 // SnapshotMedia 把 sourceDir（参考视频目录：video.mp4 + frame-*.png）快照进风格媒体目录。
 // 部分成功不回滚：媒体是冗余不是事实源，缺哪张下次重新确认/手动补即可。
 func (l *Library) SnapshotMedia(styleID, sourceDir string) error {

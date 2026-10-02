@@ -26,20 +26,28 @@ import (
 )
 
 // Style 风格条目：身份 + 外观 + 证据 + 复用件。
+// 设计系统五件套（concept/fonts/motion/device/anti_patterns）视频解析条目才有，
+// 与项目 design 阶段同构（contract.StyleSamples 同款类型）；老条目全空 → 走 v1 兜底注入。
 type Style struct {
-	ID            string         `json:"id"`
-	Name          string         `json:"name"`               // 人话名「深空渐变（高饱和·宇宙系）」
-	Direction     string         `json:"direction"`          // 方向描述（与项目 style_samples.direction 同源；迁移前=Name）
-	Desc          string         `json:"desc,omitempty"`     // 一句话气质/来源
-	Genre         string         `json:"genre,omitempty"`    // 适用题材
-	Keywords      []string       `json:"keywords,omitempty"` // 检索/匹配词
-	Tokens        map[string]any `json:"tokens,omitempty"`   // 色板/字体/转场/后期（渲染与场景注入直读）
-	Layouts       []Layout       `json:"layouts,omitempty"`  // 标准构图版式（场景生成按段轮换注入）
-	Samples       []Sample       `json:"samples,omitempty"`  // 样张 1–3 张（所见即所得）
-	Skin          *contract.Skin `json:"skin,omitempty"`     // 风格文件（项目复用时落盘 skin.json）
-	OriginProject string         `json:"origin_project,omitempty"`
-	Published     bool           `json:"published"`
-	CreatedAt     time.Time      `json:"created_at"`
+	ID            string               `json:"id"`
+	Name          string               `json:"name"`               // 人话名「深空渐变（高饱和·宇宙系）」
+	Direction     string               `json:"direction"`          // 方向描述（与项目 style_samples.direction 同源；迁移前=Name）
+	Desc          string               `json:"desc,omitempty"`     // 一句话气质/来源
+	Genre         string               `json:"genre,omitempty"`    // 适用题材
+	Keywords      []string             `json:"keywords,omitempty"` // 检索/匹配词
+	Tokens        map[string]any       `json:"tokens,omitempty"`   // 色板/字体/转场/后期（渲染与场景注入直读）
+	Layouts       []Layout             `json:"layouts,omitempty"`  // 标准构图版式（场景生成按段轮换注入）
+	Concept       string               `json:"concept,omitempty"`
+	Fonts         *contract.FontRoles  `json:"fonts,omitempty"`         // 字体三角色
+	Motion        *contract.MotionLang `json:"motion,omitempty"`        // 动效语言
+	Device        *contract.DeviceSpec `json:"device,omitempty"`        // 贯穿装置
+	AntiPatterns  []string             `json:"anti_patterns,omitempty"` // 负面清单
+	Keyframes     []string             `json:"keyframes,omitempty"`     // 真迹关键帧文件名（style_media/<id>/ 下 frame-*.png 子集）
+	Samples       []Sample             `json:"samples,omitempty"`       // 样张 1–3 张（所见即所得）
+	Skin          *contract.Skin       `json:"skin,omitempty"`          // 风格文件（项目复用时落盘 skin.json）
+	OriginProject string               `json:"origin_project,omitempty"`
+	Published     bool                 `json:"published"`
+	CreatedAt     time.Time            `json:"created_at"`
 }
 
 // Layout 标准构图版式（场景生成的版式纪律，轮换防每段同构）。
@@ -278,16 +286,33 @@ func (l *Library) DraftFromProject(projectDir, projectID, projectName string) (*
 	return &s, nil
 }
 
+// VideoStyleIn 参考视频风格入库载荷（api 层从解析草稿变形；IngestVideoRef 消费）。
+type VideoStyleIn struct {
+	Name         string // 展示名（合集分段用段名）；空则与 direction 同源
+	Direction    string
+	Genre        string
+	Keywords     []string
+	Desc         string
+	Tokens       map[string]any
+	Layouts      []Layout
+	Concept      string
+	Fonts        *contract.FontRoles
+	Motion       *contract.MotionLang
+	Device       *contract.DeviceSpec
+	AntiPatterns []string
+	Keyframes    []string // 真迹关键帧文件名（style_media/<id>/ 下的 frame-*.png 子集）
+	Samples      []Sample
+}
+
 // IngestVideoRef 参考视频解析结果入库（upsert，published=true）：
 // 旧流程的 AppendRegistry + AddVideoPack 双写双库在此合为一次写入。
-// name 为展示名（合集分段时用片中段名，可与 direction 不同）；空则与 direction 同源。
-func (l *Library) IngestVideoRef(refID, name, direction, genre string, keywords []string,
-	tokens map[string]any, layouts []Layout, samples []Sample, desc string) (*Style, error) {
-	if direction == "" || len(samples) == 0 {
+func (l *Library) IngestVideoRef(refID string, in VideoStyleIn) (*Style, error) {
+	if in.Direction == "" || len(in.Samples) == 0 {
 		return nil, fmt.Errorf("风格不完整（direction/样张缺失）")
 	}
+	name := in.Name
 	if name == "" {
-		name = direction
+		name = in.Direction
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -302,9 +327,11 @@ func (l *Library) IngestVideoRef(refID, name, direction, genre string, keywords 
 		}
 	}
 	s := Style{
-		ID: id, Name: name, Direction: direction, Desc: desc,
-		Genre: genre, Keywords: keywords, Tokens: tokens, Layouts: layouts,
-		Samples: samples, OriginProject: "video:" + refID,
+		ID: id, Name: name, Direction: in.Direction, Desc: in.Desc,
+		Genre: in.Genre, Keywords: in.Keywords, Tokens: in.Tokens, Layouts: in.Layouts,
+		Concept: in.Concept, Fonts: in.Fonts, Motion: in.Motion, Device: in.Device,
+		AntiPatterns: in.AntiPatterns, Keyframes: in.Keyframes,
+		Samples: in.Samples, OriginProject: "video:" + refID,
 		Published: true, CreatedAt: time.Now(),
 	}
 	styles = append(styles, s)
@@ -359,14 +386,24 @@ func (l *Library) ByDirection(direction string) (*Style, bool) {
 // StyleSamplesJSON 把风格变成本项目可用的 style_samples.json 内容
 // （style_id 随行——后续场景生成/拼接/再提炼都靠它精确锚定本条目；
 // skin 一并携带——确认时落盘 skin.json；confirmed 由调用方改写）。
+// 设计系统五件套 + 版式一并带出：fonts/motion/device 任一非空即让项目端
+// hasDesignSystem 成立，DesignDoc 注入/版式轮换/画面质检全套走 v2 通道。
 func (s *Style) StyleSamplesJSON() []byte {
 	out := contract.StyleSamples{
-		StyleID:   s.ID,
-		Direction: s.Direction,
-		Desc:      s.Desc,
-		Samples:   make([]contract.Sample, 0, len(s.Samples)),
-		Skin:      s.Skin,
-		Confirmed: false,
+		StyleID:      s.ID,
+		Direction:    s.Direction,
+		Desc:         s.Desc,
+		Concept:      s.Concept,
+		Fonts:        s.Fonts,
+		Motion:       s.Motion,
+		Device:       s.Device,
+		AntiPatterns: s.AntiPatterns,
+		Samples:      make([]contract.Sample, 0, len(s.Samples)),
+		Skin:         s.Skin,
+		Confirmed:    false,
+	}
+	for _, l := range s.Layouts {
+		out.Layouts = append(out.Layouts, contract.DesignLayout{ID: l.ID, Name: l.Name, Desc: l.Desc})
 	}
 	for _, smp := range s.Samples {
 		d := smp.Desc

@@ -240,7 +240,7 @@ func ValidateSkin(sk *Skin) error {
 	if ratio := ContrastRatio(sk.Slots.TXT, sk.Slots.BG); ratio < 3.0 {
 		return fmt.Errorf("skin 文字/底色对比度 %.1f:1 不足（需 ≥3:1，建议 ≥4.5:1）", ratio)
 	}
-	if !hasCJKFont(sk.Slots.Font) {
+	if !HasCJKFont(sk.Slots.Font) {
 		return fmt.Errorf("skin 字体栈 %q 未包含中文字体（渲染端中文会豆腐块）", sk.Slots.Font)
 	}
 	if len(sk.CSS) > 6000 {
@@ -266,7 +266,7 @@ var cjkFontHints = []string{
 	"PingFang", "Noto Sans CJK", "Noto Serif CJK", "Source Han", "楷", "宋体", "黑体", "雅黑", "仿宋",
 }
 
-func hasCJKFont(font string) bool {
+func HasCJKFont(font string) bool {
 	for _, k := range cjkFontHints {
 		if strings.Contains(font, k) {
 			return true
@@ -341,11 +341,11 @@ func ValidateStyleSamplesDraft(ss *StyleSamples) error {
 		if strings.TrimSpace(r.fr.Stack) == "" {
 			return fmt.Errorf("fonts.%s 字体栈为空", r.name)
 		}
-		if !hasCJKFont(r.fr.Stack) {
+		if !HasCJKFont(r.fr.Stack) {
 			return fmt.Errorf("fonts.%s 字体栈 %q 未包含中文字体（渲染端中文会豆腐块）", r.name, r.fr.Stack)
 		}
 	}
-	if d := ss.Fonts.Data; strings.TrimSpace(d.Stack) != "" && !hasCJKFont(d.Stack) {
+	if d := ss.Fonts.Data; strings.TrimSpace(d.Stack) != "" && !HasCJKFont(d.Stack) {
 		return fmt.Errorf("fonts.data 字体栈 %q 未包含中文字体（数据标签也有中文，栈尾必须带 CJK 回退）", d.Stack)
 	}
 	if ss.Motion == nil {

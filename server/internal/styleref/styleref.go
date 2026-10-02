@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
 )
 
@@ -35,14 +36,22 @@ type Ref struct {
 }
 
 // StyleDraft 解析产出的风格包（入库前草稿；tokens/layouts 直接进注册表）。
+// 设计系统五件套（concept/fonts/motion/device/anti_patterns）与项目 design 阶段
+// 同构（contract.StyleSamples 同款类型）——入库后随 StyleSamplesJSON 带进项目，
+// hasDesignSystem 成立，DesignDoc 注入/版式轮换/画面质检全套点亮。
 type StyleDraft struct {
-	Direction string          `json:"direction"`
-	Genre     string          `json:"genre"`
-	Keywords  []string        `json:"keywords"`
-	Photo     string          `json:"photo"`
-	Layouts   []StyleLayout   `json:"layouts"`
-	Tokens    json.RawMessage `json:"tokens"` // 原样透传给 styles.json（引擎按字段取）
-	Samples   []struct {
+	Direction    string               `json:"direction"`
+	Genre        string               `json:"genre"`
+	Keywords     []string             `json:"keywords"`
+	Photo        string               `json:"photo"`
+	Concept      string               `json:"concept,omitempty"`
+	Fonts        *contract.FontRoles  `json:"fonts,omitempty"`
+	Motion       *contract.MotionLang `json:"motion,omitempty"`
+	Device       *contract.DeviceSpec `json:"device,omitempty"`
+	AntiPatterns []string             `json:"anti_patterns,omitempty"`
+	Layouts      []StyleLayout        `json:"layouts"`
+	Tokens       json.RawMessage      `json:"tokens"` // 原样透传给 styles.json（引擎按字段取）
+	Samples      []struct {
 		Tag  string `json:"tag"`
 		Desc string `json:"desc"`
 		HTML string `json:"html"`
@@ -293,11 +302,18 @@ func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name, segNam
 - layouts 给 5 个该视频的标准构图版式（id 用 ASCII，name 中文 ≤6 字，desc ≤70 字写清主体位置/比例/留白/元素数；画布 1920×1080，安全区 x∈[160,1760] y∈[120,850]，底部 896 起字幕带禁放，每版式 ≥3 元素且不重叠）。
 - samples 给 2 张纯 CSS 样张（tag/desc/html），html 是完整自包含文档，画布固定 960×540：html,body{width:960px;height:540px;overflow:hidden}，内联一个 <style>，每张 ≤2000 字符，不要图片/网络资源，气质尽量贴近附上的关键帧。
 
+## 设计系统（神似的关键，逐项给全；下游与项目设计阶段同一套注入机制）
+- concept：一句话（≤40字）——这套风格的视觉概念，它为什么像这部片。
+- fonts：字体三角色 {"display":{"stack":"..","weight":"..","tracking":".."},"body":{...},"data":{...}}，display/body 必填；栈只能用上面列的 Windows 系统字体且必须含中文字体（中文会豆腐块）。
+- motion：动效语言 {"ease":"缓动族","dur_in":进场时长,"dur_settle":落定时长,"stagger":同组错峰,"notes":"性格一句话"}。看附上的连续关键帧推断：元素怎么进场（淡入/位移方向/缩放）、大概多快、错峰节奏；notes 写什么怎么动、禁什么动。时长档范围 dur_in 0.1–1.5 秒、dur_settle 0.05–1.0 秒、stagger 0–0.5 秒。
+- device：贯穿装置 {"name":"装置名","desc":"是什么、观众为什么记住它","per_seg":"逐段怎么重复/变奏"}——全片反复出现的签名画面元素或构图机制（如「放射线强调」「红色印章盖角」）；没有显式装置就从构图语法归纳一个。
+- anti_patterns：负面清单 3–6 条——这部片绝不会出现的手法（如「彩虹渐变」「emoji 贴纸」「圆角卡片堆砌」），出现即返工的俗手。
+
 ## tokens schema（缺字段引擎走缺省）
 {"font":"系统字体栈","bg":{"type":"solid|linear","from":"#..","to":"#..","angle":0,"fx":["stars|dots|grid|glow|noise 子集"],"glow":[{"color":"#..","x":50,"y":50,"r":50,"alpha":"33"}]},"ink":"#..","txt":"#..","surface":"#..|rgba(..)","surface_txt":"#..","accent":["#..×6"],"primary":"#..","arrow":"#..","border_w":0,"radius":12,"shadow":"css 或 none","title":{"weight":800,"spacing":2},"cap":{"mode":"bar|pill|plain","bg":"rgba(..)","color":"#.."},"img":{"frame":"polaroid|clean|glass","shadow":"css"}}
 
 ## 输出（只输出 JSON，无围栏）
-{"direction":"…","genre":"适用题材（从画面推断，≤30字）","keywords":["…×4-8"],"photo":"配图 query 调性（≤30字）","layouts":[…5],"tokens":{…},"samples":[…2]}
+{"direction":"…","genre":"适用题材（从画面推断，≤30字）","keywords":["…×4-8"],"photo":"配图 query 调性（≤30字）","concept":"…","fonts":{…},"motion":{…},"device":{…},"anti_patterns":["…×3-6"],"layouts":[…5],"tokens":{…},"samples":[…2]}
 `, name, spanTxt, feats.SpanS[1]-feats.SpanS[0], feats.NShots, strings.Join(pal, "、"), notes, nameHint)
 	var style StyleDraft
 	_, err := prov.GenerateJSONVisionNoThink(ctx, system, user, rep, 0.5, &style)
@@ -327,6 +343,28 @@ func validateStyle(st *StyleDraft) []string {
 	}
 	if json.Unmarshal(st.Tokens, &tk) != nil || tk.BG == nil || tk.Ink == "" || tk.TXT == "" || len(tk.Accent) < 4 {
 		errs = append(errs, "tokens 不完整（bg/ink/txt/accent≥4）")
+	}
+	// 设计系统五件套与项目 design 阶段同纪律（contract.ValidateStyleSamplesDraft 同款阈值）：
+	// 没有它们风格条目退化回 v1 色板卡——神似的缺口，宁打回重析不放行
+	if strings.TrimSpace(st.Concept) == "" {
+		errs = append(errs, "concept 缺失")
+	}
+	if st.Fonts == nil || strings.TrimSpace(st.Fonts.Display.Stack) == "" || strings.TrimSpace(st.Fonts.Body.Stack) == "" ||
+		!contract.HasCJKFont(st.Fonts.Display.Stack) || !contract.HasCJKFont(st.Fonts.Body.Stack) {
+		errs = append(errs, "fonts 不完整或字体栈缺中文字体")
+	}
+	if st.Motion == nil || strings.TrimSpace(st.Motion.Ease) == "" || strings.TrimSpace(st.Motion.Notes) == "" ||
+		st.Motion.DurIn < 0.1 || st.Motion.DurIn > 1.5 ||
+		st.Motion.DurSettle < 0.05 || st.Motion.DurSettle > 1.0 ||
+		st.Motion.Stagger < 0 || st.Motion.Stagger > 0.5 {
+		errs = append(errs, "motion 缺失或时长档越界（dur_in 0.1–1.5 / dur_settle 0.05–1.0 / stagger 0–0.5）")
+	}
+	if st.Device == nil || strings.TrimSpace(st.Device.Name) == "" ||
+		strings.TrimSpace(st.Device.Desc) == "" || strings.TrimSpace(st.Device.PerSeg) == "" {
+		errs = append(errs, "device 缺失（名称/是什么/逐段运用三件齐）")
+	}
+	if len(st.AntiPatterns) > 8 {
+		errs = append(errs, "anti_patterns 超 8 条")
 	}
 	return errs
 }

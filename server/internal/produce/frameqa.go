@@ -136,6 +136,9 @@ func (r *Runner) reviewSegments(ctx context.Context, p *pipeline.Project, only s
 	firstErr := error(nil)
 	sem := make(chan struct{}, frameqaConcurrency())
 	var wg sync.WaitGroup
+	// 真迹关键帧（风格来源视频原片帧）：考卷对照物升级——漂移判断有原始目标可依；
+	// 每段同一套真迹，循环外算一次。无媒体/压图失败为空（考卷退回只对照样张）。
+	keyImgs := styleKeyframeImages(ctx, r.DataDir, p)
 	review := func(seg contract.Segment) {
 		defer wg.Done()
 		defer func() { <-sem }()
@@ -158,14 +161,15 @@ func (r *Runner) reviewSegments(ctx context.Context, p *pipeline.Project, only s
 		}
 		var vd frameVerdict
 		// high：逐段审查调用量大，max 的深思考成本×段数不划算；max 留给 storyboard 这类每片一次的深规划。
-		// 样张附在四帧之后（图5+）：风格一致性同场评审——笼子二的回路（plan-v2 §4 Tier1 报告项）。
+		// 样张/真迹附在四帧之后（图5+）：风格一致性同场评审——笼子二的回路（plan-v2 §4 Tier1 报告项）。
 		imgs := []string{dataURL(sf.first), dataURL(sf.open), dataURL(sf.last), dataURL(sf.final)}
 		if samples := styleSampleImages(p); len(samples) > 0 {
 			imgs = append(imgs, samples...)
 		}
+		imgs = append(imgs, keyImgs...)
 		_, rerr := prov.GenerateJSONVisionEffort(ctx,
 			"你是科普视频的画面质检员，只输出 JSON。",
-			reviewPrompt(p, seg, voices[seg.ID]),
+			reviewPrompt(p, seg, voices[seg.ID], keyImgs),
 			imgs, 0.2, &vd, llm.EffortHigh)
 		if rerr != nil {
 			r.Manifest(p, "frameqa.review_error", seg.ID+": "+rerr.Error())
@@ -298,14 +302,19 @@ func specHasScene(p *pipeline.Project, segID string) bool {
 
 // reviewPrompt 四帧一调（省钱且模型可对照）：首帧查提前穿帮，开场帧查清单外提前
 // 出现，落定帧查布局全项，尾帧查退场残留。图片按 图1=首帧、图2=开场帧、
-// 图3=落定帧、图4=尾帧 顺序附在消息里；有已确认样张时图5+ 是风格样张（笼子二回路）。
-func reviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta) string {
+// 图3=落定帧、图4=尾帧 顺序附在消息里；样张/原片真迹跟在图5+（笼子二回路）。
+func reviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta, keys []string) string {
 	samples := styleSampleImages(p)
-	styleBlock := styleCheckBlock(designOf(p), len(samples))
+	styleBlock := styleCheckBlock(designOf(p), len(samples), len(keys))
 	var b strings.Builder
 	header := "这是同一段视频的四帧渲染画面（底部字幕带是画面一部分，字幕文字不算元素）。"
-	if len(samples) > 0 {
+	switch {
+	case len(samples) > 0 && len(keys) > 0:
+		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张已确认的风格样张 + %d 张本风格来源视频的原片真迹（底部字幕带是画面一部分，字幕文字不算元素）。", len(samples), len(keys))
+	case len(samples) > 0:
 		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张已确认的风格样张（底部字幕带是画面一部分，字幕文字不算元素）。", len(samples))
+	case len(keys) > 0:
+		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张本风格来源视频的原片真迹（底部字幕带是画面一部分，字幕文字不算元素）。", len(keys))
 	}
 	b.WriteString(fmt.Sprintf(`%s
 图1 = 首帧（0s，段的第一帧）；图2 = 开场帧（约 0.8s，开场元素刚落定）；
@@ -368,19 +377,29 @@ pass 标准：无 high 问题即 true；medium/low 记录但不算失败。`)
 	return b.String()
 }
 
-// styleCheckBlock 风格一致性检查块（图5+ = 已确认样张）：笼子二的回路，Tier1 是非题——
+// styleCheckBlock 风格一致性检查块（图5+ = 样张/原片真迹）：笼子二的回路，Tier1 是非题——
 // 「这段和样张像不像同一部片」。只报「像另一部片」级漂移（medium，报告项不阻断，
-// plan-v2 §4）；双皮肤与任一皮肤气质一致即算一致。无样张返回 ""。
-func styleCheckBlock(ss *contract.StyleSamples, n int) string {
-	if n <= 0 {
+// plan-v2 §4）；双皮肤与任一皮肤气质一致即算一致。真迹是原始目标，漂移判断以它为
+// 最终准绳（样张是它的网页转译）；两者都无返回 ""。
+func styleCheckBlock(ss *contract.StyleSamples, samples, keys int) string {
+	if samples <= 0 && keys <= 0 {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n## 风格一致性（对照样张，图5–图%d）\n最后 %d 张是本片确认过的风格样张。判断本段画面与样张是否**明显偏离**——配色/字体/整体气质像不像同一部片：\n", 4+n, n)
+	switch {
+	case samples > 0 && keys > 0:
+		fmt.Fprintf(&b, "\n## 风格一致性（图5–图%d 风格样张；图%d–图%d 原片真迹）\n最后 %d 张是本片确认过的风格样张（网页转译），随后 %d 张是本风格来源视频的原片真迹（关键帧）。判断本段画面与样张/真迹是否**明显偏离**——配色/字体/整体气质像不像同一部片：\n",
+			4+samples, 5+samples, 4+samples+keys, samples, keys)
+	case keys > 0:
+		fmt.Fprintf(&b, "\n## 风格一致性（对照原片真迹，图5–图%d）\n最后 %d 张是本风格来源视频的原片真迹（关键帧）。判断本段画面与真迹是否**明显偏离**——配色/字体/整体气质像不像同一部片：\n", 4+keys, keys)
+	default:
+		fmt.Fprintf(&b, "\n## 风格一致性（对照样张，图5–图%d）\n最后 %d 张是本片确认过的风格样张。判断本段画面与样张是否**明显偏离**——配色/字体/整体气质像不像同一部片：\n", 4+samples, samples)
+	}
 	if ss != nil && len(ss.EffectiveSkins()) == 2 && strings.TrimSpace(ss.SkinRule) != "" {
 		b.WriteString("- 本片是双皮肤（切换规则：" + ss.SkinRule + "）；与任一皮肤气质一致即算一致\n")
 	}
-	b.WriteString(`- 只有「像另一部片」程度才报：frame="sample"、element="风格漂移"、severity="medium"，problem 写偏在哪（色系/字体/质感），suggestion 写怎么靠回样张
+	b.WriteString(`- 只有「像另一部片」程度才报：frame="sample"、element="风格漂移"、severity="medium"，problem 写偏在哪（色系/字体/质感），suggestion 写怎么靠回参照
+- 有真迹时以真迹气质为最终准绳（样张是它的网页转译，真迹才是原始目标）
 - 正常设计内变化不算：同色系深浅、版式差异、背景纹理不同、内容不同带来的密度差异
 `)
 	return b.String()

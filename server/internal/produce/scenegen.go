@@ -92,6 +92,12 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		r.emit(p.ID, "progress", "compositions", "样张截图失败，风格注入退回纯文本")
 	}
 	sampleImgs := styleSampleImages(p)
+	// 真迹关键帧（风格来源视频原片帧）全段注入：每段都看着真迹画——课堂通道，
+	// 与考卷（frameqa 对照真迹）配套；无媒体/压图失败静默缺省，退回纯样张。
+	keyImgs := styleKeyframeImages(ctx, r.DataDir, p)
+	if len(keyImgs) > 0 {
+		sampleImgs = append(sampleImgs, keyImgs...)
+	}
 	// NoThink：画面是结构化 HTML 作业，开思考单段 5-13 分钟；关思考配合段间并发
 	// 把全片压进分钟级（v1 spec 路径同款取舍）。
 	gen := func(user string, out any) (openai.Usage, error) {
@@ -140,7 +146,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	work := func(seg contract.Segment) {
 		v := voices[seg.ID]
 		sceneM, compM := methodsFor(r.RootDir, seg)
-		style := designNoteFor(p, r.DataDir, seg.Idx)
+		style := designNoteFor(p, r.DataDir, seg.Idx) + keyframeNote(len(keyImgs))
 		user := sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM)
 		var payload struct {
 			HTML     string                  `json:"html"`
@@ -158,7 +164,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 				HTML     string                  `json:"html"`
 				Elements []contract.NamedElement `json:"elements"`
 			}
-			u2, err2 := gen(sceneUserPrompt(seg, v, "", fb, cv, designNoteFor(p, r.DataDir, seg.Idx), golden, sceneM, compM), &fixed)
+			u2, err2 := gen(sceneUserPrompt(seg, v, "", fb, cv, designNoteFor(p, r.DataDir, seg.Idx)+keyframeNote(len(keyImgs)), golden, sceneM, compM), &fixed)
 			if err2 != nil {
 				fail(fmt.Errorf("%s 场景修复失败: %w", seg.ID, err2))
 				return

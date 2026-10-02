@@ -98,3 +98,85 @@ func TestBackfillMediaSkipsMissingAndFillsExisting(t *testing.T) {
 		t.Fatal("草稿条目不应回填")
 	}
 }
+
+func TestPickKeyframes(t *testing.T) {
+	if got := PickKeyframes(nil, 5); got != nil {
+		t.Fatalf("空清单应返回 nil，得到 %v", got)
+	}
+	names := []string{"f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9"}
+	// 首尾必含
+	if got := PickKeyframes(names, 3); got[0] != "f0" || got[len(got)-1] != "f9" {
+		t.Fatalf("首尾必含: %v", got)
+	}
+	if got := PickKeyframes(names[:1], 5); len(got) != 1 || got[0] != "f0" {
+		t.Fatalf("清单不足 n 收敛为 1: %v", got)
+	}
+	if got := PickKeyframes(names, 1); len(got) != 1 || got[0] != "f0" {
+		t.Fatalf("n=1 取首张: %v", got)
+	}
+	// 均匀且无重复
+	seen := map[string]bool{}
+	got := PickKeyframes(names, 5)
+	for _, name := range got {
+		if seen[name] {
+			t.Fatalf("重复挑帧: %v", got)
+		}
+		seen[name] = true
+	}
+	if len(got) != 5 {
+		t.Fatalf("应挑 5 张: %v", got)
+	}
+}
+
+func TestKeyframePathsFallbackScan(t *testing.T) {
+	l := New(t.TempDir())
+	// 无条目无媒体 → nil
+	if got := l.KeyframePaths("vid-none", 5); got != nil {
+		t.Fatalf("无媒体应返回 nil: %v", got)
+	}
+	dir := l.MediaDir("vid-old")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// 老条目：无 Keyframes 登记清单 → 回退扫描目录 frame-*.png 均匀补挑
+	for _, name := range []string{"frame-00.png", "frame-01.png", "frame-02.png", "frame-03.png", "video.mp4"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := l.KeyframePaths("vid-old", 3)
+	if len(got) != 3 {
+		t.Fatalf("回退扫描应挑 3 张: %v", got)
+	}
+	for _, p := range got {
+		if filepath.Base(p) == "video.mp4" {
+			t.Fatal("真迹只挑 frame-*.png，不该带上原片")
+		}
+	}
+	if filepath.Base(got[0]) != "frame-00.png" || filepath.Base(got[2]) != "frame-03.png" {
+		t.Fatalf("首尾必含: %v", got)
+	}
+}
+
+func TestKeyframePathsListedNames(t *testing.T) {
+	l := New(t.TempDir())
+	seed := []Style{{ID: "vid-new", Keyframes: []string{"frame-02.png", "frame-05.png", "frame-99.png"}}}
+	dir := l.MediaDir("vid-new")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"frame-00.png", "frame-02.png", "frame-05.png"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, _ := json.Marshal(seed)
+	if err := os.WriteFile(filepath.Join(l.dir, "styles.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 登记清单优先，失效项（frame-99）跳过，只回存在的
+	got := l.KeyframePaths("vid-new", 5)
+	if len(got) != 2 || filepath.Base(got[0]) != "frame-02.png" || filepath.Base(got[1]) != "frame-05.png" {
+		t.Fatalf("按登记清单取存在文件: %v", got)
+	}
+}

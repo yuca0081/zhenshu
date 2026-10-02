@@ -1054,10 +1054,23 @@ func (s *Server) ingestRefStyle(c *gin.Context, seedID, name, coverName string, 
 	for _, smp := range d.Samples {
 		samples = append(samples, stylelib.Sample{Tag: smp.Tag, Desc: smp.Desc, HTML: smp.HTML})
 	}
-	if t := makeCover(dir, styleref.ReadFeatures(dir)); t >= 0 {
+	feats := styleref.ReadFeatures(dir)
+	if t := makeCover(dir, feats); t >= 0 {
 		samples = append([]stylelib.Sample{coverSample(stylelib.VideoStyleID(seedID), coverName, t)}, samples...)
 	}
-	st, err := s.Lib.IngestVideoRef(seedID, name, d.Direction, d.Genre, d.Keywords, tokens, layouts, samples, desc)
+	// 真迹关键帧登记：均匀挑 ≤5 张（首尾必含），快照时随 frame-*.png 一起进媒体目录
+	var frameNames []string
+	for _, f := range feats {
+		frameNames = append(frameNames, filepath.Base(f.Path))
+	}
+	st, err := s.Lib.IngestVideoRef(seedID, stylelib.VideoStyleIn{
+		Name: name, Direction: d.Direction, Genre: d.Genre, Keywords: d.Keywords, Desc: desc,
+		Tokens: tokens, Layouts: layouts,
+		Concept: d.Concept, Fonts: d.Fonts, Motion: d.Motion, Device: d.Device,
+		AntiPatterns: d.AntiPatterns,
+		Keyframes:    stylelib.PickKeyframes(frameNames, 5),
+		Samples:      samples,
+	})
 	if err != nil {
 		return nil, err
 	}
