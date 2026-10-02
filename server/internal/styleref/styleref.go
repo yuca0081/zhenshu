@@ -346,6 +346,15 @@ func validateStyle(st *StyleDraft) []string {
 	}
 	// 设计系统五件套与项目 design 阶段同纪律（contract.ValidateStyleSamplesDraft 同款阈值）：
 	// 没有它们风格条目退化回 v1 色板卡——神似的缺口，宁打回重析不放行
+	errs = append(errs, ValidateDesignSystem(st)...)
+	return errs
+}
+
+// ValidateDesignSystem 设计系统五件套自检（concept/fonts/motion/device/anti_patterns），
+// 阈值与 contract.ValidateStyleSamplesDraft 同款。入库自检与老条目回填工具共用一套，
+// 阈值只放这一处。
+func ValidateDesignSystem(st *StyleDraft) []string {
+	var errs []string
 	if strings.TrimSpace(st.Concept) == "" {
 		errs = append(errs, "concept 缺失")
 	}

@@ -323,7 +323,38 @@ func (l *Library) IngestVideoRef(refID string, in VideoStyleIn) (*Style, error) 
 	id := videoStyleID(refID)
 	for i := range styles {
 		if styles[i].ID == id {
-			return &styles[i], nil // 已入库，幂等
+			// 已入库：不整条重写（用户可能改过），只补齐缺失面——老版本入库的条目
+			// 没有五件套/真迹关键帧，重新解析确认同一个视频时在这里升级。
+			up := &styles[i]
+			if up.Concept == "" {
+				up.Concept = in.Concept
+			}
+			if up.Fonts == nil {
+				up.Fonts = in.Fonts
+			}
+			if up.Motion == nil {
+				up.Motion = in.Motion
+			}
+			if up.Device == nil {
+				up.Device = in.Device
+			}
+			if len(up.AntiPatterns) == 0 {
+				up.AntiPatterns = in.AntiPatterns
+			}
+			if len(up.Keyframes) == 0 {
+				up.Keyframes = in.Keyframes
+			}
+			if len(in.Tokens) > 0 && len(up.Tokens) == 0 {
+				up.Tokens = in.Tokens
+			}
+			if len(in.Layouts) > 0 && len(up.Layouts) == 0 {
+				up.Layouts = in.Layouts
+			}
+			err := l.save(styles)
+			if err != nil {
+				return nil, err
+			}
+			return up, nil
 		}
 	}
 	s := Style{
@@ -358,6 +389,26 @@ func (l *Library) Publish(id string) (*Style, error) {
 	return nil, fmt.Errorf("风格库没有 %s", id)
 }
 
+// UpdateEntry 单条修改（回填/升级类作业用）：读失败绝不落盘（防损坏清库），
+// fn 里只改该条目，成功才整库原子写回。
+func (l *Library) UpdateEntry(id string, fn func(*Style) error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	styles, err := l.listLocked()
+	if err != nil {
+		return fmt.Errorf("风格库读取失败（不写入，保护现有库）: %w", err)
+	}
+	for i := range styles {
+		if styles[i].ID == id {
+			if err := fn(&styles[i]); err != nil {
+				return err
+			}
+			return l.save(styles)
+		}
+	}
+	return fmt.Errorf("风格库没有 %s", id)
+}
+
 // Get 取单个条目（新建项目选用后查详情/复用）。
 func (l *Library) Get(id string) (*Style, bool) {
 	styles, _ := l.List()
@@ -389,6 +440,12 @@ func (l *Library) ByDirection(direction string) (*Style, bool) {
 // 设计系统五件套 + 版式一并带出：fonts/motion/device 任一非空即让项目端
 // hasDesignSystem 成立，DesignDoc 注入/版式轮换/画面质检全套走 v2 通道。
 func (s *Style) StyleSamplesJSON() []byte {
+	skin := s.Skin
+	if skin == nil {
+		// 条目没存皮肤（视频解析/老项目起草路径）→ 从 tokens 机械派生。
+		// v2 制作闸硬性要求皮肤，库内包不能在这里断粮；派生是纯函数，确定性与 tokens 一致。
+		skin = SkinFromTokens(s.Direction, s.Tokens)
+	}
 	out := contract.StyleSamples{
 		StyleID:      s.ID,
 		Direction:    s.Direction,
@@ -399,7 +456,7 @@ func (s *Style) StyleSamplesJSON() []byte {
 		Device:       s.Device,
 		AntiPatterns: s.AntiPatterns,
 		Samples:      make([]contract.Sample, 0, len(s.Samples)),
-		Skin:         s.Skin,
+		Skin:         skin,
 		Confirmed:    false,
 	}
 	for _, l := range s.Layouts {
