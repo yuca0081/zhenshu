@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -129,10 +130,17 @@ func cmdRun(cfg *config.Config, id, until string) {
 		fatal(fmt.Errorf("项目不存在: %s", p.Dir))
 	}
 	fmt.Printf("项目 %s · LLM 模式: %s\n", id, cfg.LLMMode)
-	if err := pipeline.Run(context.Background(), p, until); err != nil {
-		// 等待 LLM / 待实现 属正常停点，退出码 0 方便脚本串联
+	err := pipeline.Run(context.Background(), p, until)
+	if err == nil {
+		return
+	}
+	// 等待 LLM / 待实现 属正常停点，退出码 0 方便脚本串联；其余失败必须非零退出，
+	// 否则脚本串联会把半途而废的管线当成功（错误文本 Run 已打印）
+	var await *pipeline.ErrAwaitLLM
+	if errors.As(err, &await) || errors.Is(err, pipeline.ErrTodo) {
 		os.Exit(0)
 	}
+	os.Exit(1)
 }
 
 func cmdStatus(cfg *config.Config, id string) {

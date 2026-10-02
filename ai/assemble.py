@@ -32,7 +32,7 @@ def load_style_tokens(style_id):
     """按 style_id 查 styles.json 的 tokens（overlay 取 ink/primary/font；查不到给中性默认）。"""
     if not style_id:
         return {}
-    path = AI_DIR.parent / 'data' / 'library' / 'registry' / 'styles.json'
+    path = AI_DIR.parent / 'data' / 'library' / 'styles.json'
     try:
         for e in json.load(open(path, encoding='utf-8')):
             if str(e.get('id', '')).lower() == str(style_id).lower():

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
-import { NButton, NTag } from 'naive-ui'
+import { useMessage, NButton, NTag } from 'naive-ui'
 import SampleFrame from './SampleFrame.vue'
 import TemplateDetail from './TemplateDetail.vue'
 import { api } from '../api'
@@ -13,9 +13,12 @@ const refs = ref<RefVideo[]>([])
 const uploading = ref(false)
 const fileEl = ref<HTMLInputElement | null>(null)
 let timer: number | undefined
+let dead = false // 卸载标志：refresh 的 await 期间销毁组件时，返回后不得再排下一轮
 
 async function refresh() {
-  refs.value = await api.listReferences().catch(() => refs.value)
+  const list = await api.listReferences().catch(() => refs.value)
+  if (dead) return
+  refs.value = list
   schedule()
 }
 function schedule() {
@@ -24,7 +27,9 @@ function schedule() {
   if (busy) timer = window.setTimeout(refresh, 3000) // 有在跑的才轮询
 }
 onMounted(refresh)
-onUnmounted(() => window.clearTimeout(timer))
+onUnmounted(() => { dead = true; window.clearTimeout(timer) })
+
+const message = useMessage()
 
 function pick() { fileEl.value?.click() }
 async function onFile(e: Event) {
@@ -37,14 +42,14 @@ async function onFile(e: Event) {
     await refresh()
     // 上传后立刻起一次忙轮询（refresh 内部已按 status 判断）
   } catch (err) {
-    alert(`上传失败：${(err as Error).message}`)
+    message.error(`上传失败：${(err as Error).message}`)
   } finally {
     uploading.value = false
   }
 }
 
 async function retry(id: string) {
-  await api.analyzeReference(id).catch(e => alert(`重试失败：${e.message}`))
+  await api.analyzeReference(id).catch(e => message.error(`重试失败：${e.message}`))
   await refresh()
 }
 async function ingest(r: RefVideo) {
@@ -54,7 +59,7 @@ async function ingest(r: RefVideo) {
     show.value = false // 入库后 refs 刷新，关抽屉避免状态过期
     emit('ingested') // 新风格出现在「风格库」tab
   } catch (e) {
-    alert(`入库失败：${(e as Error).message}`)
+    message.error(`入库失败：${(e as Error).message}`)
   }
 }
 

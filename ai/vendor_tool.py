@@ -213,20 +213,23 @@ if __name__ == '__main__':
     if not a or a[0] in ('-h', '--help', 'help'):
         print(__doc__)
         sys.exit(0)
+    def opt_val(flag):
+        # 手工解析没有 argparse 的边界保护：flag 排末位无值时取值会 IndexError
+        i = a.index(flag)
+        return a[i + 1] if i + 1 < len(a) else ''
+
     cmd = a[0]
     if cmd == 'list':
         sys.exit(list_cmd())
     if cmd == 'ensure':
         spec = a[1] if len(a) > 1 else ''
-        member = ''
-        if '--file' in a:
-            member = a[a.index('--file') + 1]
-        ev = a[a.index('--replay') + 1] if '--replay' in a else ''
+        member = opt_val('--file') if '--file' in a else ''
+        ev = opt_val('--replay') if '--replay' in a else ''
         pending = '--allow-pending-replay' in a
         sys.exit(ensure(spec, member, ev, pending))
     if cmd == 'exam':
         spec = a[1] if len(a) > 1 else ''
-        ev = a[a.index('--replay') + 1] if '--replay' in a else ''
+        ev = opt_val('--replay') if '--replay' in a else ''
         sys.exit(exam_cmd(spec, ev))
     print(__doc__)
     sys.exit(1)

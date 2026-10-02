@@ -122,6 +122,9 @@ func parseSearchResults(text string) ([]SearchResult, error) {
 }
 
 // mcpPost 发一次 JSON-RPC。非 200 一律报错（欠费 500 的 body 是纯文本，原样带回并给可读提示）。
+// mcpClient 包级复用（连接池）：搜索调用频繁，每次新建 client 白付握手。
+var mcpClient = &http.Client{Timeout: 60 * time.Second}
+
 func mcpPost(ctx context.Context, endpoint, key, sid string, body []byte) ([]byte, http.Header, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -133,8 +136,7 @@ func mcpPost(ctx context.Context, endpoint, key, sid string, body []byte) ([]byt
 	if sid != "" {
 		req.Header.Set("Mcp-Session-Id", sid)
 	}
-	cli := &http.Client{Timeout: 60 * time.Second}
-	httpResp, err := cli.Do(req)
+	httpResp, err := mcpClient.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}

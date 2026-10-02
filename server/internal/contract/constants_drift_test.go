@@ -29,3 +29,18 @@ func TestSegTailMatchesTwinImplementations(t *testing.T) {
 	}
 }
 
+// 漂移门禁：风格库事实源是 data/library/styles.json（Go 侧 pipeline.styleTokens 直读）。
+// 曾踩坑：assemble.py 残留 registry/ 旧路径，try/except 吞错后 overlay 风格 token
+// 与转场模式静默走默认值——这里禁止该旧路径再出现。
+func TestAssembleStylesPathNoRegistry(t *testing.T) {
+	py, err := os.ReadFile(filepath.Join("..", "..", "..", "ai", "assemble.py"))
+	if err != nil {
+		t.Fatalf("assemble.py 不可读: %v", err)
+	}
+	if regexp.MustCompile(`registry`).Match(py) {
+		t.Errorf("ai/assemble.py 引用了 registry/ 旧路径——现行事实源是 data/library/styles.json")
+	}
+	if !regexp.MustCompile(`'styles\.json'`).Match(py) {
+		t.Errorf("ai/assemble.py 未引用 styles.json（overlay 取 token 的路径丢了？）")
+	}
+}

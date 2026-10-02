@@ -73,7 +73,7 @@ def shell_spec(proj):
     style_id = str(sb.get('style_id') or '')
     tokens = {}
     if style_id:
-        for e in jload(proj.parent.parent / 'library' / 'registry' / 'styles.json') or []:
+        for e in jload(proj.parent.parent / 'library' / 'styles.json') or []:
             if str(e.get('id', '')).lower() == style_id.lower():
                 tokens = e.get('tokens') or {}
                 break

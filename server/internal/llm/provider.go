@@ -122,15 +122,26 @@ func visionParts(user string, imageURLs []string) []openai.ChatMessagePart {
 	return parts
 }
 
+// httpClient 包级复用（连接池）；10 分钟超时兜底端点偶发挂住，防 Agent 循环/管线永久卡死。
+var httpClient = &http.Client{Timeout: 10 * time.Minute}
+
 func (p *Provider) generate(ctx context.Context, system string, userParts []openai.ChatMessagePart, out any, temperature float32, effort Effort) (openai.Usage, error) {
 	var lastErr error
 	var usage openai.Usage
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
-			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+			// 重试退避感知取消：任务已被取消还空转重试只会白等
+			select {
+			case <-ctx.Done():
+				return usage, ctx.Err()
+			case <-time.After(time.Duration(attempt) * 2 * time.Second):
+			}
 		}
 		resp, err := p.chatOnce(ctx, system, userParts, temperature, effort)
 		if err != nil {
+			if ctx.Err() != nil { // 取消/超时不是可重试错误
+				return usage, ctx.Err()
+			}
 			lastErr = err
 			continue // 网络/限流类错误重试
 		}
@@ -158,7 +169,7 @@ type glmThinking struct {
 // glmChatRequest ChatCompletionRequest + 智谱扩展字段（内嵌扁平序列化）。
 type glmChatRequest struct {
 	openai.ChatCompletionRequest
-	Thinking       *glmThinking `json:"thinking,omitempty"`        // 思考开关（disabled 专用）
+	Thinking        *glmThinking `json:"thinking,omitempty"`         // 思考开关（disabled 专用）
 	ReasoningEffort string       `json:"reasoning_effort,omitempty"` // 思考档位：low/high/max，与 Thinking 互斥
 }
 
@@ -204,9 +215,7 @@ func (p *Provider) postChat(ctx context.Context, req glmChatRequest) (openai.Cha
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+p.APIKey)
 	httpReq.Header.Set("Content-Type", "application/json")
-	// 默认 http.Client 无超时：端点偶发挂住会把 Agent 循环/管线永久卡死
-	cli := &http.Client{Timeout: 10 * time.Minute}
-	httpResp, err := cli.Do(httpReq)
+	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return openai.ChatCompletionResponse{}, err
 	}

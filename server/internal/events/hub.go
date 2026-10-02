@@ -8,7 +8,8 @@ import (
 )
 
 // Type 取值：
-//   msg / agent_msg / tool_call / tool_result / stage / style_confirmed / error / done
+//
+//	msg / agent_msg / tool_call / tool_result / stage / style_confirmed / error / done
 type Event struct {
 	Type   string `json:"type"`
 	Stage  string `json:"stage,omitempty"`  // stage 事件：tts|compositions|assemble|check|render
@@ -43,7 +44,9 @@ func (h *Hub) Subscribe(projectID string) (ch chan Event, replay []Event, cancel
 		defer h.mu.Unlock()
 		if m := h.subs[projectID]; m != nil {
 			delete(m, ch)
-			close(ch)
+			// 不 close(ch)：Emit 在锁外向快照 channel 非阻塞发送，这里 close 构成
+			// send-on-closed 竞态（SSE 断连撞上管线发事件即 panic，且崩的是 producer
+			// goroutine，gin recovery 罩不住）。读端随请求 ctx 退出，channel 交给 GC。
 			// 订阅者清零即删条目：SSE 断连后 map 永不清理会让长期运行的服务内存单调增长
 			if len(m) == 0 {
 				delete(h.subs, projectID)
