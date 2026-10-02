@@ -76,3 +76,10 @@ demo/style-samples/ref-video/
 # 原型验证产物(可再生成,md5 证据留 GATE.md)
 demo/webgl-prototype/render*.mp4
 demo/webgl-prototype/[ab]_*.png
+
+# 等轴2.5D/soft-3D 原型:依赖与渲染产物可再生成,不入库(闸记录见 memory/GATE)
+demo/iso-25d/renders/
+demo/iso-25d/sheet.png
+demo/soft-3d/node_modules/
+demo/soft-3d/renders/
+demo/soft-3d/sheet.png

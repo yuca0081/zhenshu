@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>SVG 像素画 Demo</title>
+<style>
+  body { background:#17171f; color:#e8e8f0; font-family:system-ui,sans-serif;
+         display:flex; flex-direction:column; align-items:center; padding:48px 16px; margin:0; }
+  h1 { font-weight:600; font-size:22px; }
+  p.sub { color:#9a9ab0; margin-top:-6px; font-size:14px; }
+  .row { display:flex; gap:36px; flex-wrap:wrap; justify-content:center; margin-top:36px; }
+  .card { background:#20202c; border:1px solid #2e2e3e; border-radius:12px; padding:26px 26px 16px; text-align:center; }
+  .checker { background:repeating-conic-gradient(#262633 0% 25%, #1c1c26 0% 50%) 0 0 / 22px 22px;
+             border-radius:8px; line-height:0; display:inline-block; padding:12px; }
+  .label { margin-top:12px; color:#c8c8da; font-size:14px; }
+  .meta { color:#78788e; font-size:12px; margin-top:4px; }
+</style>
+</head>
+<body>
+<h1>SVG 像素画 Demo</h1>
+<p class="sub">一个像素 = 一个 &lt;rect&gt; 方块 · 无限放大不糊</p>
+<div class="row">
+<div class="card"><div class="checker"><svg style="width:220px;height:200px" xmlns="http://www.w3.org/2000/svg" width="220" height="200" viewBox="0 0 11 10" shape-rendering="crispEdges">
+  <rect x="1" y="0" width="2" height="1" fill="#8f1d3c"/>
+  <rect x="8" y="0" width="2" height="1" fill="#8f1d3c"/>
+  <rect x="0" y="1" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="1" y="1" width="2" height="1" fill="#ef476f"/>
+  <rect x="3" y="1" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="7" y="1" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="8" y="1" width="2" height="1" fill="#ef476f"/>
+  <rect x="10" y="1" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="0" y="2" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="1" y="2" width="1" height="1" fill="#ffd6de"/>
+  <rect x="2" y="2" width="2" height="1" fill="#ef476f"/>
+  <rect x="4" y="2" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="6" y="2" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="7" y="2" width="3" height="1" fill="#ef476f"/>
+  <rect x="10" y="2" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="0" y="3" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="1" y="3" width="1" height="1" fill="#ffd6de"/>
+  <rect x="2" y="3" width="3" height="1" fill="#ef476f"/>
+  <rect x="5" y="3" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="6" y="3" width="4" height="1" fill="#ef476f"/>
+  <rect x="10" y="3" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="0" y="4" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="1" y="4" width="9" height="1" fill="#ef476f"/>
+  <rect x="10" y="4" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="1" y="5" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="2" y="5" width="7" height="1" fill="#ef476f"/>
+  <rect x="9" y="5" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="2" y="6" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="3" y="6" width="5" height="1" fill="#ef476f"/>
+  <rect x="8" y="6" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="3" y="7" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="4" y="7" width="3" height="1" fill="#ef476f"/>
+  <rect x="7" y="7" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="4" y="8" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="5" y="8" width="1" height="1" fill="#ef476f"/>
+  <rect x="6" y="8" width="1" height="1" fill="#8f1d3c"/>
+  <rect x="5" y="9" width="1" height="1" fill="#8f1d3c"/>
+</svg></div><div class="label">爱心</div><div class="meta">11×10 像素 · 37 个矩形</div></div>
+<div class="card"><div class="checker"><svg style="width:220px;height:160px" xmlns="http://www.w3.org/2000/svg" width="220" height="160" viewBox="0 0 11 8" shape-rendering="crispEdges">
+  <rect x="2" y="0" width="1" height="1" fill="#4ade80"/>
+  <rect x="8" y="0" width="1" height="1" fill="#4ade80"/>
+  <rect x="3" y="1" width="1" height="1" fill="#4ade80"/>
+  <rect x="7" y="1" width="1" height="1" fill="#4ade80"/>
+  <rect x="2" y="2" width="7" height="1" fill="#4ade80"/>
+  <rect x="1" y="3" width="2" height="1" fill="#4ade80"/>
+  <rect x="4" y="3" width="3" height="1" fill="#4ade80"/>
+  <rect x="8" y="3" width="2" height="1" fill="#4ade80"/>
+  <rect x="0" y="4" width="11" height="1" fill="#4ade80"/>
+  <rect x="0" y="5" width="1" height="1" fill="#4ade80"/>
+  <rect x="2" y="5" width="7" height="1" fill="#4ade80"/>
+  <rect x="10" y="5" width="1" height="1" fill="#4ade80"/>
+  <rect x="0" y="6" width="1" height="1" fill="#4ade80"/>
+  <rect x="2" y="6" width="1" height="1" fill="#4ade80"/>
+  <rect x="8" y="6" width="1" height="1" fill="#4ade80"/>
+  <rect x="10" y="6" width="1" height="1" fill="#4ade80"/>
+  <rect x="3" y="7" width="2" height="1" fill="#4ade80"/>
+  <rect x="6" y="7" width="2" height="1" fill="#4ade80"/>
+</svg></div><div class="label">太空入侵者</div><div class="meta">11×8 像素 · 18 个矩形</div></div>
+<div class="card"><div class="checker"><svg style="width:160px;height:160px" xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 8 8" shape-rendering="crispEdges">
+  <rect x="1" y="0" width="6" height="1" fill="#ffd93b"/>
+  <rect x="0" y="1" width="8" height="1" fill="#ffd93b"/>
+  <rect x="0" y="2" width="2" height="1" fill="#ffd93b"/>
+  <rect x="2" y="2" width="1" height="1" fill="#5c4300"/>
+  <rect x="3" y="2" width="2" height="1" fill="#ffd93b"/>
+  <rect x="5" y="2" width="1" height="1" fill="#5c4300"/>
+  <rect x="6" y="2" width="2" height="1" fill="#ffd93b"/>
+  <rect x="0" y="3" width="8" height="1" fill="#ffd93b"/>
+  <rect x="0" y="4" width="1" height="1" fill="#ffd93b"/>
+  <rect x="1" y="4" width="1" height="1" fill="#5c4300"/>
+  <rect x="2" y="4" width="4" height="1" fill="#ffd93b"/>
+  <rect x="6" y="4" width="1" height="1" fill="#5c4300"/>
+  <rect x="7" y="4" width="1" height="1" fill="#ffd93b"/>
+  <rect x="0" y="5" width="2" height="1" fill="#ffd93b"/>
+  <rect x="2" y="5" width="4" height="1" fill="#5c4300"/>
+  <rect x="6" y="5" width="2" height="1" fill="#ffd93b"/>
+  <rect x="0" y="6" width="8" height="1" fill="#ffd93b"/>
+  <rect x="1" y="7" width="6" height="1" fill="#ffd93b"/>
+</svg></div><div class="label">笑脸</div><div class="meta">8×8 像素 · 18 个矩形</div></div>
+</div>
+</body>
+</html>

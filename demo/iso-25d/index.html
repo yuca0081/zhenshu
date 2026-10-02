@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>等轴 2.5D 原型 · 纯 Canvas 2D</title>
+<style>
+  * { margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #A9A3E8; }
+  #stage { width: 1920px; height: 1080px; display: block; }
+</style>
+</head>
+<body>
+<canvas id="stage" width="1920" height="1080"></canvas>
+<script>
+'use strict';
+// ===== 等轴 2.5D 城市生长 · 纯 Canvas 2D =====
+// 契约：一切运动是 f(t) 的闭式函数（缓动+错峰），无累积状态，__renderFrame(t) 可任意跳帧重放。
+const cv = document.getElementById('stage');
+const ctx = cv.getContext('2d');
+const W = 1920, H = 1080, DUR = 12;
+
+// ---- 工具 ----
+const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+const lerp = (a, b, k) => a + (b - a) * k;
+const outCubic = k => 1 - Math.pow(1 - k, 3);
+const backOut = k => { const s = 1.70158; return 1 + (--k) * k * ((s + 1) * k + s); };
+const rngFactory = seed => () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let z = Math.imul(seed ^ seed >>> 15, 1 | seed); z = z + Math.imul(z ^ z >>> 7, 61 | z) ^ z; return ((z ^ z >>> 14) >>> 0) / 4294967296; };
+
+// ---- 布局（种子随机，跨次运行确定）----
+const N = 13, TW = 100, TH = 50, ZS = 42;
+const OX = 960, OY = 285;
+const grid = [];            // {kind:'lawn'|'bld'|'tree'|'pool', h, tone, delay}
+const rng = rngFactory(7);
+const HERO = { x: 6, y: 4 };
+for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+  const cx = x + 0.5, cy = y + 0.5;
+  const d = Math.hypot(cx - 6.5, cy - 6.5);
+  const r = rng();
+  let cell;
+  if (x === 6 && y === 6) cell = { kind: 'pool' };
+  else if (x === HERO.x && y === HERO.y) cell = { kind: 'bld', h: 4.6, tone: 0, hero: true };
+  else if (r < 0.13 && d > 1.6) cell = { kind: 'tree', ph: rng() * 6.28 };
+  else if (r < 0.60) {
+    const h = Math.max(0.5, Math.min(3.6, (3.3 - d * 0.36) * (0.65 + rng() * 0.75)));
+    cell = { kind: 'bld', h, tone: rng(), delay: d * 0.5 };
+  } else cell = { kind: 'lawn' };
+  cell.x = x; cell.y = y;
+  grid.push(cell);
+}
+const blds = grid.filter(c => c.kind === 'bld' || c.kind === 'tree');
+
+const proj = (px, py, z) => [OX + (px - py) * TW / 2, OY + (px + py) * TH / 2 - z * ZS];
+
+function diamond(cx, cy, cz, e) { // 中心(cx,cy) 半径e 的菱形四角
+  const a = proj(cx - e, cy - e, cz), b = proj(cx + e, cy - e, cz),
+        c = proj(cx + e, cy + e, cz), d = proj(cx - e, cy + e, cz);
+  return [a, b, c, d];
+}
+function poly(pts, fill) {
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
+}
+function face(p0, p1, z0, z1, fill) { // 立面：底边 p0→p1，高度 z0→z1
+  const a = proj(p0[0], p0[1], z0), b = proj(p1[0], p1[1], z0),
+        c = proj(p1[0], p1[1], z1), d = proj(p0[0], p0[1], z1);
+  poly([a, b, c, d], fill);
+}
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+// ---- 绘制 ----
+function drawBG(t) {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#CBC6F4'); g.addColorStop(1, '#A9A3E8');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  blob(280, 180, 340, 'rgba(244,180,196,0.20)');
+  blob(1680, 300, 380, 'rgba(143,224,208,0.16)');
+  blob(1500, 900, 420, 'rgba(255,255,255,0.10)');
+}
+function blob(x, y, r, color) {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, color); g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+}
+function drawShadow() { // 岛底软阴影
+  ctx.save(); ctx.translate(OX, OY + N * TH / 2 + 52); ctx.scale(1, 0.13);
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 560);
+  g.addColorStop(0, 'rgba(40,36,90,0.30)'); g.addColorStop(1, 'rgba(40,36,90,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, 560, 0, 6.29); ctx.fill(); ctx.restore();
+}
+function drawTile(c, t) {
+  const k = outCubic(clamp01((t - (0.15 + (c.x + c.y) * 0.05)) / 0.45));
+  if (k <= 0) return;
+  const e = 0.5;
+  const pts = diamond(c.x + 0.5, c.y + 0.5, 0, e);
+  ctx.save(); ctx.globalAlpha = k; ctx.translate(0, (1 - k) * 22);
+  if (c.kind === 'pool') {
+    poly(pts, '#8ADFCE');
+    // 涟漪：闭式周期环
+    for (let i = 0; i < 2; i++) {
+      const ph = ((t * 0.42 + i * 0.5) % 1);
+      const rk = 0.12 + ph * 0.30;
+      poly(diamond(c.x + 0.5, c.y + 0.5, 0.01, rk), `rgba(255,255,255,${(0.5 * (1 - ph)).toFixed(3)})`);
+    }
+    poly(diamond(c.x + 0.5, c.y + 0.5, 0.02, 0.10), '#B7EFE3');
+  } else if (c.kind === 'lawn') {
+    poly(pts, '#E4E1F8');
+    if ((c.x * 7 + c.y * 13) % 5 === 0) poly(diamond(c.x + 0.5, c.y + 0.5, 0.005, 0.10), '#D3EFF4');
+  } else {
+    poly(pts, '#DEDAF7');
+  }
+  ctx.restore();
+}
+function bldPalette(c, hero) {
+  if (hero) return { top: '#7B72E0', left: '#5B54C8', right: '#4A44AE', win: '#B9B4FF' };
+  const j = c.tone;
+  return {
+    top: `hsl(${248 + j * 8}, ${60 + j * 14}%, ${96 - j * 3}%)`,
+    left: `hsl(${248 + j * 8}, ${44 + j * 12}%, ${84 - j * 5}%)`,
+    right: `hsl(${248 + j * 8}, ${40 + j * 12}%, ${72 - j * 6}%)`,
+    win: `hsl(250, 55%, 88%)`,
+  };
+}
+function drawBuilding(c, t) {
+  const k = outCubic(clamp01((t - (1.05 + c.delay)) / 1.15));
+  if (k <= 0) return;
+  const h = c.h * k, cx = c.x + 0.5, cy = c.y + 0.5, e = 0.38;
+  const P = bldPalette(c, c.hero);
+  const NW = [cx - e, cy - e], NE = [cx + e, cy - e], SE = [cx + e, cy + e], SW = [cx - e, cy + e];
+  face(SW, SE, 0, h, P.left);       // 左立面(受光)
+  face(SE, NE, 0, h, P.right);      // 右立面(背光)
+  poly(diamond(cx, cy, h, e), P.top);
+  // 顶面内衬小板
+  poly(diamond(cx, cy, h + 0.02, e * 0.55), c.hero ? '#8F88F0' : 'rgba(255,255,255,0.75)');
+  // 窗（高层才画）
+  if (c.h > 1.5) {
+    const rows = Math.min(6, Math.floor(c.h * 2.2)), cols = 3;
+    ctx.fillStyle = c.hero ? P.win : 'rgba(120,114,200,0.35)';
+    for (let r = 0; r < rows; r++) for (let w = 0; w < cols; w++) {
+      const z0 = 0.22 + r * (h - 0.3) / rows + 0.06, z1 = z0 + Math.min(0.16, (h - 0.3) / rows - 0.08);
+      if (z1 >= h - 0.04) continue;
+      const u0 = 0.14 + w * 0.30, u1 = u0 + 0.16;
+      const pA = [lerp(SW[0], SE[0], u0), lerp(SW[1], SE[1], u0)], pB = [lerp(SW[0], SE[0], u1), lerp(SW[1], SE[1], u1)];
+      face(pA, pB, z0, z1, c.hero ? P.win : 'rgba(120,114,200,0.32)');
+      const qA = [lerp(SE[0], NE[0], u0), lerp(SE[1], NE[1], u0)], qB = [lerp(SE[0], NE[0], u1), lerp(SE[1], NE[1], u1)];
+      face(qA, qB, z0, z1, 'rgba(70,64,150,0.22)');
+    }
+  }
+  if (c.hero) { // 天线 + 顶灯
+    const [ax, ay] = proj(cx, cy, h + 0.02);
+    const [tx, ty] = proj(cx, cy, h + 0.75);
+    ctx.strokeStyle = '#4A44AE'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(tx, ty); ctx.stroke();
+    const blink = (Math.sin(t * 3.2) * 0.5 + 0.5);
+    ctx.fillStyle = `rgba(255,140,120,${(0.35 + blink * 0.65).toFixed(3)})`;
+    ctx.beginPath(); ctx.arc(tx, ty, 5 + blink * 2, 0, 6.29); ctx.fill();
+  }
+}
+function drawTree(c, t) {
+  const k = backOut(clamp01((t - (2.6 + (c.x + c.y) * 0.09)) / 0.5));
+  if (k <= 0) return;
+  const cx = c.x + 0.5, cy = c.y + 0.5;
+  const [sx, sy] = proj(cx, cy, 0);
+  const sw = Math.sin(t * 1.3 + c.ph) * 2.2;
+  ctx.save(); ctx.translate(sx, sy); ctx.scale(k, k);
+  ctx.fillStyle = '#8A6F5A'; ctx.fillRect(-4, -26, 8, 26);
+  ctx.fillStyle = '#6FBF8E'; ctx.beginPath(); ctx.ellipse(sw, -40, 22, 24, 0, 0, 6.29); ctx.fill();
+  ctx.fillStyle = '#8BD4A5'; ctx.beginPath(); ctx.ellipse(sw - 5, -46, 13, 12, 0, 0, 6.29); ctx.fill();
+  ctx.restore();
+}
+function drawClouds(t) {
+  const cs = [[240, 150, 1.0, 26], [1200, 100, 0.8, 18], [1620, 210, 1.1, 34]];
+  ctx.fillStyle = 'rgba(255,255,255,0.82)';
+  for (const [bx, by, s, sp] of cs) {
+    const x = ((bx + t * sp) % (W + 360)) - 180;
+    ctx.save(); ctx.translate(x, by); ctx.scale(s, s);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 64, 24, 0, 0, 6.29); ctx.ellipse(48, 8, 46, 18, 0, 0, 6.29);
+    ctx.ellipse(-46, 10, 40, 16, 0, 0, 6.29); ctx.ellipse(12, -14, 40, 20, 0, 0, 6.29);
+    ctx.fill(); ctx.restore();
+  }
+}
+function chip(value, label, dot, anchor, delay) { // 悬浮数据卡
+  return { value, label, dot, anchor, delay };
+}
+const CHIPS = [
+  chip('12', '栋建筑', '#FF8A70', () => proj(6.5, 4.5, 4.75), 6.1),
+  chip('99.6', '绿化率%', '#4ECBA4', () => proj(10.5, 8.5, 2.1), 6.8),
+  chip('0.84', '幸福指数', '#6C63D8', () => proj(2.5, 9.5, 1.9), 7.5),
+];
+function drawChip(ch, t) {
+  const k = clamp01((t - ch.delay) / 0.5);
+  if (k <= 0) return;
+  const s = backOut(k);
+  const [ax, ay] = ch.anchor();
+  const bob = Math.sin(t * 1.5 + ch.delay * 3) * 6;
+  const w = 178, h = 88, x = ax + 46, y = ay - 130 + bob;
+  ctx.save(); ctx.globalAlpha = Math.min(1, k * 1.6); ctx.translate(x + w / 2, y + h / 2); ctx.scale(s, s); ctx.translate(-w / 2, -h / 2);
+  ctx.fillStyle = 'rgba(40,36,90,0.18)';
+  roundRect(6, 10, w, h, 18); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.96)';
+  roundRect(0, 0, w, h, 18); ctx.fill();
+  ctx.fillStyle = ch.dot; ctx.beginPath(); ctx.arc(26, 26, 7, 0, 6.29); ctx.fill();
+  ctx.fillStyle = '#38347A'; ctx.font = '600 40px "Segoe UI", "Microsoft YaHei", sans-serif';
+  ctx.fillText(ch.value, 44, 42);
+  ctx.fillStyle = '#8A86C0'; ctx.font = '24px "Microsoft YaHei", sans-serif';
+  ctx.fillText(ch.label, 26, 74);
+  ctx.restore();
+  // 引线
+  if (k > 0.6) {
+    ctx.save(); ctx.globalAlpha = (k - 0.6) / 0.4 * 0.8;
+    ctx.strokeStyle = 'rgba(56,52,122,0.55)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(x + 12, y + h - 12 + bob); ctx.stroke(); ctx.restore();
+  }
+}
+function drawSweep(t) { // 对角高亮扫掠：扫入后驻停在画面中心收尾
+  const k = clamp01((t - 9.0) / 2.0);
+  if (k <= 0) return;
+  const p = lerp(-1, 13, outCubic(k)); // 13 ≈ 对角中心，驻停而非扫出画外
+  for (const c of grid) {
+    const w = Math.exp(-Math.pow((c.x + c.y) - p, 2) / 4.5);
+    if (w < 0.05) continue;
+    poly(diamond(c.x + 0.5, c.y + 0.5, c.kind === 'bld' ? 0.03 : 0.01, 0.5), `rgba(255,255,255,${(0.34 * w).toFixed(3)})`);
+  }
+}
+function drawCaption(t) {
+  const k = clamp01((t - 0.5) / 0.6);
+  if (k <= 0) return;
+  ctx.save(); ctx.globalAlpha = k;
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  roundRect(56, 988, 580, 52, 26); ctx.fill();
+  ctx.fillStyle = '#5B54C8'; ctx.font = '600 24px "Microsoft YaHei", sans-serif';
+  ctx.fillText('等轴 2.5D ISOMETRIC · 纯 Canvas 2D · f(t)', 84, 1022);
+  ctx.restore();
+}
+
+function render(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  drawBG(t);
+  // 相机慢漂移 + 微缩放
+  const s = 1 + 0.035 * (t / DUR);
+  ctx.translate(W / 2 + Math.sin(t * 0.24) * 12, H / 2 + Math.cos(t * 0.19) * 7);
+  ctx.scale(s, s); ctx.translate(-W / 2, -H / 2);
+  drawShadow();
+  const sorted = grid.slice().sort((a, b) => (a.x + a.y) - (b.x + b.y) || a.x - b.x);
+  for (const c of sorted) drawTile(c, t);
+  for (const c of sorted) { if (c.kind === 'bld') drawBuilding(c, t); }
+  drawSweep(t);
+  for (const c of sorted) { if (c.kind === 'tree') drawTree(c, t); }
+  for (const ch of CHIPS) drawChip(ch, t);
+  drawClouds(t);
+  drawCaption(t);
+}
+
+// ---- 契约入口：驱动器逐帧调用 ----
+window.__renderFrame = t => render(Math.min(DUR, Math.max(0, t)));
+window.__DUR = DUR;
+window.__READY = 1;
+if (!location.search.includes('driven=1')) {
+  const t0 = performance.now();
+  (function loop() { render((performance.now() - t0) / 1000 % DUR); requestAnimationFrame(loop); })();
+}
+</script>
+</body>
+</html>
