@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"net/http"
 	"os"
@@ -285,12 +286,11 @@ func (s *Server) listProjects(c *gin.Context) {
 }
 
 func (s *Server) projectView(c *gin.Context) {
-	id := c.Param("id")
-	p := pipeline.NewProject(s.DataDir, id)
-	if _, err := os.Stat(p.Dir); err != nil {
-		c.JSON(404, gin.H{"error": "项目不存在"})
+	p, ok := s.project(c)
+	if !ok {
 		return
 	}
+	id := p.ID
 	st := s.Agent.State(id)
 	aspect := "16:9" // 旧项目无字段，与已渲成片一致
 	topic := ""
@@ -354,12 +354,11 @@ func (s *Server) saveManuscript(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "文稿不能为空"})
 		return
 	}
-	id := c.Param("id")
-	p := pipeline.NewProject(s.DataDir, id)
-	if _, err := os.Stat(p.Dir); err != nil {
-		c.JSON(404, gin.H{"error": "项目不存在"})
+	p, ok := s.project(c)
+	if !ok {
 		return
 	}
+	id := p.ID
 	if err := os.WriteFile(p.Artifact("input/article.txt"), []byte(content), 0o644); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -411,7 +410,7 @@ func (s *Server) applyStyle(c *gin.Context) {
 		return
 	}
 	ss["confirmed"] = true
-	if err := os.WriteFile(p.Artifact("style/style_samples.json"), mustJSON(ss), 0o644); err != nil {
+	if err := os.WriteFile(p.Artifact("style/style_samples.json"), pipeline.MustJSONBytes(ss), 0o644); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -427,7 +426,7 @@ func (s *Server) applyStyle(c *gin.Context) {
 		var meta map[string]any
 		if json.Unmarshal(b, &meta) == nil {
 			meta["style_id"] = pack.ID
-			_ = pipeline.WriteFileAtomic(p.Artifact("project.json"), mustJSON(meta), 0o644)
+			_ = pipeline.WriteFileAtomic(p.Artifact("project.json"), pipeline.MustJSONBytes(meta), 0o644)
 		}
 	}
 	s.updateStatus(id, "style")
@@ -443,7 +442,7 @@ func (s *Server) storyboard(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "分镜未生成"})
 		return
 	}
-	c.Data(200, "application/json", mustJSON(sb))
+	c.Data(200, "application/json", pipeline.MustJSONBytes(sb))
 }
 
 func (s *Server) style(c *gin.Context) {
@@ -480,7 +479,7 @@ func (s *Server) confirmStyle(c *gin.Context) {
 		return
 	}
 	ss.Confirmed = true
-	if err := os.WriteFile(path, mustJSON(ss), 0o644); err != nil {
+	if err := os.WriteFile(path, pipeline.MustJSONBytes(ss), 0o644); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -552,8 +551,7 @@ func (s *Server) chat(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "消息不能为空"})
 		return
 	}
-	if _, err := os.Stat(pipeline.NewProject(s.DataDir, id).Dir); err != nil {
-		c.JSON(404, gin.H{"error": "项目不存在"})
+	if _, ok := s.project(c); !ok {
 		return
 	}
 	in.Refs = sanitizeRefs(in.Refs)
@@ -769,8 +767,7 @@ func (s *Server) video(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "成片未就绪"})
 		return
 	}
-	c.Header("Cache-Control", "no-store")
-	http.ServeContent(c.Writer, c.Request, "main.mp4", time.Now(), mustOpen(path))
+	serveFile(c, path, "main.mp4", "no-store")
 }
 
 // frame 修改态活合成物：单段帧 HTML（<template> 片段，plan §4.3 预览双模）。
@@ -781,14 +778,7 @@ func (s *Server) frame(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "非法段标识"})
 		return
 	}
-	f, err := os.Open(pipeline.NewProject(s.DataDir, c.Param("id")).Artifact("compositions/frames/" + seg + ".html"))
-	if err != nil {
-		c.JSON(404, gin.H{"error": "合成物不存在"})
-		return
-	}
-	defer f.Close()
-	c.Header("Cache-Control", "no-store")
-	http.ServeContent(c.Writer, c.Request, seg+".html", time.Now(), f)
+	serveFile(c, pipeline.NewProject(s.DataDir, c.Param("id")).Artifact("compositions/frames/"+seg+".html"), seg+".html", "no-store")
 }
 
 // asset 项目资产（gsap.min.js 等）——活合成物壳的确定性依赖，渲染引擎同款本地 gsap，无 CDN。
@@ -799,18 +789,7 @@ func (s *Server) asset(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "非法路径"})
 		return
 	}
-	f, err := os.Open(filepath.Join(pipeline.NewProject(s.DataDir, c.Param("id")).Dir, "assets", filepath.FromSlash(rel)))
-	if err != nil {
-		c.JSON(404, gin.H{"error": "资产不存在"})
-		return
-	}
-	defer f.Close()
-	st, _ := f.Stat()
-	if st == nil || st.IsDir() {
-		c.JSON(404, gin.H{"error": "资产不存在"})
-		return
-	}
-	http.ServeContent(c.Writer, c.Request, st.Name(), time.Now(), f)
+	serveFile(c, filepath.Join(pipeline.NewProject(s.DataDir, c.Param("id")).Dir, "assets", filepath.FromSlash(rel)), path.Base(rel), "")
 }
 
 func isSegID(s string) bool {
@@ -871,8 +850,7 @@ func isPngName(s string) bool {
 
 func (s *Server) sse(c *gin.Context) {
 	id := c.Param("id")
-	if _, err := os.Stat(pipeline.NewProject(s.DataDir, id).Dir); err != nil {
-		c.JSON(404, gin.H{"error": "项目不存在"})
+	if _, ok := s.project(c); !ok {
 		return
 	}
 	ch, replay, cancel := s.Hub.Subscribe(id)
@@ -910,25 +888,35 @@ func (s *Server) sse(c *gin.Context) {
 }
 
 func (s *Server) updateStatus(id, status string) {
-	p := pipeline.NewProject(s.DataDir, id)
-	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil {
-		var meta map[string]any
-		if json.Unmarshal(b, &meta) == nil {
-			meta["status"] = status
-			_ = pipeline.WriteFileAtomic(p.Artifact("project.json"), mustJSON(meta), 0o644)
-		}
-	}
+	_ = pipeline.SetProjectField(pipeline.NewProject(s.DataDir, id), "status", status)
 	_ = s.Store.UpdateStatus(id, status)
 }
 
-func mustJSON(v any) []byte {
-	b, _ := json.MarshalIndent(v, "", "  ")
-	return b
+// project 按路由 :id 构造 Project 并确认存在；不存在时已回 404，调用方直接 return。
+func (s *Server) project(c *gin.Context) (*pipeline.Project, bool) {
+	p := pipeline.NewProject(s.DataDir, c.Param("id"))
+	if _, err := os.Stat(p.Dir); err != nil {
+		c.JSON(404, gin.H{"error": "项目不存在"})
+		return nil, false
+	}
+	return p, true
 }
 
-func mustOpen(path string) *os.File {
-	f, _ := os.Open(path)
-	return f
+// serveFile 媒体/静态文件回源（打开失败 404；name 进 Content-Disposition 推断，
+// cache 为 Cache-Control 值）。video/frame/asset/媒体三 handler 共用。
+func serveFile(c *gin.Context, path, name, cache string) {
+	f, err := os.Open(path)
+	if err != nil {
+		c.JSON(404, gin.H{"error": "文件不存在"})
+		return
+	}
+	defer f.Close()
+	if st, _ := f.Stat(); st == nil || st.IsDir() {
+		c.JSON(404, gin.H{"error": "文件不存在"})
+		return
+	}
+	c.Header("Cache-Control", cache)
+	http.ServeContent(c.Writer, c.Request, name, time.Now(), f)
 }
 
 // ── 参考视频解析（风格库「视频解析」）────────────────────────
@@ -988,47 +976,130 @@ func (s *Server) analyzeReference(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true})
 }
 
-// confirmReference 解析结果入库：styles.json 注册（引擎吃 tokens）+ 方法库 pack 草稿。
+// confirmReference 解析结果入库：styles.json 注册（引擎吃 tokens）。
+// single = 全片一个风格条目；multi（合集）= 每段入库一个风格条目。
+// 两条路径都把代表帧拷成 cover.png 并作为条目第一张样张——封面即视频里的真实画面。
 func (s *Server) confirmReference(c *gin.Context) {
 	ref, err := s.Refs.Get(c.Param("id"))
 	if err != nil {
 		c.JSON(404, gin.H{"error": "引用不存在"})
 		return
 	}
-	if ref.Status != "done" || ref.Style == nil {
+	if ref.Status != "done" || (ref.Style == nil && len(ref.Segments) == 0) {
 		c.JSON(400, gin.H{"error": "还没解析完成，不能入库"})
 		return
 	}
+
+	refDir := filepath.Join(s.DataDir, "references", ref.ID)
+	if ref.Kind == "multi" { // 合集：每段一个风格条目
+		ids := []string{}
+		for i := range ref.Segments {
+			seg := &ref.Segments[i]
+			if seg.Style == nil {
+				continue // 该段解析失败（原因在 segments[i].error），跳过
+			}
+			desc := fmt.Sprintf("从参考视频「%s」第 %d 段（%.0f-%.0fs）解析提炼", ref.Name, seg.Index, seg.Start, seg.End)
+			if seg.Style.Genre != "" {
+				desc += "；" + seg.Style.Genre
+			}
+			st, err := s.ingestRefStyle(c, fmt.Sprintf("%s-s%02d", ref.ID, seg.Index), seg.Name, seg.Name,
+				seg.Style, filepath.Join(refDir, seg.Dir), desc)
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+			ids = append(ids, st.ID)
+		}
+		if len(ids) == 0 {
+			c.JSON(500, gin.H{"error": "没有任何段可入库（全部解析失败）"})
+			return
+		}
+		if err := s.Refs.MarkConfirmed(ref.ID); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"ok": true, "style_ids": ids})
+		return
+	}
+
+	// single：全片一个风格条目（老行为 + 封面样张）
 	desc := "从参考视频「" + ref.Name + "」解析提炼"
 	if ref.Style.Genre != "" {
 		desc += "；" + ref.Style.Genre
 	}
-	var samples []stylelib.Sample
-	for _, smp := range ref.Style.Samples {
-		samples = append(samples, stylelib.Sample{Tag: smp.Tag, Desc: smp.Desc, HTML: smp.HTML})
-	}
-	var tokens map[string]any
-	_ = json.Unmarshal(ref.Style.Tokens, &tokens)
-	var layouts []stylelib.Layout
-	for _, l := range ref.Style.Layouts {
-		layouts = append(layouts, stylelib.Layout{ID: l.ID, Name: l.Name, Desc: l.Desc})
-	}
-	st, err := s.Lib.IngestVideoRef(ref.ID, ref.Style.Direction, ref.Style.Genre, ref.Style.Keywords,
-		tokens, layouts, samples, desc)
+	st, err := s.ingestRefStyle(c, ref.ID, "", ref.Style.Direction, ref.Style, refDir, desc)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
-	}
-	// 原片+抽帧快照进风格目录：参考视频库删除后风格详情仍可回看（失败不挡入库，
-	// 详情抽屉对老条目/缺快照自动回退 references 目录）
-	if serr := s.Lib.SnapshotMedia(st.ID, filepath.Join(s.DataDir, "references", ref.ID)); serr != nil {
-		c.Header("X-Media-Snapshot", "failed")
 	}
 	if err := s.Refs.MarkConfirmed(ref.ID); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(200, gin.H{"ok": true, "style_id": st.ID})
+}
+
+// ingestRefStyle 单条参考风格入库：草稿形变（tokens/layouts/samples）+ 代表帧封面
+// 样张前置 + IngestVideoRef + 原片/抽帧快照，multi/single 两路径共用。
+// seedID 是 IngestVideoRef 的 refID 种子（multi 为 "<refID>-sNN"，single 为 refID）；
+// 封面图 src 的条目 id 用 stylelib.VideoStyleID(seedID) 与 IngestVideoRef 赋 id 同源推导。
+func (s *Server) ingestRefStyle(c *gin.Context, seedID, name, coverName string, d *styleref.StyleDraft, dir, desc string) (*stylelib.Style, error) {
+	var tokens map[string]any
+	_ = json.Unmarshal(d.Tokens, &tokens)
+	var layouts []stylelib.Layout
+	for _, l := range d.Layouts {
+		layouts = append(layouts, stylelib.Layout{ID: l.ID, Name: l.Name, Desc: l.Desc})
+	}
+	var samples []stylelib.Sample
+	for _, smp := range d.Samples {
+		samples = append(samples, stylelib.Sample{Tag: smp.Tag, Desc: smp.Desc, HTML: smp.HTML})
+	}
+	if t := makeCover(dir, styleref.ReadFeatures(dir)); t >= 0 {
+		samples = append([]stylelib.Sample{coverSample(stylelib.VideoStyleID(seedID), coverName, t)}, samples...)
+	}
+	st, err := s.Lib.IngestVideoRef(seedID, name, d.Direction, d.Genre, d.Keywords, tokens, layouts, samples, desc)
+	if err != nil {
+		return nil, err
+	}
+	// 原片+抽帧快照进风格目录：参考视频库删除后风格详情仍可回看（失败不挡入库，
+	// 详情抽屉对老条目/缺快照自动回退 references 目录）
+	if serr := s.Lib.SnapshotMedia(st.ID, dir); serr != nil {
+		c.Header("X-Media-Snapshot", "failed")
+	}
+	return st, nil
+}
+
+// coverSample 条目第一张样张：该风格段的真实画面帧（media 快照服务提供图片）。
+func coverSample(styleID, displayName string, t float64) stylelib.Sample {
+	name := template.HTMLEscapeString(displayName)
+	return stylelib.Sample{
+		Tag:  "参考片段截图（封面）",
+		Desc: fmt.Sprintf("取自参考视频 t=%.1fs", t),
+		HTML: fmt.Sprintf(`<!DOCTYPE html><html><head><meta charset='utf-8'><style>
+html,body{width:960px;height:540px;margin:0;overflow:hidden;background:#111}
+img{position:absolute;inset:0;width:960px;height:540px;object-fit:cover}
+.b{position:absolute;left:0;right:0;bottom:0;padding:16px 26px;
+background:linear-gradient(transparent,rgba(0,0,0,.78));color:#fff;
+font-family:'Microsoft YaHei',sans-serif;font-size:24px;letter-spacing:2px;text-shadow:0 1px 4px rgba(0,0,0,.5)}
+</style></head><body><img src='/api/library/%s/media/cover.png'><div class='b'>%s</div></body></html>`,
+			styleID, name),
+	}
+}
+
+// makeCover 代表帧（中位帧）拷成 cover.png，返回其时间点；无帧返回 -1。
+func makeCover(dir string, frames []styleref.FeatureFrame) float64 {
+	if len(frames) == 0 {
+		return -1
+	}
+	f := frames[len(frames)/2]
+	b, err := os.ReadFile(f.Path)
+	if err != nil || len(b) == 0 {
+		return -1
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cover.png"), b, 0o644); err != nil {
+		return -1
+	}
+	return f.T
 }
 
 // referenceFrames 参考视频抽帧截图清单（详情抽屉展示原片长相用）。目录扫 frame-*.png，
@@ -1062,16 +1133,20 @@ func (s *Server) referenceFrames(c *gin.Context) {
 	c.JSON(200, gin.H{"frames": frames, "has_video": hasVideo})
 }
 
+// refMediaName 参考媒体文件名白名单：抽帧 frame-*.png / 原视频 video.mp4 /
+// 封面 cover.png（入库时代表帧拷贝，封面样张的 <img> 引用它）。
+func refMediaName(name string) bool {
+	if name == "video.mp4" || name == "cover.png" {
+		return true
+	}
+	return isPngName(name) && strings.HasPrefix(name, "frame-")
+}
+
 // styleMediaResolve 风格媒体定位：快照目录（style_media/<id>）优先，
 // 缺文件回退参考视频目录（origin_project="video:<refID>" 的老条目）。
 // 返回 (文件路径, ok)；ok=false 时调用方回 404。
 func (s *Server) styleMediaResolve(styleID, name string) (string, bool) {
-	if !isSlug(styleID) {
-		return "", false
-	}
-	allowed := isPngName(name) && strings.HasPrefix(name, "frame-")
-	allowed = allowed || name == "video.mp4"
-	if !allowed {
+	if !isSlug(styleID) || !refMediaName(name) {
 		return "", false
 	}
 	if p := filepath.Join(s.Lib.MediaDir(styleID), name); fileExists(p) {
@@ -1135,14 +1210,7 @@ func (s *Server) libraryMedia(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "文件不存在"})
 		return
 	}
-	f, err := os.Open(p)
-	if err != nil {
-		c.JSON(404, gin.H{"error": "文件不存在"})
-		return
-	}
-	defer f.Close()
-	c.Header("Cache-Control", "max-age=3600")
-	http.ServeContent(c.Writer, c.Request, filepath.Base(p), time.Now(), f)
+	serveFile(c, p, filepath.Base(p), "max-age=3600")
 }
 
 func fileExists(p string) bool {
@@ -1157,18 +1225,9 @@ func (s *Server) referenceMedia(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "非法路径"})
 		return
 	}
-	allowed := isPngName(name) && strings.HasPrefix(name, "frame-")
-	allowed = allowed || name == "video.mp4"
-	if !allowed {
+	if !refMediaName(name) {
 		c.JSON(400, gin.H{"error": "非法文件名"})
 		return
 	}
-	f, err := os.Open(filepath.Join(s.DataDir, "references", id, name))
-	if err != nil {
-		c.JSON(404, gin.H{"error": "文件不存在"})
-		return
-	}
-	defer f.Close()
-	c.Header("Cache-Control", "max-age=3600")
-	http.ServeContent(c.Writer, c.Request, name, time.Now(), f)
+	serveFile(c, filepath.Join(s.DataDir, "references", id, name), name, "max-age=3600")
 }

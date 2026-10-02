@@ -1,9 +1,8 @@
 // Package styleref：参考视频 → 风格（风格库「视频解析」后端）。
 //
 // 链路：上传视频存 data/references/<id>/ → ai/extract_video_features.py 抽帧+取色
-// （确定性，不碰 LLM）→ Go 侧 GLM vision 分批读帧析构图 → 合成风格 JSON
-// （direction/tokens/layouts/样张 HTML）→ 用户确认入库 = 追加 data/library/registry/styles.json
-// （渲染引擎按 direction 匹配取 tokens，不注册则不生效）+ 方法库 pack（走草稿→入库流）。
+// （确定性，不碰 LLM）→ 解析智能体两阶段（结构理解 + 逐段提炼，见 analyze.go）
+// → 用户确认入库（api 层调 stylelib.IngestVideoRef 写 data/library/styles.json）。
 package styleref
 
 import (
@@ -24,22 +23,24 @@ import (
 )
 
 type Ref struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"` // 原始文件名（含扩展名）
-	Status    string          `json:"status"` // pending | running | done | error
-	Error     string          `json:"error,omitempty"`
-	Confirmed bool            `json:"confirmed"` // 已入库（styles.json + 方法库）
-	CreatedAt time.Time       `json:"created_at"`
-	Style     *StyleDraft     `json:"style,omitempty"` // done 时有
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`   // 原始文件名（含扩展名）
+	Status    string         `json:"status"` // pending | running | done | error
+	Error     string         `json:"error,omitempty"`
+	Confirmed bool           `json:"confirmed"` // 已入库（styles.json + 方法库）
+	CreatedAt time.Time      `json:"created_at"`
+	Kind      string         `json:"kind,omitempty"`     // single | multi（解析智能体判定）
+	Style     *StyleDraft    `json:"style,omitempty"`    // single 时有（老 ref.json 兼容）
+	Segments  []SegmentDraft `json:"segments,omitempty"` // multi 时有，每段一个风格草稿
 }
 
 // StyleDraft 解析产出的风格包（入库前草稿；tokens/layouts 直接进注册表）。
 type StyleDraft struct {
-	Direction string        `json:"direction"`
-	Genre     string        `json:"genre"`
-	Keywords  []string      `json:"keywords"`
-	Photo     string        `json:"photo"`
-	Layouts   []StyleLayout `json:"layouts"`
+	Direction string          `json:"direction"`
+	Genre     string          `json:"genre"`
+	Keywords  []string        `json:"keywords"`
+	Photo     string          `json:"photo"`
+	Layouts   []StyleLayout   `json:"layouts"`
 	Tokens    json.RawMessage `json:"tokens"` // 原样透传给 styles.json（引擎按字段取）
 	Samples   []struct {
 		Tag  string `json:"tag"`
@@ -57,7 +58,10 @@ type StyleLayout struct {
 // videoFeatures features.json（ai/extract_video_features.py 产物）。
 type videoFeatures struct {
 	DurationS float64          `json:"duration_s"`
+	SpanS     [2]float64       `json:"span_s"` // 本次抽取的时间范围（全片=[0,duration]）
 	NShots    int              `json:"n_shots"`
+	Cuts      []float64        `json:"cuts"`   // 镜头硬切点（拆段的边界候选信号）
+	Sheets    []string         `json:"sheets"` // 关键帧网格图（相对引用目录）
 	Frames    []featureFrame   `json:"frames"`
 	Palette   []paletteCluster `json:"palette"`
 }
@@ -196,72 +200,9 @@ func (s *Store) Analyze(id string) (bool, error) {
 				_ = s.saveRef(ref)
 			}
 		}()
-		s.run(context.Background(), ref)
+		s.runAgent(context.Background(), ref)
 	}()
 	return true, nil
-}
-
-func (s *Store) run(ctx context.Context, ref *Ref) {
-	fail := func(err error) {
-		ref.Status, ref.Error = "error", err.Error()
-		_ = s.saveRef(ref)
-	}
-	ref.Status, ref.Error = "running", ""
-	_ = s.saveRef(ref)
-
-	// 1. 抽帧+取色（确定性）
-	var videos []string
-	if es, rerr := os.ReadDir(s.dir(ref.ID)); rerr == nil {
-		for _, e := range es {
-			if strings.HasPrefix(e.Name(), "video.") {
-				videos = append(videos, filepath.Join(s.dir(ref.ID), e.Name()))
-			}
-		}
-	}
-	if len(videos) == 0 {
-		fail(fmt.Errorf("引用目录没有视频文件"))
-		return
-	}
-	if out, err := runPython(ctx, s.RootDir, "ai/extract_video_features.py", videos[0], s.dir(ref.ID)); err != nil {
-		fail(fmt.Errorf("特征抽取失败: %w\n%s", err, tail(out, 8)))
-		return
-	}
-	fb, err := os.ReadFile(filepath.Join(s.dir(ref.ID), "features.json"))
-	if err != nil {
-		fail(err)
-		return
-	}
-
-	// 2. vision 析构图（≤6 帧，2 批×3 图）+ 合成风格包
-	prov, err := llm.FromEnv(llm.RoleVisual)
-	if err != nil {
-		fail(fmt.Errorf("解析需要 API 模式（LLM_API_KEY）: %w", err))
-		return
-	}
-	var feats videoFeatures
-	if err := json.Unmarshal(fb, &feats); err != nil {
-		fail(err)
-		return
-	}
-	notes, err := s.analyzeCompositions(ctx, prov, feats.Frames)
-	if err != nil {
-		fail(err)
-		return
-	}
-	style, err := s.synthesize(ctx, prov, ref.Name, feats, notes)
-	if err != nil {
-		fail(err)
-		return
-	}
-	if errs := validateStyle(style); len(errs) > 0 {
-		fail(fmt.Errorf("风格包自检未过: %s", strings.Join(errs, "; ")))
-		return
-	}
-	ref.Style = style
-	ref.Status = "done"
-	if err := s.saveRef(ref); err != nil {
-		fail(err)
-	}
 }
 
 // analyzeCompositions 分批把关键帧喂 vision，逐帧记录构图观察。
@@ -312,7 +253,8 @@ func (s *Store) analyzeCompositions(ctx context.Context, prov *llm.Provider, fra
 }
 
 // synthesize 色板+构图观察+节奏 → 完整风格包 JSON（tokens 用给定 hex，样张纯 CSS 仿帧）。
-func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name string,
+// segName 非空表示合集分段模式：direction 优先采用段名（片中标题），事实用段内数据。
+func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name, segName string,
 	feats videoFeatures, notes string) (*StyleDraft, error) {
 	pal := make([]string, 0, len(feats.Palette))
 	for _, c := range feats.Palette {
@@ -329,14 +271,22 @@ func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name string,
 		}
 		rep = append(rep, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(b))
 	}
+	spanTxt := "全片"
+	if feats.SpanS[1]-feats.SpanS[0] < feats.DurationS-1 {
+		spanTxt = fmt.Sprintf("%.0f-%.0f 秒段", feats.SpanS[0], feats.SpanS[1])
+	}
+	nameHint := ""
+	if segName != "" {
+		nameHint = fmt.Sprintf("\n- 已知该段风格名「%s」（解析阶段从片中标题读出）——direction 优先直接采用它，可在 ≤6 字内微调；name 参数也以它为准", segName)
+	}
 	system := "你是视频视觉分析师，把参考视频提炼成可复用的风格包。只输出 JSON。"
-	user := fmt.Sprintf(`把参考视频「%s」提炼成一个风格包（挂到网页渲染视频管线上，与现有 token 引擎同一套 schema）。
+	user := fmt.Sprintf(`把参考视频「%s」（%s）提炼成一个风格包（挂到网页渲染视频管线上，与现有 token 引擎同一套 schema）。
 
 ## 已测得事实（必须遵守）
-- 全片 %v 秒、%d 个镜头；全局色板 k-means 8 簇：
+- 抽取范围时长 %.1f 秒、%d 个镜头；色板 k-means 8 簇：
   %s
 - 视觉逐帧构图观察：
-%s
+%s%s
 - font 只能用 Windows 系统字体栈：'Segoe UI'/'Microsoft YaHei'/'Georgia'/'KaiTi'/'STKaiti'/'Cambria'/'Arial Narrow'/'SimHei' 组合（示例：'Georgia','SimHei',serif），禁止 Noto/思源等未装字体
 - tokens 里的颜色必须从上面色板 hex 里选（可按角色微调明度但保持色相；覆盖率最高的暗色通常做 bg.from，最亮簇做 txt）；颜色之外的字段按画面气质定。
 - direction 是风格名（≤12 字，含一个括号副标）；**禁止出现「手绘」「扁平」二字**（引擎按名字路由）。
@@ -348,7 +298,7 @@ func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name string,
 
 ## 输出（只输出 JSON，无围栏）
 {"direction":"…","genre":"适用题材（从画面推断，≤30字）","keywords":["…×4-8"],"photo":"配图 query 调性（≤30字）","layouts":[…5],"tokens":{…},"samples":[…2]}
-`, name, feats.DurationS, feats.NShots, strings.Join(pal, "、"), notes)
+`, name, spanTxt, feats.SpanS[1]-feats.SpanS[0], feats.NShots, strings.Join(pal, "、"), notes, nameHint)
 	var style StyleDraft
 	_, err := prov.GenerateJSONVisionNoThink(ctx, system, user, rep, 0.5, &style)
 	if err != nil {
@@ -383,66 +333,6 @@ func validateStyle(st *StyleDraft) []string {
 
 // Get 单个引用。
 func (s *Store) Get(id string) (*Ref, error) { return s.loadRef(id) }
-
-// AppendRegistry 风格条目追加进 data/library/registry/styles.json（数组尾部；引擎按
-// direction 匹配取 tokens——不入库则解析结果只停留在预览）。加锁防并发写坏。
-func AppendRegistry(dataDir, id string, st *StyleDraft) error {
-	mu.Lock()
-	defer mu.Unlock()
-	path := filepath.Join(dataDir, "library", "registry", "styles.json")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("读 styles.json: %w", err)
-	}
-	var arr []json.RawMessage
-	if err := json.Unmarshal(b, &arr); err != nil {
-		return fmt.Errorf("styles.json 损坏: %w", err)
-	}
-	for _, it := range arr {
-		var existing struct {
-			ID string `json:"id"`
-		}
-		if json.Unmarshal(it, &existing) == nil && existing.ID == id {
-			return nil // 已入库，幂等
-		}
-	}
-	entry, err := st.RegistryEntry(id)
-	if err != nil {
-		return err
-	}
-	arr = append(arr, json.RawMessage(entry))
-	out, err := json.MarshalIndent(arr, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, out, 0o644)
-}
-
-var mu sync.Mutex
-
-// RegistryID 风格注册 id（vid- 前缀，文件名安全化）。
-func RegistryID(refID string) string {
-	sl := regexp.MustCompile(`[^a-z0-9-]+`).ReplaceAllString(strings.ToLower(refID), "-")
-	return "vid-" + strings.Trim(sl, "-")
-}
-
-// RegistryEntry 确认入库时写进 data/library/registry/styles.json 的条目。
-func (st *StyleDraft) RegistryEntry(id string) (string, error) {
-	entry := map[string]any{
-		"id":        id,
-		"direction": st.Direction,
-		"genre":     st.Genre,
-		"keywords":  st.Keywords,
-		"photo":     st.Photo,
-		"layouts":   st.Layouts,
-		"tokens":    st.Tokens,
-	}
-	b, err := json.MarshalIndent(entry, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil // 调用方把它作为数组元素插入 styles.json
-}
 
 var reTail = regexp.MustCompile(`\s+\n`)
 

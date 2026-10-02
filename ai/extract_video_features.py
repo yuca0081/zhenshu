@@ -1,14 +1,19 @@
 # -*- coding: utf-8 -*-
 """参考视频特征抽取（视频风格解析第一步，确定性部分，不碰 LLM）。
 
-用法：python ai/extract_video_features.py <video_path> <outdir>
+用法：python ai/extract_video_features.py <video_path> <outdir> [--start S] [--end E]
 产物 <outdir>/features.json：
-  { video, duration_s, n_shots, frames: [{path, t}], palette: [{hex, share, lum}] }
+  { video, duration_s, span_s, n_shots, frames: [{path, t}], palette: [{hex, share, lum}] }
+另产 <outdir>/sheet-00.png：全部关键帧拼网格（每格带 #序号 与时间戳角标），
+供解析智能体的结构判断阶段一张图看懂全片。
 
-流程：ffmpeg 场景切分取镜头时间点 → 均匀选 ≤12 个关键帧抽 640px PNG
-→ k-means 全局取色（8 簇：hex + 覆盖率 + 亮度，角色分配交给 Go 侧 LLM）。
+流程：ffmpeg 场景切分取镜头时间点（可限定 --start/--end 时间段）→ 按时长自适应
+抽 ≤36 个关键帧 640px PNG → k-means 取色（8 簇：hex + 覆盖率 + 亮度，角色分配
+交给 Go 侧解析智能体）。
 """
+import argparse
 import json
+import math
 import os
 import pathlib
 import re
@@ -17,11 +22,11 @@ import subprocess
 import sys
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 from sklearn.cluster import KMeans
 
-MAX_FRAMES = 12
 N_CLUSTERS = 8
+SHEET_COLS, SHEET_ROWS = 6, 5
 
 
 def _ff(name: str) -> str:
@@ -46,8 +51,15 @@ def probe_duration(video: pathlib.Path) -> float:
     return float(out.stdout.strip())
 
 
-def scene_times(video: pathlib.Path, duration: float) -> list[float]:
-    """场景切分：showinfo 的 pts_time 即镜头起点。失败/无切换回退均匀采样。"""
+def max_frames(duration: float) -> int:
+    """自适应帧数：12 帧≈35s 内看全，更长视频按 ~3s/帧 加密，上限 60（网格 6×5×2 张）。"""
+    return min(60, max(12, round(duration / 3)))
+
+
+def scene_times(video: pathlib.Path, duration: float, start: float, end: float, cap: int) -> tuple[list[float], list[float]]:
+    """场景切分：showinfo 的 pts_time 即镜头起点。失败/无切换回退均匀采样。
+    只看 [start, end] 时间段（合集拆段后逐段抽帧用）。
+    返回 (抽帧时间点, 全量硬切点)——硬切点是拆段智能体的边界候选信号。"""
     try:
         # 旧版用 -vsync vfr，ffmpeg 7+ 已移除该选项（Unrecognized option →
         # 场景检测静默退化均匀采样）；select 过滤后默认 passthrough 已是
@@ -55,17 +67,24 @@ def scene_times(video: pathlib.Path, duration: float) -> list[float]:
         out = subprocess.run([_ff('ffmpeg'), '-i', str(video),
                               '-vf', "select='gt(scene,0.25)',showinfo",
                               '-f', 'null', '-'], capture_output=True, text=True, timeout=600)
-        ts = sorted({float(m.group(1)) for m in re.finditer(r'pts_time:([0-9.]+)', out.stderr)})
+        cuts = sorted({float(m.group(1)) for m in re.finditer(r'pts_time:([0-9.]+)', out.stderr)})
     except Exception:
-        ts = []
-    ts = [t for t in ts if 0.5 < t < duration - 0.5]
+        cuts = []
+    cuts = [t for t in cuts if start + 0.3 < t < end - 0.3][:400]
+    ts = list(cuts)
+    span = end - start
+    if span >= duration - 1 and len(ts) < cap:
+        # 全片模式：硬切点稀疏时（叠化过渡检测不到）按 ~4s/帧 均匀补足，保证覆盖密度
+        n_even = cap - len(ts)
+        even = [start + span * (i + 0.5) / n_even for i in range(n_even)]
+        ts = sorted(set(round(t, 2) for t in ts + even))
     if len(ts) < 3:  # 长镜头/动画渐变类：均匀兜底
-        n = min(MAX_FRAMES, max(4, int(duration // 4)))
-        ts = [duration * i / n for i in range(1, n)]
-    if len(ts) > MAX_FRAMES:  # 镜头太多 → 均匀抽
-        step = len(ts) / MAX_FRAMES
-        ts = [ts[int(i * step)] for i in range(MAX_FRAMES)]
-    return [0.0] + ts
+        n = min(cap, max(3, int(span // 4)))
+        ts = [start + span * i / (n + 1) for i in range(n)]
+    if len(ts) > cap:  # 镜头太多 → 均匀抽（硬切点列表不裁，另作信号）
+        step = len(ts) / cap
+        ts = [ts[int(i * step)] for i in range(cap)]
+    return [start] + ts, cuts
 
 
 def grab_frame(video: pathlib.Path, t: float, out_png: pathlib.Path):
@@ -75,7 +94,7 @@ def grab_frame(video: pathlib.Path, t: float, out_png: pathlib.Path):
 
 
 def palette(frames: list[pathlib.Path]) -> list[dict]:
-    """全局 k-means 色板：全帧降采样像素聚类，按覆盖率排序。"""
+    """k-means 色板：帧降采样像素聚类，按覆盖率排序。"""
     px = []
     for f in frames:
         im = Image.open(f).convert('RGB').resize((80, 45))
@@ -91,34 +110,71 @@ def palette(frames: list[pathlib.Path]) -> list[dict]:
     return sorted(out, key=lambda c: -c['share'])
 
 
-def main(video_arg: str, outdir_arg: str) -> int:
-    video = pathlib.Path(video_arg)
-    outdir = pathlib.Path(outdir_arg)
+def make_sheets(frames: list[dict], outdir: pathlib.Path) -> list[str]:
+    """关键帧拼网格：每张 ≤30 格（6 列×5 行），每格 320×180 + 「#序号 t=秒」角标。
+    返回文件名列表（sheet-00.png, sheet-01.png, …）。"""
+    cell_w, cell_h, bar = 320, 180, 22
+    per = SHEET_ROWS * SHEET_COLS
+    names = []
+    for page in range(0, len(frames), per):
+        chunk = frames[page:page + per]
+        rows = math.ceil(len(chunk) / SHEET_COLS)
+        sheet = Image.new('RGB', (SHEET_COLS * cell_w, rows * (cell_h + bar)), (16, 16, 20))
+        dr = ImageDraw.Draw(sheet)
+        for i, f in enumerate(chunk):
+            im = Image.open(f['path']).convert('RGB').resize((cell_w, cell_h))
+            cx, cy = (i % SHEET_COLS) * cell_w, (i // SHEET_COLS) * (cell_h + bar)
+            sheet.paste(im, (cx, cy + bar))
+            dr.rectangle([cx, cy, cx + cell_w, cy + bar], fill=(16, 16, 20))
+            dr.text((cx + 6, cy + 4), f"#{f['idx']}  t={f['t']:.1f}s", fill=(240, 240, 240))
+        name = f'sheet-{page // per:02d}.png'
+        sheet.save(outdir / name)
+        names.append(name)
+    return names
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument('video')
+    ap.add_argument('outdir')
+    ap.add_argument('--start', type=float, default=0.0, help='限定时间段起点（段模式）')
+    ap.add_argument('--end', type=float, default=None, help='限定时间段终点（段模式）')
+    ap.add_argument('--cap', type=int, default=0, help='强制抽帧上限（0=自动：全片自适应/段模式 4）')
+    a = ap.parse_args()
+    video, outdir = pathlib.Path(a.video), pathlib.Path(a.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     if not video.exists():
         print(f'视频不存在: {video}')
         return 1
 
     duration = probe_duration(video)
-    times = scene_times(video, duration)
+    end = duration if a.end is None else min(a.end, duration)
+    cap = a.cap if a.cap > 0 else (max_frames(duration) if end - a.start >= duration - 1 else 4)
+    times, cuts = scene_times(video, duration, a.start, end, cap)
     frames = []
     for i, t in enumerate(times):
         png = outdir / f'frame-{i:02d}.png'
         grab_frame(video, t, png)
-        frames.append({'path': str(png.resolve()), 't': round(t, 2)})
+        frames.append({'path': str(png.resolve()), 't': round(t, 2), 'idx': i})
+
+    sheets = make_sheets(frames, outdir)
 
     feats = {
         'video': str(video.resolve()),
         'duration_s': round(duration, 1),
+        'span_s': [round(a.start, 2), round(end, 2)],
         'n_shots': len(times),
+        'cuts': [round(t, 2) for t in cuts],
+        'sheets': sheets,
         'frames': frames,
         'palette': palette([pathlib.Path(f['path']) for f in frames]),
     }
     (outdir / 'features.json').write_text(
         json.dumps(feats, ensure_ascii=False, indent=1), encoding='utf-8')
-    print(f'features: {len(frames)} 帧 / {duration:.0f}s / 色板 {len(feats["palette"])} 簇')
+    print(f'features: {len(frames)} 帧 / {len(sheets)} 张网格 / 硬切 {len(cuts)} 点 / '
+          f'{a.start:.0f}-{end:.0f}s / 色板 {len(feats["palette"])} 簇')
     return 0
 
 
 if __name__ == '__main__':
-    sys.exit(main(sys.argv[1], sys.argv[2]))
+    sys.exit(main())

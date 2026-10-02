@@ -34,7 +34,9 @@ func (l *Library) SnapshotMedia(styleID, sourceDir string) error {
 			continue
 		}
 		name := e.Name()
-		if name != "video.mp4" && !(strings.HasPrefix(name, "frame-") && strings.HasSuffix(name, ".png")) {
+		keep := name == "video.mp4" || name == "cover.png" ||
+			(strings.HasPrefix(name, "frame-") && strings.HasSuffix(name, ".png"))
+		if !keep {
 			continue
 		}
 		dst := filepath.Join(dstDir, name)

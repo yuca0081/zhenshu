@@ -27,19 +27,19 @@ import (
 
 // Style 风格条目：身份 + 外观 + 证据 + 复用件。
 type Style struct {
-	ID        string         `json:"id"`
-	Name      string         `json:"name"`                  // 人话名「深空渐变（高饱和·宇宙系）」
-	Direction string         `json:"direction"`             // 方向描述（与项目 style_samples.direction 同源；迁移前=Name）
-	Desc      string         `json:"desc,omitempty"`        // 一句话气质/来源
-	Genre     string         `json:"genre,omitempty"`       // 适用题材
-	Keywords  []string       `json:"keywords,omitempty"`    // 检索/匹配词
-	Tokens    map[string]any `json:"tokens,omitempty"`      // 色板/字体/转场/后期（渲染与场景注入直读）
-	Layouts   []Layout       `json:"layouts,omitempty"`     // 标准构图版式（场景生成按段轮换注入）
-	Samples   []Sample       `json:"samples,omitempty"`     // 样张 1–3 张（所见即所得）
-	Skin      *contract.Skin `json:"skin,omitempty"`        // 风格文件（项目复用时落盘 skin.json）
-	OriginProject string     `json:"origin_project,omitempty"`
-	Published bool           `json:"published"`
-	CreatedAt time.Time      `json:"created_at"`
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`               // 人话名「深空渐变（高饱和·宇宙系）」
+	Direction     string         `json:"direction"`          // 方向描述（与项目 style_samples.direction 同源；迁移前=Name）
+	Desc          string         `json:"desc,omitempty"`     // 一句话气质/来源
+	Genre         string         `json:"genre,omitempty"`    // 适用题材
+	Keywords      []string       `json:"keywords,omitempty"` // 检索/匹配词
+	Tokens        map[string]any `json:"tokens,omitempty"`   // 色板/字体/转场/后期（渲染与场景注入直读）
+	Layouts       []Layout       `json:"layouts,omitempty"`  // 标准构图版式（场景生成按段轮换注入）
+	Samples       []Sample       `json:"samples,omitempty"`  // 样张 1–3 张（所见即所得）
+	Skin          *contract.Skin `json:"skin,omitempty"`     // 风格文件（项目复用时落盘 skin.json）
+	OriginProject string         `json:"origin_project,omitempty"`
+	Published     bool           `json:"published"`
+	CreatedAt     time.Time      `json:"created_at"`
 }
 
 // Layout 标准构图版式（场景生成的版式纪律，轮换防每段同构）。
@@ -233,7 +233,11 @@ func (l *Library) DraftFromProject(projectDir, projectID, projectName string) (*
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	styles, _ := l.listLocked()
+	styles, err := l.listLocked()
+	if err != nil {
+		// 读失败绝不当空表处理：随后 save 会用单条新数据覆盖全库（清库事故）
+		return nil, fmt.Errorf("风格库读取失败（不写入，保护现有库）: %w", err)
+	}
 	if ss.StyleID != "" {
 		for i := range styles {
 			if styles[i].ID == ss.StyleID {
@@ -276,14 +280,21 @@ func (l *Library) DraftFromProject(projectDir, projectID, projectName string) (*
 
 // IngestVideoRef 参考视频解析结果入库（upsert，published=true）：
 // 旧流程的 AppendRegistry + AddVideoPack 双写双库在此合为一次写入。
-func (l *Library) IngestVideoRef(refID, direction, genre string, keywords []string,
+// name 为展示名（合集分段时用片中段名，可与 direction 不同）；空则与 direction 同源。
+func (l *Library) IngestVideoRef(refID, name, direction, genre string, keywords []string,
 	tokens map[string]any, layouts []Layout, samples []Sample, desc string) (*Style, error) {
 	if direction == "" || len(samples) == 0 {
 		return nil, fmt.Errorf("风格不完整（direction/样张缺失）")
 	}
+	if name == "" {
+		name = direction
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	styles, _ := l.listLocked()
+	styles, err := l.listLocked()
+	if err != nil {
+		return nil, fmt.Errorf("风格库读取失败（不写入，保护现有库）: %w", err)
+	}
 	id := videoStyleID(refID)
 	for i := range styles {
 		if styles[i].ID == id {
@@ -291,7 +302,7 @@ func (l *Library) IngestVideoRef(refID, direction, genre string, keywords []stri
 		}
 	}
 	s := Style{
-		ID: id, Name: direction, Direction: direction, Desc: desc,
+		ID: id, Name: name, Direction: direction, Desc: desc,
 		Genre: genre, Keywords: keywords, Tokens: tokens, Layouts: layouts,
 		Samples: samples, OriginProject: "video:" + refID,
 		Published: true, CreatedAt: time.Now(),
@@ -346,7 +357,7 @@ func (l *Library) ByDirection(direction string) (*Style, bool) {
 }
 
 // StyleSamplesJSON 把风格变成本项目可用的 style_samples.json 内容
-//（style_id 随行——后续场景生成/拼接/再提炼都靠它精确锚定本条目；
+// （style_id 随行——后续场景生成/拼接/再提炼都靠它精确锚定本条目；
 // skin 一并携带——确认时落盘 skin.json；confirmed 由调用方改写）。
 func (s *Style) StyleSamplesJSON() []byte {
 	out := contract.StyleSamples{
@@ -394,7 +405,12 @@ func newID(styles []Style) string {
 }
 
 // videoStyleID 参考视频风格 id（vid- 前缀，文件名安全化；原 styleref.RegistryID 语义）。
+// VideoStyleID 是它的导出版：api 侧封面样张的 <img src> 需要预知入库后的条目 id，
+// 与 IngestVideoRef 的赋 id 逻辑同源，防两处手工复算漂移。
 func videoStyleID(refID string) string {
 	sl := regexp.MustCompile(`[^a-z0-9-]+`).ReplaceAllString(strings.ToLower(refID), "-")
 	return "vid-" + strings.Trim(sl, "-")
 }
+
+// VideoStyleID 参考视频风格条目 id（IngestVideoRef 对同一 seed 赋的正是这个 id）。
+func VideoStyleID(refID string) string { return videoStyleID(refID) }
