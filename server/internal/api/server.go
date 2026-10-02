@@ -517,28 +517,15 @@ func (s *Server) draftManuscript(c *gin.Context) {
 		c.JSON(503, gin.H{"error": "LLM 未配置（LLM_API_KEY），请直接粘贴文稿"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 120*time.Second)
+	// 180s：撰稿工位是自主循环，时事题材会先联网核实（预算帽 2 次搜索）再成稿
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 180*time.Second)
 	defer cancel()
-	words := int(in.Minutes * 60 * 4.2) // 口播语速 ≈ 4.2 字/秒
-	var out struct {
-		Content string `json:"content"`
-	}
-	system := "你是「帧述」的口播科普撰稿人，为短视频写口播文稿。硬性要求：" +
-		"1) 第一句就是钩子（提问/反常识/画面感），不写标题和开场白；" +
-		"2) 2~4 个递进的知识点，口语化短句，像讲给朋友听，少形容词堆砌；" +
-		"3) 结尾一句收束或抛一个问题；" +
-		"4) 只输出正文：不带标题、小节序号、markdown、emoji、舞台指示；" +
-		"5) 数字和事实宁缺毋滥，不确定的不编。输出 JSON：{\"content\": \"文稿全文\"}。"
-	user := fmt.Sprintf("主题：%s\n目标时长：约 %.0f 分钟（正文约 %d 字，±20%%）。", strings.TrimSpace(in.Topic), in.Minutes, words)
-	if _, err := p.GenerateJSON(ctx, system, user, &out); err != nil {
+	content, err := agent.DraftManuscript(ctx, p, in.Topic, in.Minutes)
+	if err != nil {
 		c.JSON(500, gin.H{"error": "起草失败：" + err.Error()})
 		return
 	}
-	if strings.TrimSpace(out.Content) == "" {
-		c.JSON(500, gin.H{"error": "起草结果为空，请重试或直接粘贴文稿"})
-		return
-	}
-	c.JSON(200, gin.H{"content": strings.TrimSpace(out.Content)})
+	c.JSON(200, gin.H{"content": content})
 }
 
 func (s *Server) chat(c *gin.Context) {

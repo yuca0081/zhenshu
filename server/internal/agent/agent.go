@@ -19,6 +19,7 @@ import (
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
 	"webpage-video-agent/server/internal/produce"
+	"webpage-video-agent/server/internal/react"
 	"webpage-video-agent/server/internal/store"
 	"webpage-video-agent/server/internal/stylelib"
 	"webpage-video-agent/server/internal/webfetch"
@@ -679,43 +680,7 @@ var tools = []tool{
 			"required": []string{"query"},
 		}),
 		gate: noGate,
-		run: func(a *Agent, p *pipeline.Project, args string) string {
-			var in struct {
-				Query    string `json:"query"`
-				Recency  string `json:"recency"`
-				Location string `json:"location"`
-			}
-			_ = json.Unmarshal([]byte(args), &in)
-			q := strings.TrimSpace(in.Query)
-			if q == "" {
-				return "缺少 query"
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-			defer cancel()
-			rs, err := llm.WebSearch(ctx, q, strings.TrimSpace(in.Recency), strings.TrimSpace(in.Location))
-			if err != nil {
-				return "搜索失败：" + err.Error()
-			}
-			if len(rs) == 0 {
-				return "没有搜到相关结果，换个更具体的搜索词再试"
-			}
-			var b strings.Builder
-			fmt.Fprintf(&b, "「%s」搜到 %d 条：\n", q, len(rs))
-			for i, r := range rs {
-				meta := r.Media
-				if r.PublishDate != "" {
-					if meta != "" {
-						meta += " · "
-					}
-					meta += r.PublishDate
-				}
-				if meta != "" {
-					meta = "（" + meta + "）"
-				}
-				fmt.Fprintf(&b, "%d. %s%s\n%s\n%s\n", i+1, r.Title, meta, r.Content, r.Link)
-			}
-			return b.String()
-		},
+		run: func(_ *Agent, _ *pipeline.Project, args string) string { return runWebSearch(args) },
 	},
 	{
 		def: toolDef("fetch_url", "读取一个网页的正文（纯文本，免费不占搜索额度）。用户贴了链接想让你看内容、或 web_search 结果里有要细看的条目时用它。只抓静态页面（文章/文档/博客/wiki），不执行 JS，重前端页面会读不到正文", map[string]any{
@@ -726,23 +691,7 @@ var tools = []tool{
 			"required": []string{"url"},
 		}),
 		gate: noGate,
-		run: func(a *Agent, p *pipeline.Project, args string) string {
-			var in struct {
-				URL string `json:"url"`
-			}
-			_ = json.Unmarshal([]byte(args), &in)
-			u := strings.TrimSpace(in.URL)
-			if u == "" {
-				return "缺少 url"
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			art, err := webfetch.Fetch(ctx, u)
-			if err != nil {
-				return "网页读取失败：" + err.Error()
-			}
-			return formatArticle(art)
-		},
+		run:  func(_ *Agent, _ *pipeline.Project, args string) string { return runFetchURL(args) },
 	},
 	{
 		def: toolDef("set_bgm", "背景音乐：不带参数=列出曲库；track=曲名 设置/更换；track=\"off\" 关闭。成片已就绪时立即重新混音（几秒钟，不重渲画面）", map[string]any{
@@ -1086,32 +1035,43 @@ func (a *Agent) Run(projectID, userText string, refs []store.Ref) {
 	turnCtx, cancelTurn := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancelTurn()
 
-	final := ""
-	for step := 0; step < maxSteps; step++ {
-		msg, _, cerr := prov.Chat(turnCtx, msgs, toolSchemas())
-		if cerr != nil {
-			a.finish(projectID, "模型调用失败："+cerr.Error(), "error")
-			return
-		}
-		if len(msg.ToolCalls) == 0 {
-			final = msg.Content
-			break
-		}
-		msgs = append(msgs, msg)
-		for _, call := range msg.ToolCalls {
-			obs := a.execTool(p, call.Function.Name, call.Function.Arguments)
-			msgs = append(msgs, openai.ChatCompletionMessage{
-				Role:       openai.ChatMessageRoleTool,
-				Content:    obs,
-				ToolCallID: call.ID,
-				Name:       call.Function.Name,
-			})
-		}
+	core := react.New(prov, a.reactTools(p), maxSteps, react.Hooks{
+		OnCall: func(name, args string) {
+			a.Emit(p.ID, "tool_call", "", name+" "+compactArgs(args))
+		},
+		OnFinish: func(name, args, result string, rejected bool) {
+			a.saveToolMsg(p.ID, name, args, result)
+			if rejected {
+				a.Emit(p.ID, "tool_result", "", name+" "+result)
+			} else {
+				a.Emit(p.ID, "tool_result", "", name+" → "+firstLine(result, 120))
+			}
+		},
+	})
+	final, err := core.Run(turnCtx, msgs)
+	if err != nil {
+		a.finish(projectID, "模型调用失败："+err.Error(), "error")
+		return
 	}
 	if final == "" {
 		final = "我先停一下：这轮动作做完了，等你的下一步指示。"
 	}
 	a.finish(projectID, final, "text")
+}
+
+// reactTools 把包级工具表适配成 react 核心：门禁按实时状态求值，执行体绑当前项目。
+// 工具表本体不动——签名带宿主上下文，测试与 API 直调仍走 findTool/tools 表。
+func (a *Agent) reactTools(p *pipeline.Project) []react.Tool {
+	out := make([]react.Tool, 0, len(tools))
+	for i := range tools {
+		t := &tools[i]
+		out = append(out, react.Tool{
+			Def:  t.def,
+			Gate: func() string { return t.gate(a.State(p.ID)) },
+			Run:  func(args string) string { return t.run(a, p, args) },
+		})
+	}
+	return out
 }
 
 // formatRefs 引用卡片 → 模型可读的引用块（空则空串，不占位）。
@@ -1175,26 +1135,6 @@ func segStarts(p *pipeline.Project) map[int]float64 {
 		}
 	}
 	return starts
-}
-
-// execTool 门禁 + 执行 + 记账（工具轨迹入聊天案卷）。
-func (a *Agent) execTool(p *pipeline.Project, name, args string) string {
-	t := findTool(name)
-	if t == nil {
-		return "未知工具 " + name
-	}
-	s := a.State(p.ID)
-	if reason := t.gate(s); reason != "" {
-		obs := "拒绝：" + reason
-		a.saveToolMsg(p.ID, name, args, obs)
-		a.Emit(p.ID, "tool_result", "", name+" "+obs)
-		return obs
-	}
-	a.Emit(p.ID, "tool_call", "", name+" "+compactArgs(args))
-	obs := t.run(a, p, args)
-	a.saveToolMsg(p.ID, name, args, obs)
-	a.Emit(p.ID, "tool_result", "", name+" → "+firstLine(obs, 120))
-	return obs
 }
 
 func (a *Agent) finish(projectID, content, typ string) {
