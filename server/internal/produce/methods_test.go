@@ -88,7 +88,7 @@ func TestMethodsForInjection(t *testing.T) {
 // 相关性排序：两篇 comp 都命中时，命中词更多/更专一的排前面（非清单序）。
 func TestMethodsForRanking(t *testing.T) {
 	root := t.TempDir()
-mdir := filepath.Join(root, "data", "library", "methods")
+	mdir := filepath.Join(root, "data", "library", "methods")
 	os.MkdirAll(filepath.Join(mdir, "comp"), 0o755)
 	manifest := `[
 	 {"domain":"comp","file":"comp/generic.md","title":"泛公式","keywords":["画面"]},

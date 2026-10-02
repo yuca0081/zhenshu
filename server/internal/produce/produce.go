@@ -35,19 +35,19 @@ import (
 	"webpage-video-agent/server/internal/events"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
-	"webpage-video-agent/server/internal/stylelib"
 	"webpage-video-agent/server/internal/store"
+	"webpage-video-agent/server/internal/stylelib"
 )
 
 type Runner struct {
 	DataDir string // 仓库根 data/（项目在 data/projects/<id>）
 	RootDir string // 仓库根（ai/ 脚本所在）
 	Hub     *events.Hub
-	Store   store.Store // render_jobs 记账（nil = 不记账，测试场景）；manifest 仍是事实源
+	Store   store.Store                            // render_jobs 记账（nil = 不记账，测试场景）；manifest 仍是事实源
 	OnDone  func(projectID, status, detail string) // 终态回写（status: video|failed|cancelled；detail 供聊天汇报失败原因等）
 
-	wg       sync.WaitGroup  // 在跑的制作/重做 goroutine（优雅停机等待终态落盘）
-	stopping atomic.Bool     // 停机中：取消语义从「用户取消」改「服务停机中断」，并拒绝新任务
+	wg       sync.WaitGroup // 在跑的制作/重做 goroutine（优雅停机等待终态落盘）
+	stopping atomic.Bool    // 停机中：取消语义从「用户取消」改「服务停机中断」，并拒绝新任务
 }
 
 // manifest 制作事件协议（跨包契约：本包写、Reconcile 启动对账扫、agent.lastProduceResult
@@ -563,11 +563,11 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 			// 含 scene 的段同 t 两轮截帧像素必须一致；失败按 check 失败进同一修复轮。
 			if rerr := r.sceneReplayCheck(ctx, p); rerr != nil {
 				err = rerr
-				} else {
-					r.emit(p.ID, "stage", "check", "done")
-					r.Manifest(p, "stage.finish", "check")
-					return nil
-				}
+			} else {
+				r.emit(p.ID, "stage", "check", "done")
+				r.Manifest(p, "stage.finish", "check")
+				return nil
+			}
 		}
 		if ctx.Err() != nil { // 用户取消 ≠ check 失败，别进修复轮
 			return ctx.Err()
@@ -854,7 +854,6 @@ func absInt(v int) int {
 	return v
 }
 
-
 // translateSubtitles 双语字幕（M-C）：project.json bi_subtitle=true 时，把每段字幕
 // 短语（词区间文本）一次性 LLM 翻译成英文短句，写回 audio_meta.json 的
 // voices[].phrases_en（与 phrases 同序）；渲染层 subtitle.phrases_html 据此出英文次行。
@@ -876,8 +875,8 @@ func (r *Runner) translateSubtitles(ctx context.Context, p *pipeline.Project) er
 	}
 	voices, _ := am["voices"].([]any)
 	type segJob struct {
-		ID       string   `json:"id"`
-		Phrases  []string `json:"phrases"`
+		ID      string   `json:"id"`
+		Phrases []string `json:"phrases"`
 	}
 	jobs := []segJob{}
 	byIdx := map[string]int{}
@@ -974,7 +973,7 @@ func toAnySlice(ss []string) []any {
 
 // 方法库（data/library/methods/，清单 methods.json）：spec 生成按段内容注入的领域参考。
 // scene 域 = 确定性画布参考实现（成活率靠仿写不靠自由发挥）；comp 域 = 高级感构图公式
-//（大留白单主体/暗底浅字/段间衔接，三篇参考片分析的沉淀）。清单驱动：加方法 =
+// （大留白单主体/暗底浅字/段间衔接，三篇参考片分析的沉淀）。清单驱动：加方法 =
 // 加文件加 methods.json 条目，不改代码（methods_test.go 守卫清单与文件一致）。
 type methodEntry struct {
 	Domain   string   `json:"domain"` // scene | comp
@@ -1056,7 +1055,6 @@ func methodScore(m methodEntry, hay string) int {
 	}
 	return s
 }
-
 
 // ProjectCanvas 项目画幅（project.json aspect；旧项目无字段按 16:9，与已渲成片一致）。
 func ProjectCanvas(p *pipeline.Project) contract.Canvas {

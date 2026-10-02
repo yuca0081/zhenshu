@@ -124,19 +124,19 @@ type StyleSamples struct {
 	StyleID   string   `json:"style_id,omitempty"` // 风格库条目 id（全链路锚点：场景/拼接/再提炼按它查库）
 	Direction string   `json:"direction"`          // 如「手绘叙事（纸面·马克笔）」
 	Desc      string   `json:"desc,omitempty"`
-	Concept   string   `json:"concept,omitempty"` // 一句话：本片视觉概念，为什么这套系统配这部片
-	Samples   []Sample `json:"samples"`           // 1–3 张（用主皮肤渲出的所见即所得预览）
-	Skin      *Skin    `json:"skin,omitempty"`    // 旧字段（单皮肤，读兼容；EffectiveSkins 统一读口）
-	Skins     []Skin   `json:"skins,omitempty"`   // 1–2 套；双皮肤是穆阿蒂布式加分项（黑霓虹×米色图版按乐段交替）
+	Concept   string   `json:"concept,omitempty"`   // 一句话：本片视觉概念，为什么这套系统配这部片
+	Samples   []Sample `json:"samples"`             // 1–3 张（用主皮肤渲出的所见即所得预览）
+	Skin      *Skin    `json:"skin,omitempty"`      // 旧字段（单皮肤，读兼容；EffectiveSkins 统一读口）
+	Skins     []Skin   `json:"skins,omitempty"`     // 1–2 套；双皮肤是穆阿蒂布式加分项（黑霓虹×米色图版按乐段交替）
 	SkinRule  string   `json:"skin_rule,omitempty"` // 双皮肤切换规则（哪类段/哪个节拍穿哪套）
 
-	Fonts  *FontRoles     `json:"fonts,omitempty"`         // 字体三角色分工（禁一栈到底）
-	Motion *MotionLang    `json:"motion,omitempty"`        // 动效语言（缓动族+时长档+错峰+转场词汇）
-	Device *DeviceSpec    `json:"device,omitempty"`        // 贯穿装置（全片反复出现、随内容变奏的招牌画面）
-	Layouts []DesignLayout `json:"layouts,omitempty"`      // 本片版式网格（段轮换的优先来源，注册表降为兜底）
-	AntiPatterns []string `json:"anti_patterns,omitempty"` // 本片负面清单（出现即返工的俗手）
+	Fonts        *FontRoles     `json:"fonts,omitempty"`         // 字体三角色分工（禁一栈到底）
+	Motion       *MotionLang    `json:"motion,omitempty"`        // 动效语言（缓动族+时长档+错峰+转场词汇）
+	Device       *DeviceSpec    `json:"device,omitempty"`        // 贯穿装置（全片反复出现、随内容变奏的招牌画面）
+	Layouts      []DesignLayout `json:"layouts,omitempty"`       // 本片版式网格（段轮换的优先来源，注册表降为兜底）
+	AntiPatterns []string       `json:"anti_patterns,omitempty"` // 本片负面清单（出现即返工的俗手）
 
-	Confirmed bool     `json:"confirmed"` // 硬门：用户点头后才允许开工
+	Confirmed bool `json:"confirmed"` // 硬门：用户点头后才允许开工
 }
 
 // EffectiveSkins 新旧两种落法的统一读口：Skins 优先，退回旧 Skin 字段。
@@ -201,9 +201,9 @@ type DesignLayout struct {
 // 渲染引擎给标题/便签/箭头这些标准件上色只认槽位；自由 CSS 做纹理/特效/装饰，
 // 逐段追加到合成物 <style> 尾部（后写的同特异性规则胜出，可覆盖底妆）。
 type Skin struct {
-	Name  string    `json:"name"`  // 皮肤名（可与 direction 不同：direction 是方向描述）
+	Name  string    `json:"name"` // 皮肤名（可与 direction 不同：direction 是方向描述）
 	Slots SkinSlots `json:"slots"`
-	CSS   string    `json:"css"`   // 自由 CSS（≤6000 字符；禁动画/外链/视口单位）
+	CSS   string    `json:"css"` // 自由 CSS（≤6000 字符；禁动画/外链/视口单位）
 }
 
 // SkinSlots 必填槽位暂定四项（跑几个项目后再增减）+ 常用可选扩展。
@@ -213,12 +213,12 @@ type SkinSlots struct {
 	Accent string `json:"accent"` // 强调色（主按钮/高亮/大数字）
 	Font   string `json:"font"`   // 字体栈（必须含中文字体）
 
-	Mute     string `json:"mute,omitempty"`     // 次级文字色（缺省由 txt 降透明度推导）
-	Surface  string `json:"surface,omitempty"`  // 卡片/面板底（缺省由 bg 推导）
+	Mute     string `json:"mute,omitempty"`      // 次级文字色（缺省由 txt 降透明度推导）
+	Surface  string `json:"surface,omitempty"`   // 卡片/面板底（缺省由 bg 推导）
 	PanelTxt string `json:"panel_txt,omitempty"` // 面板内文字色（缺省由 bg/txt 推导）
 	Radius   int    `json:"radius,omitempty"`    // 圆角 px（0–40）
-	BorderW  int    `json:"border_w,omitempty"` // 描边宽 px（0–6）
-	ImgRot   int    `json:"img_rot,omitempty"`  // 配图旋转角（-8–8，构成主义斜置等）
+	BorderW  int    `json:"border_w,omitempty"`  // 描边宽 px（0–6）
+	ImgRot   int    `json:"img_rot,omitempty"`   // 配图旋转角（-8–8，构成主义斜置等）
 }
 
 // ValidateSkin 风格文件实测校验（§12.2：实测过闸才允许确认锁定）：

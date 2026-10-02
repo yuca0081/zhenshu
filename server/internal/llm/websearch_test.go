@@ -31,7 +31,7 @@ func newFakeMCP(t *testing.T, callResult string) *httptest.Server {
 			return
 		case "tools/call":
 			var p struct {
-				Name     string         `json:"name"`
+				Name      string         `json:"name"`
 				Arguments map[string]any `json:"arguments"`
 			}
 			_ = json.Unmarshal(req.Params, &p)

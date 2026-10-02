@@ -30,9 +30,9 @@ import (
 )
 
 const (
-	firstFrameAt    = "0.8"   // 开场帧时刻：首元素 reveal 最早 0.05s + 入场 ~0.35s，0.8s 已落定
-	lastFrameFrom   = "-0.3"  // 落定帧：段尾倒数 0.3s（同 M0 visual_qa 的「段落定状态」口径）
-	finalFrameFrom  = "-0.08" // 尾帧：段最后一帧（退场是否退净以此为准）
+	firstFrameAt   = "0.8"   // 开场帧时刻：首元素 reveal 最早 0.05s + 入场 ~0.35s，0.8s 已落定
+	lastFrameFrom  = "-0.3"  // 落定帧：段尾倒数 0.3s（同 M0 visual_qa 的「段落定状态」口径）
+	finalFrameFrom = "-0.08" // 尾帧：段最后一帧（退场是否退净以此为准）
 )
 
 type frameVerdict struct {
@@ -260,7 +260,6 @@ func extractFrames(ctx context.Context, p *pipeline.Project, segID string) (*seg
 	}
 	return sf, nil
 }
-
 
 func runeTrunc(s string, n int) string {
 	r := []rune(s)

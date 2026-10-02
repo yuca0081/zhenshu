@@ -26,9 +26,9 @@ func TestReconcileInterruptedJobs(t *testing.T) {
 			p.Manifest(ev, "")
 		}
 	}
-	mk("p-clean", "produce.start", "produce.done")     // 正常完结 → 不动
-	mk("p-interrupted", "produce.done", "produce.start") // 死在第二轮中途 → 补写
-	mk("p-rework-interrupted", "rework.start")           // 重做中断 → 补写
+	mk("p-clean", "produce.start", "produce.done")        // 正常完结 → 不动
+	mk("p-interrupted", "produce.done", "produce.start")  // 死在第二轮中途 → 补写
+	mk("p-rework-interrupted", "rework.start")            // 重做中断 → 补写
 	mk("p-cancelled", "rework.start", "rework.cancelled") // 已有终态 → 不动
 	mk("p-nomanifest")                                    // 无 manifest → 跳过
 
@@ -42,7 +42,7 @@ func TestReconcileInterruptedJobs(t *testing.T) {
 	}
 	// 中断补写与被中断任务同族：produce 中断写 produce.error，rework 中断写 rework.error
 	wantTerm := map[string]string{
-		"p-interrupted":       `"event":"produce.error"`,
+		"p-interrupted":        `"event":"produce.error"`,
 		"p-rework-interrupted": `"event":"rework.error"`,
 	}
 	for id, want := range wantTerm {

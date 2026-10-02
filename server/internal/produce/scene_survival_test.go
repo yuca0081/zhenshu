@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/png"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -116,7 +116,12 @@ func TestSceneSurvivalBench(t *testing.T) {
 	fmt.Fprintf(&b, "# scene 成活率基准（%s）\n\n| 段 | scene | 渲出 | 画面 | 备注 |\n|---|---|---|---|---|\n",
 		time.Now().Format("2006-01-02 15:04"))
 	for _, row := range rows {
-		mark := func(ok bool) string { if ok { return "✓" }; return "✗" }
+		mark := func(ok bool) string {
+			if ok {
+				return "✓"
+			}
+			return "✗"
+		}
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", row.id, mark(row.hasScene), mark(row.rendered), mark(row.painted), row.note)
 		if row.hasScene {
 			sceneN++

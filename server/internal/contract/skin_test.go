@@ -27,9 +27,9 @@ func TestValidateSkinOK(t *testing.T) {
 
 func TestValidateSkinSlots(t *testing.T) {
 	for name, mutate := range map[string]func(*Skin){
-		"缺槽位":     func(s *Skin) { s.Slots.TXT = "" },
-		"非hex强调色": func(s *Skin) { s.Slots.Accent = "gold" },
-		"无中文字体":   func(s *Skin) { s.Slots.Font = "'Helvetica',sans-serif" },
+		"缺槽位":       func(s *Skin) { s.Slots.TXT = "" },
+		"非hex强调色":   func(s *Skin) { s.Slots.Accent = "gold" },
+		"无中文字体":     func(s *Skin) { s.Slots.Font = "'Helvetica',sans-serif" },
 		"radius超范围": func(s *Skin) { s.Slots.Radius = 99 },
 	} {
 		sk := goodSkin()
@@ -100,17 +100,17 @@ func TestValidateDesignDraftOK(t *testing.T) {
 
 func TestValidateDesignDraftMissingBlocks(t *testing.T) {
 	for name, mutate := range map[string]func(*StyleSamples){
-		"缺concept":    func(s *StyleSamples) { s.Concept = "" },
-		"缺fonts":      func(s *StyleSamples) { s.Fonts = nil },
-		"缺motion":     func(s *StyleSamples) { s.Motion = nil },
-		"缺device":     func(s *StyleSamples) { s.Device = nil },
+		"缺concept":       func(s *StyleSamples) { s.Concept = "" },
+		"缺fonts":         func(s *StyleSamples) { s.Fonts = nil },
+		"缺motion":        func(s *StyleSamples) { s.Motion = nil },
+		"缺device":        func(s *StyleSamples) { s.Device = nil },
 		"device缺per_seg": func(s *StyleSamples) { s.Device.PerSeg = "" },
 		"motion缺notes":   func(s *StyleSamples) { s.Motion.Notes = "" },
 		"dur_in越界":       func(s *StyleSamples) { s.Motion.DurIn = 3 },
 		"stagger越界":      func(s *StyleSamples) { s.Motion.Stagger = 0.9 },
 		"display无中文字体":   func(s *StyleSamples) { s.Fonts.Display.Stack = "'Helvetica',sans-serif" },
 		"data无中文回退":      func(s *StyleSamples) { s.Fonts.Data.Stack = "Consolas,monospace" },
-		"双皮肤无切换规则":       func(s *StyleSamples) {
+		"双皮肤无切换规则": func(s *StyleSamples) {
 			s.Skins = append(s.Skins, *goodSkin())
 		},
 		"皮肤超两套": func(s *StyleSamples) {

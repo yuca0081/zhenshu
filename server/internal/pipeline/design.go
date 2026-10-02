@@ -7,6 +7,7 @@
 //   - 字体三角色分工 + 字距普遍拉开（穆阿蒂布评审）；
 //   - 贯穿装置逐段变奏正是风格本身（列LEN访客卡×5 / 西西弗斯单版式状态机）；
 //   - 双皮肤按乐段交替（穆阿蒂布黑霓虹×米色图版）。
+//
 // 载体：tokens 本体 = style/style_samples.json（不另立 tokens.json，防双源漂移）；
 // 确认后机械渲染出 style/design.md（人读 + 门2 + scene_gen 注入源）与
 // style/skin.json（引擎件，主皮肤，assemble 字幕带配色消费）。

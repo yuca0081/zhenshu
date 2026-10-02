@@ -11,7 +11,8 @@ import (
 )
 
 // 手工 A/B 验证版式注入（打真实 LLM + 渲染，平时跳过）：
-//   LAYOUTAB_PROJ=p20260927-layoutab go test ./internal/produce -run TestManualLayoutAB -v -timeout 80m
+//
+//	LAYOUTAB_PROJ=p20260927-layoutab go test ./internal/produce -run TestManualLayoutAB -v -timeout 80m
 func TestManualLayoutAB(t *testing.T) {
 	projID := os.Getenv("LAYOUTAB_PROJ")
 	if projID == "" {

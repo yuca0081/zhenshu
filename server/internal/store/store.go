@@ -19,16 +19,16 @@ import (
 )
 
 type Msg struct {
-	ID        int64  `gorm:"primaryKey"           json:"id"`
-	ProjectID string `gorm:"column:project_id"    json:"project_id"` // 磁盘项目 ID（api 主键）
-	Role      string `json:"role"`                                  // user | agent | system
-	Type      string `json:"type"`                                  // text | tool_call | progress | error
-	Content   string `json:"content"`
-	Refs      Refs   `gorm:"type:jsonb"            json:"refs,omitempty"` // 引用卡片（段/秒/帧/元素，plan §3.5）
-	ToolName  string `gorm:"column:tool_name"      json:"tool_name,omitempty"`
-	ToolArgs  string `gorm:"type:jsonb"            json:"tool_args,omitempty"`
-	ToolResult string `gorm:"type:jsonb"           json:"tool_result,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         int64     `gorm:"primaryKey"           json:"id"`
+	ProjectID  string    `gorm:"column:project_id"    json:"project_id"` // 磁盘项目 ID（api 主键）
+	Role       string    `json:"role"`                                   // user | agent | system
+	Type       string    `json:"type"`                                   // text | tool_call | progress | error
+	Content    string    `json:"content"`
+	Refs       Refs      `gorm:"type:jsonb"            json:"refs,omitempty"` // 引用卡片（段/秒/帧/元素，plan §3.5）
+	ToolName   string    `gorm:"column:tool_name"      json:"tool_name,omitempty"`
+	ToolArgs   string    `gorm:"type:jsonb"            json:"tool_args,omitempty"`
+	ToolResult string    `gorm:"type:jsonb"           json:"tool_result,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // Ref 引用卡片：段级 {idx,key}；元素级再带 t（全局秒）与元素 id/人话名（四级寻址之段/秒/帧/元素）。
@@ -70,10 +70,10 @@ func (r *Refs) Scan(src any) error {
 }
 
 type ProjectRow struct {
-	ID        string `gorm:"column:disk_id" json:"id"` // 对外一律用磁盘 ID
-	UUID      string `gorm:"primaryKey;column:id" json:"-"`
-	Name      string `json:"name"`
-	Status    string `json:"status"`
+	ID        string    `gorm:"column:disk_id" json:"id"` // 对外一律用磁盘 ID
+	UUID      string    `gorm:"primaryKey;column:id" json:"-"`
+	Name      string    `json:"name"`
+	Status    string    `json:"status"`
 	CreatedAt time.Time `gorm:"column:created_at" json:"created_at"`
 }
 
@@ -212,7 +212,8 @@ func (s *pgStore) ListRenderJobs(projectID string) ([]RenderJobRow, error) {
 	return rows, err
 }
 
-func (s *pgStore) SaveMsg(m *Msg) error {	uuid, err := s.findUUID(m.ProjectID)
+func (s *pgStore) SaveMsg(m *Msg) error {
+	uuid, err := s.findUUID(m.ProjectID)
 	if err != nil {
 		return err
 	}
@@ -262,7 +263,8 @@ func (s *memStore) upsert(diskID, name string) {
 }
 
 func (s *memStore) CreateProject(diskID, name string) error {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.upsert(diskID, name)
 	return nil
 }
@@ -270,7 +272,8 @@ func (s *memStore) CreateProject(diskID, name string) error {
 func (s *memStore) EnsureProject(diskID, name string) error { return s.CreateProject(diskID, name) }
 
 func (s *memStore) UpdateStatus(diskID, status string) error {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i := range s.projects {
 		if s.projects[i].ID == diskID {
 			s.projects[i].Status = status
@@ -280,14 +283,16 @@ func (s *memStore) UpdateStatus(diskID, status string) error {
 }
 
 func (s *memStore) ListProjects() ([]ProjectRow, error) {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	out := make([]ProjectRow, len(s.projects))
 	copy(out, s.projects)
 	return out, nil
 }
 
 func (s *memStore) SaveMsg(m *Msg) error {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.seq++
 	m.ID = s.seq
 	if m.CreatedAt.IsZero() {
@@ -298,14 +303,16 @@ func (s *memStore) SaveMsg(m *Msg) error {
 }
 
 func (s *memStore) StartRenderJob(projectID, kind string) error {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.jobSeq++
 	s.jobs = append(s.jobs, RenderJobRow{ID: s.jobSeq, ProjectID: projectID, Kind: kind, Status: "running", StartedAt: time.Now()})
 	return nil
 }
 
 func (s *memStore) FinishRenderJob(projectID, status, outputPath, errMsg string) error {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i := len(s.jobs) - 1; i >= 0; i-- {
 		if s.jobs[i].ProjectID == projectID && s.jobs[i].Status == "running" {
 			s.jobs[i].Status = status
@@ -320,7 +327,8 @@ func (s *memStore) FinishRenderJob(projectID, status, outputPath, errMsg string)
 }
 
 func (s *memStore) ListRenderJobs(projectID string) ([]RenderJobRow, error) {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var out []RenderJobRow
 	for i := len(s.jobs) - 1; i >= 0; i-- { // 新在前，与 PG 的 id DESC 同序
 		if s.jobs[i].ProjectID == projectID {
@@ -331,7 +339,8 @@ func (s *memStore) ListRenderJobs(projectID string) ([]RenderJobRow, error) {
 }
 
 func (s *memStore) ListMsgs(projectID string, afterID int64, limit int) ([]Msg, error) {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var out []Msg
 	for _, m := range s.msgs {
 		if m.ProjectID == projectID && m.ID > afterID && (m.Type == "text" || m.Type == "tool_call" || m.Type == "error") {

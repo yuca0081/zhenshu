@@ -108,12 +108,12 @@ func TestSfxConfigResolve(t *testing.T) {
 }
 
 // TestStitchComboFcStreamRefs 组合终装图的流引用必须落在实际输入序号内
-//（回归：sfx 第三路曾误写成 [3:a] —— 输入只有 0/1/2，ffmpeg 拒图终装失败）。
+// （回归：sfx 第三路曾误写成 [3:a] —— 输入只有 0/1/2，ffmpeg 拒图终装失败）。
 func TestStitchComboFcStreamRefs(t *testing.T) {
 	refRe := regexp.MustCompile(`\[(\d+):[av]\]`)
 	cases := []struct {
-		name    string
-		sfx     bool
+		name     string
+		sfx      bool
 		maxInIdx int // 输入路数 - 1
 	}{
 		{"bgm only", false, 1},

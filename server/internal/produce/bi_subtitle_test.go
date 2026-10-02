@@ -25,7 +25,7 @@ func TestTranslateSubtitlesGate(t *testing.T) {
 	}
 	meta := func(bi bool, withEN bool) map[string]any {
 		v := map[string]any{"id": "seg01", "duration_s": 2.0,
-			"words": []map[string]any{{"text": "群", "start": 0.2}, {"text": "论", "start": 0.6}},
+			"words":   []map[string]any{{"text": "群", "start": 0.2}, {"text": "论", "start": 0.6}},
 			"phrases": [][]int{{0, 1}}}
 		if withEN {
 			v["phrases_en"] = []string{"group theory"}
