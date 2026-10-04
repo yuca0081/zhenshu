@@ -66,24 +66,20 @@ func projectLayouts(p *pipeline.Project, dataDir string) []stylelib.Layout {
 }
 
 // styleNoteFor 项目风格 → 场景生成提示里的风格说明：方向 + 皮肤槽位（§12.2，锁定后
-// 以项目为准）+ 风格库条目补题材/关键词/色板 tokens（LLM 写场景代码直接拿 hex；
-// v1 的配图调性随配图槽位一起退役——v2 场景是程序化图形，无配图）。
+// 以项目为准）+ 风格库条目补色板 tokens（LLM 写场景代码直接拿 hex；v1 的配图调性随配图
+// 槽位一起退役——v2 场景是程序化图形，无配图）。条目的 genre/keywords/subject 是检索
+// 元数据（题材信息），永不注入生成提示词——题材中毒的口子。
 func styleNoteFor(p *pipeline.Project, dataDir string) string {
 	direction := projectDirection(p)
 	if direction == "" {
 		return ""
 	}
 	note := "\n## 本片风格\n- 方向：" + direction
+	note += "\n- 风格≠题材：以上是构图语法（怎么画），画面主体永远跟本段画面提示走，\n  禁止把主体降级成小卡片迁就版式；风格来源视频的题材物件与品牌字样禁止入画"
 	note += skinNote(p)
 	st := projectStyle(p, dataDir)
 	if st == nil {
 		return note
-	}
-	if st.Genre != "" {
-		note += "\n- 适用题材：" + st.Genre
-	}
-	if len(st.Keywords) > 0 {
-		note += "\n- 关键词：" + strings.Join(st.Keywords, "、")
 	}
 	if pal := PaletteNote(st.Tokens); pal != "" && !strings.Contains(note, "皮肤槽位") {
 		// 项目没锁皮肤时库色板是唯一配色事实源；锁了皮肤则槽位优先，不重复注入
@@ -125,11 +121,12 @@ func styleKeyframeImages(ctx context.Context, dataDir string, p *pipeline.Projec
 }
 
 // keyframeNote 场景生成提示里的真迹说明（真迹附在样张截图之后）。
+// 真迹只准学气质（配色/光影/质感/密度/节奏）——物件是原片题材，照着画就是题材中毒。
 func keyframeNote(n int) string {
 	if n == 0 {
 		return ""
 	}
-	return fmt.Sprintf("\n- 附图最后 %d 张是本风格来源视频的原片真迹（关键帧）：画面气质/质感/构图语感以真迹为准，设计系统与样张是它的网页转译——冲突时在不破坏契约物理边界的前提下向真迹靠\n", n)
+	return fmt.Sprintf("\n- 附图最后 %d 张是本风格来源视频的原片真迹（关键帧）：只学气质——配色、光影、质感、画面密度、构图节奏；真迹里画的物件（建筑/人物/器物等）是原视频的题材，与本片无关，禁止模仿着画；本段画什么永远由画面提示说了算\n", n)
 }
 
 // PaletteNote 风格库 tokens → 一行人话色板（底/主字/墨/accent/面板/字体）。

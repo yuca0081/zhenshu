@@ -73,6 +73,14 @@ func (r *Runner) frameQA(ctx context.Context, p *pipeline.Project, instruction, 
 		}
 		r.emit(id, "progress", "frameqa",
 			fmt.Sprintf("%d 段审查未过，带问题重出画面（第 %d 轮）", len(failed), round+1))
+		// 备份本轮要动的段 spec：修复轮是掷骰子，新画面可能反而过不了 check，
+		// 到时回滚到已知能过的版本交付（QA 问题标记后交用户决定）
+		prev := map[string][]byte{}
+		for segID := range failed {
+			if b, err := os.ReadFile(p.LLMOutput("comp-" + segID)); err == nil {
+				prev[segID] = b
+			}
+		}
 		for segID, issues := range failed {
 			if err := r.sceneGen(ctx, p, instruction, issues, segID); err != nil {
 				return err
@@ -87,7 +95,27 @@ func (r *Runner) frameQA(ctx context.Context, p *pipeline.Project, instruction, 
 			return fmt.Errorf("组装失败: %w", err)
 		}
 		if err := pipeline.Run(ctx, p, "render"); err != nil {
-			return fmt.Errorf("重渲失败: %w", err)
+			// 修复轮的新画面没过 check：整体回滚本轮改动，用旧画面交付——
+			// QA 修复是加分项不是人质（frameqa.failed 标记仍在，用户可自行决定重做）
+			r.emit(id, "progress", "frameqa", "修复轮画面未过 check，回滚到修复前画面")
+			r.Manifest(p, "frameqa.rollback", firstLine(err.Error(), 120))
+			for segID := range failed {
+				if orig, ok := prev[segID]; ok {
+					if werr := os.WriteFile(p.LLMOutput("comp-"+segID), orig, 0o644); werr != nil {
+						return werr
+					}
+				}
+				r.clearFrames(p, segID)
+			}
+			if cerr := pipeline.Run(ctx, p, "compositions"); cerr != nil {
+				return fmt.Errorf("合成物落盘失败: %w", cerr)
+			}
+			if cerr := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); cerr != nil {
+				return fmt.Errorf("组装失败: %w", cerr)
+			}
+			if cerr := pipeline.Run(ctx, p, "render"); cerr != nil {
+				return fmt.Errorf("重渲失败: %w", cerr) // 回滚后仍失败=系统性问题，如实上抛
+			}
 		}
 		// 修复轮动了段片 → 必须重缝合成片，否则交付的 main.mp4 还是修复前画面
 		// （run/runRework 的 stitch 在 frameQA 之前，救不了这里）。
@@ -168,7 +196,7 @@ func (r *Runner) reviewSegments(ctx context.Context, p *pipeline.Project, only s
 		}
 		imgs = append(imgs, keyImgs...)
 		_, rerr := prov.GenerateJSONVisionEffort(ctx,
-			"你是科普视频的画面质检员，只输出 JSON。",
+			"你是视频的画面质检员，只输出 JSON。",
 			reviewPrompt(p, seg, voices[seg.ID], keyImgs),
 			imgs, 0.2, &vd, llm.EffortHigh)
 		if rerr != nil {
@@ -323,7 +351,8 @@ func reviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta, keys [
 ## 段信息
 - 标题：%s
 - 旁白：%s
-`, header, seg.Key, seg.Narration))
+- 画面提示（本段该画什么，以此为准）：%s
+`, header, seg.Key, seg.Narration, seg.VisualBrief))
 	// scene 段（P1-1）：全画幅画布构图——大片深底/留白/暗调层次是设计不是缺陷，
 	// 卡片式「空白>25%/重心失衡」判定整组关闭；canvas 像素不参与 DOM 检查。
 	if specHasScene(p, seg.ID) {
@@ -377,10 +406,11 @@ pass 标准：无 high 问题即 true；medium/low 记录但不算失败。`)
 	return b.String()
 }
 
-// styleCheckBlock 风格一致性检查块（图5+ = 样张/原片真迹）：笼子二的回路，Tier1 是非题——
-// 「这段和样张像不像同一部片」。只报「像另一部片」级漂移（medium，报告项不阻断，
-// plan-v2 §4）；双皮肤与任一皮肤气质一致即算一致。真迹是原始目标，漂移判断以它为
-// 最终准绳（样张是它的网页转译）；两者都无返回 ""。
+// styleCheckBlock 风格一致性检查块（图5+ = 样张/原片真迹）：笼子二的回路，两条判据——
+// 风格漂移（Tier1 非题，「这段和样张像不像同一部片」，只报「像另一部片」级漂移，medium
+// 报告项不阻断，plan-v2 §4）与题材中毒（high，进修复轮回喂）：渲染画面出现真迹里的
+// 题动物件且不是画面提示要求的主体。双皮肤与任一皮肤气质一致即算一致；两者都无返回 ""。
+// 真迹只当气质参照（配色/字体/质感）——内容与真迹不同是应该的，真迹是另一部片。
 func styleCheckBlock(ss *contract.StyleSamples, samples, keys int) string {
 	if samples <= 0 && keys <= 0 {
 		return ""
@@ -388,18 +418,19 @@ func styleCheckBlock(ss *contract.StyleSamples, samples, keys int) string {
 	var b strings.Builder
 	switch {
 	case samples > 0 && keys > 0:
-		fmt.Fprintf(&b, "\n## 风格一致性（图5–图%d 风格样张；图%d–图%d 原片真迹）\n最后 %d 张是本片确认过的风格样张（网页转译），随后 %d 张是本风格来源视频的原片真迹（关键帧）。判断本段画面与样张/真迹是否**明显偏离**——配色/字体/整体气质像不像同一部片：\n",
+		fmt.Fprintf(&b, "\n## 风格一致性（图5–图%d 风格样张；图%d–图%d 原片真迹）\n最后 %d 张是本片确认过的风格样张（网页转译），随后 %d 张是本风格来源视频的原片真迹（关键帧）。\n",
 			4+samples, 5+samples, 4+samples+keys, samples, keys)
 	case keys > 0:
-		fmt.Fprintf(&b, "\n## 风格一致性（对照原片真迹，图5–图%d）\n最后 %d 张是本风格来源视频的原片真迹（关键帧）。判断本段画面与真迹是否**明显偏离**——配色/字体/整体气质像不像同一部片：\n", 4+keys, keys)
+		fmt.Fprintf(&b, "\n## 风格一致性（对照原片真迹，图5–图%d）\n最后 %d 张是本风格来源视频的原片真迹（关键帧）。\n", 4+keys, keys)
 	default:
-		fmt.Fprintf(&b, "\n## 风格一致性（对照样张，图5–图%d）\n最后 %d 张是本片确认过的风格样张。判断本段画面与样张是否**明显偏离**——配色/字体/整体气质像不像同一部片：\n", 4+samples, samples)
+		fmt.Fprintf(&b, "\n## 风格一致性（对照样张，图5–图%d）\n最后 %d 张是本片确认过的风格样张。\n", 4+samples, samples)
 	}
 	if ss != nil && len(ss.EffectiveSkins()) == 2 && strings.TrimSpace(ss.SkinRule) != "" {
 		b.WriteString("- 本片是双皮肤（切换规则：" + ss.SkinRule + "）；与任一皮肤气质一致即算一致\n")
 	}
-	b.WriteString(`- 只有「像另一部片」程度才报：frame="sample"、element="风格漂移"、severity="medium"，problem 写偏在哪（色系/字体/质感），suggestion 写怎么靠回参照
-- 有真迹时以真迹气质为最终准绳（样张是它的网页转译，真迹才是原始目标）
+	b.WriteString(`- 参照物只提供「怎么画」的气质：配色/字体/质感/构图密度。本段画的内容与真迹不同是应该的——真迹是另一部片，内容本来就不该像，不算偏离
+- 风格漂移（medium）：色系/字体/质感明显不同族，像另一部片 → frame="sample"、element="风格漂移"，problem 写偏在哪（色系/字体/质感），suggestion 写怎么靠回参照
+- 题材中毒（high）：画面里出现真迹中的题材物件（真迹画的楼宇/人物/器物等），且不是上面「画面提示」要求的主体 → frame="sample"、element="题材中毒"、severity="high"，problem 写哪个物件来自原片题材，suggestion 写换成画面提示要求的主体
 - 正常设计内变化不算：同色系深浅、版式差异、背景纹理不同、内容不同带来的密度差异
 `)
 	return b.String()

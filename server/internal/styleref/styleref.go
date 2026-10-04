@@ -41,6 +41,7 @@ type Ref struct {
 // hasDesignSystem 成立，DesignDoc 注入/版式轮换/画面质检全套点亮。
 type StyleDraft struct {
 	Direction    string               `json:"direction"`
+	Subject      string               `json:"subject,omitempty"` // 原片题材一句话（只供浏览/检索，永不注入生成提示词）
 	Genre        string               `json:"genre"`
 	Keywords     []string             `json:"keywords"`
 	Photo        string               `json:"photo"`
@@ -265,10 +266,6 @@ func (s *Store) analyzeCompositions(ctx context.Context, prov *llm.Provider, fra
 // segName 非空表示合集分段模式：direction 优先采用段名（片中标题），事实用段内数据。
 func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name, segName string,
 	feats videoFeatures, notes string) (*StyleDraft, error) {
-	pal := make([]string, 0, len(feats.Palette))
-	for _, c := range feats.Palette {
-		pal = append(pal, fmt.Sprintf("%s(覆盖率%.0f%%,亮度%.2f)", c.Hex, c.Share*100, c.Lum))
-	}
 	rep := make([]string, 0, 3) // 代表帧：首/中/尾
 	for _, idx := range []int{0, len(feats.Frames) / 2, len(feats.Frames) - 1} {
 		if idx < 0 || idx >= len(feats.Frames) {
@@ -280,6 +277,24 @@ func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name, segNam
 		}
 		rep = append(rep, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(b))
 	}
+	system := "你是视频视觉分析师，把参考视频提炼成可复用的风格包。只输出 JSON。"
+	user := synthesizeUserPrompt(name, segName, feats, notes)
+	var style StyleDraft
+	_, err := prov.GenerateJSONVisionNoThink(ctx, system, user, rep, 0.5, &style)
+	if err != nil {
+		return nil, fmt.Errorf("风格合成失败: %w", err)
+	}
+	return &style, nil
+}
+
+// synthesizeUserPrompt 风格合成作业正文（synthesize 与回归测试共用一份，防漂移）。
+// 核心纪律：风格/题材分离——除 subject 外所有字段只写「怎么画」，物件一律抽象描述，
+// 样张用几何元素演示构图（这份风格包会被用来制作题材完全不同的新片）。
+func synthesizeUserPrompt(name, segName string, feats videoFeatures, notes string) string {
+	pal := make([]string, 0, len(feats.Palette))
+	for _, c := range feats.Palette {
+		pal = append(pal, fmt.Sprintf("%s(覆盖率%.0f%%,亮度%.2f)", c.Hex, c.Share*100, c.Lum))
+	}
 	spanTxt := "全片"
 	if feats.SpanS[1]-feats.SpanS[0] < feats.DurationS-1 {
 		spanTxt = fmt.Sprintf("%.0f-%.0f 秒段", feats.SpanS[0], feats.SpanS[1])
@@ -288,8 +303,7 @@ func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name, segNam
 	if segName != "" {
 		nameHint = fmt.Sprintf("\n- 已知该段风格名「%s」（解析阶段从片中标题读出）——direction 优先直接采用它，可在 ≤6 字内微调；name 参数也以它为准", segName)
 	}
-	system := "你是视频视觉分析师，把参考视频提炼成可复用的风格包。只输出 JSON。"
-	user := fmt.Sprintf(`把参考视频「%s」（%s）提炼成一个风格包（挂到网页渲染视频管线上，与现有 token 引擎同一套 schema）。
+	return fmt.Sprintf(`把参考视频「%s」（%s）提炼成一个风格包（挂到网页渲染视频管线上，与现有 token 引擎同一套 schema）。
 
 ## 已测得事实（必须遵守）
 - 抽取范围时长 %.1f 秒、%d 个镜头；色板 k-means 8 簇：
@@ -299,28 +313,33 @@ func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name, segNam
 - font 只能用 Windows 系统字体栈：'Segoe UI'/'Microsoft YaHei'/'Georgia'/'KaiTi'/'STKaiti'/'Cambria'/'Arial Narrow'/'SimHei' 组合（示例：'Georgia','SimHei',serif），禁止 Noto/思源等未装字体
 - tokens 里的颜色必须从上面色板 hex 里选（可按角色微调明度但保持色相；覆盖率最高的暗色通常做 bg.from，最亮簇做 txt）；颜色之外的字段按画面气质定。
 - direction 是风格名（≤12 字，含一个括号副标）；**禁止出现「手绘」「扁平」二字**（引擎按名字路由）。
-- layouts 给 5 个该视频的标准构图版式（id 用 ASCII，name 中文 ≤6 字，desc ≤70 字写清主体位置/比例/留白/元素数；画布 1920×1080，安全区 x∈[160,1760] y∈[120,850]，底部 896 起字幕带禁放，每版式 ≥3 元素且不重叠）。
-- samples 给 2 张纯 CSS 样张（tag/desc/html），html 是完整自包含文档，画布固定 960×540：html,body{width:960px;height:540px;overflow:hidden}，内联一个 <style>，每张 ≤2000 字符，不要图片/网络资源，气质尽量贴近附上的关键帧。
+
+## 风格/题材分离（最高优先级纪律）
+这份风格包以后会被用来制作**题材完全不同**的新片。除 subject 外，每个字段落笔前自问：换一个题材这句话还成立吗？
+- 只写「怎么画」：构图骨架（主体位置/比例/留白/层次/元素数）、配色、字体、动效、质感；
+- 禁写原片的题材物件：原片画的是城市就禁写楼/街/车，画的是人物就禁写人物——物件一律
+  抽象成「色块/卡片/线条/图形」来描述（「楼宇剪影沿底边排布」→「几何色块沿底边排布」）；
+- subject：一句话记录原片画的是什么（如「等距视角的城市宣传动画」，≤30 字）——它只供
+  人浏览与检索，下游不会注入生成模型，题材信息只允许出现在这一处；
+- genre/keywords 只是检索词：画风词优先（如「等距」「低饱和」「硬几何」），题材词至多一个。
+
+## 布局与样张
+- layouts 给 5 个该视频的标准构图版式（id 用 ASCII，name 中文 ≤6 字，desc ≤70 字写清主体位置/比例/留白/元素数，物件一律按上面纪律抽象描述；画布 1920×1080，安全区 x∈[160,1760] y∈[120,850]，底部 896 起字幕带禁放，每版式 ≥3 元素且不重叠）。
+- samples 给 2 张纯 CSS 样张（tag/desc/html），html 是完整自包含文档，画布固定 960×540：html,body{width:960px;height:540px;overflow:hidden}，内联一个 <style>，每张 ≤2000 字符，不要图片/网络资源。样张演示的是「怎么画」：用抽象几何元素（色块/线条/占位形状）搭出构图骨架与质感，参照关键帧取配色气质即可，**禁止临摹原片里的具体物件**——样张会原样出现在题材不同的新片生成现场。
 
 ## 设计系统（神似的关键，逐项给全；下游与项目设计阶段同一套注入机制）
-- concept：一句话（≤40字）——这套风格的视觉概念，它为什么像这部片。
+- concept：一句话（≤40字）——这套风格的视觉概念（纯「怎么画」层面，不提原片画了什么）。
 - fonts：字体三角色 {"display":{"stack":"..","weight":"..","tracking":".."},"body":{...},"data":{...}}，display/body 必填；栈只能用上面列的 Windows 系统字体且必须含中文字体（中文会豆腐块）。
 - motion：动效语言 {"ease":"缓动族","dur_in":进场时长,"dur_settle":落定时长,"stagger":同组错峰,"notes":"性格一句话"}。看附上的连续关键帧推断：元素怎么进场（淡入/位移方向/缩放）、大概多快、错峰节奏；notes 写什么怎么动、禁什么动。时长档范围 dur_in 0.1–1.5 秒、dur_settle 0.05–1.0 秒、stagger 0–0.5 秒。
-- device：贯穿装置 {"name":"装置名","desc":"是什么、观众为什么记住它","per_seg":"逐段怎么重复/变奏"}——全片反复出现的签名画面元素或构图机制（如「放射线强调」「红色印章盖角」）；没有显式装置就从构图语法归纳一个。
+- device：贯穿装置 {"name":"装置名","desc":"是什么、观众为什么记住它","per_seg":"逐段怎么重复/变奏"}——全片反复出现的签名画面机制（如「放射线强调」「红色印章盖角」）；描述只写机制与节拍，物件按分离纪律抽象；没有显式装置就从构图语法归纳一个。
 - anti_patterns：负面清单 3–6 条——这部片绝不会出现的手法（如「彩虹渐变」「emoji 贴纸」「圆角卡片堆砌」），出现即返工的俗手。
 
 ## tokens schema（缺字段引擎走缺省）
 {"font":"系统字体栈","bg":{"type":"solid|linear","from":"#..","to":"#..","angle":0,"fx":["stars|dots|grid|glow|noise 子集"],"glow":[{"color":"#..","x":50,"y":50,"r":50,"alpha":"33"}]},"ink":"#..","txt":"#..","surface":"#..|rgba(..)","surface_txt":"#..","accent":["#..×6"],"primary":"#..","arrow":"#..","border_w":0,"radius":12,"shadow":"css 或 none","title":{"weight":800,"spacing":2},"cap":{"mode":"bar|pill|plain","bg":"rgba(..)","color":"#.."},"img":{"frame":"polaroid|clean|glass","shadow":"css"}}
 
 ## 输出（只输出 JSON，无围栏）
-{"direction":"…","genre":"适用题材（从画面推断，≤30字）","keywords":["…×4-8"],"photo":"配图 query 调性（≤30字）","concept":"…","fonts":{…},"motion":{…},"device":{…},"anti_patterns":["…×3-6"],"layouts":[…5],"tokens":{…},"samples":[…2]}
+{"direction":"…","subject":"原片题材一句话（≤30字）","genre":"适用题材（检索用，≤30字）","keywords":["…×4-8"],"photo":"配图 query 调性（≤30字）","concept":"…","fonts":{…},"motion":{…},"device":{…},"anti_patterns":["…×3-6"],"layouts":[…5],"tokens":{…},"samples":[…2]}
 `, name, spanTxt, feats.SpanS[1]-feats.SpanS[0], feats.NShots, strings.Join(pal, "、"), notes, nameHint)
-	var style StyleDraft
-	_, err := prov.GenerateJSONVisionNoThink(ctx, system, user, rep, 0.5, &style)
-	if err != nil {
-		return nil, fmt.Errorf("风格合成失败: %w", err)
-	}
-	return &style, nil
 }
 
 // validateStyle 入库前自检（够注册表吃、引擎能配）。

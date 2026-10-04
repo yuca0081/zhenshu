@@ -28,11 +28,13 @@ import (
 // Style 风格条目：身份 + 外观 + 证据 + 复用件。
 // 设计系统五件套（concept/fonts/motion/device/anti_patterns）视频解析条目才有，
 // 与项目 design 阶段同构（contract.StyleSamples 同款类型）；老条目全空 → 走 v1 兜底注入。
+// Subject/Genre/Keywords 是题材元数据，只供浏览与检索——永不注入生成提示词（题材中毒的口子）。
 type Style struct {
 	ID            string               `json:"id"`
 	Name          string               `json:"name"`               // 人话名「深空渐变（高饱和·宇宙系）」
 	Direction     string               `json:"direction"`          // 方向描述（与项目 style_samples.direction 同源；迁移前=Name）
 	Desc          string               `json:"desc,omitempty"`     // 一句话气质/来源
+	Subject       string               `json:"subject,omitempty"`  // 原片题材一句话（浏览/检索用）
 	Genre         string               `json:"genre,omitempty"`    // 适用题材
 	Keywords      []string             `json:"keywords,omitempty"` // 检索/匹配词
 	Tokens        map[string]any       `json:"tokens,omitempty"`   // 色板/字体/转场/后期（渲染与场景注入直读）
@@ -290,6 +292,7 @@ func (l *Library) DraftFromProject(projectDir, projectID, projectName string) (*
 type VideoStyleIn struct {
 	Name         string // 展示名（合集分段用段名）；空则与 direction 同源
 	Direction    string
+	Subject      string // 原片题材一句话（浏览/检索用，不进生成提示词）
 	Genre        string
 	Keywords     []string
 	Desc         string
@@ -329,6 +332,9 @@ func (l *Library) IngestVideoRef(refID string, in VideoStyleIn) (*Style, error) 
 			if up.Concept == "" {
 				up.Concept = in.Concept
 			}
+			if up.Subject == "" {
+				up.Subject = in.Subject
+			}
 			if up.Fonts == nil {
 				up.Fonts = in.Fonts
 			}
@@ -359,7 +365,7 @@ func (l *Library) IngestVideoRef(refID string, in VideoStyleIn) (*Style, error) 
 	}
 	s := Style{
 		ID: id, Name: name, Direction: in.Direction, Desc: in.Desc,
-		Genre: in.Genre, Keywords: in.Keywords, Tokens: in.Tokens, Layouts: in.Layouts,
+		Subject: in.Subject, Genre: in.Genre, Keywords: in.Keywords, Tokens: in.Tokens, Layouts: in.Layouts,
 		Concept: in.Concept, Fonts: in.Fonts, Motion: in.Motion, Device: in.Device,
 		AntiPatterns: in.AntiPatterns, Keyframes: in.Keyframes,
 		Samples: in.Samples, OriginProject: "video:" + refID,

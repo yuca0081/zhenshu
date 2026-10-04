@@ -161,6 +161,14 @@ func DesignDoc(ss *contract.StyleSamples, segIdx int) string {
 	var b strings.Builder
 	w := func(f string, a ...any) { fmt.Fprintf(&b, f, a...) }
 	w("## 本片设计系统：%s（每一段都必须遵守的全片规矩）\n", ss.Direction)
+	w("\n### 风格≠题材（先读这条，优先级最高）\n")
+	w("- 设计系统管的是**怎么画**（配色/字体/动效/构图骨架）；**画什么**永远由本段画面提示说了算——\n")
+	w("  禁止把本段主体降级成小卡片/贴纸去迁就版式，版式是为本段主体服务的。\n")
+	w("- 版式与装置描述里出现的具体物件（城市/建筑/卡片/角色等）是风格来源视频的**示例物**，\n")
+	w("  只取构图骨架（位置/比例/层次/留白/生长节拍），填进去的必须是本段该画的东西。\n")
+	w("- 附在图里的样张与原片真迹同理：只取配色/质感/构图密度，图里画的物件是风格来源\n")
+	w("  视频的题材，禁止照着画。\n")
+	w("- 风格来源视频自身的题材元素与品牌字样（原片名/原片编号/Logo 类字串）禁止画进画面。\n")
 	if ss.Concept != "" {
 		w("- 概念：%s\n", ss.Concept)
 	}
@@ -222,7 +230,10 @@ func DesignDoc(ss *contract.StyleSamples, segIdx int) string {
 		if strings.TrimSpace(d.Desc) != "" {
 			w("- %s\n", d.Desc)
 		}
-		if strings.TrimSpace(d.PerSeg) != "" {
+		// per_seg 是对着分镜逐段写的。库内条目（StyleID 锚定）的 per_seg 写的是原视频的
+		// 段落（seg01/seg02…），段号与本片错位，注入等于误导——只留装置机制，逐段变奏
+		// 由各段对画面提示自行发挥；本片自己的设计系统（设计阶段现发明的）才逐段指派。
+		if strings.TrimSpace(d.PerSeg) != "" && ss.StyleID == "" {
 			w("- 逐段运用：%s\n", d.PerSeg)
 		}
 	}

@@ -1051,7 +1051,7 @@ func (s *Server) ingestRefStyle(c *gin.Context, seedID, name, coverName string, 
 		frameNames = append(frameNames, filepath.Base(f.Path))
 	}
 	st, err := s.Lib.IngestVideoRef(seedID, stylelib.VideoStyleIn{
-		Name: name, Direction: d.Direction, Genre: d.Genre, Keywords: d.Keywords, Desc: desc,
+		Name: name, Direction: d.Direction, Subject: d.Subject, Genre: d.Genre, Keywords: d.Keywords, Desc: desc,
 		Tokens: tokens, Layouts: layouts,
 		Concept: d.Concept, Fonts: d.Fonts, Motion: d.Motion, Device: d.Device,
 		AntiPatterns: d.AntiPatterns,

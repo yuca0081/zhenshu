@@ -47,6 +47,9 @@ func TestDesignDocFull(t *testing.T) {
 		"**本段指定版式：data-focus", // segIdx=2 → layouts[(2-1)%2]=第2个
 		"大面积辉光",               // 负面清单
 		"hf.count",            // 动效物理提示
+		"风格≠题材",               // 注入首条：语法与题材分离（库内包题材元素入画的回归钉）
+		"画什么**永远由本段画面提示说了算", // 主体跟 visual_brief，版式示例物不是规定物
+		"品牌字样", // 原片名/编号/Logo 类字串禁入画（ISOPOLIS 事故）
 	} {
 		if !strings.Contains(doc, want) {
 			t.Fatalf("DesignDoc 缺 %q\n---\n%s", want, doc)
@@ -61,6 +64,24 @@ func TestDesignDocSegRotation(t *testing.T) {
 	}
 	if !strings.Contains(DesignDoc(ss, 3), "本段指定版式：hero-title") {
 		t.Fatalf("segIdx=3 应轮换回第 1 个版式")
+	}
+}
+
+// 库内条目（StyleID 锚定）的 device.per_seg 是对原视频分镜写的，段号与本片错位，
+// 注入等于误导——只注装置机制，逐段变奏由各段对画面提示自行发挥；本片自己的设计
+// 系统（无 StyleID）才逐段指派。
+func TestDesignDocLibrarySkipsPerSeg(t *testing.T) {
+	ss := designFixture()
+	ss.StyleID = "vid-iso-city"
+	doc := DesignDoc(ss, 2)
+	if strings.Contains(doc, "seg01 亮相") {
+		t.Fatalf("库条目 per_seg 不应注入（原视频段号与本片错位）：%s", doc)
+	}
+	if !strings.Contains(doc, "贯穿装置：章节门牌") || !strings.Contains(doc, "每章开场的金属铭牌") {
+		t.Fatalf("库条目仍应注入装置机制：%s", doc)
+	}
+	if !strings.Contains(doc, "样张与原片真迹同理") {
+		t.Fatalf("风格≠题材块应含样张/真迹图片口径：%s", doc)
 	}
 }
 
