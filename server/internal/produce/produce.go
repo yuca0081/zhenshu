@@ -300,6 +300,7 @@ func (r *Runner) runRework(ctx context.Context, p *pipeline.Project, segs []cont
 	r.Manifest(p, EventReworkStart, only+": "+firstLine(instruction, 80))
 	r.jobStart(id, "rework")
 	r.emit(id, "progress", "rework", "重做 "+strings.Join(labels, "、"))
+	r.ensureMaterials(ctx, p, false) // 只加载已有素材库，不现抓网络
 
 	// 1. 目标段画面重生成（删旧场景文件强制重出；其余段产物原样复用）
 	r.emit(id, "stage", "compositions", "running")
@@ -485,6 +486,10 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 	if err := r.translateSubtitles(ctx, p); err != nil {
 		r.emit(id, "progress", "tts", "双语字幕翻译跳过: "+err.Error())
 	}
+
+	// ── 1.6 真图素材工位（可选）：策划→Met 公版检索下载→assets/materials.json。
+	// 素材是加分项，任何失败降级为无素材继续（sceneGen 注入处静默缺省）。
+	r.ensureMaterials(ctx, p, true)
 
 	// ── 2. 语义 spec 生成（LLM）+ 确定性渲染 + 合成物落盘 ────────
 	if err := r.compositions(ctx, p); err != nil {
@@ -730,23 +735,60 @@ func (r *Runner) sceneReplayCheck(ctx context.Context, p *pipeline.Project) erro
 		atArg[i] = fmt.Sprintf("%.2f", t)
 	}
 	frames := make([][]string, 2)
-	for round := 0; round < 2; round++ {
-		dir := fmt.Sprintf("reports/replay/round%d", round+1)
+	snap := func(atArg, dir string) ([]string, error) {
 		_ = os.RemoveAll(p.Artifact(dir))
 		out, err := pipeline.RunCLI(p, "npx", "hyperframes@0.8.55", "snapshot", ".",
-			"--at", strings.Join(atArg, ","), "--no-end", "-o", dir)
+			"--at", atArg, "--no-end", "-o", dir)
 		if err != nil {
-			return fmt.Errorf("scene 回放 snapshot 失败: %s", tail(out, 8))
+			return nil, fmt.Errorf("scene 回放 snapshot 失败: %s", tail(out, 8))
 		}
 		entries, err := os.ReadDir(p.Artifact(dir))
 		if err != nil {
-			return err
+			return nil, err
 		}
+		var names []string
 		for _, e := range entries {
 			if strings.HasPrefix(e.Name(), "frame-") && strings.HasSuffix(e.Name(), ".png") {
-				frames[round] = append(frames[round], e.Name())
+				names = append(names, e.Name())
 			}
 		}
+		return names, nil
+	}
+	// 逐帧比对（带 LSB 容差）：返回未过容差的帧名与按段去重的报错行。
+	diffRounds := func(dir1, dir2 string, names []string) (badFrames, msgs []string, err error) {
+		seen := map[string]bool{}
+		for _, name := range names {
+			maxD, nD, tot, derr := pngDiffStats(
+				filepath.Join(p.Artifact(dir1), name),
+				filepath.Join(p.Artifact(dir2), name))
+			if derr != nil {
+				return nil, nil, derr
+			}
+			if maxD <= replayMaxChannelDiff && (tot == 0 || float64(nD) <= replayDiffRatioMax*float64(tot)) {
+				continue
+			}
+			segID := ""
+			if m := reSnapAt.FindStringSubmatch(name); m != nil {
+				if t, perr := strconv.ParseFloat(m[1], 64); perr == nil {
+					segID = t2seg[round2(t)]
+				}
+			}
+			if segID == "" || seen[segID] {
+				continue
+			}
+			seen[segID] = true
+			badFrames = append(badFrames, name)
+			msgs = append(msgs, fmt.Sprintf("✗ %s: scene 确定性回放未过（%s 两次截图像素不一致：max差=%d、差异像素 %d/%d——code 藏了非确定性：只用注入的 rng，运动必须写成 t 的函数，禁任何自管时间/真随机路径）", segID, name, maxD, nD, tot))
+		}
+		return badFrames, msgs, nil
+	}
+	frames[0], err = snap(strings.Join(atArg, ","), "reports/replay/round1")
+	if err != nil {
+		return err
+	}
+	frames[1], err = snap(strings.Join(atArg, ","), "reports/replay/round2")
+	if err != nil {
+		return err
 	}
 	if len(frames[0]) == 0 {
 		return fmt.Errorf("scene 回放 snapshot 未产出帧（--at %s）", strings.Join(atArg, ","))
@@ -754,31 +796,40 @@ func (r *Runner) sceneReplayCheck(ctx context.Context, p *pipeline.Project) erro
 	if len(frames[0]) != len(frames[1]) {
 		return fmt.Errorf("scene 回放两轮帧数不一致（%d vs %d）", len(frames[0]), len(frames[1]))
 	}
-	// 逐帧比对（带 LSB 容差：加色混合下 GPU 光栅化有 1/255 级抖动，非逻辑非确定）
-	var errs []string
-	reported := map[string]bool{}
-	for _, name := range frames[0] {
-		maxD, nD, tot, err := pngDiffStats(
-			filepath.Join(p.Artifact(fmt.Sprintf("reports/replay/round1")), name),
-			filepath.Join(p.Artifact(fmt.Sprintf("reports/replay/round2")), name))
-		if err != nil {
-			return err
-		}
-		if maxD <= replayMaxChannelDiff && (tot == 0 || float64(nD) <= replayDiffRatioMax*float64(tot)) {
-			continue
-		}
-		m := reSnapAt.FindStringSubmatch(name)
-		segID := ""
-		if m != nil {
-			if t, perr := strconv.ParseFloat(m[1], 64); perr == nil {
-				segID = t2seg[round2(t)]
+	badFrames, errs, err := diffRounds("reports/replay/round1", "reports/replay/round2", frames[0])
+	if err != nil {
+		return err
+	}
+	if len(badFrames) > 0 {
+		// 确认重测：只重截失败时刻。跨浏览器会话的大字号文字光栅化有 LSB 级
+		// 抖动（同内容重测即 diff=0），重测通过放行；真非确定性重测依然不一致，
+		// 报错进修复轮。
+		var confirmAt []string
+		for _, name := range badFrames {
+			if m := reSnapAt.FindStringSubmatch(name); m != nil {
+				confirmAt = append(confirmAt, m[1])
 			}
 		}
-		if segID == "" || reported[segID] {
-			continue
+		c1, cerr := snap(strings.Join(confirmAt, ","), "reports/replay/confirm1")
+		if cerr != nil {
+			return cerr
 		}
-		reported[segID] = true
-		errs = append(errs, fmt.Sprintf("✗ %s: scene 确定性回放未过（%s 两次截图像素不一致：max差=%d、差异像素 %d/%d——code 藏了非确定性：只用注入的 rng，运动必须写成 t 的函数，禁任何自管时间/真随机路径）", segID, name, maxD, nD, tot))
+		c2, cerr := snap(strings.Join(confirmAt, ","), "reports/replay/confirm2")
+		if cerr != nil {
+			return cerr
+		}
+		if len(c1) > 0 && len(c1) == len(c2) {
+			_, cMsgs, cerr := diffRounds("reports/replay/confirm1", "reports/replay/confirm2", c1)
+			if cerr != nil {
+				return cerr
+			}
+			if len(cMsgs) == 0 {
+				r.Manifest(p, "check.replay_flake", fmt.Sprintf("%d 帧确认重测通过（文字光栅化抖动）", len(badFrames)))
+				errs = nil
+			} else {
+				errs = cMsgs
+			}
+		}
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("scene 回放门禁:\n%s", strings.Join(errs, "\n"))
@@ -793,11 +844,13 @@ func round2(f float64) float64 { return math.Round(f*100) / 100 }
 
 // 回放比对容差：加色混合下 GPU 光栅化存在 LSB 级抖动（实测 900 粒子 scene：
 // 两轮 16/2073600 像素差 1/255；拉普拉斯妖 seg38：1/2073600 像素差 8/255——
-// alpha 临界值上抗锯齿覆盖判断翻转，非逻辑非确定）。真逻辑非确定性
-// （真随机/自管时间）是大面积大差异：占比 0.05% 闸仍主拦，通道差阈值只防单像素误杀。
+// alpha 临界值上抗锯齿覆盖判断翻转，非逻辑非确定）。大字号文字跨浏览器会话
+// 抖动更大（实测 96px 标题带：1394/2073600=0.067% 像素差 1/255，同内容重测
+// diff=0，见确认重测）。真逻辑非确定性（真随机/自管时间）是大面积大差异且
+// 重现稳定：占比闸仍主拦，通道差阈值只防单像素误杀，确认重测拦"抖动撞线"。
 const (
 	replayMaxChannelDiff = 8    // 任一像素通道差超此值 = 硬失败（实测 GPU 噪声上限内）
-	replayDiffRatioMax   = 5e-4 // 差异像素占比超此值 = 硬失败（≈0.05%，2M 像素 ≈1000 个）
+	replayDiffRatioMax   = 2e-3 // 差异像素占比超此值 = 疑似失败（≈0.2%，实测文字抖动 0.067% 的 3 倍余量），进确认重测
 )
 
 // pngDiffStats 解码两 PNG 逐像素比较 → (最大通道差, 差异像素数, 总像素)。

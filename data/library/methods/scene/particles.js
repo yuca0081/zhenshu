@@ -11,3 +11,6 @@ for (var i = 0; i < 160; i++) {
   ctx.arc(x + drift, y + drift * 0.4, sz, 0, 6.2832);
   ctx.fill();
 }
+// 提醒（接线易漏点）：上面的绘制体要由一条暂停的时间线驱动——tl.to({},{duration:段长,ease:"none",
+// onUpdate 里用 tl.time() 调绘制函数,},0)——并在末尾把时间线按段 id 注册进全局时间线表（契约第 3/7 条），
+// 漏注册会被 lint 拒收。占位与接线三行模板见作业正文。

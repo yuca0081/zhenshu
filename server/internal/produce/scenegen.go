@@ -98,6 +98,11 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	if len(keyImgs) > 0 {
 		sampleImgs = append(sampleImgs, keyImgs...)
 	}
+	// 真图素材（素材工位产物，assets/materials.json）：看着真图摆位置。
+	matImgs := materialImages(p)
+	if len(matImgs) > 0 {
+		sampleImgs = append(sampleImgs, matImgs...)
+	}
 	// NoThink：画面是结构化 HTML 作业，开思考单段 5-13 分钟；关思考配合段间并发
 	// 把全片压进分钟级（v1 spec 路径同款取舍）。
 	gen := func(user string, out any) (openai.Usage, error) {
@@ -146,7 +151,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	work := func(seg contract.Segment) {
 		v := voices[seg.ID]
 		sceneM, compM := methodsFor(r.RootDir, seg)
-		style := designNoteFor(p, r.DataDir, seg.Idx) + keyframeNote(len(keyImgs))
+		style := designNoteFor(p, r.DataDir, seg.Idx) + keyframeNote(len(keyImgs)) + materialsNote(p)
 		user := sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM)
 		var payload struct {
 			HTML     string                  `json:"html"`
@@ -157,20 +162,20 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			fail(fmt.Errorf("%s 场景生成失败: %w", seg.ID, gerr))
 			return
 		}
-		errs := sceneValidate(r, payload.HTML, seg.ID)
+		errs := sceneValidate(r, p, payload.HTML, seg.ID)
 		for repair := 0; repair < 2 && len(errs) > 0; repair++ { // 外科修复：违规逐条回喂
 			fb := instruction + feedback + "\n上一版场景文件被契约检查拒绝，必须逐条修正：\n- " + strings.Join(errs, "\n- ")
 			var fixed struct {
 				HTML     string                  `json:"html"`
 				Elements []contract.NamedElement `json:"elements"`
 			}
-			u2, err2 := gen(sceneUserPrompt(seg, v, "", fb, cv, designNoteFor(p, r.DataDir, seg.Idx)+keyframeNote(len(keyImgs)), golden, sceneM, compM), &fixed)
+			u2, err2 := gen(sceneUserPrompt(seg, v, "", fb, cv, designNoteFor(p, r.DataDir, seg.Idx)+keyframeNote(len(keyImgs))+materialsNote(p), golden, sceneM, compM), &fixed)
 			if err2 != nil {
 				fail(fmt.Errorf("%s 场景修复失败: %w", seg.ID, err2))
 				return
 			}
 			u1, payload = u2, fixed
-			errs = sceneValidate(r, payload.HTML, seg.ID)
+			errs = sceneValidate(r, p, payload.HTML, seg.ID)
 		}
 		if len(errs) > 0 {
 			fail(fmt.Errorf("%s 契约检查三轮未过：\n- %s", seg.ID, strings.Join(errs, "\n- ")))
@@ -230,8 +235,9 @@ func goldenExample(rootDir string) string {
 	return string(b)
 }
 
-// sceneValidate 契约校验：Go 结构检查 + ai/scene_lint.py 静态门禁（Tier 0）。
-func sceneValidate(r *Runner, html, segID string) []string {
+// sceneValidate 契约校验：Go 结构检查 + ai/scene_lint.py 静态门禁（Tier 0）+
+// 素材引用白名单（assets/img/ 引用必须命中素材清单，清单外文件渲染必裂图）。
+func sceneValidate(r *Runner, p *pipeline.Project, html, segID string) []string {
 	var errs []string
 	if strings.TrimSpace(html) == "" {
 		return []string{"html 为空"}
@@ -252,6 +258,7 @@ func sceneValidate(r *Runner, html, segID string) []string {
 	if strings.Contains(html, "data-ph=") || strings.Contains(html, "data-w=") {
 		errs = append(errs, "禁止字幕标注（data-ph/data-w）——字幕带由平台按 TTS 时间戳机械装配，内容留在上 83%")
 	}
+	errs = append(errs, materialWhitelistCheck(p, html)...)
 	errs = append(errs, r.sceneLintWithVend(html)...)
 	return errs
 }
@@ -394,7 +401,10 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
    禁 Math.random（随机一律种子化，如 __rng32(seed) 闭包）；禁 CSS animation/transition/@keyframes；
    禁网络（fetch/XHR/WebSocket/外链 http(s)）；禁 Worker；禁 <video>/<audio>
 7. canvas 画布：绘制函数 = window["__draw_<id>"]=function(t,ctx,W,H,rng)——t 的纯函数，
-   每帧从零重画；由 tl.to({},{duration,onUpdate:…调用 draw(t)…}},0) 驱动；运动一律写成 t 的函数
+   每帧从零重画；运动一律写成 t 的函数。接线三行逐字照抄（只换尖括号占位），漏注册=lint 拒收 [F3]：
+   var tl=gsap.timeline({paused:true});
+   tl.to({},{duration:<段总时长秒>,ease:"none",onUpdate:function(){window["__draw_<id>"](tl.time(),ctx,W,H,rng);}},0);
+   window.__timelines["<段id>"]=tl;
 8. 字体：本地字体栈 + @font-face{src:local()} 声明（引用即声明）；
    禁止在 CSS transform 里做居中（translateX(-50%%) 等）再让 GSAP 补间同一元素——GSAP 会整体覆盖 CSS transform，居中必须用 GSAP 的 xPercent/yPercent
 9. 不写字幕——底部字幕带由平台注入；内容留在上 83%%，禁止出现 data-ph=/data-w= 标注
