@@ -136,7 +136,7 @@ def ffmpeg_encode(wav_path, mp3_path):
 TRACKS = [
     {
         'name': 'calm',
-        'mood': '温暖平静的和弦垫——通用科普/叙事，默认推荐',
+        'mood': '温暖平静的和弦垫——通用叙事/口播，默认推荐',
         'chords': [['C3', 'E3', 'G3', 'B3'], ['A2', 'E3', 'G3', 'C4'],
                    ['F2', 'A3', 'C4', 'E4'], ['G2', 'B3', 'D4', 'E4']],
         'slot': 12.0, 'bright': 1.0, 'pluck': None,

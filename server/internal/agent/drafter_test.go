@@ -50,7 +50,7 @@ func TestDraftDirectAnswer(t *testing.T) {
 	}
 	// system 提示词与用户主题应进首轮
 	first := m.gotMsgs[0]
-	if first[0].Role != openai.ChatMessageRoleSystem || !strings.Contains(first[0].Content, "口播科普撰稿人") {
+	if first[0].Role != openai.ChatMessageRoleSystem || !strings.Contains(first[0].Content, "口播撰稿人") {
 		t.Fatalf("system 提示词缺失: %.60s", first[0].Content)
 	}
 	if !strings.Contains(first[1].Content, "黑洞有多大") {

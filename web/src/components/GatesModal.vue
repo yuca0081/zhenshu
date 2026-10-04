@@ -146,7 +146,7 @@ watch(() => props.gate, async g => {
       <div class="opts">
         <NSelect
           v-model:value="minutes" size="small" style="width: 110px"
-          :options="[{ label: '约 1 分钟', value: 1 }, { label: '约 2 分钟', value: 2 }, { label: '约 3 分钟', value: 3 }]"
+          :options="[{ label: '约 1 分钟', value: 1 }, { label: '约 2 分钟', value: 2 }, { label: '约 3 分钟', value: 3 }, { label: '约 5 分钟', value: 5 }]"
         />
         <NButton size="small" :disabled="!view?.topic" :loading="drafting" @click="draft">AI 起草文稿</NButton>
         <span class="hint">{{ view?.topic ? '起草后填入上方文本框，可随意改' : '没有主题（老项目），直接粘贴文稿' }}</span>
@@ -157,7 +157,8 @@ watch(() => props.gate, async g => {
         <NButton size="small" :disabled="!linkURL.trim()" :loading="extracting" @click="extract">提取正文</NButton>
       </div>
       <div class="foot">
-        <span class="count">{{ wordCount }} 字 · 预计 {{ Math.max(1, Math.round(wordCount / 4.2 / 60)) }} 分钟</span>
+        <!-- 语速按 Edge TTS 实测 4.7 字/秒（苏格拉底片 1207 字 / 256s 语音） -->
+        <span class="count">{{ wordCount }} 字 · 预计 {{ Math.max(1, Math.round(wordCount / 4.7 / 60)) }} 分钟</span>
         <NButton type="primary" :disabled="!content.trim()" @click="save">保存</NButton>
       </div>
       <div v-if="stale" class="warn">分镜是基于旧稿生成的——改稿后请在对话里让我重新生成分镜。</div>

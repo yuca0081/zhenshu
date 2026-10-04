@@ -3,6 +3,8 @@ package pipeline
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -305,8 +307,8 @@ func stageStoryboard(p *Project) error {
 		article, _ := os.ReadFile(p.Artifact("input/article.txt"))
 		var sb contract.Storyboard
 		usage, gerr := prov.GenerateJSON(pctx(p),
-			"你是科普/解说视频的分镜规划器。只输出 JSON。",
-			storyboardUserPrompt(string(article)), &sb)
+			"你是视频的分镜规划器。只输出 JSON。",
+			storyboardUserPrompt(p, string(article)), &sb)
 		if gerr == nil {
 			p.Manifest("llm.usage", fmt.Sprintf("storyboard prompt=%d completion=%d tokens",
 				usage.PromptTokens, usage.CompletionTokens))
@@ -317,7 +319,7 @@ func stageStoryboard(p *Project) error {
 				p.Manifest("storyboard.api.rejected", aerr.Error())
 				// 校验拒绝：落一份请求文件供人工修正，不继续重试（bake-off 要记录失败）
 				_ = writeFile("", p.LLMRequest("storyboard"),
-					storyboardUserPrompt(string(article))+fmt.Sprintf("\n\n<!-- 上次模型输出被拒绝: %s\n    产物写入 %s 后重跑 -->\n", aerr, out))
+					storyboardUserPrompt(p, string(article))+fmt.Sprintf("\n\n<!-- 上次模型输出被拒绝: %s\n    产物写入 %s 后重跑 -->\n", aerr, out))
 				return fmt.Errorf("API 分镜被自检拒绝: %w", aerr)
 			}
 		}
@@ -333,18 +335,16 @@ func stageStoryboard(p *Project) error {
 	return &ErrAwaitLLM{RequestPath: req, OutputPath: out}
 }
 
-// storyboardUserPrompt API 模式的 user prompt（与文件契约同一份要求，输出 JSON 严格按 schema）。
-// input/storyboard_notes.txt 存在时追加用户修改要求（update_storyboard 工具写入）。
-func storyboardUserPrompt(article string) string { return storyboardUserPromptNotes(article, "") }
-
-func storyboardUserPromptNotes(article, notes string) string {
+// storyboardBrief 分镜作业正文：API 直调与会话请求共用一份（防两处漂移，同 designBrief 做法）。
+// notes 为用户的分镜修改要求，空则不占位。
+func storyboardBrief(article, notes string) string {
 	noteBlock := ""
 	if notes != "" {
 		noteBlock = "\n\n用户对分镜的修改要求（优先满足）：\n" + notes
 	}
-	return fmt.Sprintf(`把下面的文稿改写成视频分镜表 JSON。
+	return fmt.Sprintf(`把文稿改写成视频分镜表 JSON。
 
-要求：
+## 要求
 - timing_basis 固定 "narration"；plan 写一句话分段思路
 - 每段 = {id:"seg01"起连续编号, idx, key:段落短标题, narration:旁白全文, visual_brief:画面提示一句话, duration_hint:秒数}
 - 忠实原文，不编造事实；旁白只能来自文稿（口语化改写可以）
@@ -353,12 +353,27 @@ func storyboardUserPromptNotes(article, notes string) string {
   进程、章节感强的题材且用户明确提出时才启用）：
   头部加 "overlay":{"enabled":true,"chapter_counter":{"prefix":"距今","unit":"亿年","from":46.0,"to":0.0},"timeline":["章节1","章节2"]}（三锚点均可缺省）；
   启用时每段加 "chapter":"中文章节名|English Small Caps"（竖线前后可只留其一；相邻同章各段写同值）
-- 只输出 JSON，无 markdown 围栏、无注释
 
-文稿（%d 字）：
+## 文稿（%d 字）
 ---
 %s
 ---%s`, utf8.RuneCountInString(article), article, noteBlock)
+}
+
+// storyboardNotes 用户的分镜修改要求（update_storyboard 工具写 input/storyboard_notes.txt）。
+// 语义与 style_notes.txt 一致：文件在就一直生效，重新写入即替换。
+func storyboardNotes(p *Project) string {
+	b, err := os.ReadFile(p.Artifact("input/storyboard_notes.txt"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// storyboardUserPrompt API 模式的 user prompt：共用正文 + API 输出格式行。
+func storyboardUserPrompt(p *Project, article string) string {
+	return storyboardBrief(article, storyboardNotes(p)) +
+		"\n\n只输出 JSON：第一个字符必须是 {、最后一个字符必须是 }，无 markdown 围栏、无注释。"
 }
 
 // stageStyleSamples 风格样张 + 本片设计系统（LLM 作业 #2，v2 笼子二，见 design.go）：
@@ -522,6 +537,8 @@ func stageCompositions(p *Project) error {
 			Note:        "每段一个产物文件，可任意顺序/并行填写",
 		}
 	}
+	// 场景 HTML 忘写系统字体 @font-face 是 lint 硬错误且 LLM 修复轮不收敛——落盘侧机械补齐
+	fixupFrameFonts(p)
 	return nil
 }
 
@@ -540,8 +557,9 @@ func stageCheck(p *Project) error {
 
 // stageRender 按段渲染（增量）+ 无损拼接。
 // 每段一个单段工程 .hf-seg/segNN.html（assemble 生成，含该段画面与配音），
-// 渲出 renders/segs/segNN.mp4；段片缺失或旧于 段帧/音频/段工程 任一来源则重渲，
-// 其余段跳过——rework 只重渲改动段，耗时与段长成正比而非片长。
+// 渲出 renders/segs/segNN.mp4；段片缺失或段输入内容（帧html/音频/段工程，哈希
+// 指纹见 segStale）与上次渲染不一致则重渲，其余段跳过——rework 只重渲改动段，
+// 耗时与段长成正比而非片长。
 // main.mp4 = 人声母版 concat -c copy 后按项目配乐混音（见 stageStitch）。
 func stageRender(p *Project) error {
 	sb, err := p.LoadStoryboard()
@@ -566,11 +584,19 @@ func stageRender(p *Project) error {
 		if err != nil {
 			return fmt.Errorf("%s 渲染失败:\n%s", seg.ID, tailLines(outLog, 30))
 		}
+		if sum, err := segSrcSum(p, seg.ID); err == nil {
+			_ = os.WriteFile(out+".sum", []byte(sum), 0o644)
+		}
 		p.Manifest("render.seg", seg.ID)
 	}
 	entries, _ := os.ReadDir(segsDir)
 	for _, e := range entries { // 清理清单外残留段片（段增删后旧文件不进 concat，也不留垃圾）
-		if strings.HasSuffix(e.Name(), ".mp4") && !live[strings.TrimSuffix(e.Name(), ".mp4")] {
+		base := strings.TrimSuffix(e.Name(), ".mp4")
+		if strings.HasSuffix(e.Name(), ".mp4") && !live[base] {
+			_ = os.Remove(filepath.Join(segsDir, e.Name()))
+			_ = os.Remove(filepath.Join(segsDir, e.Name()+".sum"))
+		}
+		if strings.HasSuffix(e.Name(), ".mp4.sum") && !live[strings.TrimSuffix(e.Name(), ".mp4.sum")] {
 			_ = os.Remove(filepath.Join(segsDir, e.Name()))
 		}
 	}
@@ -581,22 +607,41 @@ func stageRender(p *Project) error {
 	return nil
 }
 
-// segStale 段片是否需要重渲：缺失，或旧于该段的 帧html/音频/单段工程 任一来源。
+// segStale 段片是否需要重渲：缺失，或该段的 帧html/音频/单段工程 内容与上次渲染时
+// 不一致。按内容哈希（sidecar .sum）判旧而不是 mtime：修复轮回滚会把全部段源原样
+// 重写一遍，mtime 全部刷新，按时间判会把段级缓存打穿成 20 分钟的全片重渲。
 func segStale(p *Project, segID, out string) bool {
-	fi, err := os.Stat(out)
+	if _, err := os.Stat(out); err != nil {
+		return true
+	}
+	side := out + ".sum"
+	want, err := os.ReadFile(side)
+	if err != nil {
+		return true // 没有指纹（老项目首次升级/上次渲染中断）→ 重渲一次补上
+	}
+	got, err := segSrcSum(p, segID)
 	if err != nil {
 		return true
 	}
+	return string(want) != got
+}
+
+// segSrcSum 段渲染输入的内容指纹：帧html + 音频 + 单段工程逐个 sha256 拼接。
+func segSrcSum(p *Project, segID string) (string, error) {
+	h := sha256.New()
 	for _, src := range []string{
 		p.Artifact("compositions/frames/" + segID + ".html"),
 		p.Artifact("audio/" + segID + ".wav"),
 		p.Artifact(".hf-seg/" + segID + ".html"),
 	} {
-		if sfi, err := os.Stat(src); err == nil && sfi.ModTime().After(fi.ModTime()) {
-			return true
+		b, err := os.ReadFile(src)
+		if err != nil {
+			return "", err
 		}
+		fmt.Fprintf(h, "%s\x00%d\x00", src, len(b))
+		h.Write(b)
 	}
-	return false
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // concatSegs 全部段片 concat -c copy 拼成人声母版 main_voice.mp4（同源输出参数
@@ -1747,16 +1792,9 @@ func storyboardRequest(p *Project, article, out string) string {
 	return fmt.Sprintf(`# 作业：分镜规划（帧述 M0 · LLM 作业 #1）
 
 ## 角色与任务
-你是科普/解说视频的分镜规划器。把下面的文稿改写成一份分镜表：
-- 忠实原文（时长服从内容，不强制压缩；总时长上限 900 秒，超限需给出压缩取舍建议）
-- 每段 = 旁白（从文稿改写，口语化可以，不得编造事实）+ 画面提示（一句话，人话）+ 时长估计
-- 每段控制在 8–16 秒；段落数量随内容自然决定
-- timing_basis 固定 "narration"（旁白驱动：先配音，画面按实际音频时长生成）
+你是视频的分镜规划器。
 
-## 文稿（input/article.txt，共 %d 字）
----
 %s
----
 
 ## 输出要求
 把 JSON 写到: %s
@@ -1777,11 +1815,12 @@ func storyboardRequest(p *Project, article, out string) string {
     }
   ]
 }
+（overlay 可选：仅启用时在头部加 "overlay" 字段、相关段加 "chapter"，结构见上面要求）
 
 ## 硬约束（schema 校验会拒收）
 - segments 非空；每段 narration、duration_hint > 0；id 从 seg01 连续编号
 - 总时长 ≤ 900；旁白只能来自文稿内容
-`, utf8.RuneCountInString(article), article, out)
+`, storyboardBrief(article, storyboardNotes(p)), out)
 }
 
 func compRequest(p *Project, seg contract.Segment, direction, out string) string {

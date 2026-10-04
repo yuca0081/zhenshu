@@ -401,6 +401,44 @@ var tools = []tool{
 		},
 	},
 	{
+		def: toolDef("save_manuscript", "保存口播文稿正文到项目（用户把文稿直接发进对话时用它落盘，效果等同「文稿」标签粘贴保存）", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"content": map[string]any{"type": "string", "description": "文稿全文（口播正文）"},
+			},
+			"required": []string{"content"},
+		}),
+		gate: func(s State) string {
+			if s.Producing {
+				return "制作运行中，先等本条完成"
+			}
+			return ""
+		},
+		run: func(a *Agent, p *pipeline.Project, args string) string {
+			var in struct {
+				Content string `json:"content"`
+			}
+			_ = json.Unmarshal([]byte(args), &in)
+			content := strings.TrimSpace(in.Content)
+			if content == "" {
+				return "缺少文稿正文"
+			}
+			if err := os.WriteFile(p.Artifact("input/article.txt"), []byte(content), 0o644); err != nil {
+				return "保存失败：" + err.Error()
+			}
+			// 与文稿弹窗保存同语义：article.txt 是唯一真源；manuscript.json 是重放产物，
+			// 不删的话重新制作时 TTS 拿的还是旧稿。
+			_ = os.Remove(p.Artifact("manuscripts/manuscript.json"))
+			_, hasSb := os.Stat(p.Artifact("storyboards/storyboard.json"))
+			a.setDoneStatus(p.ID, "manuscript")
+			msg := fmt.Sprintf("文稿已保存（%d 字）", len([]rune(content)))
+			if hasSb == nil {
+				msg += "；已有分镜基于旧稿，要重新出分镜才会生效"
+			}
+			return msg
+		},
+	},
+	{
 		def: toolDef("draft_style_samples", "产出本片设计系统与风格样张（皮肤1-2套/字体角色/动效语言/贯穿装置/版式/负面清单 + 1-3张样张）：首次出样张（风格库或默认包冷启动）；样张已存在时必须带 instruction 按用户要求重新生成", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -506,7 +544,7 @@ var tools = []tool{
 				return "成片已就绪，无需重新制作（要改画面/重做某段用 rework；要下载地址用 export）"
 			}
 			if len(missing) > 0 {
-				return "前置未齐（缺 " + strings.Join(missing, "、") + "）。补齐路径，向用户说明：文稿——点对话栏上方的「文稿」标签粘贴保存，或直接把文稿发进对话；分镜——你调用 draft_storyboard 生成；风格——点「风格」标签选库内风格（即时生效）或描述方向出样张"
+				return "前置未齐（缺 " + strings.Join(missing, "、") + "）。补齐路径，向用户说明：文稿——点「文稿」标签粘贴保存，或把文稿直接发进对话由你调 save_manuscript 存下；分镜——你调用 draft_storyboard 生成；风格——点「风格」标签选库内风格（即时生效）或描述方向出样张"
 			}
 			return ""
 		},
@@ -997,7 +1035,7 @@ func (a *Agent) systemPrompt(id string, s State) string {
 
 工作准则：
 - 上面这份状态是唯一事实：状态说成片就绪就是已就绪，直接给下载地址 /api/projects/%s/video/main.mp4；不确定就先 read_project 核对，禁止按聊天历史想象状态。
-- 三前置硬门：文稿、分镜、风格样张（用户确认）——齐了才能 start_production，代码强制，别硬闯；缺哪项就引导用户点对话栏上方的同名标签补齐（文稿也可直接粘进对话），成片就绪后不再 start_production。
+- 三前置硬门：文稿、分镜、风格样张（用户确认）——齐了才能 start_production，代码强制，别硬闯；缺哪项就引导用户补齐——文稿直接粘进对话由你 save_manuscript 存下，分镜/风格点对话栏上方的同名标签，成片就绪后不再 start_production。
 - 换风格/调样张：调 draft_style_samples 并把用户要求原样放进 instruction，样张没重新生成就不能说「已出新样张」——没做工具调用就当没做。
 - 成片就绪后：改某段画面用 rework（整段重生成画面、音频不动）；用户带 📎 段/元素引用的消息几乎都是 rework 意图。元素引用指名了改哪个元素，rework 的 instruction 里点名它（人话名，必要时带元素 id 与时刻）。要精确定位段与元素先 list_segments。换配音音色用 set_voice（空参列音色，设置后自动整片重制）。出片后主动 extract_stylepack 沉淀风格（一次就够，已提炼过不必重复）。
 - 默认自主连贯：能做的直接做（出分镜→出样张→自检一路做下去），到用户门（风格确认）停下说清楚等什么。

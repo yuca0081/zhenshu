@@ -76,13 +76,47 @@ def load_skin_slots(proj):
         return {}
 
 
+def _hex_rgb(c):
+    m = re.match(r'#([0-9a-fA-F]{6})$', str(c or '').strip())
+    if not m:
+        return None
+    v = m.group(1)
+    return tuple(int(v[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _rel_luma(rgb):
+    def ch(u):
+        u = u / 255
+        return u / 12.92 if u <= 0.04045 else ((u + 0.055) / 1.055) ** 2.4
+    r, g, b = rgb
+    return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
+
+
+def _contrast(a, b):
+    la, lb = _rel_luma(a), _rel_luma(b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def subtitle_text_color(slots):
+    """字幕字色守卫：字幕条固定深底（rgba(10,10,14,.62) 压在皮肤底色上），而皮肤
+    txt 槽位是为浅底面板设计的——深底直接用会暗对暗（实测暖砂皮肤 #321F16 只有
+    1.8:1）。对有效条底色算对比度，不达 4.5:1 回落浅色。"""
+    bg = _hex_rgb(slots.get('bg') or '') or (255, 255, 255)
+    bar = tuple(round(0.38 * bg[i] + 0.62 * v) for i, v in enumerate((10, 10, 14)))
+    txt = _hex_rgb(slots.get('txt') or '')
+    if txt is not None and _contrast(txt, bar) >= 4.5:
+        return slots['txt']
+    return '#F2F2EA'
+
+
 def subtitle_blocks(scenes, meta_voices, slots, base=0.0):
     """平台字幕带（v2：字幕=TTS 时间戳机械装配，模型永不写 cue）。
     每段一个父级 clip（z=55，字幕带占底部 ~17%），短语硬切 + 词级渐亮，
     时间轴挂主 tl（绝对时刻 = 段起点 + 词相对时刻；单段工程传 base 使段内归零）。
     返回 (html 片段, 主 tl 的 JS 语句)，与 overlay_block 同一注入位。"""
     per = {v['id']: v for v in meta_voices}
-    txt = slots.get('txt') or '#F2F2EA'
+    txt = subtitle_text_color(slots)
     font = slots.get('font') or "'Segoe UI','Microsoft YaHei',sans-serif"
     html_parts, js_parts = [], []
     for sid, start, dur, adur in scenes:
@@ -117,8 +151,8 @@ def subtitle_blocks(scenes, meta_voices, slots, base=0.0):
             f'    #cap-{sid} .cap-en {{ font-size: .56em; font-style: italic; opacity: .72; '
             f'font-family: Georgia, "Times New Roman", serif; letter-spacing: .04em; margin-top: .12em; }}\n'
             f'  </style>\n'
-            f'  <div class="cap-zone"><div class="cap-line"><div class="cap-body">'
-            + ''.join(ph_html) + '</div></div></div>\n'
+            f'  <div class="cap-zone"><div class="cap-body">'
+            + ''.join(ph_html) + '</div></div>\n'
             f'</div>')
         js = [f"gsap.set('#cap-{sid} .cap-ph',{{opacity:0}});"]
         for pi, rng in enumerate(phrases):
@@ -311,13 +345,17 @@ def main(proj_dir: str) -> int:
         if f.stem not in scene:
             f.unlink()
     for sid in ids:
-        (segdir / f'{sid}.html').write_text(
-            project_html(W, H, scene[sid],
-                         scenes_html([(sid, 0, scene[sid], durs[sid])]),
-                         *overlay_block(chapters.get(sid, ''), scene[sid], starts[sid]),
-                         *subtitle_blocks([(sid, 0, scene[sid], durs[sid])], meta['voices'], slots),
-                         xfade=xfade),
-            encoding='utf-8')
+        seg_html = project_html(W, H, scene[sid],
+                                scenes_html([(sid, 0, scene[sid], durs[sid])]),
+                                *overlay_block(chapters.get(sid, ''), scene[sid], starts[sid]),
+                                *subtitle_blocks([(sid, 0, scene[sid], durs[sid])], meta['voices'], slots),
+                                xfade=xfade)
+        out = segdir / f'{sid}.html'
+        # 内容没变就保住 mtime：段级重渲缓存按"段片旧于段工程"判旧（pipeline segStale），
+        # 修复轮回滚会把全部段源原样重写一遍，无脑覆盖 mtime 会把缓存打穿成全片重渲
+        if out.exists() and out.read_text(encoding='utf-8') == seg_html:
+            continue
+        out.write_text(seg_html, encoding='utf-8')
 
     (proj / 'assets').mkdir(exist_ok=True)
     if not (proj / 'assets' / 'gsap.min.js').exists():

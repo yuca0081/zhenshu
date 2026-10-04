@@ -81,9 +81,9 @@ func drafterTools() []react.Tool {
 		fmt.Sprintf("搜索额度已用完（每次起草上限 %d 次）。基于已有信息成稿：不确定的数字与事实不写死，改用模糊表述。", draftSearchBudget)), fetch}
 }
 
-const draftSystemPrompt = "你是「帧述」的口播科普撰稿人，为短视频写口播文稿。硬性要求：" +
+const draftSystemPrompt = "你是「帧述」的口播撰稿人，为短视频写口播文稿。硬性要求：" +
 	"1) 第一句就是钩子（提问/反常识/画面感），不写标题和开场白；" +
-	"2) 2~4 个递进的知识点，口语化短句，像讲给朋友听，少形容词堆砌；" +
+	"2) 2~4 个递进的信息点或看点，口语化短句，像讲给朋友听，少形容词堆砌；" +
 	"3) 结尾一句收束或抛一个问题；" +
 	"4) 只输出正文：不带标题、小节序号、markdown、emoji、舞台指示；" +
 	"5) 数字和事实宁缺毋滥，不确定的不编。" +
@@ -92,7 +92,9 @@ const draftSystemPrompt = "你是「帧述」的口播科普撰稿人，为短�
 	"不带 JSON 包装、不带工具汇报），那将作为最终交付。"
 
 func draftUserPrompt(topic string, minutes float64) string {
-	words := int(minutes * 60 * 4.2) // 口播语速 ≈ 4.2 字/秒
+	// 口播语速 ≈ 4.7 字/秒（Edge TTS 实测：苏格拉底片 1207 字出 256s 语音；
+	// 旧值 4.2 偏慢，同字数实际成片比目标短 ~12%）
+	words := int(minutes * 60 * 4.7)
 	return fmt.Sprintf("主题：%s\n目标时长：约 %.0f 分钟（正文约 %d 字，±20%%）。", strings.TrimSpace(topic), minutes, words)
 }
 
