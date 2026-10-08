@@ -8,12 +8,13 @@
 // 条目存 data/library/styles.json（磁盘为事实源）：
 // 成片出片 Agent 起草（published=false）或视频解析入库（published=true）
 // → 新建项目选用 → 样张+skin 拷进项目，style_id 随 style_samples.json 落盘。
-// 首次访问自动迁移合并旧双库（templates.json × registry/styles.json，读旧写新一次完成）。
 package stylelib
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -32,7 +33,7 @@ import (
 type Style struct {
 	ID            string               `json:"id"`
 	Name          string               `json:"name"`               // 人话名「深空渐变（高饱和·宇宙系）」
-	Direction     string               `json:"direction"`          // 方向描述（与项目 style_samples.direction 同源；迁移前=Name）
+	Direction     string               `json:"direction"`          // 方向描述（与项目 style_samples.direction 同源）
 	Desc          string               `json:"desc,omitempty"`     // 一句话气质/来源
 	Subject       string               `json:"subject,omitempty"`  // 原片题材一句话（浏览/检索用）
 	Genre         string               `json:"genre,omitempty"`    // 适用题材
@@ -66,19 +67,35 @@ type Sample struct {
 	HTML string `json:"html"`
 }
 
+// ErrNoEntry 条目不存在（Publish/Delete 命中时返回；api 层据此回 404）。
+var ErrNoEntry = errors.New("风格库没有该条目")
+
 type Library struct {
 	dir string // data/library
 	mu  sync.Mutex
 }
 
+// 单实例注册表（library 目录绝对路径 → *Library）：同库处处同锁。曾改为每次
+// New 新建实例——各自一把互不相关的锁，并发「读-改-写」全靠 rename 原子性兜底，
+// 存在后写覆盖前写的丢更新窗口；沉淀为进程内单例后 mu 才真正把写路径串起来。
+// styles.json 体量很小，不做内容缓存（文件永远是事实源，外部手改即时可见）。
+var instances sync.Map // key: library dir 绝对路径 → *Library
+
 func New(dataDir string) *Library {
-	return &Library{dir: filepath.Join(dataDir, "library")}
+	key, err := filepath.Abs(filepath.Join(dataDir, "library"))
+	if err != nil {
+		key = filepath.Join(dataDir, "library")
+	}
+	if v, ok := instances.Load(key); ok {
+		return v.(*Library)
+	}
+	v, _ := instances.LoadOrStore(key, &Library{dir: key})
+	return v.(*Library)
 }
 
 func (l *Library) path() string { return filepath.Join(l.dir, "styles.json") }
 
-// List 全部条目，新在前。首次访问自动完成旧双库（templates.json × registry/styles.json，
-// 更早的 stylepacks.json 也认）→ styles.json 的迁移合并。
+// List 全部条目，新在前。
 func (l *Library) List() ([]Style, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -88,14 +105,7 @@ func (l *Library) List() ([]Style, error) {
 func (l *Library) listLocked() ([]Style, error) {
 	b, err := os.ReadFile(l.path())
 	if os.IsNotExist(err) {
-		styles := l.migrate()
-		if styles != nil {
-			if serr := l.save(styles); serr != nil {
-				return nil, serr
-			}
-			return styles, nil
-		}
-		return nil, nil
+		return nil, nil // 空库（白板是合法状态）
 	}
 	if err != nil {
 		return nil, err
@@ -106,123 +116,6 @@ func (l *Library) listLocked() ([]Style, error) {
 	}
 	sort.Slice(styles, func(i, j int) bool { return styles[i].CreatedAt.After(styles[j].CreatedAt) })
 	return styles, nil
-}
-
-// migrate 旧双库合并：registry 条目为骨（id/tokens/layouts/genre/keywords，id 被老项目
-// style_id 引用必须保留），pack 为肉（desc/samples/skin/published）。同 direction 归并
-// 为一条；各自落单的也进库（tokens 空的靠样张气质，samples 空的靠 tokens）。
-func (l *Library) migrate() []Style {
-	packs := l.legacyPacks()
-	if packs == nil {
-		if reg := l.legacyRegistry(); len(reg) == 0 {
-			return nil // 两处皆空 = 全新环境，不动笔
-		}
-	}
-	byDirection := map[string]int{}
-	var styles []Style
-	for _, reg := range l.legacyRegistry() {
-		byDirection[reg.Direction] = len(styles)
-		reg.Published = true // 注册表存在 = 已入卷
-		if reg.CreatedAt.IsZero() {
-			reg.CreatedAt = time.Now()
-		}
-		styles = append(styles, reg)
-	}
-	for _, p := range packs {
-		if i, ok := byDirection[p.Direction]; ok {
-			s := &styles[i] // 注册表为骨，pack 补肉
-			if p.Desc != "" {
-				s.Desc = p.Desc
-			}
-			if len(p.Samples) > 0 {
-				s.Samples = p.Samples
-			}
-			if p.Skin != nil {
-				s.Skin = p.Skin
-			}
-			s.Published = s.Published || p.Published
-			if !p.CreatedAt.IsZero() {
-				s.CreatedAt = p.CreatedAt
-			}
-			if s.OriginProject == "" {
-				s.OriginProject = p.OriginProject
-			}
-			continue
-		}
-		// 无注册表对应：项目提炼包自成条目（tokens 空，靠样张气质）
-		styles = append(styles, p)
-	}
-	return styles
-}
-
-// legacyPacks 旧模板包（templates.json，更早 stylepacks.json 兜底）→ 新条目。
-// example_specs/assets 是 v1 死字段，不迁移。
-func (l *Library) legacyPacks() []Style {
-	for _, name := range []string{"templates.json", "stylepacks.json"} {
-		b, err := os.ReadFile(filepath.Join(l.dir, name))
-		if err != nil {
-			continue
-		}
-		var old []struct {
-			ID            string         `json:"id"`
-			Name          string         `json:"name"`
-			Direction     string         `json:"direction"`
-			Desc          string         `json:"desc"`
-			SampleHTML    string         `json:"sample_html"`
-			SampleTag     string         `json:"sample_tag"`
-			OriginProject string         `json:"origin_project"`
-			Published     bool           `json:"published"`
-			CreatedAt     time.Time      `json:"created_at"`
-			Skin          *contract.Skin `json:"skin"`
-		}
-		if json.Unmarshal(b, &old) != nil {
-			continue
-		}
-		var out []Style
-		for _, p := range old {
-			s := Style{
-				ID: p.ID, Name: p.Name, Direction: p.Direction, Desc: p.Desc,
-				OriginProject: p.OriginProject, Published: p.Published, CreatedAt: p.CreatedAt,
-				Skin: p.Skin,
-			}
-			if s.Direction == "" {
-				s.Direction = s.Name
-			}
-			if p.SampleHTML != "" {
-				s.Samples = []Sample{{Tag: p.SampleTag, HTML: p.SampleHTML}}
-			}
-			out = append(out, s)
-		}
-		return out
-	}
-	return nil
-}
-
-// legacyRegistry 旧风格注册表（registry/styles.json）→ 新条目（photo 是 v1 配图概念，丢弃）。
-func (l *Library) legacyRegistry() []Style {
-	b, err := os.ReadFile(filepath.Join(l.dir, "registry", "styles.json"))
-	if err != nil {
-		return nil
-	}
-	var old []struct {
-		ID        string         `json:"id"`
-		Direction string         `json:"direction"`
-		Genre     string         `json:"genre"`
-		Keywords  []string       `json:"keywords"`
-		Tokens    map[string]any `json:"tokens"`
-		Layouts   []Layout       `json:"layouts"`
-	}
-	if json.Unmarshal(b, &old) != nil {
-		return nil
-	}
-	var out []Style
-	for _, e := range old {
-		out = append(out, Style{
-			ID: e.ID, Name: e.Direction, Direction: e.Direction, Genre: e.Genre,
-			Keywords: e.Keywords, Tokens: e.Tokens, Layouts: e.Layouts,
-		})
-	}
-	return out
 }
 
 // DraftFromProject 从已出片项目起草风格（Agent 自动，published=false 等用户确认）。
@@ -392,32 +285,45 @@ func (l *Library) Publish(id string) (*Style, error) {
 			return &styles[i], l.save(styles)
 		}
 	}
-	return nil, fmt.Errorf("风格库没有 %s", id)
+	return nil, fmt.Errorf("%w: %s", ErrNoEntry, id)
 }
 
-// UpdateEntry 单条修改（回填/升级类作业用）：读失败绝不落盘（防损坏清库），
-// fn 里只改该条目，成功才整库原子写回。
-func (l *Library) UpdateEntry(id string, fn func(*Style) error) error {
+// Delete 删除条目并清掉它的媒体快照目录。已出片项目不受影响——样张与皮肤在选用时
+// 早已拷进项目各自的 style/，删的只是「以后新建项目还能不能选它」。
+func (l *Library) Delete(id string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	styles, err := l.listLocked()
 	if err != nil {
 		return fmt.Errorf("风格库读取失败（不写入，保护现有库）: %w", err)
 	}
+	out := make([]Style, 0, len(styles))
+	found := false
 	for i := range styles {
 		if styles[i].ID == id {
-			if err := fn(&styles[i]); err != nil {
-				return err
-			}
-			return l.save(styles)
+			found = true
+			continue
 		}
+		out = append(out, styles[i])
 	}
-	return fmt.Errorf("风格库没有 %s", id)
+	if !found {
+		return fmt.Errorf("%w: %s", ErrNoEntry, id)
+	}
+	if err := l.save(out); err != nil {
+		return err
+	}
+	_ = os.RemoveAll(l.MediaDir(id)) // 媒体是冗余快照，清不净不挡条目删除
+	return nil
 }
 
-// Get 取单个条目（新建项目选用后查详情/复用）。
+// Get 取单个条目（新建项目选用后查详情/复用）。库文件损坏时按不存在处理，
+// 但必须把损坏喊出来——静默返回会让人以为条目丢了。
 func (l *Library) Get(id string) (*Style, bool) {
-	styles, _ := l.List()
+	styles, err := l.List()
+	if err != nil {
+		log.Printf("[stylelib] styles.json 读取失败，查询按不存在处理: %v", err)
+		return nil, false
+	}
 	for i := range styles {
 		if styles[i].ID == id {
 			return &styles[i], true
@@ -426,12 +332,16 @@ func (l *Library) Get(id string) (*Style, bool) {
 	return nil, false
 }
 
-// ByDirection 方向名精确匹配（style_id 缺位的旧项目/默认包兜底锚定）。
+// ByDirection 方向名精确匹配（style_id 缺位的旧项目兜底锚定）。
 func (l *Library) ByDirection(direction string) (*Style, bool) {
 	if strings.TrimSpace(direction) == "" {
 		return nil, false
 	}
-	styles, _ := l.List()
+	styles, err := l.List()
+	if err != nil {
+		log.Printf("[stylelib] styles.json 读取失败，查询按不存在处理: %v", err)
+		return nil, false
+	}
 	for i := range styles {
 		if styles[i].Direction == direction {
 			return &styles[i], true

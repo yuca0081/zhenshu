@@ -120,7 +120,7 @@ func (r *Runner) ensureMaterials(ctx context.Context, p *pipeline.Project, requi
 
 	needs, err := r.planMaterials(ctx, p)
 	if err != nil {
-		r.Manifest(p, "materials.plan_error", firstLine(err.Error(), 120))
+		r.Manifest(p, "materials.plan_error", pipeline.FirstLine(err.Error(), 120))
 		return
 	}
 	if len(needs.Needs) == 0 {
@@ -148,7 +148,7 @@ func (r *Runner) ensureMaterials(ctx context.Context, p *pipeline.Project, requi
 		for i := 0; i < count; i++ {
 			m, err := client.fetchOne(ctx, p, n.Seg, n.Query, n.Use, perSeg[n.Seg])
 			if err != nil {
-				r.Manifest(p, "materials.skip", n.Seg+": "+firstLine(err.Error(), 100))
+				r.Manifest(p, "materials.skip", n.Seg+": "+pipeline.FirstLine(err.Error(), 100))
 				continue
 			}
 			st.Materials = append(st.Materials, m)
@@ -189,7 +189,7 @@ func (r *Runner) planMaterials(ctx context.Context, p *pipeline.Project) (*mater
 		fmt.Fprintf(&b, "- %s｜%s｜画面提示：%s\n", seg.ID, seg.Key, runeTrunc(seg.VisualBrief, 60))
 	}
 	var out materialNeeds
-	_, err = prov.GenerateJSONNoThink(ctx, "你是科普片的视觉素材策划，只输出 JSON。", fmt.Sprintf(`下面是分镜清单。判断哪些段值得贴**真图拼贴素材**（名画/雕像/陶器/遗址/历史实物照片，来自大都会博物馆开放藏品库，全部公版），哪些段程序化图形就够（抽象概念/图表/氛围/人物剪影）。
+	_, err = prov.GenerateJSONNoThink(ctx, "你是短视频的视觉素材策划，只输出 JSON。", fmt.Sprintf(`下面是分镜清单。判断哪些段值得贴**真图拼贴素材**（名画/雕像/陶器/遗址/历史实物照片，来自大都会博物馆开放藏品库，全部公版），哪些段程序化图形就够（抽象概念/图表/氛围/人物剪影）。
 
 ## 分镜
 %s
@@ -439,7 +439,7 @@ func (m *metClient) download(ctx context.Context, p *pipeline.Project, seg, quer
 	cmd := exec.CommandContext(ctx, ff, "-y", "-v", "error", "-i", tmp.Name(),
 		"-vf", fmt.Sprintf("scale='min(%d,iw)':-2", materialWidthMax), "-q:v", "4", dst)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return Material{}, fmt.Errorf("压图失败: %s\n%s", err, tail(string(out), 5))
+		return Material{}, fmt.Errorf("压图失败: %s\n%s", err, pipeline.TailLines(string(out), 5))
 	}
 	f, err := os.Open(dst)
 	if err != nil {
@@ -478,10 +478,4 @@ func slugify(title string, objectID int) string {
 		return fmt.Sprintf("obj%d", objectID)
 	}
 	return fmt.Sprintf("%s-%d", s, objectID)
-}
-
-// ProbeFetch 真网验证入口（cmd/materialsprobe 用）：直连真 Met API 走完
-// 检索→筛公版→下载原图→压图，不碰 LLM、不渲画面。
-func ProbeFetch(ctx context.Context, p *pipeline.Project, seg, query, use string, idx int) (Material, error) {
-	return newMetClient().fetchOne(ctx, p, seg, query, use, idx)
 }

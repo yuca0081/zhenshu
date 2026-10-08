@@ -14,8 +14,9 @@ const props = defineProps<{
   currentTime: number
   duration: number
   pickedIdx: number[]
+  rework?: boolean // 成片就绪且无重做进行中：段块悬停出「重做」入口
 }>()
-const emit = defineEmits<{ seek: [t: number]; pick: [idx: number, key: string]; 'pick-time': [t: number] }>()
+const emit = defineEmits<{ seek: [t: number]; pick: [idx: number, key: string]; 'pick-time': [t: number]; rework: [idx: number, key: string] }>()
 
 const PUNCT = '，。！？；、：,.!?;:…—·'
 const hasPunct = (s: string) => [...s].some(ch => PUNCT.includes(ch))
@@ -186,6 +187,7 @@ function onLaneDblClick(e: MouseEvent, start: number, dur: number) {
         >
           <b>{{ s.idx }}</b>
           <i>{{ s.key }}</i>
+          <button v-if="rework" class="rw" title="重做此段画面（可填修改要求）" @click.stop="emit('rework', s.idx, s.key)">↻ 重做</button>
         </div>
       </div>
 
@@ -270,6 +272,14 @@ function onLaneDblClick(e: MouseEvent, start: number, dur: number) {
 .blk b { font-size: 10px; color: #7c7c88; flex: none; }
 .blk i { font-style: normal; font-size: 11px; color: #c3c3cd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .blk.on i { color: #f0c674; }
+/* 段块悬停「重做」入口：段级画面重做直连（默认带上次指令），只在成片态出现 */
+.blk .rw {
+  position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
+  border: 1px solid rgba(240, 198, 116, .4); background: #292217; color: #f0c674; cursor: pointer;
+  font-size: 10px; padding: 0 7px; border-radius: 999px; opacity: 0; transition: opacity .15s;
+}
+.blk:hover .rw { opacity: 1; }
+.blk .rw:hover { background: #3a2f1c; }
 
 .ph {
   position: absolute; top: 0; bottom: 0; cursor: pointer; overflow: hidden; white-space: nowrap;

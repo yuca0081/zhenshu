@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -16,12 +17,20 @@ var ErrEmptyChoice = errors.New("模型返回空 choices")
 func (p *Provider) Chat(ctx context.Context, msgs []openai.ChatCompletionMessage, tools []openai.Tool) (openai.ChatCompletionMessage, openai.Usage, error) {
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
-	req := glmChatRequest{
-		ChatCompletionRequest: openai.ChatCompletionRequest{
-			Model:    p.Model,
-			Messages: msgs,
-		},
+	// 消息逐条预序列化（含 tool_calls 等字段原样透传），再拼成 RawMessage 数组进统一壳
+	raw := make([]json.RawMessage, 0, len(msgs))
+	for _, m := range msgs {
+		b, err := json.Marshal(m)
+		if err != nil {
+			return openai.ChatCompletionMessage{}, openai.Usage{}, err
+		}
+		raw = append(raw, b)
 	}
+	arr, err := json.Marshal(raw)
+	if err != nil {
+		return openai.ChatCompletionMessage{}, openai.Usage{}, err
+	}
+	req := glmChatRequest{Model: p.Model, Messages: arr}
 	if len(tools) > 0 {
 		req.Tools = tools
 	}

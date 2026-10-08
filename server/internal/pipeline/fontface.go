@@ -16,11 +16,20 @@ import (
 
 // osFontWhitelist 渲染端（Windows/镜像）实际可用的系统字体——scene 提示字体白名单
 // 的超集；不在白名单里的字体族不动（web 字体必须有真字体文件，src:local 是骗检）。
+// 与 ai/assemble.py 的 _OS_CJK_FONTS 是同一份集合的双端实现（中文别名/西文全收），
+// constants_drift_test.go 强制两边一致，改这里必须同步那边。
 var osFontWhitelist = map[string]bool{
-	"microsoft yahei": true, "simhei": true, "simsun": true, "kaiti": true,
-	"stkaiti": true, "fangsong": true, "consolas": true, "segoe ui": true,
-	"georgia": true, "cambria": true, "arial narrow": true, "arial": true,
-	"courier new": true, "times new roman": true, "impact": true,
+	"microsoft yahei": true, "微软雅黑": true,
+	"simhei": true, "黑体": true,
+	"simsun": true, "宋体": true,
+	"nsimsun": true, "新宋体": true,
+	"kaiti": true, "楷体": true,
+	"stkaiti": true, "stsong": true, "stzhongsong": true,
+	"fangsong": true, "仿宋": true,
+	"noto serif sc": true, "noto sans sc": true,
+	"consolas": true, "segoe ui": true, "georgia": true, "cambria": true,
+	"arial narrow": true, "arial": true, "courier new": true,
+	"times new roman": true, "impact": true,
 }
 
 var (
@@ -108,7 +117,7 @@ func fixupFrameFonts(p *Project) {
 		}
 		fixed := ensureFontFaces(string(b))
 		if fixed != string(b) {
-			_ = writeFile("", path, fixed)
+			_ = writeFile(path, fixed)
 		}
 	}
 }

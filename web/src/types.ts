@@ -28,9 +28,6 @@ export interface ProjectView {
   total_hint: number
   has_video: boolean
   producing: boolean
-  // 检视壳复刻成片观感：stitch 转场模式 + 后期妆（与 main.mp4 同源；post=null=无后期）
-  transition: string // cut | fade | xfade
-  post: { vignette?: number; grain?: number; chroma?: number } | null
 }
 
 export interface Segment {
@@ -43,8 +40,6 @@ export interface Segment {
 }
 
 export interface Storyboard {
-  timing_basis: string
-  style_id: string
   plan: string
   segments: Segment[]
 }
@@ -57,7 +52,6 @@ export interface StyleSample {
 
 export interface StyleSamples {
   direction: string
-  desc: string
   samples: StyleSample[]
   skin?: Skin // 风格文件（§12.2）：样张阶段与样张同产，确认时锁定
   confirmed: boolean
@@ -90,7 +84,6 @@ export interface Msg {
   content: string
   refs?: ChatRef[]
   tool_name?: string
-  tool_args?: string
   created_at: string
 }
 
@@ -112,7 +105,6 @@ export interface Style {
   motion?: DesignMotion
   device?: DesignDevice
   anti_patterns?: string[]
-  keyframes?: string[] // 真迹关键帧文件名（style_media/<id>/ 下的 frame-*.png 子集）
   origin_project?: string
   published: boolean
   created_at: string
@@ -133,20 +125,18 @@ export interface AlignWord {
 
 export interface AudioVoice {
   id: string
-  path: string
   duration_s: number
   words: AlignWord[]
 }
 
 export interface AudioMeta {
-  tts_provider: string
-  voice_id: string
   voices: AudioVoice[]
   timeline?: { id: string; start: number; end: number }[] // xfade 成片的实际段边界（有则 segTable 用它）
 }
 
-// 聊天输入框上方的引用项（时间轴/分镜/检视点选加入，随消息结构化发给 Agent）
+// 聊天输入框上方的引用项（时间轴/分镜点选加入，随消息结构化发给 Agent）
 // 三态：段级（idx+key）/ 时刻级（idx+key+t）/ 元素级（+elementId+elementName）
+// 元素级仅历史消息兼容展示——检视模式下线后不再产生新元素引用
 export interface ChatRef {
   idx: number
   key: string

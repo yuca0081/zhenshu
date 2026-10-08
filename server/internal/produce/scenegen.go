@@ -151,7 +151,8 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	work := func(seg contract.Segment) {
 		v := voices[seg.ID]
 		sceneM, compM := methodsFor(r.RootDir, seg)
-		style := designNoteFor(p, r.DataDir, seg.Idx) + keyframeNote(len(keyImgs)) + materialsNote(p)
+		// 附图顺序 = 样张 → 真迹关键帧 → 素材真图；三段说明各自对号入座
+		style := designNoteFor(p, r.DataDir, seg.Idx) + keyframeNote(len(keyImgs)) + materialNote(len(matImgs)) + materialsNote(p)
 		user := sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM)
 		var payload struct {
 			HTML     string                  `json:"html"`
@@ -169,7 +170,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 				HTML     string                  `json:"html"`
 				Elements []contract.NamedElement `json:"elements"`
 			}
-			u2, err2 := gen(sceneUserPrompt(seg, v, "", fb, cv, designNoteFor(p, r.DataDir, seg.Idx)+keyframeNote(len(keyImgs))+materialsNote(p), golden, sceneM, compM), &fixed)
+			u2, err2 := gen(sceneUserPrompt(seg, v, "", fb, cv, designNoteFor(p, r.DataDir, seg.Idx)+keyframeNote(len(keyImgs))+materialNote(len(matImgs))+materialsNote(p), golden, sceneM, compM), &fixed)
 			if err2 != nil {
 				fail(fmt.Errorf("%s 场景修复失败: %w", seg.ID, err2))
 				return
@@ -213,7 +214,8 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 }
 
 // sceneSystemFor 系统提示跟随项目已确认的设计系统（笼子二：方向 + 贯穿装置一句话，
-// 细则由 designNoteFor 注入正文；无设计文件的老项目退回手绘缺省）。
+// 细则由 designNoteFor 注入正文）。正常流程到不了缺省分支——样张是三前置硬门，
+// 能进场景生成的项目必有 style_samples.json；这里只兜异常态，给中性措辞不留题材预设。
 func sceneSystemFor(p *pipeline.Project) string {
 	var ss contract.StyleSamples
 	if b, err := os.ReadFile(p.Artifact("style/style_samples.json")); err == nil && json.Unmarshal(b, &ss) == nil && ss.Direction != "" {
@@ -223,7 +225,7 @@ func sceneSystemFor(p *pipeline.Project) string {
 		}
 		return s
 	}
-	return "你是视频的画面工程师，直接写可渲染的场景 HTML。只输出 JSON。风格：手绘叙事（纸面·马克笔）——米黄纸面、深灰线稿、彩色便签、楷体。"
+	return "你是视频的画面工程师，直接写可渲染的场景 HTML。只输出 JSON。风格：未注入设计系统——保持干净克制的中性版式，高对比配色、少装饰。"
 }
 
 // goldenExample 契约金样例（ai/contract-example/seg-golden.html）作为结构 few-shot。
@@ -276,7 +278,7 @@ func (r *Runner) sceneLintRun(html string) []string {
 		return []string{"lint 临时文件写失败: " + err.Error()}
 	}
 	tmp.Close()
-	cmd := exec.Command(pythonExe(), filepath.Join(r.RootDir, "ai", "scene_lint.py"), name)
+	cmd := exec.Command(pipeline.PythonExe(), filepath.Join(r.RootDir, "ai", "scene_lint.py"), name)
 	cmd.Dir = r.RootDir
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -290,7 +292,7 @@ func (r *Runner) sceneLintRun(html string) []string {
 		}
 	}
 	if len(errs) == 0 { // lint 崩了（非违规）：报原文，别静默放行
-		errs = append(errs, "scene_lint 异常: "+firstLine(string(out), 3))
+		errs = append(errs, "scene_lint 异常: "+pipeline.FirstLine(string(out), 3))
 	}
 	return errs
 }
@@ -326,12 +328,12 @@ func (r *Runner) vendorEnsure(spec string, timeout time.Duration) error {
 	defer vendMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, pythonExe(), filepath.Join(r.RootDir, "ai", "vendor_tool.py"),
+	cmd := exec.CommandContext(ctx, pipeline.PythonExe(), filepath.Join(r.RootDir, "ai", "vendor_tool.py"),
 		"ensure", spec, "--allow-pending-replay")
 	cmd.Dir = r.RootDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%s", firstLine(string(out), 2))
+		return fmt.Errorf("%s", pipeline.FirstLine(string(out), 2))
 	}
 	return nil
 }

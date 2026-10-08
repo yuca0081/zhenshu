@@ -36,10 +36,8 @@ func TestManualStyleRegen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := filepath.Dir(cfg.DataDir)
 	a := &Agent{
 		DataDir: cfg.DataDir,
-		RootDir: root,
 		Lib:     stylelib.New(cfg.DataDir),
 		Emit:    func(projectID, typ, stage, detail string) {},
 		OnEvent: func(projectID, event, detail string) { t.Logf("event %s: %s", event, detail) },

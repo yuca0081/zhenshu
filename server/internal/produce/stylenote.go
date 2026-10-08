@@ -120,13 +120,13 @@ func styleKeyframeImages(ctx context.Context, dataDir string, p *pipeline.Projec
 	return urls
 }
 
-// keyframeNote 场景生成提示里的真迹说明（真迹附在样张截图之后）。
+// keyframeNote 场景生成提示里的真迹说明（真迹紧随样张截图；素材真图在真迹之后）。
 // 真迹只准学气质（配色/光影/质感/密度/节奏）——物件是原片题材，照着画就是题材中毒。
 func keyframeNote(n int) string {
 	if n == 0 {
 		return ""
 	}
-	return fmt.Sprintf("\n- 附图最后 %d 张是本风格来源视频的原片真迹（关键帧）：只学气质——配色、光影、质感、画面密度、构图节奏；真迹里画的物件（建筑/人物/器物等）是原视频的题材，与本片无关，禁止模仿着画；本段画什么永远由画面提示说了算\n", n)
+	return fmt.Sprintf("\n- 附图样张之后紧随的 %d 张是本风格来源视频的原片真迹（关键帧）：只学气质——配色、光影、质感、画面密度、构图节奏；真迹里画的物件（建筑/人物/器物等）是原视频的题材，与本片无关，禁止模仿着画；本段画什么永远由画面提示说了算\n", n)
 }
 
 // PaletteNote 风格库 tokens → 一行人话色板（底/主字/墨/accent/面板/字体）。

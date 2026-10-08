@@ -21,6 +21,7 @@ import (
 
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
+	"webpage-video-agent/server/internal/pipeline"
 )
 
 type Ref struct {
@@ -264,8 +265,9 @@ func (s *Store) analyzeCompositions(ctx context.Context, prov *llm.Provider, fra
 
 // synthesize 色板+构图观察+节奏 → 完整风格包 JSON（tokens 用给定 hex，样张纯 CSS 仿帧）。
 // segName 非空表示合集分段模式：direction 优先采用段名（片中标题），事实用段内数据。
+// videoURL 非空 = 附原视频剪辑直读（动效/运镜以视频实测为准）；空 = 纯帧推断（老路径）。
 func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name, segName string,
-	feats videoFeatures, notes string) (*StyleDraft, error) {
+	feats videoFeatures, notes string, videoURL string) (*StyleDraft, error) {
 	rep := make([]string, 0, 3) // 代表帧：首/中/尾
 	for _, idx := range []int{0, len(feats.Frames) / 2, len(feats.Frames) - 1} {
 		if idx < 0 || idx >= len(feats.Frames) {
@@ -278,9 +280,14 @@ func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name, segNam
 		rep = append(rep, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(b))
 	}
 	system := "你是视频视觉分析师，把参考视频提炼成可复用的风格包。只输出 JSON。"
-	user := synthesizeUserPrompt(name, segName, feats, notes)
+	user := synthesizeUserPrompt(name, segName, feats, notes, videoURL != "")
 	var style StyleDraft
-	_, err := prov.GenerateJSONVisionNoThink(ctx, system, user, rep, 0.5, &style)
+	var err error
+	if videoURL != "" {
+		_, err = prov.GenerateJSONVisionVideoNoThink(ctx, system, user, rep, videoURL, 0.5, &style)
+	} else {
+		_, err = prov.GenerateJSONVisionNoThink(ctx, system, user, rep, 0.5, &style)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("风格合成失败: %w", err)
 	}
@@ -290,7 +297,8 @@ func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name, segNam
 // synthesizeUserPrompt 风格合成作业正文（synthesize 与回归测试共用一份，防漂移）。
 // 核心纪律：风格/题材分离——除 subject 外所有字段只写「怎么画」，物件一律抽象描述，
 // 样张用几何元素演示构图（这份风格包会被用来制作题材完全不同的新片）。
-func synthesizeUserPrompt(name, segName string, feats videoFeatures, notes string) string {
+// withVideo 表示消息里附有原视频剪辑：动效/运镜/节奏以视频实测为准（静止帧看不出时间维度）。
+func synthesizeUserPrompt(name, segName string, feats videoFeatures, notes string, withVideo bool) string {
 	pal := make([]string, 0, len(feats.Palette))
 	for _, c := range feats.Palette {
 		pal = append(pal, fmt.Sprintf("%s(覆盖率%.0f%%,亮度%.2f)", c.Hex, c.Share*100, c.Lum))
@@ -303,6 +311,16 @@ func synthesizeUserPrompt(name, segName string, feats videoFeatures, notes strin
 	if segName != "" {
 		nameHint = fmt.Sprintf("\n- 已知该段风格名「%s」（解析阶段从片中标题读出）——direction 优先直接采用它，可在 ≤6 字内微调；name 参数也以它为准", segName)
 	}
+	videoBlock := ""
+	motionSrc := "看附上的连续关键帧推断"
+	if withVideo {
+		videoBlock = `
+## 原视频直读（消息里附有可播放的原视频，范围即上方抽取范围）
+- 动效/运镜/转场/节奏是静止帧给不了的信息，**以视频实测为准**：元素怎么进场（淡入/位移/缩放/弹跳）、多快、错峰密度、镜头有没有推拉摇移、镜头间怎么过渡；
+- 颜色仍以测得色板 hex 为准（视频压缩会偏色），构图仍以下方逐帧观察为准。
+`
+		motionSrc = "以附上的原视频实测为准（你能直接看到运动）"
+	}
 	return fmt.Sprintf(`把参考视频「%s」（%s）提炼成一个风格包（挂到网页渲染视频管线上，与现有 token 引擎同一套 schema）。
 
 ## 已测得事实（必须遵守）
@@ -313,7 +331,7 @@ func synthesizeUserPrompt(name, segName string, feats videoFeatures, notes strin
 - font 只能用 Windows 系统字体栈：'Segoe UI'/'Microsoft YaHei'/'Georgia'/'KaiTi'/'STKaiti'/'Cambria'/'Arial Narrow'/'SimHei' 组合（示例：'Georgia','SimHei',serif），禁止 Noto/思源等未装字体
 - tokens 里的颜色必须从上面色板 hex 里选（可按角色微调明度但保持色相；覆盖率最高的暗色通常做 bg.from，最亮簇做 txt）；颜色之外的字段按画面气质定。
 - direction 是风格名（≤12 字，含一个括号副标）；**禁止出现「手绘」「扁平」二字**（引擎按名字路由）。
-
+%s
 ## 风格/题材分离（最高优先级纪律）
 这份风格包以后会被用来制作**题材完全不同**的新片。除 subject 外，每个字段落笔前自问：换一个题材这句话还成立吗？
 - 只写「怎么画」：构图骨架（主体位置/比例/留白/层次/元素数）、配色、字体、动效、质感；
@@ -330,7 +348,7 @@ func synthesizeUserPrompt(name, segName string, feats videoFeatures, notes strin
 ## 设计系统（神似的关键，逐项给全；下游与项目设计阶段同一套注入机制）
 - concept：一句话（≤40字）——这套风格的视觉概念（纯「怎么画」层面，不提原片画了什么）。
 - fonts：字体三角色 {"display":{"stack":"..","weight":"..","tracking":".."},"body":{...},"data":{...}}，display/body 必填；栈只能用上面列的 Windows 系统字体且必须含中文字体（中文会豆腐块）。
-- motion：动效语言 {"ease":"缓动族","dur_in":进场时长,"dur_settle":落定时长,"stagger":同组错峰,"notes":"性格一句话"}。看附上的连续关键帧推断：元素怎么进场（淡入/位移方向/缩放）、大概多快、错峰节奏；notes 写什么怎么动、禁什么动。时长档范围 dur_in 0.1–1.5 秒、dur_settle 0.05–1.0 秒、stagger 0–0.5 秒。
+- motion：动效语言 {"ease":"缓动族","dur_in":进场时长,"dur_settle":落定时长,"stagger":同组错峰,"notes":"性格一句话"}。%s：元素怎么进场（淡入/位移方向/缩放）、大概多快、错峰节奏；notes 写什么怎么动、禁什么动。时长档范围 dur_in 0.1–1.5 秒、dur_settle 0.05–1.0 秒、stagger 0–0.5 秒。
 - device：贯穿装置 {"name":"装置名","desc":"是什么、观众为什么记住它","per_seg":"逐段怎么重复/变奏"}——全片反复出现的签名画面机制（如「放射线强调」「红色印章盖角」）；描述只写机制与节拍，物件按分离纪律抽象；没有显式装置就从构图语法归纳一个。
 - anti_patterns：负面清单 3–6 条——这部片绝不会出现的手法（如「彩虹渐变」「emoji 贴纸」「圆角卡片堆砌」），出现即返工的俗手。
 
@@ -339,7 +357,7 @@ func synthesizeUserPrompt(name, segName string, feats videoFeatures, notes strin
 
 ## 输出（只输出 JSON，无围栏）
 {"direction":"…","subject":"原片题材一句话（≤30字）","genre":"适用题材（检索用，≤30字）","keywords":["…×4-8"],"photo":"配图 query 调性（≤30字）","concept":"…","fonts":{…},"motion":{…},"device":{…},"anti_patterns":["…×3-6"],"layouts":[…5],"tokens":{…},"samples":[…2]}
-`, name, spanTxt, feats.SpanS[1]-feats.SpanS[0], feats.NShots, strings.Join(pal, "、"), notes, nameHint)
+`, name, spanTxt, feats.SpanS[1]-feats.SpanS[0], feats.NShots, strings.Join(pal, "、"), notes, nameHint, videoBlock, motionSrc)
 }
 
 // validateStyle 入库前自检（够注册表吃、引擎能配）。
@@ -411,14 +429,10 @@ func tail(s string, n int) string {
 }
 
 func runPython(ctx context.Context, rootDir, script string, args ...string) (string, error) {
-	py, err := exec.LookPath("python")
-	if err != nil {
-		return "", fmt.Errorf("python 不在 PATH: %w", err)
-	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	argv := append([]string{filepath.Join(rootDir, script)}, args...)
-	cmd := exec.CommandContext(ctx, py, argv...)
+	cmd := exec.CommandContext(ctx, pipeline.PythonExe(), argv...)
 	cmd.Dir = rootDir
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {

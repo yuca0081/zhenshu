@@ -22,7 +22,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -96,29 +95,12 @@ func (r *Runner) Start(projectID string) (bool, error) {
 		}()
 		// panic 兜底：audio_meta 等产物结构异常不该崩掉整个服务（goroutine panic 直接退进程）
 		err := safeRun(func() error { return r.run(ctx, p) })
-		if errors.Is(err, context.Canceled) {
-			detail := "用户取消制作"
-			if r.stopping.Load() {
-				detail = "服务停机，制作中断（产物已保留，重启后重新开工即按段复用）"
-			}
-			r.emit(projectID, "stage", "pipeline", "cancelled")
-			r.emit(projectID, "cancelled", "", detail)
-			r.Manifest(p, EventProduceCancelled, detail)
-			r.jobTerminal(projectID, "cancelled", "", detail)
-			if r.OnDone != nil {
-				r.OnDone(projectID, "cancelled", detail)
-			}
-			return
-		}
-		if err != nil {
-			r.emit(projectID, "stage", "pipeline", "error: "+err.Error())
-			r.emit(projectID, "error", "", err.Error())
-			r.Manifest(p, EventProduceError, err.Error())
-			r.jobTerminal(projectID, "failed", "", err.Error())
-			if r.OnDone != nil {
-				r.OnDone(projectID, "failed", err.Error())
-			}
-		}
+		r.finishJob(p, projectID, err, jobTail{
+			evCancelled:  EventProduceCancelled,
+			evError:      EventProduceError,
+			cancelDetail: "用户取消制作",
+			stopDetail:   "服务停机，制作中断（产物已保留，重启后重新开工即按段复用）",
+		})
 	}()
 	return true, nil
 }
@@ -198,31 +180,54 @@ func (r *Runner) Rework(projectID string, segIDs []string, instruction string) (
 			r.wg.Done()
 		}()
 		err := safeRun(func() error { return r.runRework(ctx, p, segs, instruction) })
-		if errors.Is(err, context.Canceled) {
-			detail := "用户取消重做"
-			if r.stopping.Load() {
-				detail = "服务停机，重做中断（该段旧画面仍在成片里，重启后可再重做）"
-			}
-			r.emit(projectID, "stage", "pipeline", "cancelled")
-			r.emit(projectID, "cancelled", "", detail)
-			r.Manifest(p, EventReworkCancelled, joinSegIDs(segs)+": "+detail)
-			r.jobTerminal(projectID, "cancelled", "", detail)
-			if r.OnDone != nil {
-				r.OnDone(projectID, "cancelled", detail)
-			}
-			return
-		}
-		if err != nil {
-			r.emit(projectID, "stage", "pipeline", "error: "+err.Error())
-			r.emit(projectID, "error", "", err.Error())
-			r.Manifest(p, EventReworkError, joinSegIDs(segs)+": "+err.Error())
-			r.jobTerminal(projectID, "failed", "", err.Error())
-			if r.OnDone != nil {
-				r.OnDone(projectID, "failed", err.Error())
-			}
-		}
+		r.finishJob(p, projectID, err, jobTail{
+			evCancelled:    EventReworkCancelled,
+			evError:        EventReworkError,
+			manifestPrefix: joinSegIDs(segs) + ": ",
+			cancelDetail:   "用户取消重做",
+			stopDetail:     "服务停机，重做中断（该段旧画面仍在成片里，重启后可再重做）",
+		})
 	}()
 	return true, nil
+}
+
+// jobTail 制作/重做两个 goroutine 终态收尾里仅有的四处差异。
+type jobTail struct {
+	evCancelled    string // manifest 取消事件名（EventProduceCancelled / EventReworkCancelled）
+	evError        string // manifest 失败事件名
+	manifestPrefix string // manifest detail 前缀（重做侧为段号前缀，制作侧为空）
+	cancelDetail   string // 用户取消时给用户看的话
+	stopDetail     string // 服务停机中断时给用户看的话
+}
+
+// finishJob 制作/重做 goroutine 的终态收尾（共用）：emit 事件、manifest 记账、
+// render_jobs 终态回写、聊天汇报（OnDone）。err == nil（成功）时不动——成功路径
+// 两边形态差异大，由调用方各自处理。
+func (r *Runner) finishJob(p *pipeline.Project, projectID string, err error, t jobTail) {
+	if err == nil {
+		return
+	}
+	if errors.Is(err, context.Canceled) {
+		detail := t.cancelDetail
+		if r.stopping.Load() {
+			detail = t.stopDetail
+		}
+		r.emit(projectID, "stage", "pipeline", "cancelled")
+		r.emit(projectID, "cancelled", "", detail)
+		r.Manifest(p, t.evCancelled, t.manifestPrefix+detail)
+		r.jobTerminal(projectID, "cancelled", "", detail)
+		if r.OnDone != nil {
+			r.OnDone(projectID, "cancelled", detail)
+		}
+		return
+	}
+	r.emit(projectID, "stage", "pipeline", "error: "+err.Error())
+	r.emit(projectID, "error", "", err.Error())
+	r.Manifest(p, t.evError, t.manifestPrefix+err.Error())
+	r.jobTerminal(projectID, "failed", "", err.Error())
+	if r.OnDone != nil {
+		r.OnDone(projectID, "failed", err.Error())
+	}
 }
 
 func joinSegIDs(segs []contract.Segment) string {
@@ -297,7 +302,7 @@ func (r *Runner) runRework(ctx context.Context, p *pipeline.Project, segs []cont
 	for i, s := range segs {
 		labels[i] = fmt.Sprintf("段%d「%s」", s.Idx, s.Key)
 	}
-	r.Manifest(p, EventReworkStart, only+": "+firstLine(instruction, 80))
+	r.Manifest(p, EventReworkStart, only+": "+pipeline.FirstLine(instruction, 80))
 	r.jobStart(id, "rework")
 	r.emit(id, "progress", "rework", "重做 "+strings.Join(labels, "、"))
 	r.ensureMaterials(ctx, p, false) // 只加载已有素材库，不现抓网络
@@ -605,7 +610,7 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 			}
 		}
 		repairOnly := strings.Join(targets, ",")
-		feedback := "上一版画面被自动检查拒绝，报错摘要（✗ 行逐项都要修）：\n" + tail(err.Error(), 25) +
+		feedback := "上一版画面被自动检查拒绝，报错摘要（✗ 行逐项都要修）：\n" + pipeline.TailLines(err.Error(), 25) +
 			"\n修复规则：\n" +
 			"- 重叠/越界：整体重排拉开间距，避开底部字幕带（禁放区见布局规则），必要时减少元素。\n" +
 			"- 对比度 ✗：文字色与它实际压着的背景太接近。检查器的建议色不可信（实测往往不达标）——" +
@@ -615,7 +620,7 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 		// 本轮 check 失败收口（计时），修复轮重生成的时间不计入 check
 		r.Manifest(p, "stage.finish", "check")
 		r.emit(p.ID, "stage", "check", fmt.Sprintf("repair：重生成画面（段：%s）", repairOnly))
-		r.Manifest(p, "check.repair", tail(err.Error(), 10))
+		r.Manifest(p, "check.repair", pipeline.TailLines(err.Error(), 10))
 		if err := r.sceneGen(ctx, p, instruction, feedback, repairOnly); err != nil {
 			return err
 		}
@@ -740,7 +745,7 @@ func (r *Runner) sceneReplayCheck(ctx context.Context, p *pipeline.Project) erro
 		out, err := pipeline.RunCLI(p, "npx", "hyperframes@0.8.55", "snapshot", ".",
 			"--at", atArg, "--no-end", "-o", dir)
 		if err != nil {
-			return nil, fmt.Errorf("scene 回放 snapshot 失败: %s", tail(out, 8))
+			return nil, fmt.Errorf("scene 回放 snapshot 失败: %s", pipeline.TailLines(out, 8))
 		}
 		entries, err := os.ReadDir(p.Artifact(dir))
 		if err != nil {
@@ -1200,28 +1205,9 @@ func feedbackBlock(f string) string {
 
 // ── 子进程与工具 ─────────────────────────────────────────────
 
-// pythonExe 解析可用的 Python 解释器。Windows 的 `python` 常是 Microsoft Store
-// 的 WindowsApps 占位 stub（LookPath 找得到，一跑就退 9009），跳过它退到 py 启动器。
-func pythonExe() string {
-	if p, err := exec.LookPath("python"); err == nil && !isStoreStub(p) {
-		return p
-	}
-	if p, err := exec.LookPath("py"); err == nil {
-		return p
-	}
-	return "python"
-}
-
-// isStoreStub 识别 WindowsApps 商店占位假 python。真从 Store 装了 Python 的路径
-// 同样含 WindowsApps——会被误跳过，但那是 py 启动器不存在，兜底仍回 `python`，不受影响。
-func isStoreStub(p string) bool {
-	return runtime.GOOS == "windows" &&
-		strings.Contains(strings.ToLower(filepath.ToSlash(p)), "windowsapps")
-}
-
 // python 跑仓库 ai/ 脚本（cwd = 仓库根）。任务取消时连带杀掉子进程。
 func (r *Runner) python(ctx context.Context, script string, projDir string, timeout time.Duration) error {
-	py := pythonExe()
+	py := pipeline.PythonExe()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, py, filepath.Join(r.RootDir, script), projDir)
@@ -1232,7 +1218,7 @@ func (r *Runner) python(ctx context.Context, script string, projDir string, time
 		if ctx.Err() != nil { // 被取消/超时杀掉：报可识别的 ctx 错误而非 killed
 			return ctx.Err()
 		}
-		return fmt.Errorf("%s 退出: %w\n%s", script, err, tail(buf.String(), 15))
+		return fmt.Errorf("%s 退出: %w\n%s", script, err, pipeline.TailLines(buf.String(), 15))
 	}
 	fmt.Println(buf.String())
 	return nil
@@ -1256,23 +1242,6 @@ func (r *Runner) clearFrames(p *pipeline.Project, only string) {
 	for _, f := range files {
 		_ = os.Remove(f)
 	}
-}
-
-func tail(s string, n int) string {
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return strings.Join(lines, "\n")
-}
-
-func firstLine(s string, n int) string {
-	s = strings.SplitN(s, "\n", 2)[0]
-	r := []rune(s)
-	if len(r) > n {
-		return string(r[:n]) + "…"
-	}
-	return s
 }
 
 // contrastSuggRe 抓 checker 对比度诊断对：✗ 选择器 比值:1 (need …) \n Try rgb(..); source frames/segNN.html

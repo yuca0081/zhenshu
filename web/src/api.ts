@@ -82,12 +82,6 @@ export const api = {
   chat: (id: string, content: string, refs: ChatRef[] = []) =>
     post<{ ok: boolean }>(`/api/projects/${id}/chat`, { content, refs }),
 
-  frameText: (id: string, seg: string) =>
-    authFetch(`/api/projects/${id}/frames/${seg}`).then(r => {
-      if (!r.ok) throw new Error(r.statusText)
-      return r.text()
-    }),
-
   draftManuscript: (topic: string, minutes = 1) =>
     post<{ content: string }>('/api/draft/manuscript', { topic, minutes }),
 
@@ -97,9 +91,7 @@ export const api = {
 
   messages: (id: string, after = 0) => req<Msg[]>(`/api/projects/${id}/messages?after=${after}`),
 
-  produce: (id: string) => post<{ ok: boolean }>(`/api/projects/${id}/produce`),
-
-  // 一键段级重做（检视态按钮直连；instruction 空 = 服务端复用该段上次指令）
+  // 一键段级重做（时间轴段块按钮直连；instruction 空 = 服务端复用该段上次指令）
   reworkStart: (id: string, segments: string[], instruction = '') =>
     post<{ ok: boolean; labels: string[]; instruction: string }>(`/api/projects/${id}/rework`, { segments, instruction }),
 
@@ -111,6 +103,9 @@ export const api = {
   listLibrary: () => req<Style[]>('/api/library'),
 
   publishPack: (id: string) => post<Style>(`/api/library/${id}/publish`),
+
+  // 删除风格条目（含媒体快照）。已出片项目不受影响：样张/皮肤在选用时已拷进项目
+  deleteLibrary: (id: string) => req<{ ok: boolean }>(`/api/library/${id}`, { method: 'DELETE' }),
 
   // 风格媒体（视频解析入库的原片+抽帧快照；老条目服务端自动回退 references 目录）
   libraryFrames: (id: string) =>
@@ -132,8 +127,6 @@ export const api = {
 
 // rev = 成片代次（重做完成后递增）：同 URL 会被 <video> 惰性复用，重做完必须换 URL 才能看到新画面
 export const videoURL = (id: string, rev = 0) => withToken(`/api/projects/${id}/video/main.mp4${rev ? `?v=${rev}` : ''}`)
-// 活合成物壳的确定性依赖：项目内本地 gsap（与渲染引擎同一份，无 CDN）
-export const assetURL = (id: string, p: string) => withToken(`/api/projects/${id}/assets/${p}`)
 // 参考引用媒体（抽帧 frame-*.png / 原视频 video.mp4；详情抽屉用）
 export const referenceMediaURL = (id: string, file: string) => withToken(`/api/references/${id}/media/${file}`)
 // 风格库媒体（入库快照；详情抽屉用）

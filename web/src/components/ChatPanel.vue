@@ -82,7 +82,7 @@ const refKey = (r: ChatRef) => r.elementId ?? (r.t != null ? `s${r.idx}t${r.t}` 
       </div>
       <div v-if="busy && !msgs.length" class="none"><NSpin :size="14" /></div>
     </NScrollbar>
-    <!-- 引用列表：时间轴/分镜/检视点选加入，可单删；随下一条消息结构化发出 -->
+    <!-- 引用列表：时间轴/分镜点选加入，可单删；随下一条消息结构化发出 -->
     <div v-if="refs.length" class="refs">
       <span class="refs-label">引用 {{ refs.length }}</span>
       <div class="ref-chips">

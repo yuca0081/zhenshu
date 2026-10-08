@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useMessage, NButton, NInput, NModal, NScrollbar, NSpin, NTag } from 'naive-ui'
-import type { AudioMeta, ChatRef, Manuscript, ProjectView, Storyboard, StyleSamples } from '../types'
-import { fmtClock, segAt, segTable } from '../segtime'
+import type { AudioMeta, Manuscript, ProjectView, Storyboard, StyleSamples } from '../types'
+import { fmtClock, segTable, type SegCol } from '../segtime'
 import { api, videoURL } from '../api'
 import Timeline from './Timeline.vue'
-import LiveFrame from './LiveFrame.vue'
 import SampleFrame from './SampleFrame.vue'
 
 const props = defineProps<{
@@ -17,11 +16,10 @@ const props = defineProps<{
   videoId: string
   audioMeta: AudioMeta | null
   pickedIdx: number[]
-  inspect: boolean // 检视模式开关在标题行（App 持有），进入时定位到当前播放时刻
   videoRev: number // 成片代次（重做完成递增）：换 URL 强制重载
   progressLine: string // 制作/重做细粒度进度（App 转发 SSE progress）
 }>()
-const emit = defineEmits<{ 'confirm-style': []; seg: [idx: number, key: string]; 'seg-element': [ref: ChatRef]; cancel: []; 'pick-time': [t: number]; 'inspect-off': []; 'edit-manuscript': []; 'rework-started': [] }>()
+const emit = defineEmits<{ 'confirm-style': []; seg: [idx: number, key: string]; cancel: []; 'pick-time': [t: number]; 'edit-manuscript': []; 'rework-started': [] }>()
 
 const stageName: Record<string, string> = {
   tts: '配音', compositions: '画面', assemble: '组装', check: '检查', render: '渲染', frameqa: '画面审查',
@@ -34,21 +32,11 @@ const dur = ref(0)
 const playing = ref(false) // 播放中隐藏「引用此刻」悬浮钮
 function onSeek(t: number) {
   cur.value = t
-  // video 用 v-show（检视时隐藏）：currentTime 保持同步，退出检视不跳变
   if (videoEl.value) videoEl.value.currentTime = t
-  if (props.inspect) {
-    const hit = segAt(segsT.value, t)
-    if (hit) { inspectSegId.value = hit.segId; inspectT.value = t }
-  }
 }
 function pickSeg(idx: number, key: string) { emit('seg', idx, key) }
 // 时刻引用：播放器「引用此刻」按钮 / 时间轴双击（全局秒，随消息结构化发出）
 function pickTime(t: number) { emit('pick-time', t) }
-
-// ── 检视模式（plan §4.3 修改态）：video ↔ 活合成物 LiveFrame ──
-const inspectSegId = ref('') // 当前加载的段（segNN）
-const inspectT = ref(0) // 检视时刻（全局秒）
-const frameRev = ref(0) // 重做完 bump，强制 LiveFrame 重载帧
 
 // 皮肤槽位色板（非颜色槽位不进 chips，字体单独展示）
 const skinChips = computed(() => {
@@ -67,42 +55,6 @@ const skinChips = computed(() => {
 const segsT = computed(() => segTable(props.storyboard, props.audioMeta))
 // tts 显示「配音不动」：重做/复用链路跳过配音，后续阶段已有动静时 tts 恒 pending
 const ttsIdle = computed(() => !!props.stageSummary?.some(x => x.state !== 'pending'))
-const inspectCol = computed(() => segsT.value.find(s => s.segId === inspectSegId.value) ?? null)
-const inspectLocalT = computed(() => {
-  const c = inspectCol.value
-  return c ? Math.max(0, inspectT.value - c.start) : 0
-})
-
-// 进入检视：暂停视频，定位到当前播放时刻所在段
-watch(() => props.inspect, v => {
-  if (!v) return
-  videoEl.value?.pause()
-  const hit = segAt(segsT.value, cur.value)
-  inspectSegId.value = hit?.segId ?? segsT.value[0]?.segId ?? ''
-  inspectT.value = cur.value
-})
-
-// 元素点选 → 元素级 📎 引用（带上检视时刻）
-function onPickElement(p: { segId: string; id: string; name: string }) {
-  const c = segsT.value.find(s => s.segId === p.segId)
-  if (!c) return
-  emit('seg-element', { idx: c.idx, key: c.key, t: inspectT.value, elementId: p.id, elementName: p.name })
-}
-
-// 圈选 → 命中元素批量进引用（App 侧按元素 id 去重）
-function onLasso(p: { segId: string; picks: { id: string; name: string }[] }) {
-  const c = segsT.value.find(s => s.segId === p.segId)
-  if (!c) return
-  for (const el of p.picks) {
-    emit('seg-element', { idx: c.idx, key: c.key, t: inspectT.value, elementId: el.id, elementName: el.name })
-  }
-}
-
-// 制作中帧文件在重写：退出检视（App 持有开关）；重做流程结束（stageSummary 消失）→ bump 重载
-watch(() => props.stageSummary, (nv, ov) => {
-  if (nv) emit('inspect-off')
-  else if (ov) frameRev.value++
-})
 
 // ── 成片代次刷新：换 URL 重载并回到原播放位置（重做完立刻看新画面）──
 watch(() => props.videoRev, () => {
@@ -116,24 +68,27 @@ watch(() => props.videoRev, () => {
   }
 })
 
-// ── 一键重做此段（检视态）：预填该段上次指令，确认直连 REST（不走对话轮）──
+// ── 一键重做此段（时间轴段块按钮）：预填该段上次指令，确认直连 REST（不走对话轮）──
 const reworkShow = ref(false)
 const reworkInstr = ref('')
 const reworkBusy = ref(false)
+const reworkSeg = ref<SegCol | null>(null)
 const message = useMessage()
-async function openRework() {
+async function openRework(idx: number, key: string) {
+  const s = segsT.value.find(x => x.idx === idx && x.key === key)
+  if (!s) return
+  reworkSeg.value = s
   reworkInstr.value = ''
-  if (inspectSegId.value) {
-    const r = await api.reworkLast(props.videoId, inspectSegId.value).catch(() => null)
-    reworkInstr.value = r?.instruction ?? ''
-  }
+  const r = await api.reworkLast(props.videoId, s.segId).catch(() => null)
+  reworkInstr.value = r?.instruction ?? ''
   reworkShow.value = true
 }
 async function confirmRework() {
-  if (!inspectSegId.value || reworkBusy.value) return
+  const s = reworkSeg.value
+  if (!s || reworkBusy.value) return
   reworkBusy.value = true
   try {
-    await api.reworkStart(props.videoId, [inspectSegId.value], reworkInstr.value.trim())
+    await api.reworkStart(props.videoId, [s.segId], reworkInstr.value.trim())
     reworkShow.value = false
     emit('rework-started') // REST 直连不经 agent：让 App 重拉 view（producing 态/停止按钮）
   } catch (e) {
@@ -218,7 +173,7 @@ async function confirmRework() {
         </NScrollbar>
       </div>
 
-      <!-- 状态 4：成片（检视/下载在标题行，「引用此刻」悬浮视频右下；舞台只留画面+时间轴） -->
+      <!-- 状态 4：成片（下载在标题行，「引用此刻」悬浮视频右上；舞台只留画面+时间轴） -->
       <div v-else-if="view.has_video" class="pane video-pane" :class="{ vertical: view.aspect === '9:16' }">
         <!-- 段级重做中：细进度条（其余段的画面/音频不动） -->
         <div v-if="stageSummary" class="rework-strip">
@@ -234,24 +189,12 @@ async function confirmRework() {
         <div v-if="progressLine && stageSummary" class="progress-line">{{ progressLine }}</div>
         <div class="player">
           <video
-            v-show="!inspect"
             ref="videoEl" :src="videoURL(videoId, videoRev)" controls preload="metadata"
             @timeupdate="cur = videoEl!.currentTime" @loadedmetadata="dur = videoEl!.duration || 0"
             @play="playing = true" @pause="playing = false" @ended="playing = false"
           />
-          <button v-show="!inspect && !playing" class="now-btn" @click="pickTime(cur)">
+          <button v-show="!playing" class="now-btn" @click="pickTime(cur)">
             引用此刻 {{ fmtClock(cur) }}
-          </button>
-          <LiveFrame
-            v-if="inspect && inspectSegId"
-            :video-id="videoId" :seg-id="inspectSegId" :local-time="inspectLocalT" :rev="frameRev"
-            :transition="view?.transition ?? 'fade'" :post="view?.post ?? null"
-            @pick="onPickElement"
-            @lasso="onLasso"
-          />
-          <!-- 一键重做当前检视段（指令可编辑，默认上次要求） -->
-          <button v-if="inspect && inspectSegId && !stageSummary" class="rework-btn" @click="openRework">
-            ↻ 重做此段
           </button>
         </div>
         <NModal v-model:show="reworkShow" preset="dialog" title="重做此段画面" positive-text="开始重做" negative-text="取消" :loading="reworkBusy" @positive-click="confirmRework">
@@ -261,7 +204,8 @@ async function confirmRework() {
         <Timeline
           v-if="storyboard"
           :storyboard="storyboard" :audio-meta="audioMeta" :current-time="cur" :duration="dur"
-          :picked-idx="pickedIdx" @seek="onSeek" @pick="pickSeg" @pick-time="pickTime"
+          :picked-idx="pickedIdx" :rework="!stageSummary" @seek="onSeek" @pick="pickSeg" @pick-time="pickTime"
+          @rework="openRework"
         />
       </div>
 
@@ -346,13 +290,6 @@ figcaption span { font-size: 12px; color: #8a8a96; }
 /* video 铺满播放器、画面 contain 居中（letterbox 同为黑底）——悬浮钮/控制条贴视频框 */
 .player video { width: 100%; height: 100%; object-fit: contain; border-radius: 8px; background: #000; display: block; }
 .video-pane.vertical .player { width: auto; }
-/* 检视模式：LiveFrame 限高防溢出（横屏保持组件内 16:9，竖屏切 9:16） */
-.player :deep(.live-frame) { max-height: 100%; }
-.video-pane.vertical .player :deep(.live-frame),
-.video-pane.vertical .player :deep(.live-loading),
-.video-pane.vertical .player :deep(.live-err) {
-  width: auto; height: 100%; max-width: 100%; aspect-ratio: 9 / 16;
-}
 /* 「引用此刻」悬浮在视频右上角（播放中隐藏），避开底部原生控制条 */
 .now-btn {
   position: absolute; right: 10px; top: 10px; z-index: 4; cursor: pointer;
@@ -365,12 +302,6 @@ figcaption span { font-size: 12px; color: #8a8a96; }
 .progress-line { flex: none; width: 100%; font-size: 12px; color: #8a8a96; padding: 0 4px; }
 .pstage[data-skip="true"] { opacity: .45; border-style: dashed; }
 .rework-modal-hint { font-size: 13px; color: #8a8a96; line-height: 1.8; margin: 0 0 10px; }
-.rework-btn {
-  position: absolute; right: 10px; top: 10px; z-index: 4; cursor: pointer;
-  border: 1px solid rgba(240, 198, 116, .45); background: rgba(16, 14, 8, .78); color: #f0c674;
-  font-size: 12px; padding: 4px 12px; border-radius: 999px; backdrop-filter: blur(3px);
-}
-.rework-btn:hover { background: rgba(42, 36, 22, .92); }
 
 /* 制作中（pstage = 进度胶囊；不能叫 .stage，会和外层舞台 section 撞类名导致 align/padding 污染） */
 .producing { align-items: center; justify-content: center; gap: 18px; }

@@ -76,56 +76,76 @@ const (
 // GenerateJSON 一次 JSON 作业：system+user → 模型 → 剥掉 markdown 围栏 → json.Unmarshal 到 out。
 // 返回本次 token 用量（成本记账）；重试时的用量取最后一次成功调用。
 func (p *Provider) GenerateJSON(ctx context.Context, system, user string, out any) (openai.Usage, error) {
-	return p.generate(ctx, system,
-		[]openai.ChatMessagePart{{Type: openai.ChatMessagePartTypeText, Text: user}}, out, 0.7, EffortDefault)
+	return p.generate(ctx, system, user, nil, "", out, 0.7, EffortDefault)
 }
 
 // GenerateJSONNoThink 同 GenerateJSON，但彻底关闭思考（thinking.type=disabled）。
 // 结构化作业（样张/画面 HTML）思考会烧上万 reasoning token、拖到分钟级，纯亏时长。
 func (p *Provider) GenerateJSONNoThink(ctx context.Context, system, user string, out any) (openai.Usage, error) {
-	return p.generate(ctx, system,
-		[]openai.ChatMessagePart{{Type: openai.ChatMessagePartTypeText, Text: user}}, out, 0.7, EffortDisabled)
+	return p.generate(ctx, system, user, nil, "", out, 0.7, EffortDisabled)
 }
 
 // GenerateJSONEffort 同 GenerateJSON，思考档位由调用方定。
 func (p *Provider) GenerateJSONEffort(ctx context.Context, system, user string, out any, effort Effort) (openai.Usage, error) {
-	return p.generate(ctx, system,
-		[]openai.ChatMessagePart{{Type: openai.ChatMessagePartTypeText, Text: user}}, out, 0.7, effort)
+	return p.generate(ctx, system, user, nil, "", out, 0.7, effort)
 }
 
-// GenerateJSONVision 多模态 JSON 作业：user 文本 + 若干图片（data URL）→ 模型，解析同 GenerateJSON。
-// temperature 由调用方定：评审类低温（稳定判断），画面生成类高温（发散）。
-func (p *Provider) GenerateJSONVision(ctx context.Context, system, user string, imageURLs []string, temperature float32, out any) (openai.Usage, error) {
-	return p.generate(ctx, system, visionParts(user, imageURLs), out, temperature, EffortDefault)
-}
-
-// GenerateJSONVisionNoThink 同 GenerateJSONVision，但关闭思考。画面 spec 这类大 HTML 作业
-// 开思考会烧 1 万+ reasoning token、单段拖到 5–13 分钟；关掉后同样的活分钟级完成。
+// GenerateJSONVisionNoThink 多模态 JSON 作业：user 文本 + 若干图片（data URL）→ 模型，关闭思考。
+// 画面 spec 这类大 HTML 作业开思考会烧 1 万+ reasoning token、单段拖到 5–13 分钟；
+// 关掉后同样的活分钟级完成。评审类低温（稳定判断），画面生成类高温（发散）。
 func (p *Provider) GenerateJSONVisionNoThink(ctx context.Context, system, user string, imageURLs []string, temperature float32, out any) (openai.Usage, error) {
-	return p.generate(ctx, system, visionParts(user, imageURLs), out, temperature, EffortDisabled)
+	return p.generate(ctx, system, user, imageURLs, "", out, temperature, EffortDisabled)
 }
 
 // GenerateJSONVisionEffort 同 GenerateJSONVision，思考档位由调用方定。
 func (p *Provider) GenerateJSONVisionEffort(ctx context.Context, system, user string, imageURLs []string, temperature float32, out any, effort Effort) (openai.Usage, error) {
-	return p.generate(ctx, system, visionParts(user, imageURLs), out, temperature, effort)
+	return p.generate(ctx, system, user, imageURLs, "", out, temperature, effort)
 }
 
-func visionParts(user string, imageURLs []string) []openai.ChatMessagePart {
-	parts := make([]openai.ChatMessagePart, 0, len(imageURLs)+1)
-	for _, u := range imageURLs {
-		parts = append(parts, openai.ChatMessagePart{
-			Type:     openai.ChatMessagePartTypeImageURL,
-			ImageURL: &openai.ChatMessageImageURL{URL: u},
-		})
+// GenerateJSONVisionVideoNoThink 视频直读版多模态 JSON 作业：若干图片（data URL）+
+// 一段视频（公网 URL，模型侧自行拉取播放）→ 模型。视频块承载静止帧给不了的时间维度
+// 信息（动效/运镜/转场/节奏）；videoURL 为空等价 GenerateJSONVisionNoThink。
+func (p *Provider) GenerateJSONVisionVideoNoThink(ctx context.Context, system, user string, imageURLs []string, videoURL string, temperature float32, out any) (openai.Usage, error) {
+	return p.generate(ctx, system, user, imageURLs, videoURL, out, temperature, EffortDisabled)
+}
+
+// glmMedia 多模态块的 URL 载荷。
+type glmMedia struct {
+	URL string `json:"url"`
+}
+
+// glmMediaPart 多模态内容块（text | image_url | video_url）。go-openai 的
+// ChatMessagePart 只认 text/image_url，视频块必须本地组包（实测编码端点接受
+// video_url 与 image_url 混排，视频块放首位——与官方 video_url 在 content 首位的约定一致）。
+type glmMediaPart struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *glmMedia `json:"image_url,omitempty"`
+	VideoURL *glmMedia `json:"video_url,omitempty"`
+}
+
+// glmMessage 聊天消息（Content 是字符串或 []glmMediaPart，组包时决定）。
+type glmMessage struct {
+	Role    string `json:"role"`
+	Content any    `json:"content"`
+}
+
+func mediaParts(user string, imageURLs []string, videoURL string) []glmMediaPart {
+	parts := make([]glmMediaPart, 0, len(imageURLs)+2)
+	if videoURL != "" {
+		parts = append(parts, glmMediaPart{Type: "video_url", VideoURL: &glmMedia{URL: videoURL}})
 	}
-	parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: user})
+	for _, u := range imageURLs {
+		parts = append(parts, glmMediaPart{Type: "image_url", ImageURL: &glmMedia{URL: u}})
+	}
+	parts = append(parts, glmMediaPart{Type: "text", Text: user})
 	return parts
 }
 
 // httpClient 包级复用（连接池）；10 分钟超时兜底端点偶发挂住，防 Agent 循环/管线永久卡死。
 var httpClient = &http.Client{Timeout: 10 * time.Minute}
 
-func (p *Provider) generate(ctx context.Context, system string, userParts []openai.ChatMessagePart, out any, temperature float32, effort Effort) (openai.Usage, error) {
+func (p *Provider) generate(ctx context.Context, system, user string, imageURLs []string, videoURL string, out any, temperature float32, effort Effort) (openai.Usage, error) {
 	var lastErr error
 	var usage openai.Usage
 	for attempt := 0; attempt < 3; attempt++ {
@@ -137,7 +157,7 @@ func (p *Provider) generate(ctx context.Context, system string, userParts []open
 			case <-time.After(time.Duration(attempt) * 2 * time.Second):
 			}
 		}
-		resp, err := p.chatOnce(ctx, system, userParts, temperature, effort)
+		resp, err := p.chatOnce(ctx, system, mediaParts(user, imageURLs, videoURL), temperature, effort)
 		if err != nil {
 			if ctx.Err() != nil { // 取消/超时不是可重试错误
 				return usage, ctx.Err()
@@ -166,24 +186,31 @@ type glmThinking struct {
 	Type string `json:"type"` // enabled | disabled
 }
 
-// glmChatRequest ChatCompletionRequest + 智谱扩展字段（内嵌扁平序列化）。
+// glmChatRequest 统一组包壳。消息数组由组包方预序列化成 RawMessage——字符串内容
+// （Chat/工具对话）与多模态块（含 video_url）两条路共用一个壳，postChat 零分叉。
 type glmChatRequest struct {
-	openai.ChatCompletionRequest
-	Thinking        *glmThinking `json:"thinking,omitempty"`         // 思考开关（disabled 专用）
-	ReasoningEffort string       `json:"reasoning_effort,omitempty"` // 思考档位：low/high/max，与 Thinking 互斥
+	Model           string          `json:"model"`
+	Messages        json.RawMessage `json:"messages"`
+	ResponseFormat  *openai.ChatCompletionResponseFormat `json:"response_format,omitempty"`
+	Temperature     float32         `json:"temperature,omitempty"`
+	Tools           []openai.Tool   `json:"tools,omitempty"`
+	Thinking        *glmThinking    `json:"thinking,omitempty"`
+	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
 }
 
-func (p *Provider) chatOnce(ctx context.Context, system string, userParts []openai.ChatMessagePart, temperature float32, effort Effort) (openai.ChatCompletionResponse, error) {
+func (p *Provider) chatOnce(ctx context.Context, system string, userParts []glmMediaPart, temperature float32, effort Effort) (openai.ChatCompletionResponse, error) {
+	msgs, err := json.Marshal([]glmMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: system},
+		{Role: openai.ChatMessageRoleUser, Content: userParts},
+	})
+	if err != nil {
+		return openai.ChatCompletionResponse{}, err
+	}
 	req := glmChatRequest{
-		ChatCompletionRequest: openai.ChatCompletionRequest{
-			Model: p.Model,
-			Messages: []openai.ChatCompletionMessage{
-				{Role: openai.ChatMessageRoleSystem, Content: system},
-				{Role: openai.ChatMessageRoleUser, MultiContent: userParts},
-			},
-			ResponseFormat: &openai.ChatCompletionResponseFormat{Type: openai.ChatCompletionResponseFormatTypeJSONObject},
-			Temperature:    temperature,
-		},
+		Model:          p.Model,
+		Messages:       msgs,
+		ResponseFormat: &openai.ChatCompletionResponseFormat{Type: openai.ChatCompletionResponseFormatTypeJSONObject},
+		Temperature:    temperature,
 	}
 	applyEffort(&req, effort)
 	return p.postChat(ctx, req)

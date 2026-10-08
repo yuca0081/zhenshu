@@ -98,7 +98,7 @@ func (r *Runner) frameQA(ctx context.Context, p *pipeline.Project, instruction, 
 			// 修复轮的新画面没过 check：整体回滚本轮改动，用旧画面交付——
 			// QA 修复是加分项不是人质（frameqa.failed 标记仍在，用户可自行决定重做）
 			r.emit(id, "progress", "frameqa", "修复轮画面未过 check，回滚到修复前画面")
-			r.Manifest(p, "frameqa.rollback", firstLine(err.Error(), 120))
+			r.Manifest(p, "frameqa.rollback", pipeline.FirstLine(err.Error(), 120))
 			for segID := range failed {
 				if orig, ok := prev[segID]; ok {
 					if werr := os.WriteFile(p.LLMOutput("comp-"+segID), orig, 0o644); werr != nil {
@@ -255,7 +255,7 @@ func extractFrames(ctx context.Context, p *pipeline.Project, segID string) (*seg
 		var buf bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &buf, &buf
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("%w\n%s", err, tail(buf.String(), 5))
+			return fmt.Errorf("%w\n%s", err, pipeline.TailLines(buf.String(), 5))
 		}
 		return nil
 	}

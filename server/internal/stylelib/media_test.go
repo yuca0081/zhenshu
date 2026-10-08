@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestSnapshotMediaLinksAndSkipsExisting(t *testing.T) {
@@ -51,51 +50,6 @@ func TestSnapshotMediaMissingSource(t *testing.T) {
 	l := New(t.TempDir())
 	if err := l.SnapshotMedia("vid-x", filepath.Join(t.TempDir(), "nope")); err == nil {
 		t.Fatal("源目录缺失应报错")
-	}
-}
-
-func TestBackfillMediaSkipsMissingAndFillsExisting(t *testing.T) {
-	l := New(t.TempDir())
-	references := t.TempDir()
-	// 造两条已入库的 video 来源条目：一条有原片，一条没有
-	dir := l.dir
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now()
-	seed := []Style{
-		{ID: "vid-have", Name: "有原片", Direction: "有原片", OriginProject: "video:ref-have", Published: true, CreatedAt: now},
-		{ID: "vid-gone", Name: "原片已删", Direction: "原片已删", OriginProject: "video:ref-gone", Published: true, CreatedAt: now},
-		{ID: "sp-draft", Name: "草稿不回填", Direction: "草稿不回填", OriginProject: "video:ref-draft", Published: false, CreatedAt: now},
-	}
-	b, _ := json.Marshal(seed)
-	if err := os.WriteFile(filepath.Join(dir, "styles.json"), b, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	refDir := filepath.Join(references, "ref-have")
-	if err := os.MkdirAll(refDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(refDir, "video.mp4"), []byte("v"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(refDir, "frame-1.0.png"), []byte("p"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	l.BackfillMedia(references)
-
-	if _, err := os.Stat(filepath.Join(l.MediaDir("vid-have"), "video.mp4")); err != nil {
-		t.Fatal("有原片的条目未回填:", err)
-	}
-	if _, err := os.Stat(filepath.Join(l.MediaDir("vid-have"), "frame-1.0.png")); err != nil {
-		t.Fatal("抽帧未回填")
-	}
-	if _, err := os.Stat(l.MediaDir("vid-gone")); err == nil {
-		t.Fatal("原片已删的条目不应建媒体目录")
-	}
-	if _, err := os.Stat(l.MediaDir("sp-draft")); err == nil {
-		t.Fatal("草稿条目不应回填")
 	}
 }
 

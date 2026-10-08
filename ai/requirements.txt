@@ -15,4 +15,3 @@ faster-whisper>=1.0
 # extract_video_features.py（参考视频解析，styleref 生产路径）
 numpy>=1.24
 pillow>=10.0
-scikit-learn>=1.3

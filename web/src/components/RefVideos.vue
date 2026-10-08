@@ -4,9 +4,8 @@ import { useMessage, NButton, NTag } from 'naive-ui'
 import SampleFrame from './SampleFrame.vue'
 import TemplateDetail from './TemplateDetail.vue'
 import { api } from '../api'
-import type { RefVideo, Style, TemplateDetailData } from '../types'
+import type { RefVideo, TemplateDetailData } from '../types'
 
-const props = defineProps<{ styles: Style[] }>()
 const emit = defineEmits<{ ingested: [] }>()
 
 const refs = ref<RefVideo[]>([])

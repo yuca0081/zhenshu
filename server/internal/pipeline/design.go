@@ -89,17 +89,9 @@ func storyboardDigest(sb *contract.Storyboard) string {
 	var b strings.Builder
 	for _, seg := range sb.Segments {
 		fmt.Fprintf(&b, "- %s（%s，约%.0f 秒）旁白：%s\n  画面提示：%s\n",
-			seg.ID, seg.Key, seg.DurationHint, truncRunes(seg.Narration, 90), truncRunes(seg.VisualBrief, 60))
+			seg.ID, seg.Key, seg.DurationHint, TruncRunes(seg.Narration, 90), TruncRunes(seg.VisualBrief, 60))
 	}
 	return b.String()
-}
-
-func truncRunes(s string, n int) string {
-	r := []rune(strings.TrimSpace(s))
-	if len(r) <= n {
-		return string(r)
-	}
-	return string(r[:n]) + "…"
 }
 
 func designJSONShape() string {
@@ -267,14 +259,14 @@ func LockDesign(p *Project, ss *contract.StyleSamples) error {
 	if len(skins) == 0 {
 		return fmt.Errorf("设计系统缺皮肤（skins/skin）")
 	}
-	if err := writeFile("", p.Artifact("style/design.md"), DesignDoc(ss, 0)); err != nil {
+	if err := writeFile(p.Artifact("style/design.md"), DesignDoc(ss, 0)); err != nil {
 		return fmt.Errorf("design.md 落盘失败: %w", err)
 	}
 	sbj, err := json.MarshalIndent(skins[0], "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := writeFile("", p.Artifact("style/skin.json"), string(sbj)); err != nil {
+	if err := writeFile(p.Artifact("style/skin.json"), string(sbj)); err != nil {
 		return fmt.Errorf("skin.json 落盘失败: %w", err)
 	}
 	p.Manifest("design.version", designVersion(ss))

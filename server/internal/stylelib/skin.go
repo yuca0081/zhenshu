@@ -17,7 +17,7 @@ func SkinFromTokens(name string, tokens map[string]any) *contract.Skin {
 	}
 	bg := hexOf(tokens, "bg") // bg 可能是 hex 串或 {from,to} 渐变对象
 	if bg == "" {
-		bg = "#2D2C36" // 深底兜底：科普片深色画面占多数，字色再往亮里挑
+		bg = "#2D2C36" // 深底兜底：深底亮字的画面更常见，字色再往亮里挑
 	}
 	txt := pickTxt(tokens, bg)
 	accent := pickAccent(tokens, txt)

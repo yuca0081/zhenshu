@@ -23,7 +23,6 @@ import sys
 
 import numpy as np
 from PIL import Image, ImageDraw
-from sklearn.cluster import KMeans
 
 N_CLUSTERS = 8
 SHEET_COLS, SHEET_ROWS = 6, 5
@@ -31,11 +30,11 @@ SHEET_COLS, SHEET_ROWS = 6, 5
 
 def _ff(name: str) -> str:
     # which 解析：Windows 上自动命中 ffprobe.exe/ffmpeg.exe，PATH 优先；
-    # FFBIN 环境变量可指向便携版 bin 目录（不再硬编码他人机器的绝对路径）
+    # FFMPEG_BIN 环境变量可指向便携版 bin 目录（与 Go 侧 fontface/pipeline 同名同义）
     p = shutil.which(name)
     if p:
         return p
-    bindir = os.environ.get('FFBIN', '')
+    bindir = os.environ.get('FFMPEG_BIN', '')
     if bindir:
         cand = pathlib.Path(bindir) / name
         if cand.exists():
@@ -93,17 +92,50 @@ def grab_frame(video: pathlib.Path, t: float, out_png: pathlib.Path):
                    check=True, timeout=120)
 
 
+def _nearest(data, cent):
+    """每个像素到各质心的最近簇号（距离平方，无须开根）。"""
+    d = ((data[:, None, :] - cent[None, :, :]) ** 2).sum(-1)
+    return d.argmin(1)
+
+
+def _kmeans(data, k, n_init=4, iters=30, seed=42):
+    """轻量确定性 k-means：固定种子、n_init 轮取 SSE 最优（对齐原 sklearn 版语义）。
+    只为这一处聚类拖 sklearn+scipy 进镜像不值当，numpy 十几行够用。"""
+    rng = np.random.default_rng(seed)
+    best = None  # (sse, cent, lab)
+    for _ in range(n_init):
+        cent = data[rng.choice(len(data), size=k, replace=False)].copy()
+        for _ in range(iters):
+            lab = _nearest(data, cent)
+            new = cent.copy()
+            for j in range(k):
+                m = lab == j
+                if m.any():
+                    new[j] = data[m].mean(0)
+                else:  # 空簇：吸收离自己质心最远的点
+                    new[j] = data[_nearest(cent, data).argmax()]
+            done = np.allclose(new, cent, atol=0.01)
+            cent = new
+            if done:
+                break
+        lab = _nearest(data, cent)
+        sse = float(((data - cent[lab]) ** 2).sum())
+        if best is None or sse < best[0]:
+            best = (sse, cent, lab)
+    return best[1], best[2]
+
+
 def palette(frames: list[pathlib.Path]) -> list[dict]:
     """k-means 色板：帧降采样像素聚类，按覆盖率排序。"""
     px = []
     for f in frames:
         im = Image.open(f).convert('RGB').resize((80, 45))
         px.append(np.asarray(im).reshape(-1, 3))
-    data = np.concatenate(px).astype(float)
-    km = KMeans(n_clusters=N_CLUSTERS, n_init=4, random_state=42).fit(data)
+    data = np.concatenate(px).astype(np.float32)
+    cent, lab = _kmeans(data, N_CLUSTERS)
     out = []
-    for i, c in enumerate(km.cluster_centers_):
-        share = float((km.labels_ == i).mean())
+    for j, c in enumerate(cent):
+        share = float((lab == j).mean())
         r, g, b = (int(round(v)) for v in c)
         lum = round((0.2126 * r + 0.7152 * g + 0.0722 * b) / 255, 3)
         out.append({'hex': f'#{r:02X}{g:02X}{b:02X}', 'share': round(share, 3), 'lum': lum})

@@ -42,12 +42,17 @@ def load_style_tokens(style_id):
     return {}
 
 
-# OS 自带中文字体（无字体文件可打包）：hyperframes lint 要求引用即声明——
+# OS 自带字体（无字体文件可打包）：hyperframes lint 要求引用即声明——
 # src: local(...) 的 @font-face 声明本身即满足检查（checker Fix 指引原文）。
+# 与 server/internal/pipeline/fontface.go 的 osFontWhitelist 是同一份集合的双端
+# 实现（中文字体含中文别名，西文照收——本地缺字体时声明兜底 lint，不影响回退栈），
+# constants_drift_test.go 强制两边一致，改这里必须同步那边。
 _OS_CJK_FONTS = {
-    'simsun', '宋体', 'nsimsun', '新宋体', 'simhei', '黑体', 'kaiti', '楷体',
-    'stkaiti', 'stsong', 'stzhongsong', 'fangsong', '仿宋', 'microsoft yahei', '微软雅黑',
-    'noto serif sc', 'noto sans sc',
+    'microsoft yahei', '微软雅黑', 'simhei', '黑体', 'simsun', '宋体',
+    'nsimsun', '新宋体', 'kaiti', '楷体', 'stkaiti', 'stsong', 'stzhongsong',
+    'fangsong', '仿宋', 'noto serif sc', 'noto sans sc',
+    'consolas', 'segoe ui', 'georgia', 'cambria', 'arial narrow', 'arial',
+    'courier new', 'times new roman', 'impact',
 }
 
 

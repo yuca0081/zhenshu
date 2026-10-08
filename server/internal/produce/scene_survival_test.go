@@ -45,7 +45,7 @@ func TestSceneSurvivalBench(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
 
-	instr := "本片是数学科普风格测试片（深空底+霓虹发光审美）。画面主体优先用程序化画布" +
+	instr := "本片是风格测试片（深空底+霓虹发光审美）。画面主体优先用程序化画布" +
 		"（<canvas> + window.__draw_ 参数化绘制，每段 1 个，全画幅），再叠 1 个大字标题。纯代码画面，不引图片。"
 	t.Log("① sceneGen（LLM 直写场景文件，10 段并发 3）…")
 	if err := r.sceneGen(ctx, p, instr, "", ""); err != nil {

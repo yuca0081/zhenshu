@@ -8,8 +8,10 @@ package styleref
 // 阶段2 提炼：single = 全片一个风格包（老行为）；multi = 逐段抽帧（段内关键帧
 //   + 段内取色）+ 逐段风格包，段名优先采用片中标题。
 //
-// 护栏：LLM 只看图和结构化事实；文件与进程全部由 Go 侧执行；某段解析失败
+// 护栏：LLM 只看图/视频和结构化事实；文件与进程全部由 Go 侧执行；某段解析失败
 // 不拖垮整次解析（该段 Style 置空，其余段照常产出）。
+// 视频直读（2026-10-08）：PUBLIC_BASE_URL 配置后，阶段2 每个风格单元附 480p 无声剪辑
+// 的签名 URL 供模型直看（动效/运镜/节奏实测）；未配置或剪辑失败自动退纯帧。见 video.go。
 
 import (
 	"context"
@@ -101,14 +103,19 @@ func (s *Store) runAgent(ctx context.Context, ref *Ref) {
 		return
 	}
 
-	// 4. 阶段2：提炼风格包
+	// 4. 阶段2：提炼风格包（附原视频剪辑直读——动效/运镜以视频实测为准；剪辑/签名
+	//    任一步不成自动退纯帧，视频是增强项不挡解析）
 	if st.Kind != "multi" || len(st.Segments) < 2 {
 		notes, err := s.analyzeCompositions(ctx, prov, feats.Frames)
 		if err != nil {
 			fail(err)
 			return
 		}
-		style, err := s.synthesize(ctx, prov, ref.Name, "", feats, notes)
+		clipURL := s.videoURLFor(ctx, ref.ID, video, 0, 0, "full")
+		style, err := s.synthesize(ctx, prov, ref.Name, "", feats, notes, clipURL)
+		if err != nil && clipURL != "" { // 视频拉取/解析失败（模型侧取媒体失败等）：降级纯帧再来一次
+			style, err = s.synthesize(ctx, prov, ref.Name, "", feats, notes, "")
+		}
 		if err != nil {
 			fail(err)
 			return
@@ -302,7 +309,11 @@ func (s *Store) analyzeSegments(ctx context.Context, prov *llm.Provider, video s
 			out = append(out, draft)
 			continue
 		}
-		style, err := s.synthesize(ctx, prov, ref.Name, seg.Name, feats, notes)
+		clipURL := s.videoURLFor(ctx, ref.ID, video, seg.Start, seg.End, fmt.Sprintf("seg%02d", idx))
+		style, err := s.synthesize(ctx, prov, ref.Name, seg.Name, feats, notes, clipURL)
+		if err != nil && clipURL != "" { // 视频拉取/解析失败：降级纯帧再来一次
+			style, err = s.synthesize(ctx, prov, ref.Name, seg.Name, feats, notes, "")
+		}
 		if err != nil {
 			draft.Error = err.Error()
 			out = append(out, draft)

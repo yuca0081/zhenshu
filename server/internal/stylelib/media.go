@@ -121,26 +121,3 @@ func copyFile(src, dst string) error {
 	}
 	return out.Close()
 }
-
-// BackfillMedia 启动回填：video: 来源的老条目若媒体目录为空且参考视频目录还在，
-// 补一次快照（入库是一次性的，老条目靠这里补齐）。失败逐条跳过不挡启动。
-func (l *Library) BackfillMedia(referencesDir string) {
-	styles, err := l.List()
-	if err != nil {
-		return
-	}
-	for _, st := range styles {
-		if !st.Published || !strings.HasPrefix(st.OriginProject, "video:") {
-			continue
-		}
-		dir := l.MediaDir(st.ID)
-		if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
-			continue // 已有快照
-		}
-		refDir := filepath.Join(referencesDir, strings.TrimPrefix(st.OriginProject, "video:"))
-		if _, err := os.Stat(filepath.Join(refDir, "video.mp4")); err != nil {
-			continue // 原片不在（已删/异机），无从补
-		}
-		_ = l.SnapshotMedia(st.ID, refDir)
-	}
-}

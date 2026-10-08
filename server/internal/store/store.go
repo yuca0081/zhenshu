@@ -99,7 +99,6 @@ type Store interface {
 	CreateProject(diskID, name string) error
 	EnsureProject(diskID, name string) error // 已存在则跳过
 	UpdateStatus(diskID, status string) error
-	ListProjects() ([]ProjectRow, error)
 	SaveMsg(m *Msg) error
 	ListMsgs(projectID string, afterID int64, limit int) ([]Msg, error)
 	// render_jobs 记账：起跑插 running 行，终态回写该项目最近一行 running
@@ -169,15 +168,6 @@ func (s *pgStore) EnsureProject(diskID, name string) error {
 
 func (s *pgStore) UpdateStatus(diskID, status string) error {
 	return s.db.Exec(`UPDATE projects SET status = ? WHERE disk_id = ?`, status, diskID).Error
-}
-
-func (s *pgStore) ListProjects() ([]ProjectRow, error) {
-	var rows []ProjectRow
-	err := s.db.Table("projects").
-		Select("disk_id, name, status, created_at").
-		Where("disk_id IS NOT NULL").
-		Order("created_at DESC").Scan(&rows).Error
-	return rows, err
 }
 
 func (s *pgStore) StartRenderJob(projectID, kind string) error {
@@ -280,14 +270,6 @@ func (s *memStore) UpdateStatus(diskID, status string) error {
 		}
 	}
 	return nil
-}
-
-func (s *memStore) ListProjects() ([]ProjectRow, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]ProjectRow, len(s.projects))
-	copy(out, s.projects)
-	return out, nil
 }
 
 func (s *memStore) SaveMsg(m *Msg) error {

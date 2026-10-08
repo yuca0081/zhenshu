@@ -208,8 +208,8 @@ data/
    └─ outputs/                  # renders、manifest.jsonl、credits（终态资产）
 ```
 
-- **引擎资产不入库**：`ai/assets/icons`（2113 个 lucide SVG，icon 元素渲染时本地直读）、
-  `gsap.min.js` 留原地——它们是代码侧运行时，不是用户可检索的素材。
+- **引擎资产不入库**：`gsap.min.js` 留原地——它是代码侧运行时，不是用户可检索的素材。
+  （`ai/assets/icons` 的 2113 个 lucide SVG 曾计划做 icon 元素本地直读，场景从未引用，2026-10-08 已删。）
 - **git 边界**：registry/gallery/BGM/默认样张追踪（种子资产）；`media/image/` 增长物
   与 `refs/` 不追踪（体积与版权，将来由 PG/MinIO 接管持久性）；catalog.json 追踪。
 - `data/samples`、`data/bakeoff`、`demo/`、`videos/`：实验区，不迁不删，另行归档。

@@ -165,7 +165,7 @@ func pctx(p *Project) context.Context {
 	return context.Background()
 }
 
-func writeFile(dir string, path, content string) error {
+func writeFile(path, content string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -263,7 +263,7 @@ func stageManuscript(p *Project) error {
 	}
 	m := contract.NewManuscript(content, "paste")
 	b, _ := json.MarshalIndent(m, "", "  ")
-	if err := writeFile("", out, string(b)); err != nil {
+	if err := writeFile(out, string(b)); err != nil {
 		return err
 	}
 	p.Manifest("manuscript.saved", fmt.Sprintf("%d 字", m.WordCount))
@@ -285,7 +285,7 @@ func stageStoryboard(p *Project) error {
 		if err := contract.ValidateStoryboard(sb); err != nil {
 			return fmt.Errorf("分镜未过自检: %w", err)
 		}
-		if err := writeFile("", final, mustJSON(sb)); err != nil {
+		if err := writeFile(final, mustJSON(sb)); err != nil {
 			return err
 		}
 		p.Manifest("storyboard.saved", fmt.Sprintf("%d 段 / %.0fs", len(sb.Segments), sb.TotalHint()))
@@ -318,7 +318,7 @@ func stageStoryboard(p *Project) error {
 			} else {
 				p.Manifest("storyboard.api.rejected", aerr.Error())
 				// 校验拒绝：落一份请求文件供人工修正，不继续重试（bake-off 要记录失败）
-				_ = writeFile("", p.LLMRequest("storyboard"),
+				_ = writeFile(p.LLMRequest("storyboard"),
 					storyboardUserPrompt(p, string(article))+fmt.Sprintf("\n\n<!-- 上次模型输出被拒绝: %s\n    产物写入 %s 后重跑 -->\n", aerr, out))
 				return fmt.Errorf("API 分镜被自检拒绝: %w", aerr)
 			}
@@ -329,7 +329,7 @@ func stageStoryboard(p *Project) error {
 	// 降级：会话模式（写请求文件，等待产物）
 	req := p.LLMRequest("storyboard")
 	article, _ := os.ReadFile(p.Artifact("input/article.txt"))
-	if err := writeFile("", req, storyboardRequest(p, string(article), out)); err != nil {
+	if err := writeFile(req, storyboardRequest(p, string(article), out)); err != nil {
 		return err
 	}
 	return &ErrAwaitLLM{RequestPath: req, OutputPath: out}
@@ -400,7 +400,7 @@ func stageStyleSamples(p *Project) error {
 		if err := contract.ValidateStyleSamples(&ss); err != nil {
 			return err // 包括 confirmed=false：等待用户确认
 		}
-		if err := writeFile("", final, mustJSON(ss)); err != nil {
+		if err := writeFile(final, mustJSON(ss)); err != nil {
 			return err
 		}
 		p.Manifest("style.confirmed", ss.Direction)
@@ -428,7 +428,7 @@ func stageStyleSamples(p *Project) error {
 			verr := contract.ValidateStyleSamplesDraft(&ss)
 			if verr == nil {
 				ss.Confirmed = false
-				if err := writeFile("", final, mustJSON(ss)); err != nil {
+				if err := writeFile(final, mustJSON(ss)); err != nil {
 					return err
 				}
 				p.Manifest("llm.usage", fmt.Sprintf("style_samples prompt=%d completion=%d tokens",
@@ -444,7 +444,7 @@ func stageStyleSamples(p *Project) error {
 	}
 
 	req := p.LLMRequest("style_samples")
-	if err := writeFile("", req, designRequest(p, sb, out)); err != nil {
+	if err := writeFile(req, designRequest(p, sb, out)); err != nil {
 		return err
 	}
 	return &ErrAwaitLLM{RequestPath: req, OutputPath: out, Note: "样张 JSON 中 confirmed 置 true 代表用户已确认（硬门）"}
@@ -516,16 +516,16 @@ func stageCompositions(p *Project) error {
 			if payload.HTML == "" || len(payload.Elements) == 0 {
 				return fmt.Errorf("%s 缺少 html 或 elements（元素命名规范是硬约束）", out)
 			}
-			if err := writeFile("", comp, payload.HTML); err != nil {
+			if err := writeFile(comp, payload.HTML); err != nil {
 				return err
 			}
 			reg, _ := json.MarshalIndent(contract.ElementRegistry{Elements: payload.Elements}, "", "  ")
-			_ = writeFile("", p.Artifact("compositions/registry/"+seg.ID+".json"), string(reg))
+			_ = writeFile(p.Artifact("compositions/registry/"+seg.ID+".json"), string(reg))
 			p.Manifest("composition.saved", seg.ID)
 			continue
 		}
 		req := p.LLMRequest(name)
-		if err := writeFile("", req, compRequest(p, seg, direction, out)); err != nil {
+		if err := writeFile(req, compRequest(p, seg, direction, out)); err != nil {
 			return err
 		}
 		awaiting = seg.ID
@@ -550,7 +550,7 @@ func stageCheck(p *Project) error {
 		// 对话/清单侧各自再做 tail/挑行
 		return fmt.Errorf("check 未过（诊断如下，修复后重跑）:\n%s", out)
 	}
-	_ = writeFile("", p.Artifact(".hyperframes-ok"), "check passed "+time.Now().Format(time.RFC3339)+"\n")
+	_ = writeFile(p.Artifact(".hyperframes-ok"), "check passed "+time.Now().Format(time.RFC3339)+"\n")
 	p.Manifest("check.passed", "")
 	return nil
 }
@@ -658,10 +658,6 @@ func concatSegs(p *Project, sb *contract.Storyboard, segsDir string) error {
 		_ = os.Remove(p.Artifact("renders/timeline.json"))
 		p.Manifest("render.xfade_fallback", "段过短，回退 concat")
 	}
-	ff, err := ffmpegPath()
-	if err != nil {
-		return err
-	}
 	list := filepath.Join(segsDir, "list.txt")
 	var b strings.Builder
 	for _, seg := range sb.Segments {
@@ -670,19 +666,13 @@ func concatSegs(p *Project, sb *contract.Storyboard, segsDir string) error {
 	if err := os.WriteFile(list, []byte(b.String()), 0o644); err != nil {
 		return err
 	}
-	ctx := pctx(p)
-	cmd := ctxCommand(ctx, ff, "-y", "-v", "error",
-		"-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "../main_voice.mp4")
-	cmd.Dir = segsDir
-	cmd.Env = cmdEnv()
-	var buf bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &buf, &buf
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("段片拼接失败: %w\n%s", err, tailLines(buf.String(), 20))
+	if _, err := runFFmpeg(p, segsDir, "段片拼接", "-y", "-v", "error",
+		"-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "../main_voice.mp4"); err != nil {
+		return err
 	}
 	// concat 成片也写 timeline.json：段片时长按帧量化（30fps 每段 ±1 帧），
 	// 裸「配音+0.35」累计与成片实际边界逐段漂移（长片尾段累计可达 0.2s+），
-	// 前端检视按 timeline 映射段内时刻——必须与成片同源（实测段片时长）。
+	// 前端时间轴按 timeline 映射段内时刻——必须与成片同源（实测段片时长）。
 	if err := writeActualTimeline(p, sb, segsDir); err != nil {
 		return err
 	}
@@ -690,7 +680,7 @@ func concatSegs(p *Project, sb *contract.Storyboard, segsDir string) error {
 }
 
 // writeActualTimeline 按段片实测时长（ffprobe）累计写 renders/timeline.json。
-// 任一段片探不出时长 → 报错（边界错位会直接污染检视映射，不能静默跳过）。
+// 任一段片探不出时长 → 报错（边界错位会直接污染前端时间轴映射，不能静默跳过）。
 func writeActualTimeline(p *Project, sb *contract.Storyboard, segsDir string) error {
 	tl := make([]timelineRow, len(sb.Segments))
 	at := 0.0
@@ -737,25 +727,6 @@ func transitionFor(p *Project) string {
 		}
 	}
 	return "fade"
-}
-
-// TransitionFor transitionFor 的导出版（检视壳按模式复刻黑场转场层）。
-func TransitionFor(p *Project) string { return transitionFor(p) }
-
-// PostFXExport postFX 的导出视图（JSON 直接进 projectView，检视壳复刻后期妆）。
-type PostFXExport struct {
-	Vignette float64 `json:"vignette"`
-	Grain    float64 `json:"grain"`
-	Chroma   float64 `json:"chroma"`
-}
-
-// PostFor postFor 的导出版（nil = 无后期）。
-func PostFor(p *Project) *PostFXExport {
-	fx := postFor(p)
-	if fx.off() {
-		return nil
-	}
-	return &PostFXExport{Vignette: fx.Vignette, Grain: fx.Grain, Chroma: fx.Chroma}
 }
 
 // styleStr registry tokens 字符串值（styleBool 的字符串版）。
@@ -882,11 +853,6 @@ func xfadeConcat(p *Project, sb *contract.Storyboard, segsDir string) error {
 	if err != nil {
 		return err
 	}
-	ff, err := ffmpegPath()
-	if err != nil {
-		return err
-	}
-	ctx := pctx(p)
 	args := []string{"-y", "-v", "error"}
 	for _, id := range ids {
 		args = append(args, "-i", id+".mp4")
@@ -896,13 +862,8 @@ func xfadeConcat(p *Project, sb *contract.Storyboard, segsDir string) error {
 		"-map", "[vout]", "-map", "[aout]",
 		"-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
 		"-c:a", "aac", "-b:a", "192k", "../main_voice.mp4")
-	cmd := ctxCommand(ctx, ff, args...)
-	cmd.Dir = segsDir
-	cmd.Env = cmdEnv()
-	var buf bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &buf, &buf
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("交叉叠化拼接失败: %w\n%s", err, tailLines(buf.String(), 20))
+	if _, err := runFFmpeg(p, segsDir, "交叉叠化拼接", args...); err != nil {
+		return err
 	}
 	tl := make([]timelineRow, len(ids))
 	for i, id := range ids {
@@ -1049,17 +1010,9 @@ func bgmFor(p *Project) (name, file string) {
 // （音乐听人声的话自动压低）→ amix（不归一化，人声原样；sfx 垫同入终混）。
 // 视频流直拷。母版永不改动，产物写临时文件后原子转正——重复执行无二次混音风险。
 func mixBGM(p *Project, voice, track, sfx, out string) error {
-	fade := ""
-	if dur := probeDuration(voice); dur > 3.5 {
-		fade = fmt.Sprintf(",afade=t=out:st=%.2f:d=1.5", dur-1.7)
-	}
-	mixIn, nIn := "", 2
-	if sfx != "" {
-		mixIn, nIn = "[2:a]", 3
-	}
-	fc := fmt.Sprintf("[1:a]volume=0.34%s[m];"+
-		"[m][0:a]sidechaincompress=threshold=0.035:ratio=7:attack=120:release=1100[duck];"+
-		"[0:a][duck]%samix=inputs=%d:duration=first:dropout_transition=0:normalize=0[aout]", fade, mixIn, nIn)
+	fade := bgmFade(voice)
+	mixIn, nIn := bgmMixIn(sfx)
+	fc := bgmFcTail(fade, mixIn, nIn)
 	args := []string{"-y", "-v", "error", "-i", voice,
 		"-stream_loop", "-1", "-i", track}
 	if sfx != "" {
@@ -1077,6 +1030,31 @@ func mixBGM(p *Project, voice, track, sfx, out string) error {
 	return runFFmpegRename(p, args, tmp, out, "混音")
 }
 
+// bgmFade BGM 结尾淡出：人声比 3.5s 长时末尾 1.5s 收（mixBGM 与终装同源）。
+func bgmFade(voice string) string {
+	if dur := probeDuration(voice); dur > 3.5 {
+		return fmt.Sprintf(",afade=t=out:st=%.2f:d=1.5", dur-1.7)
+	}
+	return ""
+}
+
+// bgmMixIn sfx 垫在 amix 里的第三路引用。输入序约定：0=人声、1=BGM、2=sfx——
+// 写成 [3:a] 会因流不存在被 ffmpeg 拒图，终装失败。
+func bgmMixIn(sfx string) (string, int) {
+	if sfx != "" {
+		return "[2:a]", 3
+	}
+	return "", 2
+}
+
+// bgmFcTail BGM 闪避混音的音频滤镜段（终装 stitchComboFc = 视频链 + 本段）。
+func bgmFcTail(fade, mixIn string, nIn int) string {
+	return fmt.Sprintf("[1:a]volume=0.34%s[m];"+
+		"[m][0:a]sidechaincompress=threshold=0.035:ratio=7:attack=120:release=1100[duck];"+
+		"[0:a][duck]%samix=inputs=%d:duration=first:dropout_transition=0:normalize=0[aout]",
+		fade, mixIn, nIn)
+}
+
 // mixSfx 无 BGM 无后期、仅 sfx 垫时的最小混音（视频直拷，音频重编一次）。
 func mixSfx(p *Project, voice, sfx, out string) error {
 	fc := "[1:a][0:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]"
@@ -1091,24 +1069,32 @@ func mixSfx(p *Project, voice, sfx, out string) error {
 	return runFFmpegRename(p, args, tmp, out, "sfx 混音")
 }
 
-// runFFmpegRename 跑 ffmpeg，成功后临时文件原子转正（混音/终装共用）。
-// 接 p.Ctx：取消/停机时连树击杀，不再留孤儿 ffmpeg 写产物（manifest 已记终态的窗口）。
-func runFFmpegRename(p *Project, args []string, tmp, out, what string) error {
+// runFFmpeg 跑 ffmpeg 并捕获输出（接 p.Ctx：取消/停机时连树击杀）。非零退出时
+// 返回带尾部日志的错误；what 用于错误消息前缀（拼接/交叉叠化/混音…）。
+func runFFmpeg(p *Project, dir, what string, args ...string) (string, error) {
 	ff, err := ffmpegPath()
 	if err != nil {
-		return err
+		return "", err
 	}
 	cmd := ctxCommand(pctx(p), ff, args...)
-	cmd.Dir = p.Dir
+	cmd.Dir = dir
 	cmd.Env = cmdEnv()
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	if err := cmd.Run(); err != nil {
-		_ = os.Remove(tmp)
 		if ctxErr := pctx(p).Err(); ctxErr != nil {
-			return fmt.Errorf("ffmpeg %s被取消: %w", what, ctxErr)
+			return buf.String(), fmt.Errorf("ffmpeg %s被取消: %w", what, ctxErr)
 		}
-		return fmt.Errorf("ffmpeg %s退出: %w\n%s", what, err, tailLines(buf.String(), 20))
+		return buf.String(), fmt.Errorf("ffmpeg %s退出: %w\n%s", what, err, tailLines(buf.String(), 20))
+	}
+	return buf.String(), nil
+}
+
+// runFFmpegRename 跑 ffmpeg，成功后临时文件原子转正（混音/终装共用）。
+func runFFmpegRename(p *Project, args []string, tmp, out, what string) error {
+	if _, err := runFFmpeg(p, p.Dir, what, args...); err != nil {
+		_ = os.Remove(tmp)
+		return err
 	}
 	_ = os.Remove(out)
 	return os.Rename(tmp, out)
@@ -1307,10 +1293,6 @@ func sfxStem(p *Project) string {
 	if dur <= 0 {
 		return ""
 	}
-	ff, err := ffmpegPath()
-	if err != nil {
-		return ""
-	}
 	out := p.Artifact("renders/sfx_stem.wav")
 	args := []string{"-y", "-v", "error",
 		"-f", "lavfi", "-t", fmt.Sprintf("%.2f", dur+0.5), "-i", "anullsrc=r=44100:cl=stereo"}
@@ -1326,13 +1308,8 @@ func sfxStem(p *Project) string {
 	}
 	args = append(args, "-filter_complex", sfxStemFilter(wAt, rAt),
 		"-map", "[s]", "-c:a", "pcm_s16le", tmp)
-	cmd := ctxCommand(pctx(p), ff, args...)
-	cmd.Dir = p.Dir
-	cmd.Env = cmdEnv()
-	var buf bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &buf, &buf
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("  · sfx 垫生成失败（跳过音效）: %v\n", tailLines(buf.String(), 5))
+	if _, err := runFFmpeg(p, p.Dir, "sfx 垫", args...); err != nil {
+		fmt.Printf("  · sfx 垫生成失败（跳过音效）: %v\n", err)
 		_ = os.Remove(tmp)
 		return ""
 	}
@@ -1466,17 +1443,11 @@ func hasFFmpegFilter(name string) bool {
 // 一次（libx264 crf 18，视觉近无损；母版不动，重跑零成本）；无后期无 BGM 无 sfx 走
 // 老路径（-c:v copy）保证现有项目行为不变。产物写临时文件后原子转正。
 func stitchFinal(p *Project, voice, track, sfx string, post *postFX, out string) error {
-	if post.off() {
-		if track != "" {
-			return mixBGM(p, voice, track, sfx, out)
-		}
-		if sfx != "" {
-			return mixSfx(p, voice, sfx, out)
-		}
-		return copyFile(voice, out)
+	vc := ""
+	if !post.off() {
+		vc = post.videoChain()
 	}
-	vc := post.videoChain()
-	if vc == "" { // 参数给了但滤镜全不可用 → 退老路径
+	if vc == "" { // 无后期，或参数给了但滤镜全不可用 → 老路径（-c:v copy），行为不变
 		if track != "" {
 			return mixBGM(p, voice, track, sfx, out)
 		}
@@ -1511,17 +1482,8 @@ func stitchFinal(p *Project, voice, track, sfx string, post *postFX, out string)
 				"-c:a", "aac", "-b:a", "192k")
 		}
 	} else {
-		fade := ""
-		if dur := probeDuration(voice); dur > 3.5 {
-			fade = fmt.Sprintf(",afade=t=out:st=%.2f:d=1.5", dur-1.7)
-		}
-		mixIn, nIn := "", 2
-		if sfx != "" {
-			// 输入序：0=人声、1=BGM、2=sfx 垫——amix 第三路是 [2:a]（写成 [3:a]
-			// 会因流不存在被 ffmpeg 拒图，终装失败）
-			mixIn, nIn = "[2:a]", 3
-		}
-		fc := stitchComboFc(vc, fade, mixIn, nIn)
+		mixIn, nIn := bgmMixIn(sfx)
+		fc := stitchComboFc(vc, bgmFade(voice), mixIn, nIn)
 		args = append(args, "-stream_loop", "-1", "-i", track)
 		if sfx != "" {
 			args = append(args, "-i", sfx)
@@ -1538,12 +1500,8 @@ func stitchFinal(p *Project, voice, track, sfx string, post *postFX, out string)
 
 // stitchComboFc 后期+BGM(+sfx) 一图流的滤镜图（纯函数抽出，测试校验流引用）。
 // 输入约定：0=人声母版、1=BGM、2=sfx 垫（sfx 非空时才有第 3 路输入）。
-func stitchComboFc(vc, fade, mixIn string, nIn int) string {
-	return fmt.Sprintf("[0:v]%s[vout];"+
-		"[1:a]volume=0.34%s[m];"+
-		"[m][0:a]sidechaincompress=threshold=0.035:ratio=7:attack=120:release=1100[duck];"+
-		"[0:a][duck]%samix=inputs=%d:duration=first:dropout_transition=0:normalize=0[aout]",
-		vc, fade, mixIn, nIn)
+func stitchComboFc(vc string, fade string, mixIn string, nIn int) string {
+	return fmt.Sprintf("[0:v]%s[vout];", vc) + bgmFcTail(fade, mixIn, nIn)
 }
 
 // probeDuration ffprobe 取媒体时长（秒；失败返回 0，调用方跳过淡出）。
@@ -1744,6 +1702,28 @@ func tailLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// TailLines 尾 n 行（错误摘要/命令输出回喂用）。produce/agent 与 pipeline 共用一份。
+func TailLines(s string, n int) string { return tailLines(s, n) }
+
+// FirstLine 首行截到 n 个 rune（超长加 …）。
+func FirstLine(s string, n int) string {
+	s = strings.SplitN(s, "\n", 2)[0]
+	r := []rune(s)
+	if len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
+}
+
+// TruncRunes TrimSpace 后截到 n 个 rune（超长加 …）。
+func TruncRunes(s string, n int) string {
+	r := []rune(strings.TrimSpace(s))
+	if len(r) <= n {
+		return string(r)
+	}
+	return string(r[:n]) + "…"
 }
 
 // RunCLI 供 produce 包复用（scene 确定性回放门禁调 hyperframes snapshot）。

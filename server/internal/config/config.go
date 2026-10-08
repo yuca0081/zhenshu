@@ -9,12 +9,10 @@ import (
 )
 
 // Config 汇总运行时配置：DataDir / LLMMode / PG。
-// PG：聊天案卷（配了就连，连不上拒启）。
+// PG：聊天案卷（配了就连，连不上拒启）。LLM 密钥由 llm.FromEnv 直读环境，不经这里。
 type Config struct {
 	DataDir string
 	LLMMode string // manual（会话模式·文件契约，M0 默认）| api（OpenAI 兼容 LLM：GLM 编码套餐/DeepSeek 等）
-
-	LLMKey string
 
 	PGDSN string
 }
@@ -41,7 +39,6 @@ func Load() (*Config, error) {
 	c := &Config{
 		DataDir: get("DATA_DIR", "data"),
 		LLMMode: get("LLM_MODE", "manual"),
-		LLMKey:  get("LLM_API_KEY", os.Getenv("DEEPSEEK_API_KEY")),
 		PGDSN:   os.Getenv("PG_DSN"),
 	}
 

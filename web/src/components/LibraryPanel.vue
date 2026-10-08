@@ -1,13 +1,28 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { NButton, NTag } from 'naive-ui'
+import { NButton, NPopconfirm, NTag, useMessage } from 'naive-ui'
+import { api } from '../api'
 import { coverStyle } from '../format'
 import SampleFrame from './SampleFrame.vue'
 import TemplateDetail from './TemplateDetail.vue'
 import type { Style, TemplateDetailData } from '../types'
 
 const props = defineProps<{ packs: Style[] }>()
-const emit = defineEmits<{ publish: [id: string] }>()
+const emit = defineEmits<{ publish: [id: string]; deleted: [] }>()
+const message = useMessage()
+
+// 删除条目（库里没有撤销；已出片项目不受影响——样张/皮肤选用时已拷走）
+async function onDelete(id: string) {
+  try {
+    await api.deleteLibrary(id)
+    message.success('已删除')
+  } catch (e) {
+    message.error(`删除失败：${(e as Error).message}`)
+    return
+  }
+  show.value = false // 详情抽屉开着就一并关掉，避免展示已删条目
+  emit('deleted')
+}
 
 // 点卡片开详情抽屉：条目本体自带 tokens/layouts/全套样张，直接规范化
 const show = ref(false)
@@ -85,9 +100,17 @@ function subline(s: Style): string {
           </div>
           <div class="row2">
             <span class="origin">{{ s.id }}</span>
-            <NButton v-if="!s.published" size="small" type="primary" ghost @click.stop="emit('publish', s.id)">
-              入库
-            </NButton>
+            <span class="btns">
+              <NPopconfirm @positive-click="onDelete(s.id)">
+                <template #trigger>
+                  <NButton size="small" quaternary type="error" @click.stop>删除</NButton>
+                </template>
+                删除后新建项目不能再选它；已出片项目不受影响。
+              </NPopconfirm>
+              <NButton v-if="!s.published" size="small" type="primary" ghost @click.stop="emit('publish', s.id)">
+                入库
+              </NButton>
+            </span>
           </div>
         </figcaption>
       </figure>
@@ -116,6 +139,7 @@ figcaption { padding: 10px 12px 12px; display: flex; flex-direction: column; gap
 .desc { font-size: 11.5px; color: #8a8a96; }
 .meta { display: flex; gap: 6px; flex-wrap: wrap; }
 .row2 { display: flex; align-items: center; justify-content: space-between; }
+.btns { display: flex; gap: 6px; align-items: center; }
 .origin { font-size: 11px; color: #55555f; font-family: monospace; }
 .cover {
   height: 169px; display: grid; place-items: center; padding: 0 18px; text-align: center;

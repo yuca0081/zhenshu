@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -42,5 +43,46 @@ func TestAssembleStylesPathNoRegistry(t *testing.T) {
 	}
 	if !regexp.MustCompile(`'styles\.json'`).Match(py) {
 		t.Errorf("ai/assemble.py 未引用 styles.json（overlay 取 token 的路径丢了？）")
+	}
+}
+
+// 漂移门禁：系统字体白名单是 Go/Py 双端隐式契约——scene HTML 补声明走 pipeline
+// osFontWhitelist，字幕 overlay 走 assemble.py _OS_CJK_FONTS。两边集合不一致时，
+// 同一字体名一侧补声明另一侧不补，lint 修复轮就会单侧反复失败。
+func TestFontWhitelistMatchesTwinImplementation(t *testing.T) {
+	go_, err := os.ReadFile(filepath.Join("..", "..", "..", "server", "internal", "pipeline", "fontface.go"))
+	if err != nil {
+		t.Fatalf("fontface.go 不可读: %v", err)
+	}
+	py, err := os.ReadFile(filepath.Join("..", "..", "..", "ai", "assemble.py"))
+	if err != nil {
+		t.Fatalf("assemble.py 不可读: %v", err)
+	}
+	extract := func(re, src string) map[string]bool {
+		out := map[string]bool{}
+		for _, m := range regexp.MustCompile(re).FindAllStringSubmatch(src, -1) {
+			out[strings.TrimSpace(m[1])] = true
+		}
+		return out
+	}
+	goSet := extract(`"([^"]+)":\s*true`, string(go_))
+	// py 集合以「'xxx', 'yyy',\n」字面量书写，逐对引号截取
+	pySet := extract(`'([^']+)'`, regexp.MustCompile(`_OS_CJK_FONTS = \{([^}]*)\}`).
+		FindStringSubmatch(string(py))[1])
+	if len(goSet) == 0 {
+		t.Fatal("fontface.go 里没提取到任何白名单条目（结构变了？同步本测试）")
+	}
+	if len(pySet) == 0 {
+		t.Fatal("assemble.py 里没提取到 _OS_CJK_FONTS 条目（结构变了？同步本测试）")
+	}
+	for name := range goSet {
+		if !pySet[name] {
+			t.Errorf("白名单漂移：%q 在 fontface.go 有、assemble.py 没有（两边必须同一集合）", name)
+		}
+	}
+	for name := range pySet {
+		if !goSet[name] {
+			t.Errorf("白名单漂移：%q 在 assemble.py 有、fontface.go 没有（两边必须同一集合）", name)
+		}
 	}
 }

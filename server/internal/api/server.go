@@ -11,9 +11,9 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -75,9 +75,8 @@ func (s *Server) Router() *gin.Engine {
 	api.POST("/projects/:id/cancel", s.cancelProduce)
 	api.GET("/projects/:id/video/main.mp4", s.video)
 	api.GET("/projects/:id/audio_meta", s.audioMeta)
-	api.GET("/projects/:id/frames/:seg", s.frame)
-	api.GET("/projects/:id/assets/*filepath", s.asset)
 	api.GET("/library", s.listLibrary)
+	api.DELETE("/library/:id", s.deleteLibraryEntry)
 	api.GET("/library/:id/frames", s.libraryFrames)
 	api.GET("/library/:id/media/:file", s.libraryMedia)
 	api.POST("/library/:id/publish", s.publishPack)
@@ -87,6 +86,9 @@ func (s *Server) Router() *gin.Engine {
 	api.GET("/references/:id/media/:file", s.referenceMedia)
 	api.POST("/references/:id/analyze", s.analyzeReference)
 	api.POST("/references/:id/confirm", s.confirmReference)
+	// 临时视频接口不进 tokened 组（大模型不会带 X-API-Token）：防线是 HMAC 签名 +
+	// 有效期 + clip-*.mp4 白名单（styleref.VerifyVideo/VideoFile），只暴露解析剪辑。
+	r.GET("/api/llm-video/:id/:name", s.llmVideo)
 
 	// 前端产物（web/dist）存在则托管
 	dist := filepath.Join(s.RootDir, "web", "dist")
@@ -148,17 +150,12 @@ func (s *Server) bodyGuard() gin.HandlerFunc {
 }
 
 // secureParams 路由参数白名单：拒绝路径分隔符与 ".."。gin 的 param 已做百分号解码，
-// `..%5C..` 到这里是 `..\..`——Windows 下 filepath.Join 认 `\` 为分隔符，path.Clean
-// （asset handler 用）只认 `/` 拦不住它，必须在入口统一拒绝。
+// `..%5C..` 到这里是 `..\..`——Windows 下 filepath.Join 认 `\` 为分隔符，
+// 必须在入口统一拒绝。
 func secureParams() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		for _, p := range c.Params {
-			v := p.Value
-			bad := strings.Contains(v, "..") || strings.ContainsAny(v, `/\`)
-			if p.Key == "filepath" { // 资产子路径合法含 "/"；仍禁 ".." 与 "\"
-				bad = strings.Contains(v, "..") || strings.Contains(v, `\`)
-			}
-			if bad {
+			if strings.Contains(p.Value, "..") || strings.ContainsAny(p.Value, `/\`) {
 				c.JSON(400, gin.H{"error": "非法路径参数"})
 				c.Abort()
 				return
@@ -176,7 +173,8 @@ func (s *Server) createProject(c *gin.Context) {
 		Topic       string `json:"topic"`        // 一句话主题（文稿弹窗 AI 起草的种子）
 		Manuscript  string `json:"manuscript"`   // 可选：直接带稿创建（不走弹窗补）
 		Aspect      string `json:"aspect"`       // 9:16（默认，plan §7 M1）| 16:9
-		StylePackID string `json:"stylepack_id"` // 方法库复用（可空 = 冷启动自拟）
+		StyleID     string `json:"style_id"`     // 风格库条目（可空 = 不选，样张阶段模型自由发挥）
+		StylePackID string `json:"stylepack_id"` // 旧字段名，过渡期兼容（applyStyle 同款双字段）
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
@@ -184,6 +182,10 @@ func (s *Server) createProject(c *gin.Context) {
 	}
 	in.Topic = strings.TrimSpace(in.Topic)
 	in.Manuscript = strings.TrimSpace(in.Manuscript)
+	styleID := in.StyleID
+	if styleID == "" {
+		styleID = in.StylePackID
+	}
 	// 新建只要求名称+主题（文稿/风格是三前置，进工作区后在对话栏标签里补）；
 	// 带稿直建是老路径，兼容保留。
 	if in.Topic == "" && in.Manuscript == "" {
@@ -193,9 +195,9 @@ func (s *Server) createProject(c *gin.Context) {
 	if in.Aspect != "16:9" && in.Aspect != "9:16" {
 		in.Aspect = "9:16"
 	}
-	if in.StylePackID != "" {
-		if pack, ok := s.Lib.Get(in.StylePackID); !ok || !pack.Published {
-			c.JSON(400, gin.H{"error": "风格包不存在或未发布"})
+	if styleID != "" {
+		if pack, ok := s.Lib.Get(styleID); !ok || !pack.Published {
+			c.JSON(400, gin.H{"error": "风格库条目不存在或未入库"})
 			return
 		}
 	}
@@ -232,7 +234,7 @@ func (s *Server) createProject(c *gin.Context) {
 	}
 	meta, _ := json.MarshalIndent(map[string]any{
 		"id": id, "name": in.Name, "status": "created", "aspect": in.Aspect,
-		"topic": in.Topic, "stylepack_id": in.StylePackID,
+		"topic": in.Topic, "style_id": styleID,
 		"created_at": time.Now().Format(time.RFC3339),
 	}, "", "  ")
 	_ = os.WriteFile(p.Artifact("project.json"), meta, 0o644)
@@ -314,9 +316,6 @@ func (s *Server) projectView(c *gin.Context) {
 		},
 		"seg_count": st.SegCount, "total_hint": st.TotalHint,
 		"has_video": st.HasVideo, "producing": st.Producing,
-		// 检视壳复刻成片观感用：转场模式 + stitch 后期妆（与 main.mp4 同源口径）
-		"transition": pipeline.TransitionFor(p),
-		"post":       pipeline.PostFor(p),
 	})
 }
 
@@ -624,7 +623,7 @@ func (s *Server) cancelProduce(c *gin.Context) {
 	c.JSON(202, gin.H{"ok": true})
 }
 
-// startRework 一键段级重做（检视态「重做此段」按钮直连，绕过对话轮）。
+// startRework 一键段级重做（时间轴段块「重做」按钮直连，绕过对话轮）。
 // instruction 可空 = 依次取目标段的历史指令复用（「用上次的要求再试一次」）。
 func (s *Server) startRework(c *gin.Context) {
 	id := c.Param("id")
@@ -757,40 +756,6 @@ func (s *Server) video(c *gin.Context) {
 	serveFile(c, path, "main.mp4", "no-store")
 }
 
-// frame 修改态活合成物：单段帧 HTML（<template> 片段，plan §4.3 预览双模）。
-// 前端 LiveFrame 以 srcdoc 壳消费：壳内引项目 assets/gsap.min.js 并自行激活时间轴。
-func (s *Server) frame(c *gin.Context) {
-	seg := c.Param("seg")
-	if !isSegID(seg) {
-		c.JSON(400, gin.H{"error": "非法段标识"})
-		return
-	}
-	serveFile(c, pipeline.NewProject(s.DataDir, c.Param("id")).Artifact("compositions/frames/"+seg+".html"), seg+".html", "no-store")
-}
-
-// asset 项目资产（gsap.min.js 等）——活合成物壳的确定性依赖，渲染引擎同款本地 gsap，无 CDN。
-func (s *Server) asset(c *gin.Context) {
-	// path.Clean 以 "/" 锚定后 ".." 全部被解析掉，再校验只剩相对路径
-	rel := strings.TrimPrefix(path.Clean("/"+strings.TrimPrefix(c.Param("filepath"), "/")), "/")
-	if rel == "" {
-		c.JSON(400, gin.H{"error": "非法路径"})
-		return
-	}
-	serveFile(c, filepath.Join(pipeline.NewProject(s.DataDir, c.Param("id")).Dir, "assets", filepath.FromSlash(rel)), path.Base(rel), "")
-}
-
-func isSegID(s string) bool {
-	if !strings.HasPrefix(s, "seg") || len(s) == 3 {
-		return false
-	}
-	for _, r := range s[3:] {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
-
 // ── 风格库（起草自动 + 入库确认）─────────────────────────────
 
 func (s *Server) listLibrary(c *gin.Context) {
@@ -808,10 +773,28 @@ func (s *Server) listLibrary(c *gin.Context) {
 func (s *Server) publishPack(c *gin.Context) {
 	pack, err := s.Lib.Publish(c.Param("id"))
 	if err != nil {
-		c.JSON(404, gin.H{"error": err.Error()})
+		if errors.Is(err, stylelib.ErrNoEntry) {
+			c.JSON(404, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(200, pack)
+}
+
+// deleteLibraryEntry 删除风格条目（含媒体快照）。已出片项目不受影响——样张/皮肤在
+// 选用时已拷进项目各自的 style/。
+func (s *Server) deleteLibraryEntry(c *gin.Context) {
+	if err := s.Lib.Delete(c.Param("id")); err != nil {
+		if errors.Is(err, stylelib.ErrNoEntry) {
+			c.JSON(404, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true})
 }
 
 func isSlug(s string) bool {
@@ -1069,6 +1052,29 @@ func (s *Server) ingestRefStyle(c *gin.Context, seedID, name, coverName string, 
 	return st, nil
 }
 
+// llmVideo 临时视频接口（视频直读，2026-10-08）：把参考视频的 480p 剪辑交给大模型拉取。
+// 不要求 X-API-Token（调用方是模型侧的取媒体器）——防线三道：HMAC 签名（与文件绑定，
+// 改一个字符即失效）+ 6 小时有效期 + 文件名白名单（只认 clip-*.mp4，原片永不出这个口子）。
+// 链接只在解析时按需签发，无链接则此路由对公网无意义。
+func (s *Server) llmVideo(c *gin.Context) {
+	id, name := c.Param("id"), c.Param("name")
+	exp, err := strconv.ParseInt(c.Query("exp"), 10, 64)
+	if err != nil {
+		c.JSON(403, gin.H{"error": "缺 exp"})
+		return
+	}
+	if !s.Refs.VerifyVideo(id, name, exp, c.Query("sig")) {
+		c.JSON(403, gin.H{"error": "签名无效或已过期"})
+		return
+	}
+	path, ok := s.Refs.VideoFile(id, name)
+	if !ok {
+		c.JSON(404, gin.H{"error": "文件不存在"})
+		return
+	}
+	serveFile(c, path, name, "no-store")
+}
+
 // coverSample 条目第一张样张：该风格段的真实画面帧（media 快照服务提供图片）。
 func coverSample(styleID, displayName string, t float64) stylelib.Sample {
 	name := template.HTMLEscapeString(displayName)
@@ -1102,33 +1108,43 @@ func makeCover(dir string, frames []styleref.FeatureFrame) float64 {
 	return f.T
 }
 
-// referenceFrames 参考视频抽帧截图清单（详情抽屉展示原片长相用）。目录扫 frame-*.png，
-// 附是否带原视频。
+// scanMediaDir 目录抽帧清单：frame-*.png（白名单名校验）+ 是否带原视频。
+// referenceFrames 与 libraryFrames 共用。
+func scanMediaDir(dir string) (frames []string, hasVideo bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		switch name := e.Name(); {
+		case isPngName(name) && strings.HasPrefix(name, "frame-"):
+			frames = append(frames, name)
+		case name == "video.mp4":
+			hasVideo = true
+		}
+	}
+	return frames, hasVideo
+}
+
+// referenceFrames 参考视频抽帧截图清单（详情抽屉展示原片长相用）。
 func (s *Server) referenceFrames(c *gin.Context) {
 	id := c.Param("id")
 	if !isSlug(id) {
 		c.JSON(400, gin.H{"error": "非法路径"})
 		return
 	}
-	dir := filepath.Join(s.DataDir, "references", id)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		c.JSON(404, gin.H{"error": "引用不存在"})
-		return
+	frames, hasVideo := scanMediaDir(filepath.Join(s.DataDir, "references", id))
+	if frames == nil && !hasVideo { // 目录读不了 = 引用不存在
+		if _, err := os.Stat(filepath.Join(s.DataDir, "references", id)); err != nil {
+			c.JSON(404, gin.H{"error": "引用不存在"})
+			return
+		}
 	}
-	frames := []string{}
-	hasVideo := false
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		switch {
-		case isPngName(name) && strings.HasPrefix(name, "frame-"):
-			frames = append(frames, name)
-		case name == "video.mp4":
-			hasVideo = true
-		}
+	if frames == nil {
+		frames = []string{}
 	}
 	c.JSON(200, gin.H{"frames": frames, "has_video": hasVideo})
 }
@@ -1169,28 +1185,10 @@ func (s *Server) libraryFrames(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "非法路径"})
 		return
 	}
-	scan := func(dir string) (frames []string, hasVideo bool) {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return nil, false
-		}
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			switch name := e.Name(); {
-			case isPngName(name) && strings.HasPrefix(name, "frame-"):
-				frames = append(frames, name)
-			case name == "video.mp4":
-				hasVideo = true
-			}
-		}
-		return frames, hasVideo
-	}
-	frames, hasVideo := scan(s.Lib.MediaDir(id))
+	frames, hasVideo := scanMediaDir(s.Lib.MediaDir(id))
 	if len(frames) == 0 { // 抽帧缺失就回退（快照只带 video 时也要能列出参考抽帧）
 		if st, ok := s.Lib.Get(id); ok && strings.HasPrefix(st.OriginProject, "video:") {
-			frames2, hv2 := scan(filepath.Join(s.DataDir, "references", strings.TrimPrefix(st.OriginProject, "video:")))
+			frames2, hv2 := scanMediaDir(filepath.Join(s.DataDir, "references", strings.TrimPrefix(st.OriginProject, "video:")))
 			frames = frames2
 			if !hasVideo {
 				hasVideo = hv2
