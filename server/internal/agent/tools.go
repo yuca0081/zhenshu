@@ -7,15 +7,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
+	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 
 	"webpage-video-agent/server/internal/contract"
+	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
-	"webpage-video-agent/server/internal/produce"
 	"webpage-video-agent/server/internal/stylelib"
+	"webpage-video-agent/server/internal/styleref"
 	"webpage-video-agent/server/internal/webfetch"
 )
 
@@ -157,7 +158,7 @@ var tools = []tool{
 		},
 	},
 	{
-		def: toolDef("draft_style_samples", "产出本片设计系统与风格样张（皮肤1-2套/字体角色/动效语言/贯穿装置/版式/负面清单 + 1-3张样张）：首次出样张——项目选了库内风格就复用它，没选就由你按分镜自由发明（现场发明约束，不套模板）；样张已存在时必须带 instruction 按用户要求重新生成", map[string]any{
+		def: toolDef("draft_style_samples", "产出本片设计系统与风格样张（皮肤1-2套/字体角色/动效语言/贯穿装置/版式/负面清单 + 1-3张样张）：首次出样张——项目选了库内风格就按它的「标签+特色」强参考发明（吸收机制，物件用本片内容），没选就由你按分镜自由发明（现场发明约束，不套模板）；样张已存在时必须带 instruction 按用户要求重新生成", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"instruction": map[string]any{"type": "string", "description": "用户对风格的修改/新方向要求（如：更暖色调、加猫爪猫耳Q版点缀；换全新方向也写在这）。首次出样张可省略"},
@@ -176,27 +177,40 @@ var tools = []tool{
 			_ = json.Unmarshal([]byte(args), &in)
 			out := p.Artifact("style/style_samples.json")
 			if strings.TrimSpace(in.Instruction) != "" {
-				// 带要求（首次或重生成一律走这条）：冷启动默认包不符合用户明确的方向，
+				// 带要求（首次或重生成一律走这条）：用户明确的方向优先于任何选定风格，
 				// 直接按要求现写——样张与风格文件（skin）同产（§12.2）
 				return a.regenerateStyle(p, in.Instruction, out)
 			}
 			if _, err := os.Stat(out); err == nil {
 				return "风格样张已出，等用户在舞台点击「确认风格」；用户想改风格就带着要求调 instruction 重新生成"
 			}
-			// 来源优先级：项目选定的风格库条目 → 模型自由发挥。没有默认包——设计阶段
-			// 本就要求「为本片现场发明约束然后遵守」（design.go 铁律），直接走
-			// style_samples 管线阶段即可（与 regenerateStyle 同一条路）。
+			// 来源优先级：项目选定的风格库条目（强参考：设计阶段现发明并逐条吸收特色）
+			// → 模型自由发挥。v3 条目没有自带样张——设计系统必须本片现发明，
+			// 样张确认硬门对所有人成立。
 			if st := a.selectedStyle(p); st != nil {
-				if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-					return err.Error()
+				briefPath := p.Artifact("style/style_brief.json")
+				if _, err := os.Stat(briefPath); err != nil {
+					// GatesModal 的 applyStyle 通常已落简报；直接对话选用时在此补齐（全开）
+					brief, err := a.Lib.BuildBrief(st.ID, nil)
+					if err != nil {
+						return "简报组装失败：" + err.Error()
+					}
+					if err := stylelib.WriteBriefFile(briefPath, brief); err != nil {
+						return err.Error()
+					}
 				}
-				if err := os.WriteFile(out, st.StyleSamplesJSON(), 0o644); err != nil {
-					return err.Error()
+				if err := pipeline.Run(context.Background(), p, "style_samples"); err != nil {
+					return "样张生成失败：" + err.Error()
+				}
+				var ss contract.StyleSamples
+				dir, n := "", 0
+				if b, rerr := os.ReadFile(out); rerr == nil && json.Unmarshal(b, &ss) == nil {
+					dir, n = ss.Direction, len(ss.Samples)
 				}
 				if a.OnEvent != nil {
-					a.OnEvent(p.ID, "style_draft", st.Direction)
+					a.OnEvent(p.ID, "style_draft", dir)
 				}
-				return fmt.Sprintf("风格样张已出（复用风格库「%s」，origin=%s）。硬门——用户在舞台点头确认后才能开工", st.Name, st.OriginProject)
+				return fmt.Sprintf("风格样张已出（强参考「%s」：标签气质+特色逐条吸收）：%s（%d 张，舞台可预览）。硬门——用户在舞台点头确认后才能开工", st.Name, dir, n)
 			}
 			if err := pipeline.Run(context.Background(), p, "style_samples"); err != nil {
 				return "样张生成失败：" + err.Error()
@@ -253,7 +267,7 @@ var tools = []tool{
 				return "成片已就绪，无需重新制作（要改画面/重做某段用 rework；要下载地址用 export）"
 			}
 			if len(missing) > 0 {
-				return "前置未齐（缺 " + strings.Join(missing, "、") + "）。补齐路径，向用户说明：文稿——点「文稿」标签粘贴保存，或把文稿直接发进对话由你调 save_manuscript 存下；分镜——你调用 draft_storyboard 生成；风格——点「风格」标签选库内风格（即时生效）或描述方向出样张"
+				return "前置未齐（缺 " + strings.Join(missing, "、") + "）。补齐路径，向用户说明：文稿——点「文稿」标签粘贴保存，或把文稿直接发进对话由你调 save_manuscript 存下；分镜——你调用 draft_storyboard 生成；风格——点「风格」标签选库内风格（选定后你调 draft_style_samples 出样张）或描述方向出样张"
 			}
 			return ""
 		},
@@ -337,7 +351,7 @@ var tools = []tool{
 		},
 	},
 	{
-		def: toolDef("extract_stylepack", "把本片风格提炼成风格库草稿（风格文件+全套样张；成片出片后自动做，用户在风格库确认入库后可复用）", nil),
+		def: toolDef("extract_stylepack", "把本片风格沉淀成风格库草稿（标签+特色清单，LLM 打标；成片出片后自动做，用户在风格库确认入库后可复用；草稿的证据帧留空，由用户在库页回看补录）", nil),
 		gate: func(s State) string {
 			if !s.HasVideo {
 				return "成片未就绪，出片后再提炼"
@@ -345,14 +359,39 @@ var tools = []tool{
 			return ""
 		},
 		run: func(a *Agent, p *pipeline.Project, _ string) string {
-			pack, err := a.Lib.DraftFromProject(p.Dir, p.ID, a.State(p.ID).Name)
+			// 幂等先行：本就出自库内风格 / 已起草过 → 直接交代（不起 LLM）
+			if st := a.draftedStyle(p); st != nil {
+				if st.Published {
+					return fmt.Sprintf("「%s」已在风格库（已发布）", st.Name)
+				}
+				return fmt.Sprintf("风格「%s」已是草稿，用户在风格库页点「入库」确认", st.Name)
+			}
+			prov, err := llm.FromEnv(llm.RolePlan)
+			if err != nil {
+				return "提炼需要 API 模式（LLM_API_KEY）"
+			}
+			digest, derr := designDigest(p)
+			if derr != nil {
+				return "提炼失败：" + derr.Error()
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+			d, terr := styleref.DraftFromDesign(ctx, prov, a.Lib, a.State(p.ID).Name, digest)
+			if terr != nil {
+				return "提炼失败：" + terr.Error()
+			}
+			pack, err := a.Lib.DraftFromProject(p.Dir, p.ID, stylelib.ProjectDraftIn{
+				Name: d.Name, Subject: d.Subject, Tags: d.Tags,
+				TagEvidence: d.TagEvidence, Signatures: d.Signatures,
+			})
 			if err != nil {
 				return "提炼失败：" + err.Error()
 			}
 			if pack.Published {
 				return fmt.Sprintf("「%s」已在风格库（已发布）", pack.Name)
 			}
-			return fmt.Sprintf("风格「%s」已起草（草稿）。用户在风格库页点「入库」确认后，之后新建项目可直接复用", pack.Name)
+			return fmt.Sprintf("风格「%s」已起草（标签 %s + 特色×%d，草稿）。用户在风格库页点「入库」确认后，之后新建项目可直接复用",
+				pack.Name, pack.Tags.Main, len(pack.Signatures))
 		},
 	},
 	{
@@ -361,10 +400,10 @@ var tools = []tool{
 		run:  func(a *Agent, p *pipeline.Project, _ string) string { return a.State(p.ID).summary() },
 	},
 	{
-		def: toolDef("search_styles", "检索风格库（可复用的视觉风格：色板/版式/样张）。新建项目选风格、用户问「有什么风格」、或用户描述的气质可能命中库内条目时先查这里；命中后引导用户在风格门/风格库里选它（报 id）", map[string]any{
+		def: toolDef("search_styles", "检索风格库（v3：标签+特色清单的可复用风格）。新建项目选风格、用户问「有什么风格」、或用户描述的气质可能命中库内条目时先查这里；命中后引导用户在风格门/风格库里选它（报 id）", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"query": map[string]any{"type": "string", "description": "气质/视觉关键词（如 深空渐变 手写黑板 荧光霓虹 水墨）"},
+				"query": map[string]any{"type": "string", "description": "气质/风格关键词（如 粘土定格 故障风 蒸汽波 等距）"},
 			},
 			"required": []string{"query"},
 		}),
@@ -374,31 +413,40 @@ var tools = []tool{
 			if err != nil {
 				return "风格库读取失败：" + err.Error()
 			}
-			q := strings.ToLower(strings.TrimSpace(args))
-			key := func(ss stylelib.Style) string {
-				return strings.ToLower(strings.Join(append([]string{ss.ID, ss.Name, ss.Direction, ss.Genre}, ss.Keywords...), " "))
+			vocab := a.Lib.VocabList()
+			tagName := func(id string) string {
+				for _, e := range vocab {
+					if e.ID == id {
+						return e.Name
+					}
+				}
+				return id
 			}
+			q := strings.ToLower(strings.TrimSpace(args))
 			var lines []string
 			for _, ss := range styles {
-				if q != "" && !strings.Contains(key(ss), q) {
+				keys := []string{ss.ID, ss.Name, ss.Subject, ss.Tags.Main}
+				keys = append(keys, ss.Tags.Aux...)
+				for _, sg := range ss.Signatures {
+					keys = append(keys, sg.Name, sg.Mechanism)
+				}
+				if q != "" && !strings.Contains(strings.ToLower(strings.Join(keys, " ")), q) {
 					continue
 				}
 				state := map[bool]string{true: "已入库", false: "草稿待入库"}[ss.Published]
 				line := fmt.Sprintf("- %s | %s | %s", ss.ID, ss.Name, state)
-				if ss.Genre != "" {
-					line += " | 题材:" + ss.Genre
+				if ss.Tags.Main != "" {
+					line += " | 标签:" + tagName(ss.Tags.Main)
+					for _, aux := range ss.Tags.Aux {
+						line += "+" + tagName(aux)
+					}
 				}
-				if len(ss.Keywords) > 0 {
-					line += " | 词:" + strings.Join(ss.Keywords, ",")
-				}
-				if pal := produce.PaletteNote(ss.Tokens); pal != "" {
-					line += " | " + pal
-				}
-				if len(ss.Layouts) > 0 {
-					line += fmt.Sprintf(" | 版式×%d", len(ss.Layouts))
-				}
-				if len(ss.Samples) > 0 {
-					line += fmt.Sprintf(" | 样张×%d", len(ss.Samples))
+				if len(ss.Signatures) > 0 {
+					names := make([]string, 0, len(ss.Signatures))
+					for _, sg := range ss.Signatures {
+						names = append(names, sg.Name)
+					}
+					line += fmt.Sprintf(" | 特色×%d（%s）", len(ss.Signatures), strings.Join(names, "、"))
 				}
 				lines = append(lines, line)
 			}
@@ -406,14 +454,14 @@ var tools = []tool{
 				if q != "" {
 					full, _ := a.Lib.List()
 					if len(full) == 0 {
-						return "风格库为空：出片后我会自动起草风格，用户确认入库"
+						return "风格库为空：出片后我会自动起草风格，或在风格库页上传参考视频解析入库"
 					}
 					return "没有命中「" + q + "」的风格。库里现有 " + fmt.Sprintf("%d", len(full)) + " 条，重调一次可放宽或换关键词"
 				}
-				return "风格库为空：出片后我会自动起草风格，用户确认入库"
+				return "风格库为空：出片后我会自动起草风格，或在风格库页上传参考视频解析入库"
 			}
 			return fmt.Sprintf("风格库 %d 条：\n", len(lines)) + strings.Join(lines, "\n") +
-				"\n选用：风格门弹窗点卡片，或让我把 id 记入 project（style_id）"
+				"\n选用：风格门弹窗点卡片（可关掉不想吸收的特色），或让我把 id 记入 project（style_id）"
 		},
 	},
 	{

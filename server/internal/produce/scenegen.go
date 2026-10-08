@@ -94,7 +94,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	sampleImgs := styleSampleImages(p)
 	// 真迹关键帧（风格来源视频原片帧）全段注入：每段都看着真迹画——课堂通道，
 	// 与考卷（frameqa 对照真迹）配套；无媒体/压图失败静默缺省，退回纯样张。
-	keyImgs := styleKeyframeImages(ctx, r.DataDir, p)
+	keyImgs := styleKeyframeImages(ctx, p)
 	if len(keyImgs) > 0 {
 		sampleImgs = append(sampleImgs, keyImgs...)
 	}
@@ -152,7 +152,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		v := voices[seg.ID]
 		sceneM, compM := methodsFor(r.RootDir, seg)
 		// 附图顺序 = 样张 → 真迹关键帧 → 素材真图；三段说明各自对号入座
-		style := designNoteFor(p, r.DataDir, seg.Idx) + keyframeNote(len(keyImgs)) + materialNote(len(matImgs)) + materialsNote(p)
+		style := designNoteFor(p, seg.Idx) + keyframeNote(len(keyImgs)) + materialNote(len(matImgs)) + materialsNote(p)
 		user := sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM)
 		var payload struct {
 			HTML     string                  `json:"html"`
@@ -170,7 +170,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 				HTML     string                  `json:"html"`
 				Elements []contract.NamedElement `json:"elements"`
 			}
-			u2, err2 := gen(sceneUserPrompt(seg, v, "", fb, cv, designNoteFor(p, r.DataDir, seg.Idx)+keyframeNote(len(keyImgs))+materialNote(len(matImgs))+materialsNote(p), golden, sceneM, compM), &fixed)
+			u2, err2 := gen(sceneUserPrompt(seg, v, "", fb, cv, designNoteFor(p, seg.Idx)+keyframeNote(len(keyImgs))+materialNote(len(matImgs))+materialsNote(p), golden, sceneM, compM), &fixed)
 			if err2 != nil {
 				fail(fmt.Errorf("%s 场景修复失败: %w", seg.ID, err2))
 				return

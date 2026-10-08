@@ -1,17 +1,17 @@
 package styleref
 
-// 解析智能体：参考视频 → 风格条目（一条主路径，两阶段）。
+// 解析智能体：参考视频 → 风格条目草稿（一条主路径，两阶段）。
 //
 // 阶段1 理解：全片关键帧网格（sheet-00.png，每格带 #序号/时间戳）→ vision LLM
 //   判断视频是单一风格还是多风格合集；多风格时给出每段的名称与起止边界。
 //   边界由 Go 校验（排序/去重叠/最短时长），LLM 只提建议不碰时间轴。
-// 阶段2 提炼：single = 全片一个风格包（老行为）；multi = 逐段抽帧（段内关键帧
-//   + 段内取色）+ 逐段风格包，段名优先采用片中标题。
+// 阶段2 打标+提炼（v3）：single = 全片一份「标签+特色」草稿；multi = 逐段抽帧
+//   （段内关键帧 + 段内取色）+ 逐段草稿，段名优先采用片中标题。
 //
 // 护栏：LLM 只看图/视频和结构化事实；文件与进程全部由 Go 侧执行；某段解析失败
 // 不拖垮整次解析（该段 Style 置空，其余段照常产出）。
 // 视频直读（2026-10-08）：PUBLIC_BASE_URL 配置后，阶段2 每个风格单元附 480p 无声剪辑
-// 的签名 URL 供模型直看（动效/运镜/节奏实测）；未配置或剪辑失败自动退纯帧。见 video.go。
+// 的签名 URL 供模型直看（运镜/转场/节奏实测）；未配置或剪辑失败自动退纯帧。见 video.go。
 
 import (
 	"context"
@@ -103,8 +103,8 @@ func (s *Store) runAgent(ctx context.Context, ref *Ref) {
 		return
 	}
 
-	// 4. 阶段2：提炼风格包（附原视频剪辑直读——动效/运镜以视频实测为准；剪辑/签名
-	//    任一步不成自动退纯帧，视频是增强项不挡解析）
+	// 4. 阶段2：打标 + 特色提炼（附原视频剪辑直读——运镜/转场以视频实测为准；剪辑/签名
+	//    任一步不成自动退纯帧，视频是增强项不挡解析；结构自检失败重喂 ≤2 轮在 synthesize 内）
 	if st.Kind != "multi" || len(st.Segments) < 2 {
 		notes, err := s.analyzeCompositions(ctx, prov, feats.Frames)
 		if err != nil {
@@ -118,10 +118,6 @@ func (s *Store) runAgent(ctx context.Context, ref *Ref) {
 		}
 		if err != nil {
 			fail(err)
-			return
-		}
-		if errs := validateStyle(style); len(errs) > 0 {
-			fail(fmt.Errorf("风格包自检未过: %s", strings.Join(errs, "; ")))
 			return
 		}
 		ref.Kind, ref.Style, ref.Segments = "single", style, nil
@@ -316,11 +312,6 @@ func (s *Store) analyzeSegments(ctx context.Context, prov *llm.Provider, video s
 		}
 		if err != nil {
 			draft.Error = err.Error()
-			out = append(out, draft)
-			continue
-		}
-		if errs := validateStyle(style); len(errs) > 0 {
-			draft.Error = "风格包自检未过: " + strings.Join(errs, "; ")
 			out = append(out, draft)
 			continue
 		}

@@ -400,6 +400,10 @@ func stageStyleSamples(p *Project) error {
 		if err := contract.ValidateStyleSamples(&ss); err != nil {
 			return err // 包括 confirmed=false：等待用户确认
 		}
+		// 会话模式（人工/上轮产物）也过落点校验：简报存在时特色必须登记齐
+		if err := LoadStyleBrief(p).CheckAbsorption(ss.SignatureAbsorption); err != nil {
+			return fmt.Errorf("人工样张产物不合格: %w", err)
+		}
 		if err := writeFile(final, mustJSON(ss)); err != nil {
 			return err
 		}
@@ -409,7 +413,8 @@ func stageStyleSamples(p *Project) error {
 
 	// API 模式：直出设计系统（confirmed 置 false，等用户在舞台确认——硬门由 final 落定校验把守）。
 	// NoThink：设计+样张是结构化 CSS 作业，开思考烧上万 reasoning token、拖到分钟级。
-	// 产出比 v1 大（皮肤×2+三角色+动效+装置+样张），草稿校验带修复循环（缺项回喂重出，≤2 轮）。
+	// 产出比 v1 大（皮肤×2+三角色+动效+装置+样张），草稿校验带修复循环（缺项回喂重出，≤2 轮）；
+	// 风格简报存在时追加特色落点覆盖检查（v3 §4.5：机械数数，缺/越枚举=打回）。
 	sb, err := p.LoadStoryboard()
 	if err != nil {
 		return fmt.Errorf("先完成 storyboard: %w", err)
@@ -426,6 +431,9 @@ func stageStyleSamples(p *Project) error {
 				break
 			}
 			verr := contract.ValidateStyleSamplesDraft(&ss)
+			if verr == nil {
+				verr = LoadStyleBrief(p).CheckAbsorption(ss.SignatureAbsorption)
+			}
 			if verr == nil {
 				ss.Confirmed = false
 				if err := writeFile(final, mustJSON(ss)); err != nil {
@@ -710,8 +718,9 @@ const xfadeDur = 0.4
 
 var errXfadeShort = errors.New("xfade: 段过短")
 
-// transitionFor 转场模式：project.json "transition" > 风格 tokens.transition > "fade"。
+// transitionFor 转场模式：project.json "transition" > "fade"。
 // cut=页内硬切；fade=v1 页内黑场微叠化；xfade=v1b concat 侧真交叉叠化。
+// v3 库条目不携带 tokens，读库配置的旧路径已随 schema 退役。
 func transitionFor(p *Project) string {
 	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil {
 		var m map[string]any
@@ -721,24 +730,7 @@ func transitionFor(p *Project) string {
 			}
 		}
 	}
-	if id := ProjectStyleID(p); id != "" {
-		if v := styleStr(id, "transition", ""); v != "" {
-			return v
-		}
-	}
 	return "fade"
-}
-
-// styleStr registry tokens 字符串值（styleBool 的字符串版）。
-func styleStr(styleID, key, def string) string {
-	t, ok := styleTokens(styleID)
-	if !ok {
-		return def
-	}
-	if s, _ := t[key].(string); strings.TrimSpace(s) != "" {
-		return strings.ToLower(strings.TrimSpace(s))
-	}
-	return def
 }
 
 // ProjectStyleID 项目的风格库锚点：style_samples.style_id 优先（选库/冷启动落盘），
@@ -756,34 +748,6 @@ func ProjectStyleID(p *Project) string {
 		return strings.TrimSpace(sb.StyleID)
 	}
 	return ""
-}
-
-// styleTokens 风格库条目 tokens（library/styles.json；id 大小写不敏感）。
-func styleTokens(styleID string) (map[string]any, bool) {
-	if dataDir == "" || strings.TrimSpace(styleID) == "" {
-		return nil, false
-	}
-	b, err := os.ReadFile(filepath.Join(dataDir, "library", "styles.json"))
-	if err != nil {
-		return nil, false
-	}
-	var entries []struct {
-		ID     string          `json:"id"`
-		Tokens json.RawMessage `json:"tokens"`
-	}
-	if json.Unmarshal(b, &entries) != nil {
-		return nil, false
-	}
-	for _, e := range entries {
-		if strings.EqualFold(e.ID, styleID) {
-			var t map[string]any
-			if json.Unmarshal(e.Tokens, &t) != nil {
-				return nil, false
-			}
-			return t, true
-		}
-	}
-	return nil, false
 }
 
 // timelineRow xfade 成片的实际段边界（sfx 布点/前端时间轴对齐的权威口径）。
@@ -1141,8 +1105,8 @@ const (
 	sfxRiserVol  = 0.38
 )
 
-// sfxFor 转场音效开关：project.json "transition_sfx"（true/false）>
-// 风格 tokens.transition_sfx > 默认关。
+// sfxFor 转场音效开关：project.json "transition_sfx"（true/false）> 默认关。
+// v3 库条目不携带 tokens，读库配置的旧路径已随 schema 退役。
 func sfxFor(p *Project) bool {
 	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil {
 		var meta struct {
@@ -1152,17 +1116,7 @@ func sfxFor(p *Project) bool {
 			return *meta.TransitionSFX
 		}
 	}
-	return styleBool(ProjectStyleID(p), "transition_sfx")
-}
-
-// styleBool 风格条目 tokens 里的布尔开关（styles.json；id 大小写不敏感）。
-func styleBool(styleID, key string) bool {
-	t, ok := styleTokens(styleID)
-	if !ok {
-		return false
-	}
-	on, _ := t[key].(bool)
-	return on
+	return false
 }
 
 // SetTransitionSFX 写 project.json 的 transition_sfx 字段（agent 工具 set_sfx 落点）。
@@ -1338,6 +1292,7 @@ func (fx *postFX) off() bool {
 }
 
 // postFor 后期参数解析（stitch 每次执行时读盘——换风格/改配置无需重启）。
+// v3 库条目不携带 tokens，读库 post 的旧路径已随 schema 退役。
 func postFor(p *Project) *postFX {
 	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil {
 		var meta struct {
@@ -1354,33 +1309,8 @@ func postFor(p *Project) *postFX {
 			}
 		}
 	}
-	if fx := stylePost(ProjectStyleID(p)); fx != nil {
-		return fx
-	}
 	d := defaultPostFX
 	return &d
-}
-
-// stylePost 风格条目 tokens.post（styles.json；id 大小写不敏感，未配返回 nil）。
-func stylePost(styleID string) *postFX {
-	t, ok := styleTokens(styleID)
-	if !ok {
-		return nil
-	}
-	raw, _ := t["post"].(string)
-	if raw == "" {
-		if m, _ := t["post"].(map[string]any); m == nil {
-			return nil
-		}
-	}
-	var fx postFX
-	if b, err := json.Marshal(t["post"]); err == nil && json.Unmarshal(b, &fx) == nil {
-		if fx.off() {
-			return nil
-		}
-		return &fx
-	}
-	return nil
 }
 
 // videoChain 后期视频滤镜链（空 = 无滤镜）。顺序：色差 → 暗角 → 颗粒

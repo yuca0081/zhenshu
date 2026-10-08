@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"io"
 	"net/http"
 	"os"
@@ -80,12 +79,16 @@ func (s *Server) Router() *gin.Engine {
 	api.GET("/library/:id/frames", s.libraryFrames)
 	api.GET("/library/:id/media/:file", s.libraryMedia)
 	api.POST("/library/:id/publish", s.publishPack)
+	api.GET("/vocab", s.listVocab)
 	api.POST("/references", s.uploadReference)
 	api.GET("/references", s.listReferences)
 	api.GET("/references/:id/frames", s.referenceFrames)
 	api.GET("/references/:id/media/:file", s.referenceMedia)
 	api.POST("/references/:id/analyze", s.analyzeReference)
 	api.POST("/references/:id/confirm", s.confirmReference)
+	api.PUT("/references/:id/draft", s.updateReferenceDraft)
+	api.GET("/references/:id/seg/:seg/frames", s.referenceSegFrames)
+	api.GET("/references/:id/seg/:seg/media/:file", s.referenceSegMedia)
 	// 临时视频接口不进 tokened 组（大模型不会带 X-API-Token）：防线是 HMAC 签名 +
 	// 有效期 + clip-*.mp4 白名单（styleref.VerifyVideo/VideoFile），只暴露解析剪辑。
 	r.GET("/api/llm-video/:id/:name", s.llmVideo)
@@ -371,13 +374,16 @@ func (s *Server) saveManuscript(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true, "word_count": words, "storyboard_stale": hasSb == nil})
 }
 
-// applyStyle 风格弹窗选定库内风格包：写 style_samples.json 并直接标记已确认
-// （弹窗里预览样张后显式点「确认使用」= 硬门通过，无需再回舞台点一遍）。
-// 同时把选定包记入 project.json，后续 extract_stylepack / 复用链路读同一字段。
+// applyStyle 风格弹窗选定库内条目（v3 §4.5）：写 style/style_brief.json（含特色
+// 开关——disabled 是用户关掉的特色 id，默认全开），并把选定条目记入 project.json。
+// **行为变化（相对 v2）**：不再「即时生效跳过样张确认」——v3 条目没有自带样张，
+// 设计系统必须本片现发明，样张确认硬门对所有人成立；旧样张产物一并清掉，
+// 风格门回到「等出样张」。重选条目 = brief 整体重写。
 func (s *Server) applyStyle(c *gin.Context) {
 	var in struct {
-		StyleID     string `json:"style_id"`
-		StylePackID string `json:"stylepack_id"` // 旧字段名，前端过渡期兼容
+		StyleID     string   `json:"style_id"`
+		StylePackID string   `json:"stylepack_id"` // 旧字段名，前端过渡期兼容
+		Disabled    []string `json:"disabled"`     // 关掉的特色 id（默认全开）
 	}
 	if err := c.ShouldBindJSON(&in); err != nil || (strings.TrimSpace(in.StyleID) == "" && strings.TrimSpace(in.StylePackID) == "") {
 		c.JSON(400, gin.H{"error": "缺少 style_id"})
@@ -398,28 +404,25 @@ func (s *Server) applyStyle(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "项目不存在"})
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(p.Artifact("style/style_samples.json")), 0o755); err != nil {
+	disabled := map[string]bool{}
+	for _, sig := range in.Disabled {
+		disabled[sig] = true
+	}
+	brief, err := s.Lib.BuildBrief(pack.ID, disabled)
+	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	// 弹窗预览 + 显式确认一步完成：confirmed 翻 true（StyleSamplesJSON 默认 false 等舞台点头）
-	var ss map[string]any
-	if err := json.Unmarshal(pack.StyleSamplesJSON(), &ss); err != nil {
+	if err := stylelib.WriteBriefFile(p.Artifact("style/style_brief.json"), brief); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	ss["confirmed"] = true
-	if err := os.WriteFile(p.Artifact("style/style_samples.json"), pipeline.MustJSONBytes(ss), 0o644); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	// 模板自带风格文件则一并锁定进项目（§12.3：皮肤定死是模板强一致的来源）
-	if pack.Skin != nil {
-		if sb, merr := json.MarshalIndent(pack.Skin, "", "  "); merr == nil {
-			_ = pipeline.WriteFileAtomic(p.Artifact("style/skin.json"), sb, 0o644)
-		}
-	} else {
-		_ = os.Remove(p.Artifact("style/skin.json")) // 换模板防残留旧皮肤
+	// 旧样张产物作废（强参考换了，设计必须重发明）：样张/皮肤/设计文档/LLM 中间产物
+	for _, f := range []string{
+		"style/style_samples.json", "style/skin.json", "style/design.md", "llm/style_samples.json",
+		"style/sample-0.png", "style/sample-1.png", "style/sample-2.png",
+	} {
+		_ = os.Remove(p.Artifact(f))
 	}
 	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil {
 		var meta map[string]any
@@ -428,10 +431,18 @@ func (s *Server) applyStyle(c *gin.Context) {
 			_ = pipeline.WriteFileAtomic(p.Artifact("project.json"), pipeline.MustJSONBytes(meta), 0o644)
 		}
 	}
-	s.updateStatus(id, "style")
-	p.Manifest("style.applied", fmt.Sprintf("库内风格包「%s」", pack.Name))
-	s.Hub.Emit(id, "style_confirmed", "", pack.Direction)
-	c.JSON(200, gin.H{"ok": true, "direction": pack.Direction})
+	// 风格门回到「等出样张」：状态按剩余前置降级（有分镜=storyboard，有稿=manuscript）
+	back := "created"
+	if _, err := os.Stat(p.Artifact("input/article.txt")); err == nil {
+		back = "manuscript"
+	}
+	if _, err := p.LoadStoryboard(); err == nil {
+		back = "storyboard"
+	}
+	s.updateStatus(projID, back)
+	p.Manifest("style.applied", fmt.Sprintf("库内风格「%s」＋特色×%d（强参考）", pack.Name, len(brief.Signatures)))
+	s.Hub.Emit(projID, "style_applied", "", pack.Name)
+	c.JSON(200, gin.H{"ok": true, "name": pack.Name, "signatures": len(brief.Signatures)})
 }
 
 func (s *Server) storyboard(c *gin.Context) {
@@ -946,9 +957,8 @@ func (s *Server) analyzeReference(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true})
 }
 
-// confirmReference 解析结果入库：styles.json 注册（引擎吃 tokens）。
-// single = 全片一个风格条目；multi（合集）= 每段入库一个风格条目。
-// 两条路径都把代表帧拷成 cover.png 并作为条目第一张样张——封面即视频里的真实画面。
+// confirmReference 解析结果入库：styles.json 写「标签+特色」条目。
+// single = 全片一个条目；multi（合集）= 每段一个条目。
 func (s *Server) confirmReference(c *gin.Context) {
 	ref, err := s.Refs.Get(c.Param("id"))
 	if err != nil {
@@ -961,19 +971,15 @@ func (s *Server) confirmReference(c *gin.Context) {
 	}
 
 	refDir := filepath.Join(s.DataDir, "references", ref.ID)
-	if ref.Kind == "multi" { // 合集：每段一个风格条目
+	if ref.Kind == "multi" { // 合集：每段一个条目
 		ids := []string{}
 		for i := range ref.Segments {
 			seg := &ref.Segments[i]
 			if seg.Style == nil {
 				continue // 该段解析失败（原因在 segments[i].error），跳过
 			}
-			desc := fmt.Sprintf("从参考视频「%s」第 %d 段（%.0f-%.0fs）解析提炼", ref.Name, seg.Index, seg.Start, seg.End)
-			if seg.Style.Genre != "" {
-				desc += "；" + seg.Style.Genre
-			}
-			st, err := s.ingestRefStyle(c, fmt.Sprintf("%s-s%02d", ref.ID, seg.Index), seg.Name, seg.Name,
-				seg.Style, filepath.Join(refDir, seg.Dir), desc)
+			st, err := s.ingestRefStyle(fmt.Sprintf("%s-s%02d", ref.ID, seg.Index), seg.Style,
+				filepath.Join(refDir, seg.Dir))
 			if err != nil {
 				c.JSON(500, gin.H{"error": err.Error()})
 				return
@@ -992,12 +998,8 @@ func (s *Server) confirmReference(c *gin.Context) {
 		return
 	}
 
-	// single：全片一个风格条目（老行为 + 封面样张）
-	desc := "从参考视频「" + ref.Name + "」解析提炼"
-	if ref.Style.Genre != "" {
-		desc += "；" + ref.Style.Genre
-	}
-	st, err := s.ingestRefStyle(c, ref.ID, "", ref.Style.Direction, ref.Style, refDir, desc)
+	// single：全片一个条目
+	st, err := s.ingestRefStyle(ref.ID, ref.Style, refDir)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -1009,46 +1011,45 @@ func (s *Server) confirmReference(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true, "style_id": st.ID})
 }
 
-// ingestRefStyle 单条参考风格入库：草稿形变（tokens/layouts/samples）+ 代表帧封面
-// 样张前置 + IngestVideoRef + 原片/抽帧快照，multi/single 两路径共用。
-// seedID 是 IngestVideoRef 的 refID 种子（multi 为 "<refID>-sNN"，single 为 refID）；
-// 封面图 src 的条目 id 用 stylelib.VideoStyleID(seedID) 与 IngestVideoRef 赋 id 同源推导。
-func (s *Server) ingestRefStyle(c *gin.Context, seedID, name, coverName string, d *styleref.StyleDraft, dir, desc string) (*stylelib.Style, error) {
-	var tokens map[string]any
-	_ = json.Unmarshal(d.Tokens, &tokens)
-	var layouts []stylelib.Layout
-	for _, l := range d.Layouts {
-		layouts = append(layouts, stylelib.Layout{ID: l.ID, Name: l.Name, Desc: l.Desc})
-	}
-	var samples []stylelib.Sample
-	for _, smp := range d.Samples {
-		samples = append(samples, stylelib.Sample{Tag: smp.Tag, Desc: smp.Desc, HTML: smp.HTML})
-	}
+// ingestRefStyle 一条参考风格入库：帧引用存在性校验（对着解析帧目录）+ 代表帧
+// 封面 + IngestVideoRef（新载荷：标签+特色+题材一句话）+ 原片/抽帧快照，
+// multi/single 两路径共用。seedID 是 IngestVideoRef 的 refID 种子（multi 为
+// "<refID>-sNN"，single 为 refID）。
+func (s *Server) ingestRefStyle(seedID string, d *styleref.StyleDraft, dir string) (*stylelib.Style, error) {
 	feats := styleref.ReadFeatures(dir)
-	if t := makeCover(dir, feats); t >= 0 {
-		samples = append([]stylelib.Sample{coverSample(stylelib.VideoStyleID(seedID), coverName, t)}, samples...)
-	}
-	// 真迹关键帧登记：均匀挑 ≤5 张（首尾必含），快照时随 frame-*.png 一起进媒体目录
-	var frameNames []string
+	valid := map[string]bool{}
 	for _, f := range feats {
-		frameNames = append(frameNames, filepath.Base(f.Path))
+		valid[filepath.Base(f.Path)] = true
 	}
+	// 帧引用实存校验（§4.1：入库时执行——确认页人工改动可能引入坏引用）
+	for _, ev := range d.TagEvidence {
+		for _, f := range ev.Frames {
+			if !valid[f] {
+				return nil, fmt.Errorf("标签 %s 的证据帧 %s 不存在", ev.Tag, f)
+			}
+		}
+	}
+	for _, sg := range d.Signatures {
+		for _, f := range sg.Frames {
+			if !valid[f] {
+				return nil, fmt.Errorf("特色 %s 的证据帧 %s 不存在", sg.Name, f)
+			}
+		}
+	}
+	makeCover(dir, feats) // 代表帧拷成 cover.png（卡片封面/回看），失败不挡入库
 	st, err := s.Lib.IngestVideoRef(seedID, stylelib.VideoStyleIn{
-		Name: name, Direction: d.Direction, Subject: d.Subject, Genre: d.Genre, Keywords: d.Keywords, Desc: desc,
-		Tokens: tokens, Layouts: layouts,
-		Concept: d.Concept, Fonts: d.Fonts, Motion: d.Motion, Device: d.Device,
-		AntiPatterns: d.AntiPatterns,
-		Keyframes:    stylelib.PickKeyframes(frameNames, 5),
-		Samples:      samples,
+		Name:        d.Name,
+		Subject:     d.Subject,
+		Tags:        d.Tags,
+		TagEvidence: d.TagEvidence,
+		Signatures:  d.Signatures,
 	})
 	if err != nil {
 		return nil, err
 	}
 	// 原片+抽帧快照进风格目录：参考视频库删除后风格详情仍可回看（失败不挡入库，
 	// 详情抽屉对老条目/缺快照自动回退 references 目录）
-	if serr := s.Lib.SnapshotMedia(st.ID, dir); serr != nil {
-		c.Header("X-Media-Snapshot", "failed")
-	}
+	_ = s.Lib.SnapshotMedia(st.ID, dir)
 	return st, nil
 }
 
@@ -1075,21 +1076,35 @@ func (s *Server) llmVideo(c *gin.Context) {
 	serveFile(c, path, name, "no-store")
 }
 
-// coverSample 条目第一张样张：该风格段的真实画面帧（media 快照服务提供图片）。
-func coverSample(styleID, displayName string, t float64) stylelib.Sample {
-	name := template.HTMLEscapeString(displayName)
-	return stylelib.Sample{
-		Tag:  "参考片段截图（封面）",
-		Desc: fmt.Sprintf("取自参考视频 t=%.1fs", t),
-		HTML: fmt.Sprintf(`<!DOCTYPE html><html><head><meta charset='utf-8'><style>
-html,body{width:960px;height:540px;margin:0;overflow:hidden;background:#111}
-img{position:absolute;inset:0;width:960px;height:540px;object-fit:cover}
-.b{position:absolute;left:0;right:0;bottom:0;padding:16px 26px;
-background:linear-gradient(transparent,rgba(0,0,0,.78));color:#fff;
-font-family:'Microsoft YaHei',sans-serif;font-size:24px;letter-spacing:2px;text-shadow:0 1px 4px rgba(0,0,0,.5)}
-</style></head><body><img src='/api/library/%s/media/cover.png'><div class='b'>%s</div></body></html>`,
-			styleID, name),
+// listVocab 风格词表（只读，前端展示词条 brief 用；空表 = 冷启动正常态）。
+func (s *Server) listVocab(c *gin.Context) {
+	entries := s.Lib.VocabList()
+	if entries == nil {
+		entries = []stylelib.VocabEntry{}
 	}
+	c.JSON(200, entries)
+}
+
+// updateReferenceDraft 确认页编辑解析草稿（§4.4：入库前可增删改特色）。
+// seg 为段序（multi 用，1 起；缺省/0 = single 整片草稿）。
+func (s *Server) updateReferenceDraft(c *gin.Context) {
+	var in struct {
+		Seg   int                  `json:"seg"`
+		Style *styleref.StyleDraft `json:"style"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || in.Style == nil {
+		c.JSON(400, gin.H{"error": "缺少 style 草稿"})
+		return
+	}
+	if err := stylelib.ValidateSignatures(in.Style.Signatures); err != nil {
+		c.JSON(400, gin.H{"error": "特色清单不合格：" + err.Error()})
+		return
+	}
+	if err := s.Refs.UpdateDraft(c.Param("id"), in.Seg, in.Style); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true})
 }
 
 // makeCover 代表帧（中位帧）拷成 cover.png，返回其时间点；无帧返回 -1。
@@ -1228,4 +1243,55 @@ func (s *Server) referenceMedia(c *gin.Context) {
 		return
 	}
 	serveFile(c, filepath.Join(s.DataDir, "references", id, name), name, "max-age=3600")
+}
+
+// segNo multi 段目录名（seg-01..seg-40）：白名单校验 + 目录实存。
+func (s *Server) segDir(id, seg string) (string, bool) {
+	n, err := strconv.Atoi(seg)
+	if err != nil || n < 1 || n > 40 {
+		return "", false
+	}
+	dir := filepath.Join(s.DataDir, "references", id, fmt.Sprintf("seg-%02d", n))
+	if _, err := os.Stat(dir); err != nil {
+		return "", false
+	}
+	return dir, true
+}
+
+// referenceSegFrames multi 段草稿的抽帧清单（证据帧在 seg-NN/ 子目录，确认页指认用）。
+func (s *Server) referenceSegFrames(c *gin.Context) {
+	id := c.Param("id")
+	if !isSlug(id) {
+		c.JSON(400, gin.H{"error": "非法路径"})
+		return
+	}
+	dir, ok := s.segDir(id, c.Param("seg"))
+	if !ok {
+		c.JSON(404, gin.H{"error": "段目录不存在"})
+		return
+	}
+	frames, _ := scanMediaDir(dir)
+	if frames == nil {
+		frames = []string{}
+	}
+	c.JSON(200, gin.H{"frames": frames})
+}
+
+// referenceSegMedia multi 段草稿的证据帧本体（白名单同 refMediaName）。
+func (s *Server) referenceSegMedia(c *gin.Context) {
+	id, name := c.Param("id"), c.Param("file")
+	if !isSlug(id) {
+		c.JSON(400, gin.H{"error": "非法路径"})
+		return
+	}
+	if !refMediaName(name) {
+		c.JSON(400, gin.H{"error": "非法文件名"})
+		return
+	}
+	dir, ok := s.segDir(id, c.Param("seg"))
+	if !ok {
+		c.JSON(404, gin.H{"error": "段目录不存在"})
+		return
+	}
+	serveFile(c, filepath.Join(dir, name), name, "max-age=3600")
 }

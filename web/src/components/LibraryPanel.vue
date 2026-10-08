@@ -1,17 +1,23 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { NButton, NPopconfirm, NTag, useMessage } from 'naive-ui'
-import { api } from '../api'
-import { coverStyle } from '../format'
-import SampleFrame from './SampleFrame.vue'
+import { api, libraryMediaURL } from '../api'
 import TemplateDetail from './TemplateDetail.vue'
-import type { Style, TemplateDetailData } from '../types'
+import type { Style, TemplateDetailData, VocabEntry } from '../types'
 
 const props = defineProps<{ packs: Style[] }>()
 const emit = defineEmits<{ publish: [id: string]; deleted: [] }>()
 const message = useMessage()
 
-// 删除条目（库里没有撤销；已出片项目不受影响——样张/皮肤选用时已拷走）
+// 词表（条目标签 id → 名称/简介 join 用；加载失败退裸 id）
+const vocab = ref<VocabEntry[]>([])
+async function loadVocab() {
+  vocab.value = await api.listVocab().catch(() => [] as VocabEntry[])
+}
+loadVocab()
+const vEntry = (id: string) => vocab.value.find(v => v.id === id)
+
+// 删除条目（库里没有撤销；已出片项目不受影响——简报在选用时已拷走）
 async function onDelete(id: string) {
   try {
     await api.deleteLibrary(id)
@@ -24,33 +30,21 @@ async function onDelete(id: string) {
   emit('deleted')
 }
 
-// 点卡片开详情抽屉：条目本体自带 tokens/layouts/全套样张，直接规范化
+// 点卡片开详情抽屉：标签 join 词表
 const show = ref(false)
 const detail = ref<TemplateDetailData | null>(null)
 function open(s: Style) {
   detail.value = {
     title: s.name,
     status: { label: s.published ? '已入库' : '草稿', type: s.published ? 'success' : 'warning' },
-    direction: s.direction,
-    genre: s.genre,
-    keywords: s.keywords,
-    layouts: s.layouts,
-    tokens: s.tokens ?? null,
-    concept: s.concept,
-    fonts: s.fonts,
-    motion: s.motion,
-    device: s.device,
-    anti_patterns: s.anti_patterns,
-    samples: (s.samples ?? []).map(x => ({ tag: x.tag, desc: x.desc, html: x.html })),
+    subject: s.subject,
+    tags: [s.tags.main, ...(s.tags.aux ?? [])]
+      .filter(Boolean)
+      .map(id => ({ id, name: vEntry(id)?.name ?? id, brief: vEntry(id)?.brief })),
+    tagEvidence: s.tag_evidence ?? [],
+    signatures: s.signatures ?? [],
     originLabel: '来源 ' + (s.origin_project || '—'),
     createdAt: new Date(s.created_at).toLocaleDateString(),
-    desc: s.desc,
-    extraTags: [
-      s.skin ? '风格文件' : '',
-      s.layouts?.length ? `版式×${s.layouts.length}` : '',
-      s.tokens ? '色板' : '',
-      s.motion || s.device ? '设计系统' : '',
-    ].filter(Boolean),
     libMediaId: s.origin_project?.startsWith('video:') ? s.id : undefined,
     packId: s.id,
     published: s.published,
@@ -61,28 +55,25 @@ function onPublish(id: string) {
   show.value = false // 关抽屉再入库：入库后 packs 刷新，避免抽屉里状态过期
   emit('publish', id)
 }
-
-// 卡片副行：题材 + 关键词摘要
-function subline(s: Style): string {
-  const kw = (s.keywords ?? []).slice(0, 3).join(' · ')
-  return [s.genre, kw].filter(Boolean).join('　')
-}
 </script>
 
 <template>
   <section class="lib">
     <header class="head">
       <h2>风格库</h2>
-      <p>可复用的视觉风格：色板 tokens 定死、版式仿照、内容自由——用同一风格出的片子同一套皮肤、相似气质。点击卡片看样张与色板详情。</p>
+      <p>策展目录 + 绝活收藏夹：条目只打公认风格标签，配参考片独有手法清单——选用即「强参考」，设计阶段现发明设计系统并逐条吸收。点卡片看标签、特色与证据帧。</p>
     </header>
     <div v-if="!packs.length" class="none">
-      风格库还是空的。出一条片、成片出片后 Agent 会自动起草风格，到这里确认入库；或在「视频解析」上传参考视频提炼。
+      风格库还是空的。在「视频解析」上传参考视频解析入库（词表会自动长出第一批词条）；出片后 Agent 也会自动起草。
     </div>
     <div v-else class="grid">
       <figure v-for="s in packs" :key="s.id" class="card" :class="{ draft: !s.published }" @click="open(s)">
-        <SampleFrame v-if="s.samples?.[0]?.html" :html="s.samples![0].html" />
-        <div v-else class="cover" :style="coverStyle(s)">
-          <b>{{ s.name }}</b>
+        <div class="cover">
+          <img v-if="s.origin_project?.startsWith('video:')" :src="libraryMediaURL(s.id, 'cover.png')"
+            loading="lazy" alt="" @error="($event.target as HTMLImageElement).style.display = 'none'" />
+          <div class="cover-fallback">
+            <b>{{ s.name }}</b>
+          </div>
         </div>
         <figcaption>
           <div class="row1">
@@ -91,13 +82,12 @@ function subline(s: Style): string {
               {{ s.published ? '已入库' : '草稿' }}
             </NTag>
           </div>
-          <span v-if="subline(s)" class="sub">{{ subline(s) }}</span>
-          <span v-if="s.desc" class="desc">{{ s.desc }}</span>
-          <div class="meta">
-            <NTag v-if="s.skin" size="tiny" :bordered="false" type="info">风格文件</NTag>
-            <NTag v-if="s.layouts?.length" size="tiny" :bordered="false" type="info">版式×{{ s.layouts.length }}</NTag>
-            <NTag v-if="(s.samples?.length ?? 0) > 1" size="tiny" :bordered="false" type="info">样张×{{ s.samples!.length }}</NTag>
+          <div class="chips">
+            <NTag size="tiny" :bordered="false" type="warning">{{ vEntry(s.tags.main)?.name ?? s.tags.main }}</NTag>
+            <NTag v-for="a in s.tags.aux ?? []" :key="a" size="tiny" :bordered="false">{{ vEntry(a)?.name ?? a }}</NTag>
+            <NTag v-if="s.signatures?.length" size="tiny" :bordered="false" type="info">特色×{{ s.signatures.length }}</NTag>
           </div>
+          <span v-if="s.subject" class="sub" :title="s.subject">{{ s.subject }}</span>
           <div class="row2">
             <span class="origin">{{ s.id }}</span>
             <span class="btns">
@@ -123,8 +113,8 @@ function subline(s: Style): string {
 <style scoped>
 .lib { flex: 1; min-height: 0; overflow: auto; padding: 24px 28px; }
 .head h2 { font-size: 16px; color: #d9d9e0; }
-.head p { font-size: 12.5px; color: #7c7c88; margin: 4px 0 18px; }
-.none { color: #55555f; font-size: 13px; padding: 40px 0; }
+.head p { font-size: 12.5px; color: #7c7c88; margin: 4px 0 18px; line-height: 1.6; }
+.none { color: #55555f; font-size: 13px; padding: 40px 0; line-height: 1.8; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
 .card {
   background: #14141a; border: 1px solid #232329; border-radius: 12px; overflow: hidden;
@@ -135,14 +125,16 @@ function subline(s: Style): string {
 figcaption { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
 .row1 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .row1 b { font-size: 13px; }
-.sub { font-size: 11.5px; color: #e0c985; }
-.desc { font-size: 11.5px; color: #8a8a96; }
-.meta { display: flex; gap: 6px; flex-wrap: wrap; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.sub { font-size: 11.5px; color: #8a8a96; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row2 { display: flex; align-items: center; justify-content: space-between; }
 .btns { display: flex; gap: 6px; align-items: center; }
 .origin { font-size: 11px; color: #55555f; font-family: monospace; }
-.cover {
-  height: 169px; display: grid; place-items: center; padding: 0 18px; text-align: center;
+.cover { position: relative; height: 150px; background: #0d0d12; }
+.cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.cover-fallback {
+  position: absolute; inset: 0; display: grid; place-items: center; padding: 0 18px; text-align: center;
+  background: linear-gradient(135deg, #1a1a22, #23232e);
 }
-.cover b { color: #fff; font-size: 16px; letter-spacing: 1px; text-shadow: 0 1px 6px rgba(0,0,0,.45); }
+.cover-fallback b { color: #d9d9e0; font-size: 15px; letter-spacing: 1px; }
 </style>

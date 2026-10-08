@@ -189,6 +189,65 @@ func (a *Agent) selectedStyle(p *pipeline.Project) *stylelib.Style {
 	return st
 }
 
+// draftedStyle 幂等探测（extract_stylepack 前行）：style_samples.style_id 命中库内
+// 条目（本就出自库）或同项目已起草过 → 返回该条目；nil = 需要走 LLM 起草。
+func (a *Agent) draftedStyle(p *pipeline.Project) *stylelib.Style {
+	if st := a.selectedStyle(p); st != nil {
+		return st
+	}
+	styles, err := a.Lib.List()
+	if err != nil {
+		return nil
+	}
+	for i := range styles {
+		if styles[i].OriginProject == p.ID {
+			return &styles[i]
+		}
+	}
+	return nil
+}
+
+// designDigest 本片设计系统人话摘要（extract_stylepack 的打标原料）。
+func designDigest(p *pipeline.Project) (string, error) {
+	b, err := os.ReadFile(p.Artifact("style/style_samples.json"))
+	if err != nil {
+		return "", fmt.Errorf("项目无设计系统（style_samples.json 缺失）")
+	}
+	var ss contract.StyleSamples
+	if err := json.Unmarshal(b, &ss); err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "- 方向：%s\n- 概念：%s\n", ss.Direction, ss.Concept)
+	for i, sk := range ss.EffectiveSkins() {
+		label := "皮肤"
+		if i == 1 {
+			label = "副皮肤"
+		}
+		fmt.Fprintf(&sb, "- %s「%s」：底 %s / 字 %s / 强调 %s；css %s\n",
+			label, sk.Name, sk.Slots.BG, sk.Slots.TXT, sk.Slots.Accent, pipeline.FirstLine(sk.CSS, 200))
+	}
+	if ss.SkinRule != "" {
+		fmt.Fprintf(&sb, "- 皮肤切换：%s\n", ss.SkinRule)
+	}
+	if f := ss.Fonts; f != nil {
+		fmt.Fprintf(&sb, "- 字体：display %s / body %s / data %s\n", f.Display.Stack, f.Body.Stack, f.Data.Stack)
+	}
+	if m := ss.Motion; m != nil {
+		fmt.Fprintf(&sb, "- 动效：%s，进场 %.2fs 落定 %.2fs 错峰 %.2fs——%s\n", m.Ease, m.DurIn, m.DurSettle, m.Stagger, m.Notes)
+	}
+	if d := ss.Device; d != nil {
+		fmt.Fprintf(&sb, "- 贯穿装置「%s」：%s；逐段：%s\n", d.Name, d.Desc, d.PerSeg)
+	}
+	for _, l := range ss.Layouts {
+		fmt.Fprintf(&sb, "- 版式 %s（%s）：%s\n", l.ID, l.Name, l.Desc)
+	}
+	if len(ss.AntiPatterns) > 0 {
+		fmt.Fprintf(&sb, "- 负面清单：%s\n", strings.Join(ss.AntiPatterns, "、"))
+	}
+	return sb.String(), nil
+}
+
 // regenerateStyle 按用户修改要求重新出样张：旧样张备份防翻车，要求写 input/style_notes.txt，
 // 跑 style_samples 阶段（API 直调；未配 LLM 时降级为会话请求文件）。
 // 失败还原旧样张——项目任何时刻都不留「样张空洞」；成功则清库内指向与截图缓存。
@@ -220,8 +279,9 @@ func (a *Agent) regenerateStyle(p *pipeline.Project, instruction, out string) st
 	for i := 0; i < 3; i++ { // 截图缓存一并清掉，防 produce 把旧图配新样张
 		_ = os.Remove(p.Artifact(fmt.Sprintf("style/sample-%d.png", i)))
 	}
-	_ = os.Remove(p.Artifact("style/skin.json")) // 旧皮肤随旧样张作废，确认新样张时重落
-	_ = os.Remove(p.Artifact("style/design.md")) // 旧设计系统文档同样作废（确认新样张时机械重渲）
+	_ = os.Remove(p.Artifact("style/skin.json"))   // 旧皮肤随旧样张作废，确认新样张时重落
+	_ = os.Remove(p.Artifact("style/design.md"))   // 旧设计系统文档同样作废（确认新样张时机械重渲）
+	_ = os.Remove(p.Artifact("style/style_brief.json")) // 用户点名换方向：强参考简报一并作废
 	notes := "原风格方向：" + prevDir + "\n用户修改要求：" + instruction
 	if err := os.MkdirAll(filepath.Dir(p.Artifact("input/style_notes.txt")), 0o755); err != nil {
 		return restore(err)
@@ -233,13 +293,14 @@ func (a *Agent) regenerateStyle(p *pipeline.Project, instruction, out string) st
 		return restore(err)
 	}
 	_ = os.Remove(bak)
-	// 自拟重生成后不再指向库内风格包（样张已不是那一包的）
+	// 自拟重生成后不再指向库内风格（样张已不是那一包的；简报也已在开头清掉）
 	var pj struct {
 		StylePackID string `json:"stylepack_id"`
 	}
 	if b, rerr := os.ReadFile(p.Artifact("project.json")); rerr == nil && json.Unmarshal(b, &pj) == nil && pj.StylePackID != "" {
 		_ = pipeline.SetProjectField(p, "stylepack_id", "")
 	}
+	_ = pipeline.SetProjectField(p, "style_id", "")
 	dir := prevDir
 	var ss contract.StyleSamples
 	if b, rerr := os.ReadFile(out); rerr == nil && json.Unmarshal(b, &ss) == nil && ss.Direction != "" {

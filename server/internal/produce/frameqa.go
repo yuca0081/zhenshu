@@ -44,6 +44,9 @@ type frameVerdict struct {
 		Problem    string `json:"problem"`
 		Suggestion string `json:"suggestion"`
 	} `json:"issues"`
+	// v3 特色判据（§4.6 第二层）：简报存在时逐条判 absorbed/drifted/missing；
+	// missing|drifted → 判据原句进修复要求（sigFeedback）。
+	Signatures []sigVerdictRow `json:"signatures"`
 }
 
 // frameQA 对 only 段（空=全片）做视觉审查 + 自修复。instruction 是 rework 的
@@ -166,7 +169,11 @@ func (r *Runner) reviewSegments(ctx context.Context, p *pipeline.Project, only s
 	var wg sync.WaitGroup
 	// 真迹关键帧（风格来源视频原片帧）：考卷对照物升级——漂移判断有原始目标可依；
 	// 每段同一套真迹，循环外算一次。无媒体/压图失败为空（考卷退回只对照样张）。
-	keyImgs := styleKeyframeImages(ctx, r.DataDir, p)
+	keyImgs := styleKeyframeImages(ctx, p)
+	// v3 特色判据清单（简报特色 × 落点表）：每段同一套，循环外算一次；
+	// 含动态特色（transition/camera）才追加边界帧——没勾动态特色零额外抽帧（§4.6 成本策略）。
+	crits := signatureCriteria(pipeline.LoadStyleBrief(p), designOf(p))
+	dynamic := hasDynamicCrit(crits)
 	review := func(seg contract.Segment) {
 		defer wg.Done()
 		defer func() { <-sem }()
@@ -190,14 +197,20 @@ func (r *Runner) reviewSegments(ctx context.Context, p *pipeline.Project, only s
 		var vd frameVerdict
 		// high：逐段审查调用量大，max 的深思考成本×段数不划算；max 留给 storyboard 这类每片一次的深规划。
 		// 样张/真迹附在四帧之后（图5+）：风格一致性同场评审——笼子二的回路（plan-v2 §4 Tier1 报告项）。
+		// 段边界前后帧序列（transition 判据的考核证据）附在最后。
 		imgs := []string{dataURL(sf.first), dataURL(sf.open), dataURL(sf.last), dataURL(sf.final)}
 		if samples := styleSampleImages(p); len(samples) > 0 {
 			imgs = append(imgs, samples...)
 		}
 		imgs = append(imgs, keyImgs...)
+		var boundary []string
+		if dynamic {
+			boundary = extractBoundaryFrames(ctx, p, seg.Idx)
+			imgs = append(imgs, boundary...)
+		}
 		_, rerr := prov.GenerateJSONVisionEffort(ctx,
 			"你是视频的画面质检员，只输出 JSON。",
-			reviewPrompt(p, seg, voices[seg.ID], keyImgs),
+			reviewPrompt(p, seg, voices[seg.ID], keyImgs, crits, len(boundary)),
 			imgs, 0.2, &vd, llm.EffortHigh)
 		if rerr != nil {
 			r.Manifest(p, "frameqa.review_error", seg.ID+": "+rerr.Error())
@@ -205,12 +218,25 @@ func (r *Runner) reviewSegments(ctx context.Context, p *pipeline.Project, only s
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if vd.Pass && !hasHigh(vd) {
+		for _, sv := range vd.Signatures {
+			if sv.Verdict != "" {
+				r.Manifest(p, "frameqa.sig", fmt.Sprintf("%s %s: %s %s", seg.ID, sv.SigID, sv.Verdict, sv.Note))
+			}
+		}
+		if vd.Pass && !hasHigh(vd) && !sigFailed(vd.Signatures) {
 			r.Manifest(p, "frameqa.seg", fmt.Sprintf("%s: pass", seg.ID))
 			return
 		}
-		r.Manifest(p, "frameqa.seg", fmt.Sprintf("%s: fail（%d 个问题）", seg.ID, len(vd.Issues)))
-		failed[seg.ID] = issuesFeedback(vd)
+		nIssue := len(vd.Issues)
+		if sigFailed(vd.Signatures) {
+			nIssue += len(vd.Signatures)
+		}
+		r.Manifest(p, "frameqa.seg", fmt.Sprintf("%s: fail（%d 个问题）", seg.ID, nIssue))
+		feedback := issuesFeedback(vd)
+		if sigFailed(vd.Signatures) {
+			feedback += sigFeedback(vd.Signatures, crits)
+		}
+		failed[seg.ID] = feedback
 	}
 	for _, seg := range todo {
 		wg.Add(1)
@@ -330,8 +356,9 @@ func specHasScene(p *pipeline.Project, segID string) bool {
 
 // reviewPrompt 四帧一调（省钱且模型可对照）：首帧查提前穿帮，开场帧查清单外提前
 // 出现，落定帧查布局全项，尾帧查退场残留。图片按 图1=首帧、图2=开场帧、
-// 图3=落定帧、图4=尾帧 顺序附在消息里；样张/原片真迹跟在图5+（笼子二回路）。
-func reviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta, keys []string) string {
+// 图3=落定帧、图4=尾帧 顺序附在消息里；样张/原片真迹跟在图5+（笼子二回路）；
+// 段边界前后帧序列（transition 判据的考核证据）附在最末。crits 是特色判据清单（§4.6）。
+func reviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta, keys []string, crits []sigCriterion, boundaryN int) string {
 	samples := styleSampleImages(p)
 	styleBlock := styleCheckBlock(designOf(p), len(samples), len(keys))
 	var b strings.Builder
@@ -343,6 +370,9 @@ func reviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta, keys [
 		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张已确认的风格样张（底部字幕带是画面一部分，字幕文字不算元素）。", len(samples))
 	case len(keys) > 0:
 		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张本风格来源视频的原片真迹（底部字幕带是画面一部分，字幕文字不算元素）。", len(keys))
+	}
+	if boundaryN > 0 {
+		header += fmt.Sprintf("另附 %d 张段边界前后帧序列（转场判据的证据）。", boundaryN)
 	}
 	b.WriteString(fmt.Sprintf(`%s
 图1 = 首帧（0s，段的第一帧）；图2 = 开场帧（约 0.8s，开场元素刚落定）；
@@ -399,10 +429,18 @@ func reviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta, keys [
 `)
 	}
 	b.WriteString(styleBlock)
+	b.WriteString(criteriaBlock(crits, boundaryN))
 	b.WriteString(`
 ## 输出 JSON
-{"pass": true/false, "issues": [{"frame": "first|open|last|final|sample", "severity": "high|medium|low", "element": "哪个元素", "problem": "什么问题", "suggestion": "怎么改"}]}
-pass 标准：无 high 问题即 true；medium/low 记录但不算失败。`)
+{"pass": true/false, "issues": [{"frame": "first|open|last|final|sample", "severity": "high|medium|low", "element": "哪个元素", "problem": "什么问题", "suggestion": "怎么改"}]`)
+	if len(crits) > 0 {
+		b.WriteString(`,
+"signatures": [{"sig_id": "sig1", "verdict": "absorbed|drifted|missing", "note": "一句话依据"}]`)
+	}
+	b.WriteString(`
+}
+pass 标准：无 high 问题即 true；medium/low 记录但不算失败` +
+		map[bool]string{true: "；特色判据任一 missing/drifted 也算失败", false: ""}[len(crits) > 0] + "。")
 	return b.String()
 }
 

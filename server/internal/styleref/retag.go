@@ -1,0 +1,153 @@
+package styleref
+
+// 成片反哺入库（v3 §5 M1-4）：extract_stylepack 把本片已确认的设计系统起草成
+// 「标签+特色」草稿。成片只有本片、无原片帧——特色证据帧缺省（允许 frames 为空
+// 的草稿，人工在库页补），打标走文本通道（设计系统 digest → 词表比对 + 申请新词），
+// 与视频解析共用 resolveDraft 的词表查重/落表机制。
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"webpage-video-agent/server/internal/contract"
+	"webpage-video-agent/server/internal/llm"
+	"webpage-video-agent/server/internal/stylelib"
+)
+
+// DraftFromDesign 从项目设计系统起草标签+特色（agent 的 extract_stylepack 调用）。
+// designDigest 是设计系统的人话摘要（direction/concept/皮肤槽位/字体/动效/装置/
+// 版式/负面清单），lib 是风格库（词表查重落表用）。
+func DraftFromDesign(ctx context.Context, prov *llm.Provider, lib *stylelib.Library, projectName, designDigest string) (*StyleDraft, error) {
+	vocabList := lib.VocabList()
+	var vocabB strings.Builder
+	if len(vocabList) > 0 {
+		for _, e := range vocabList {
+			vocabB.WriteString("- " + e.ID + "（" + e.Name + "）：" + e.Brief + "\n")
+		}
+	} else {
+		vocabB.WriteString("（词表还是空的——你打的每个标签都会作为第一批新词申请入库）\n")
+	}
+	var lastErr error
+	for round := 0; round < 3; round++ {
+		var retryNote string
+		if lastErr != nil {
+			retryNote = "\n\n## 上一次输出被拒（修正后重出）\n" + lastErr.Error()
+		}
+		var raw taggerOutput
+		_, err := prov.GenerateJSONNoThink(ctx,
+			"你是视频风格策展人：给一套自制设计系统打公认风格标签、提炼它真正独有的手法特色。只输出 JSON。",
+			fmt.Sprintf(`给成片「%s」的设计系统打风格标签、提炼特色，产物进风格库供后续新片复用。
+
+## 风格词表（打标签先查这里）
+%s
+## 这套设计系统（本片已确认、全片遵守的规矩）
+%s
+## 打标签（主 1 + 辅 ≤2）
+- 只收有公认视觉定义的风格名词（设计史/影视行话立得住的）；词表里有的直接引用 id，
+  没有合适词条才「申请新词」（name+aliases+brief+tells+小写蛇形英文 id）；
+- note 写人话指认（这套系统里哪个决定支撑了这个判断）；frames 一律留空（成片没有原片帧，
+  证据帧由人工在库页补录）。
+
+## 提炼特色（≤6 条，只写这套系统真正独有的手法）
+- kind 六选一：%s；mechanism 写机制不写物件（换题材照做仍成立），use_hint 写什么节拍适合用；
+- 从 device/motion/skins/layouts/transition 习惯里挑有记号的机制；公认风格自带的手法不算特色；
+- frames 一律留空。
+
+## 题材只进 subject
+- subject 一句话记录本片画的是什么（≤30 字）——只供检索，永不进生成提示词。
+
+## 输出（只输出 JSON，无围栏）
+{"name":"条目名（≤12 字）","subject":"本片题材一句话","tags":[{"id":"..","new":{..},"note":".."}],
+"signatures":[{"kind":"..","name":"..","mechanism":"..","use_hint":".."}]}%s`,
+				projectName, vocabB.String(), designDigest, contract.SignatureKindNames(), retryNote),
+			&raw)
+		if err != nil {
+			return nil, fmt.Errorf("起草作业失败: %w", err)
+		}
+		d, rerr := resolveDesignDraft(ctx, prov, lib, &raw)
+		if rerr == nil {
+			return d, nil
+		}
+		lastErr = rerr
+	}
+	return nil, lastErr
+}
+
+// resolveDesignDraft 视频版 resolveDraft 的无帧变体：同样的词表落表纪律，
+// 但不做帧存在性校验（草稿允许空帧）。
+func resolveDesignDraft(ctx context.Context, prov *llm.Provider, lib *stylelib.Library, raw *taggerOutput) (*StyleDraft, error) {
+	if len(raw.Tags) < 1 || len(raw.Tags) > 3 {
+		return nil, fmt.Errorf("tags 数量 %d 不合法（主 1 + 辅 ≤2）", len(raw.Tags))
+	}
+	vocab, err := lib.LoadVocab()
+	if err != nil {
+		return nil, fmt.Errorf("词表读取失败: %w", err)
+	}
+	var pend []*newWord
+	ids := make([]string, 0, len(raw.Tags))
+	names := make([]string, 0, len(raw.Tags))
+	for i, t := range raw.Tags {
+		switch {
+		case t.ID != "" && vocab.Has(t.ID):
+			ids = append(ids, t.ID)
+			names = append(names, vocab.Entries[t.ID].Name)
+		case t.New != nil && strings.TrimSpace(t.New.Name) != "":
+			if hit, ok := vocab.Find(t.New.Name); ok {
+				ids = append(ids, hit.ID)
+				names = append(names, hit.Name)
+			} else {
+				ids = append(ids, "")
+				names = append(names, strings.TrimSpace(t.New.Name))
+				pend = append(pend, t.New)
+			}
+		default:
+			return nil, fmt.Errorf("第 %d 个标签既不在词表也没申请新词", i+1)
+		}
+	}
+	if len(pend) > 0 {
+		blanks := make([]int, 0, len(pend))
+		for i, id := range ids {
+			if id == "" {
+				blanks = append(blanks, i)
+			}
+		}
+		cands := make([]string, 0, len(pend))
+		for _, w := range pend {
+			cands = append(cands, w.Name)
+		}
+		hits, derr := semanticDedup(ctx, prov, lib, cands)
+		if derr != nil {
+			return nil, fmt.Errorf("新词语义查重失败: %w", derr)
+		}
+		for pi, w := range pend {
+			if exID := hits[w.Name]; exID != "" && vocab.Has(exID) {
+				if aerr := lib.VocabAttachAlias(exID, w.Name); aerr != nil {
+					return nil, aerr
+				}
+				ids[blanks[pi]] = exID
+				continue
+			}
+			id, cerr := lib.VocabCreate(stylelib.VocabEntry{
+				ID: w.ID, Name: w.Name, Aliases: w.Aliases, Brief: w.Brief, Tells: w.Tells,
+			})
+			if cerr != nil {
+				return nil, fmt.Errorf("新词 %q 入表失败: %w", w.Name, cerr)
+			}
+			ids[blanks[pi]] = id
+		}
+	}
+	d := &StyleDraft{
+		Name:    strings.TrimSpace(raw.Name),
+		Subject: strings.TrimSpace(raw.Subject),
+		Tags:    contract.StyleTags{Main: ids[0], Aux: ids[1:]},
+	}
+	if d.Name == "" {
+		d.Name = names[0]
+	}
+	for i, t := range raw.Tags {
+		d.TagEvidence = append(d.TagEvidence, contract.TagEvidence{Tag: ids[i], Note: strings.TrimSpace(t.Note)})
+	}
+	d.Signatures = append(d.Signatures, raw.Signatures...)
+	return d, stylelib.ValidateSignatures(d.Signatures)
+}

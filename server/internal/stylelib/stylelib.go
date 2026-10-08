@@ -1,13 +1,12 @@
-// Package stylelib：风格库（唯一风格事实源，前称模板库/StylePack/风格注册表）。
+// Package stylelib：风格库 v3（docs/style-library-v3.md）——「策展目录 + 绝活收藏夹」。
 //
-// 一个条目 = 一个风格，五个面：身份（id/name/desc/genre/keywords）、外观（tokens 色板
-// + layouts 版式）、证据（samples 样张 1–3 张）、复用件（skin 风格文件）、溯源（origin）。
-// 全链路一条锚线：style_samples.json 的 style_id 精确指到条目——场景生成拿 tokens/版式、
-// 拼接拿转场/后期特效、复用拷 skin，都按 id 查这里，不再 direction 模糊 join。
+// 一个条目 = 一套标签（引用模型固有知识，不提取教学）+ 特色清单（参考片真正独有
+// 的手法：运镜/转场/母题/动效/素材/配色，机制化写作，制作时整包生效、单条可关）
+// + 证据（style_media/<id>/ 原片与抽帧快照：打标证据、QA 考卷、回看素材）。
+// Subject 是原片题材一句话，只供检索，永不进生成提示词（题材中毒的口子）。
 //
-// 条目存 data/library/styles.json（磁盘为事实源）：
-// 成片出片 Agent 起草（published=false）或视频解析入库（published=true）
-// → 新建项目选用 → 样张+skin 拷进项目，style_id 随 style_samples.json 落盘。
+// 条目存 data/library/styles.json（磁盘为事实源，空库零迁移）：
+// 视频解析入库（published=true）或成片反哺起草（published=false，人工在库页确认）。
 package stylelib
 
 import (
@@ -26,45 +25,20 @@ import (
 	"webpage-video-agent/server/internal/contract"
 )
 
-// Style 风格条目：身份 + 外观 + 证据 + 复用件。
-// 设计系统五件套（concept/fonts/motion/device/anti_patterns）视频解析条目才有，
-// 与项目 design 阶段同构（contract.StyleSamples 同款类型）；老条目全空 → 走 v1 兜底注入。
-// Subject/Genre/Keywords 是题材元数据，只供浏览与检索——永不注入生成提示词（题材中毒的口子）。
+// Style 风格条目 v3：标签 + 特色 + 证据 + 溯源。
+// 相对 v2 删除 direction/desc/genre/keywords/tokens/layouts/concept/fonts/motion/
+// device/anti_patterns/keyframes/samples/skin——公认风格交给模型固有知识（标签），
+// 独有手法交给特色，设计系统由各片设计阶段现发明（强参考走 style_brief.json）。
 type Style struct {
-	ID            string               `json:"id"`
-	Name          string               `json:"name"`               // 人话名「深空渐变（高饱和·宇宙系）」
-	Direction     string               `json:"direction"`          // 方向描述（与项目 style_samples.direction 同源）
-	Desc          string               `json:"desc,omitempty"`     // 一句话气质/来源
-	Subject       string               `json:"subject,omitempty"`  // 原片题材一句话（浏览/检索用）
-	Genre         string               `json:"genre,omitempty"`    // 适用题材
-	Keywords      []string             `json:"keywords,omitempty"` // 检索/匹配词
-	Tokens        map[string]any       `json:"tokens,omitempty"`   // 色板/字体/转场/后期（渲染与场景注入直读）
-	Layouts       []Layout             `json:"layouts,omitempty"`  // 标准构图版式（场景生成按段轮换注入）
-	Concept       string               `json:"concept,omitempty"`
-	Fonts         *contract.FontRoles  `json:"fonts,omitempty"`         // 字体三角色
-	Motion        *contract.MotionLang `json:"motion,omitempty"`        // 动效语言
-	Device        *contract.DeviceSpec `json:"device,omitempty"`        // 贯穿装置
-	AntiPatterns  []string             `json:"anti_patterns,omitempty"` // 负面清单
-	Keyframes     []string             `json:"keyframes,omitempty"`     // 真迹关键帧文件名（style_media/<id>/ 下 frame-*.png 子集）
-	Samples       []Sample             `json:"samples,omitempty"`       // 样张 1–3 张（所见即所得）
-	Skin          *contract.Skin       `json:"skin,omitempty"`          // 风格文件（项目复用时落盘 skin.json）
-	OriginProject string               `json:"origin_project,omitempty"`
-	Published     bool                 `json:"published"`
-	CreatedAt     time.Time            `json:"created_at"`
-}
-
-// Layout 标准构图版式（场景生成的版式纪律，轮换防每段同构）。
-type Layout struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Desc string `json:"desc"`
-}
-
-// Sample 样张（与成片同一套 token，所见即所得）。
-type Sample struct {
-	Tag  string `json:"tag"`
-	Desc string `json:"desc,omitempty"`
-	HTML string `json:"html"`
+	ID            string                `json:"id"` // vid-<refID>[-sNN] | sp<ts>
+	Name          string                `json:"name"`
+	Tags          contract.StyleTags    `json:"tags"`
+	TagEvidence   []contract.TagEvidence `json:"tag_evidence,omitempty"` // 每个 tag 至少一条
+	Signatures    []contract.Signature  `json:"signatures,omitempty"`    // 0–6 条
+	Subject       string                `json:"subject,omitempty"`       // 原片题材一句话，只供检索，永不进生成提示词
+	OriginProject string                `json:"origin_project,omitempty"` // "video:<refID>" 或项目 id
+	Published     bool                  `json:"published"`
+	CreatedAt     time.Time             `json:"created_at"`
 }
 
 // ErrNoEntry 条目不存在（Publish/Delete 命中时返回；api 层据此回 404）。
@@ -75,10 +49,9 @@ type Library struct {
 	mu  sync.Mutex
 }
 
-// 单实例注册表（library 目录绝对路径 → *Library）：同库处处同锁。曾改为每次
-// New 新建实例——各自一把互不相关的锁，并发「读-改-写」全靠 rename 原子性兜底，
-// 存在后写覆盖前写的丢更新窗口；沉淀为进程内单例后 mu 才真正把写路径串起来。
-// styles.json 体量很小，不做内容缓存（文件永远是事实源，外部手改即时可见）。
+// 单实例注册表（library 目录绝对路径 → *Library）：同库处处同锁。styles.json 与
+// vocab.json 同一把锁串行（打标入库会同时写两个文件）。文件永远是事实源，不做
+// 内容缓存（外部手改即时可见）。
 var instances sync.Map // key: library dir 绝对路径 → *Library
 
 func New(dataDir string) *Library {
@@ -95,7 +68,9 @@ func New(dataDir string) *Library {
 
 func (l *Library) path() string { return filepath.Join(l.dir, "styles.json") }
 
-// List 全部条目，新在前。
+// List 全部条目，新在前。加载即校验：schema 不合格的条目视为损坏，跳过并喊出来
+// （写入侧已校验，能走到这里的通常是手改）；证据帧文件缺失只做剪枝不拒条目
+// （快照部分失败不该让条目从列表里消失——那样连删都删不掉）。
 func (l *Library) List() ([]Style, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -114,24 +89,156 @@ func (l *Library) listLocked() ([]Style, error) {
 	if err := json.Unmarshal(b, &styles); err != nil {
 		return nil, fmt.Errorf("styles.json 损坏: %w", err)
 	}
-	sort.Slice(styles, func(i, j int) bool { return styles[i].CreatedAt.After(styles[j].CreatedAt) })
-	return styles, nil
+	out := make([]Style, 0, len(styles))
+	for i := range styles {
+		if errs := validateEntry(&styles[i]); len(errs) > 0 {
+			log.Printf("[stylelib] 条目 %s 校验不合格，加载时跳过: %s", styles[i].ID, strings.Join(errs, "; "))
+			continue
+		}
+		styles[i].TagEvidence = pruneMissingFrames(l, styles[i].ID, styles[i].TagEvidence)
+		styles[i].Signatures = pruneMissingSigFrames(l, styles[i].ID, styles[i].Signatures)
+		out = append(out, styles[i])
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+// pruneMissingFrames 证据帧按 style_media/<id> 实存剪枝（不存在的引用静默剔除）。
+func pruneMissingFrames(l *Library, id string, evs []contract.TagEvidence) []contract.TagEvidence {
+	out := evs[:0:0]
+	for _, ev := range evs {
+		ev.Frames = keepExisting(l, id, ev.Frames)
+		out = append(out, ev)
+	}
+	return out
+}
+
+func pruneMissingSigFrames(l *Library, id string, sigs []contract.Signature) []contract.Signature {
+	out := sigs[:0:0]
+	for _, sg := range sigs {
+		sg.Frames = keepExisting(l, id, sg.Frames)
+		out = append(out, sg)
+	}
+	return out
+}
+
+func keepExisting(l *Library, id string, names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if _, err := os.Stat(filepath.Join(l.MediaDir(id), n)); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// validateEntry schema 校验（不查文件实存——那由写入方对着源目录做、加载时剪枝）：
+// tags.main 必填且在词表；aux ≤2 且同上；signatures ≤6、kind 枚举、mechanism 非空。
+// vocab 传 nil 时跳过词表核对（仅校验结构），词表核对由带词表的封装补上。
+func validateEntry(s *Style) []string {
+	return validateEntryVocab(s, nil)
+}
+
+func validateEntryVocab(s *Style, vocab *Vocab) []string {
+	var errs []string
+	if strings.TrimSpace(s.Name) == "" {
+		errs = append(errs, "name 为空")
+	}
+	if strings.TrimSpace(s.Tags.Main) == "" {
+		errs = append(errs, "tags.main 为空")
+	} else if vocab != nil && !vocab.Has(s.Tags.Main) {
+		errs = append(errs, "tags.main="+s.Tags.Main+" 不在词表")
+	}
+	if len(s.Tags.Aux) > 2 {
+		errs = append(errs, "tags.aux 超 2 个")
+	}
+	for _, a := range s.Tags.Aux {
+		if vocab != nil && a != "" && !vocab.Has(a) {
+			errs = append(errs, "tags.aux="+a+" 不在词表")
+		}
+	}
+	if err := ValidateSignatures(s.Signatures); err != nil {
+		errs = append(errs, err.Error())
+	}
+	return errs
+}
+
+// ValidateSignatures 特色清单校验：≤6、id 条目内唯一、kind 枚举、name/mechanism 非空。
+// frames 允许为空（成片反哺草稿，人工在库页补）。
+func ValidateSignatures(sigs []contract.Signature) error {
+	if len(sigs) > 6 {
+		return fmt.Errorf("signatures %d 条超上限（≤6）", len(sigs))
+	}
+	seen := map[string]bool{}
+	for i := range sigs {
+		sg := &sigs[i]
+		if strings.TrimSpace(sg.ID) == "" {
+			sg.ID = fmt.Sprintf("sig%d", i+1) // 兜底补号（入库路径正常都会带）
+		}
+		if seen[sg.ID] {
+			return fmt.Errorf("signature id %q 重复", sg.ID)
+		}
+		seen[sg.ID] = true
+		if !contract.ValidSignatureKind(sg.Kind) {
+			return fmt.Errorf("signature %q 的 kind=%q 越界（可选：%s）", sg.ID, sg.Kind, contract.SignatureKindNames())
+		}
+		if strings.TrimSpace(sg.Name) == "" {
+			return fmt.Errorf("signature %q 缺 name", sg.ID)
+		}
+		if strings.TrimSpace(sg.Mechanism) == "" {
+			return fmt.Errorf("signature %q 缺 mechanism（机制描述）", sg.ID)
+		}
+	}
+	return nil
+}
+
+// VideoStyleIn 参考视频风格入库载荷 v3（api 层从解析草稿变形；IngestVideoRef 消费）。
+type VideoStyleIn struct {
+	Name        string
+	Subject     string // 原片题材一句话（浏览/检索用，不进生成提示词）
+	Tags        contract.StyleTags
+	TagEvidence []contract.TagEvidence
+	Signatures  []contract.Signature // ID 允许缺省，入库时统一编 sig1..sigN
+}
+
+// IngestVideoRef 参考视频解析结果入库（upsert，published=true）。
+// 校验 §4.1 全规则（含词表核对）；同 seed 重复入库覆盖式重写（v3 条目都是解析
+// 产物，重解析=用户对同一视频再来一次，旧值不保——确认页已让人工过目）。
+func (l *Library) IngestVideoRef(refID string, in VideoStyleIn) (*Style, error) {
+	s := Style{
+		ID:            videoStyleID(refID),
+		Name:          in.Name,
+		Tags:          in.Tags,
+		TagEvidence:   in.TagEvidence,
+		Subject:       in.Subject,
+		OriginProject: "video:" + refID,
+		Published:     true,
+		CreatedAt:     time.Now(),
+	}
+	s.Signatures = renumberSigs(in.Signatures)
+	if err := l.put(&s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// ProjectDraftIn 成片反哺起草载荷（extract_stylepack，agent 侧 LLM 打标后组装）。
+type ProjectDraftIn struct {
+	Name        string
+	Subject     string
+	Tags        contract.StyleTags
+	TagEvidence []contract.TagEvidence
+	Signatures  []contract.Signature // frames 允许为空（本片无原片帧，人工在库页补）
 }
 
 // DraftFromProject 从已出片项目起草风格（Agent 自动，published=false 等用户确认）。
-// 随包带走 skin + 全部样张（≤3）；style_samples 带 style_id 说明本就出自库内风格，
-// 幂等返回该条目（复用链路不再重复起草）。同一项目重复起草同样幂等。
-func (l *Library) DraftFromProject(projectDir, projectID, projectName string) (*Style, error) {
-	var ss contract.StyleSamples
-	b, err := os.ReadFile(filepath.Join(projectDir, "style", "style_samples.json"))
-	if err != nil {
-		return nil, fmt.Errorf("项目无风格样张: %w", err)
+// 幂等：style_samples 带 style_id（本就出自库内风格）或同项目已起草过 → 返回既有条目。
+func (l *Library) DraftFromProject(projectDir, projectID string, in ProjectDraftIn) (*Style, error) {
+	var ss struct {
+		StyleID string `json:"style_id"`
 	}
-	if err := json.Unmarshal(b, &ss); err != nil {
-		return nil, err
-	}
-	if ss.Direction == "" || len(ss.Samples) == 0 {
-		return nil, fmt.Errorf("风格样张不完整（direction/样本缺失）")
+	if b, err := os.ReadFile(filepath.Join(projectDir, "style", "style_samples.json")); err == nil {
+		_ = json.Unmarshal(b, &ss)
 	}
 
 	l.mu.Lock()
@@ -156,119 +263,61 @@ func (l *Library) DraftFromProject(projectDir, projectID, projectName string) (*
 
 	s := Style{
 		ID:            newID(styles),
-		Name:          ss.Direction,
-		Direction:     ss.Direction,
-		Desc:          fmt.Sprintf("从「%s」成片提炼；含风格文件与全套样张", projectName),
-		Skin:          ss.Skin,
+		Name:          in.Name,
+		Tags:          in.Tags,
+		TagEvidence:   in.TagEvidence,
+		Subject:       in.Subject,
 		OriginProject: projectID,
 		Published:     false,
 		CreatedAt:     time.Now(),
 	}
-	for _, smp := range ss.Samples {
-		if len(s.Samples) >= 3 {
-			break
-		}
-		s.Samples = append(s.Samples, Sample{Tag: smp.Tag, Desc: smp.Desc, HTML: smp.HTML})
-	}
-	// skin 是样张阶段 LLM 同产、用户确认时锁定的（§12.2）；样张里有但 skin 缺位则不带
-	if s.Skin != nil && s.Skin.Slots.BG == "" {
-		s.Skin = nil
-	}
-	styles = append(styles, s)
-	if err := l.save(styles); err != nil {
+	s.Signatures = renumberSigs(in.Signatures)
+	if err := l.putLocked(&s); err != nil {
 		return nil, err
 	}
 	return &s, nil
 }
 
-// VideoStyleIn 参考视频风格入库载荷（api 层从解析草稿变形；IngestVideoRef 消费）。
-type VideoStyleIn struct {
-	Name         string // 展示名（合集分段用段名）；空则与 direction 同源
-	Direction    string
-	Subject      string // 原片题材一句话（浏览/检索用，不进生成提示词）
-	Genre        string
-	Keywords     []string
-	Desc         string
-	Tokens       map[string]any
-	Layouts      []Layout
-	Concept      string
-	Fonts        *contract.FontRoles
-	Motion       *contract.MotionLang
-	Device       *contract.DeviceSpec
-	AntiPatterns []string
-	Keyframes    []string // 真迹关键帧文件名（style_media/<id>/ 下的 frame-*.png 子集）
-	Samples      []Sample
+// renumberSigs 特色统一编号 sig1..sigN（条目内唯一由 ValidateSignatures 把关）。
+func renumberSigs(sigs []contract.Signature) []contract.Signature {
+	out := make([]contract.Signature, len(sigs))
+	copy(out, sigs)
+	for i := range out {
+		out[i].ID = fmt.Sprintf("sig%d", i+1)
+	}
+	return out
 }
 
-// IngestVideoRef 参考视频解析结果入库（upsert，published=true）：
-// 旧流程的 AppendRegistry + AddVideoPack 双写双库在此合为一次写入。
-func (l *Library) IngestVideoRef(refID string, in VideoStyleIn) (*Style, error) {
-	if in.Direction == "" || len(in.Samples) == 0 {
-		return nil, fmt.Errorf("风格不完整（direction/样张缺失）")
-	}
-	name := in.Name
-	if name == "" {
-		name = in.Direction
-	}
+// put 带词表核对的写入（ingest/起草共用）。
+func (l *Library) put(s *Style) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.putLocked(s)
+}
+
+func (l *Library) putLocked(s *Style) error {
+	vocab := l.loadVocabLocked()
+	if errs := validateEntryVocab(s, vocab); len(errs) > 0 {
+		return fmt.Errorf("风格条目不合格: %s", strings.Join(errs, "; "))
+	}
 	styles, err := l.listLocked()
 	if err != nil {
-		return nil, fmt.Errorf("风格库读取失败（不写入，保护现有库）: %w", err)
+		return fmt.Errorf("风格库读取失败（不写入，保护现有库）: %w", err)
 	}
-	id := videoStyleID(refID)
+	replaced := false
 	for i := range styles {
-		if styles[i].ID == id {
-			// 已入库：不整条重写（用户可能改过），只补齐缺失面——老版本入库的条目
-			// 没有五件套/真迹关键帧，重新解析确认同一个视频时在这里升级。
-			up := &styles[i]
-			if up.Concept == "" {
-				up.Concept = in.Concept
-			}
-			if up.Subject == "" {
-				up.Subject = in.Subject
-			}
-			if up.Fonts == nil {
-				up.Fonts = in.Fonts
-			}
-			if up.Motion == nil {
-				up.Motion = in.Motion
-			}
-			if up.Device == nil {
-				up.Device = in.Device
-			}
-			if len(up.AntiPatterns) == 0 {
-				up.AntiPatterns = in.AntiPatterns
-			}
-			if len(up.Keyframes) == 0 {
-				up.Keyframes = in.Keyframes
-			}
-			if len(in.Tokens) > 0 && len(up.Tokens) == 0 {
-				up.Tokens = in.Tokens
-			}
-			if len(in.Layouts) > 0 && len(up.Layouts) == 0 {
-				up.Layouts = in.Layouts
-			}
-			err := l.save(styles)
-			if err != nil {
-				return nil, err
-			}
-			return up, nil
+		if styles[i].ID == s.ID {
+			// 同 seed 重解析：保留首建时间（列表排序稳定），其余以新解析为准
+			s.CreatedAt = styles[i].CreatedAt
+			styles[i] = *s
+			replaced = true
+			break
 		}
 	}
-	s := Style{
-		ID: id, Name: name, Direction: in.Direction, Desc: in.Desc,
-		Subject: in.Subject, Genre: in.Genre, Keywords: in.Keywords, Tokens: in.Tokens, Layouts: in.Layouts,
-		Concept: in.Concept, Fonts: in.Fonts, Motion: in.Motion, Device: in.Device,
-		AntiPatterns: in.AntiPatterns, Keyframes: in.Keyframes,
-		Samples: in.Samples, OriginProject: "video:" + refID,
-		Published: true, CreatedAt: time.Now(),
+	if !replaced {
+		styles = append(styles, *s)
 	}
-	styles = append(styles, s)
-	if err := l.save(styles); err != nil {
-		return nil, err
-	}
-	return &s, nil
+	return l.save(styles)
 }
 
 // Publish 用户确认入库。
@@ -288,7 +337,7 @@ func (l *Library) Publish(id string) (*Style, error) {
 	return nil, fmt.Errorf("%w: %s", ErrNoEntry, id)
 }
 
-// Delete 删除条目并清掉它的媒体快照目录。已出片项目不受影响——样张与皮肤在选用时
+// Delete 删除条目并清掉它的媒体快照目录。已出片项目不受影响——简报在选用时
 // 早已拷进项目各自的 style/，删的只是「以后新建项目还能不能选它」。
 func (l *Library) Delete(id string) error {
 	l.mu.Lock()
@@ -332,63 +381,6 @@ func (l *Library) Get(id string) (*Style, bool) {
 	return nil, false
 }
 
-// ByDirection 方向名精确匹配（style_id 缺位的旧项目兜底锚定）。
-func (l *Library) ByDirection(direction string) (*Style, bool) {
-	if strings.TrimSpace(direction) == "" {
-		return nil, false
-	}
-	styles, err := l.List()
-	if err != nil {
-		log.Printf("[stylelib] styles.json 读取失败，查询按不存在处理: %v", err)
-		return nil, false
-	}
-	for i := range styles {
-		if styles[i].Direction == direction {
-			return &styles[i], true
-		}
-	}
-	return nil, false
-}
-
-// StyleSamplesJSON 把风格变成本项目可用的 style_samples.json 内容
-// （style_id 随行——后续场景生成/拼接/再提炼都靠它精确锚定本条目；
-// skin 一并携带——确认时落盘 skin.json；confirmed 由调用方改写）。
-// 设计系统五件套 + 版式一并带出：fonts/motion/device 任一非空即让项目端
-// hasDesignSystem 成立，DesignDoc 注入/版式轮换/画面质检全套走 v2 通道。
-func (s *Style) StyleSamplesJSON() []byte {
-	skin := s.Skin
-	if skin == nil {
-		// 条目没存皮肤（视频解析/老项目起草路径）→ 从 tokens 机械派生。
-		// v2 制作闸硬性要求皮肤，库内包不能在这里断粮；派生是纯函数，确定性与 tokens 一致。
-		skin = SkinFromTokens(s.Direction, s.Tokens)
-	}
-	out := contract.StyleSamples{
-		StyleID:      s.ID,
-		Direction:    s.Direction,
-		Desc:         s.Desc,
-		Concept:      s.Concept,
-		Fonts:        s.Fonts,
-		Motion:       s.Motion,
-		Device:       s.Device,
-		AntiPatterns: s.AntiPatterns,
-		Samples:      make([]contract.Sample, 0, len(s.Samples)),
-		Skin:         skin,
-		Confirmed:    false,
-	}
-	for _, l := range s.Layouts {
-		out.Layouts = append(out.Layouts, contract.DesignLayout{ID: l.ID, Name: l.Name, Desc: l.Desc})
-	}
-	for _, smp := range s.Samples {
-		d := smp.Desc
-		if d == "" {
-			d = "风格库复用样张"
-		}
-		out.Samples = append(out.Samples, contract.Sample{Tag: smp.Tag, Desc: d, HTML: smp.HTML})
-	}
-	b, _ := json.MarshalIndent(out, "", "  ")
-	return b
-}
-
 func (l *Library) save(styles []Style) error {
 	if err := os.MkdirAll(l.dir, 0o755); err != nil {
 		return err
@@ -415,12 +407,7 @@ func newID(styles []Style) string {
 }
 
 // videoStyleID 参考视频风格 id（vid- 前缀，文件名安全化；原 styleref.RegistryID 语义）。
-// VideoStyleID 是它的导出版：api 侧封面样张的 <img src> 需要预知入库后的条目 id，
-// 与 IngestVideoRef 的赋 id 逻辑同源，防两处手工复算漂移。
 func videoStyleID(refID string) string {
 	sl := regexp.MustCompile(`[^a-z0-9-]+`).ReplaceAllString(strings.ToLower(refID), "-")
 	return "vid-" + strings.Trim(sl, "-")
 }
-
-// VideoStyleID 参考视频风格条目 id（IngestVideoRef 对同一 seed 赋的正是这个 id）。
-func VideoStyleID(refID string) string { return videoStyleID(refID) }

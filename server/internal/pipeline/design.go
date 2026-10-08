@@ -27,8 +27,23 @@ import (
 
 const designSystemPrompt = "你是视频视觉总监。先通读全部分镜，为这一部片发明一套设计系统，全片每一段都遵守。只输出 JSON。"
 
+// LoadStyleBrief 读项目风格简报（style/style_brief.json，v3 §4.3）。
+// 不存在/损坏返回 nil——nil = 没选库内风格，设计阶段裸发明（合法常态）。
+func LoadStyleBrief(p *Project) *contract.StyleBrief {
+	b, err := os.ReadFile(p.Artifact("style/style_brief.json"))
+	if err != nil {
+		return nil
+	}
+	var brief contract.StyleBrief
+	if json.Unmarshal(b, &brief) != nil || brief.EntryID == "" {
+		return nil
+	}
+	return &brief
+}
+
 // designBrief 设计作业正文（API 直调与会话请求共用一份，防两处漂移）。
 // input/style_notes.txt 存在时追加用户修改要求（draft_style_samples 带 instruction 写入）。
+// 风格简报存在时追加「强参考」注入块（v3 §4.5）：气质基调（词表 brief）+ 必答特色清单。
 // 样张画布硬定 960×540：舞台 SampleFrame 缩放与 ai/snap_samples.py 截图都按此假设。
 func designBrief(p *Project, sb *contract.Storyboard) string {
 	notes := ""
@@ -41,7 +56,7 @@ func designBrief(p *Project, sb *contract.Storyboard) string {
 - 系统是**发明**的，不是从风格库选一个套上。默认审美（绿 chip 黄底、大面积辉光、金句五件套）出现即失败，除非 concept 里明确论证它就是本片语言。
 - 每个决定都要能回答「为什么配这部片」——写进 concept。
 - 设计要在渲染物理内可执行：可补间属性只有 opacity/x/y/scale/rotation 系（数字滚动用 count 工具）；禁 CSS 动画/外链/视口单位。
-
+%s
 ## 全部分镜（设计必须从这些内容里长出来）
 %s
 ## 设计系统六件套（缺一件会被校验打回）
@@ -80,7 +95,53 @@ func designBrief(p *Project, sb *contract.Storyboard) string {
 - 不用图片/网络资源，纯 CSS；多张样张构图版式必须明显不同，每张 desc 写明用了哪个版式；
 - 画布硬约束（违反必被裁切）：每张 html 是完整自包含文档，画布固定 960×540：
   html,body{width:960px;height:540px;overflow:hidden}；内容全部落在画布内，不依赖滚动；
-  禁 vw/vh；大字标题留边距；每张 html ≤2000 字符%s`, storyboardDigest(sb), notes)
+  禁 vw/vh；大字标题留边距；每张 html ≤2000 字符%s`, briefBlock(p), storyboardDigest(sb), notes)
+}
+
+// briefBlock 强参考注入块（v3 §4.5）：简报存在时给设计阶段立「用户选定的硬要求」。
+// 特色只给机制（物件换成本片内容——吸收机制而非临摹原片），落点登记要求随后由
+// designJSONShape 的 signature_absorption 字段承接。
+func briefBlock(p *Project) string {
+	brief := LoadStyleBrief(p)
+	if brief == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n## 本片风格参考（用户选定，硬要求）\n")
+	if tb := tagBriefLine(brief, brief.Tags.Main); tb != "" {
+		fmt.Fprintf(&b, "气质基调：%s", tb)
+	} else {
+		fmt.Fprintf(&b, "气质基调：%s", brief.EntryName)
+	}
+	for _, aux := range brief.Tags.Aux {
+		if tb := tagBriefLine(brief, aux); tb != "" {
+			fmt.Fprintf(&b, "；辅：%s", tb)
+		}
+	}
+	b.WriteString("\n- 吸收的是机制不是物件：参考风格的题材/物件与本项目无关，换成本片内容实现同款手法。\n")
+	if len(brief.Signatures) > 0 {
+		b.WriteString("必答特色（每条都必须被设计系统吸收，并在 signature_absorption 中登记落点）：\n")
+		for i, sg := range brief.Signatures {
+			fmt.Fprintf(&b, "%d. [%s] %s——机制：%s", i+1, sg.Kind, sg.Name, sg.Mechanism)
+			if strings.TrimSpace(sg.UseHint) != "" {
+				fmt.Fprintf(&b, "（适用：%s）", sg.UseHint)
+			}
+			b.WriteString("（证据帧已附）\n")
+		}
+	} else {
+		b.WriteString("（该条目没有开启的特色，气质对齐即可）\n")
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+func tagBriefLine(brief *contract.StyleBrief, id string) string {
+	for _, tb := range brief.TagBriefs {
+		if tb.ID == id {
+			return tb.Name + "——" + tb.Brief
+		}
+	}
+	return ""
 }
 
 // storyboardDigest 分镜摘要：设计的原料——每段标题/旁白/画面提示各截一段，
@@ -118,6 +179,7 @@ func designJSONShape() string {
               "per_seg": "seg01 首次亮相…seg02 变奏…seg03 起每章复现…" },
   "layouts": [ { "id": "hero-title", "name": "大字海报", "desc": "构图描述：主体位置/元素铺排/留白方向" } ],
   "anti_patterns": ["大面积辉光", "金句+引号+装饰线+作者+边框五件套", "右半空版式"],
+  "signature_absorption": [ { "sig_id": "sig1", "lands_in": "device|motion|skins|camera_plan|transition_policy|material_policy", "how": "一句话写清这条特色怎么落在该组件" } ],
   "samples": [
     { "tag": "样张 A · 标题帧", "desc": "用了哪个版式、展示什么", "html": "<!doctype html>…整文档 960×540…" }
   ],
@@ -125,8 +187,26 @@ func designJSONShape() string {
 }`
 }
 
+// designAbsorptionNote 输出要求里对落点表的补充说明（有简报才提）。
+func designAbsorptionNote(p *Project) string {
+	brief := LoadStyleBrief(p)
+	if brief == nil || len(brief.Signatures) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n- signature_absorption：简报里每条开启的特色（%s）都必须登记，lands_in 只能取 %s；漏登/越界会被打回重出\n",
+		joinSigIDs(brief), contract.AbsorptionLandNames())
+}
+
+func joinSigIDs(brief *contract.StyleBrief) string {
+	ids := make([]string, 0, len(brief.Signatures))
+	for _, sg := range brief.Signatures {
+		ids = append(ids, sg.ID)
+	}
+	return strings.Join(ids, ",")
+}
+
 func designUserPrompt(p *Project, sb *contract.Storyboard) string {
-	return designBrief(p, sb) + "\n\n## 输出要求\n只输出 JSON，无 markdown 围栏：\n" + designJSONShape()
+	return designBrief(p, sb) + "\n\n## 输出要求\n只输出 JSON，无 markdown 围栏：\n" + designJSONShape() + designAbsorptionNote(p)
 }
 
 func designRequest(p *Project, sb *contract.Storyboard, out string) string {
@@ -138,18 +218,26 @@ func designRequest(p *Project, sb *contract.Storyboard, out string) string {
 把 JSON 写到: %s（confirmed 先置 false，用户确认后由管线改为 true——这是硬门）
 
 %s
+%s
 
 ## 校验（缺一件都会被拒）
 - direction/concept 非空；skins 1–2 套（双皮肤必须给 skin_rule）；samples 1–3 张且每张 html 非空
 - fonts.display/body 栈含中文字体；motion.ease/notes 非空、dur_in 0.1–1.5、dur_settle 0.05–1.0、stagger 0–0.5
 - device.name/desc/per_seg 三件齐
-`, designBrief(p, sb), out, designJSONShape())
+`, designBrief(p, sb), out, designJSONShape(), designAbsorptionNote(p))
 }
 
 // DesignDoc 设计系统 → 注入文档（scene_gen 每段注入源 + 确认后 design.md 落盘内容）。
 // 机械渲染，与 tokens（style_samples.json）零漂移；设计块缺失时只渲染已有部分
-// （库内老包/旧项目降级为方向+皮肤，不炸）。segIdx ≥ 1 时附加本段版式指派（按段轮换）。
+// （旧项目降级为方向+皮肤，不炸）。segIdx ≥ 1 时附加本段版式指派（按段轮换）。
 func DesignDoc(ss *contract.StyleSamples, segIdx int) string {
+	return DesignDocWithBrief(ss, segIdx, nil)
+}
+
+// DesignDocWithBrief 带风格简报的渲染（v3 §4.5：落点表写进 design.md，强参考的
+// 特色与落点对 scene_gen 可见——段的转场/动效实现按落点执行）。brief 为 nil 退化为
+// 旧渲染（老项目/未选风格）。
+func DesignDocWithBrief(ss *contract.StyleSamples, segIdx int, brief *contract.StyleBrief) string {
 	var b strings.Builder
 	w := func(f string, a ...any) { fmt.Fprintf(&b, f, a...) }
 	w("## 本片设计系统：%s（每一段都必须遵守的全片规矩）\n", ss.Direction)
@@ -247,19 +335,42 @@ func DesignDoc(ss *contract.StyleSamples, segIdx int) string {
 			}
 		}
 	}
+	// v3：特色落点表（简报特色 × 设计交卷自报落点）。渲染画面按落点执行对应手法；
+	// 特色机制只写「怎么做到」，物件永远跟画面提示走。
+	if brief != nil && len(brief.Signatures) > 0 {
+		w("\n### 本片强参考特色（用户选定的硬要求，按落点执行）\n")
+		landed := map[string]contract.SigAbsorption{}
+		for _, a := range ss.SignatureAbsorption {
+			landed[a.SigID] = a
+		}
+		for _, sg := range brief.Signatures {
+			a := landed[sg.ID]
+			line := "- [%s] %s——机制：%s"
+			args := []any{sg.Kind, sg.Name, sg.Mechanism}
+			if a.SigID != "" {
+				line += "｜落点 %s：%s"
+				args = append(args, a.LandsIn, a.How)
+			}
+			if strings.TrimSpace(sg.UseHint) != "" {
+				line += "（适用：%s）"
+				args = append(args, sg.UseHint)
+			}
+			w(line+"\n", args...)
+		}
+		w("- 特色吸收的是机制：物件与题材永远跟本段画面提示走，禁止临摹参考片里的具体物件\n")
+	}
 	return b.String()
 }
 
-// LockDesign 确认后的设计系统落盘：design.md（人读 + 门2 + scene_gen 注入源）+
-// skin.json（引擎件=主皮肤，assemble 字幕带配色消费）。tokens 本体就是
-// style/style_samples.json——不另立 tokens.json，防双源漂移（宪法 #1）。
-// 库内老包（无设计块）不在此落——applyPack 直写 confirmed 文件走兜底注入。
+// LockDesign 确认后的设计系统落盘：design.md（人读 + 门2 + scene_gen 注入源，含
+// 强参考特色落点表）+ skin.json（引擎件=主皮肤，assemble 字幕带配色消费）。
+// tokens 本体就是 style/style_samples.json——不另立 tokens.json，防双源漂移（宪法 #1）。
 func LockDesign(p *Project, ss *contract.StyleSamples) error {
 	skins := ss.EffectiveSkins()
 	if len(skins) == 0 {
 		return fmt.Errorf("设计系统缺皮肤（skins/skin）")
 	}
-	if err := writeFile(p.Artifact("style/design.md"), DesignDoc(ss, 0)); err != nil {
+	if err := writeFile(p.Artifact("style/design.md"), DesignDocWithBrief(ss, 0, LoadStyleBrief(p))); err != nil {
 		return fmt.Errorf("design.md 落盘失败: %w", err)
 	}
 	sbj, err := json.MarshalIndent(skins[0], "", "  ")

@@ -1,8 +1,14 @@
-// Package styleref：参考视频 → 风格（风格库「视频解析」后端）。
+// Package styleref：参考视频 → 风格条目（风格库「视频解析」后端，v3）。
 //
 // 链路：上传视频存 data/references/<id>/ → ai/extract_video_features.py 抽帧+取色
-// （确定性，不碰 LLM）→ 解析智能体两阶段（结构理解 + 逐段提炼，见 analyze.go）
+// （确定性，不碰 LLM）→ 解析智能体两阶段（结构理解 + 逐段打标提炼，见 analyze.go）
 // → 用户确认入库（api 层调 stylelib.IngestVideoRef 写 data/library/styles.json）。
+//
+// v3 作业 = 打标 + 特色提炼（一次轻解析，§4.4）：
+//   - 公认风格只打标签：词表（vocab.json）里有的引用 id，没有的「申请新词」
+//     （name+aliases+brief+tells）→ Go 侧查重（归一化精确 + LLM 语义）→ 落表；
+//   - 参考片独有的手法提炼成特色清单（≤6，六类枚举，机制化写作 + 证据帧）；
+//   - 不再产出五件套/tokens/HTML 样张/skin——设计系统由各片设计阶段现发明。
 package styleref
 
 import (
@@ -22,6 +28,7 @@ import (
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
+	"webpage-video-agent/server/internal/stylelib"
 )
 
 type Ref struct {
@@ -29,41 +36,46 @@ type Ref struct {
 	Name      string         `json:"name"`   // 原始文件名（含扩展名）
 	Status    string         `json:"status"` // pending | running | done | error
 	Error     string         `json:"error,omitempty"`
-	Confirmed bool           `json:"confirmed"` // 已入库（styles.json + 方法库）
+	Confirmed bool           `json:"confirmed"` // 已入库（styles.json）
 	CreatedAt time.Time      `json:"created_at"`
 	Kind      string         `json:"kind,omitempty"`     // single | multi（解析智能体判定）
-	Style     *StyleDraft    `json:"style,omitempty"`    // single 时有（老 ref.json 兼容）
-	Segments  []SegmentDraft `json:"segments,omitempty"` // multi 时有，每段一个风格草稿
+	Style     *StyleDraft    `json:"style,omitempty"`    // single 时有
+	Segments  []SegmentDraft `json:"segments,omitempty"` // multi 时有，每段一个标签+特色草稿
 }
 
-// StyleDraft 解析产出的风格包（入库前草稿；tokens/layouts 直接进注册表）。
-// 设计系统五件套（concept/fonts/motion/device/anti_patterns）与项目 design 阶段
-// 同构（contract.StyleSamples 同款类型）——入库后随 StyleSamplesJSON 带进项目，
-// hasDesignSystem 成立，DesignDoc 注入/版式轮换/画面质检全套点亮。
+// StyleDraft 解析产出的标签+特色草稿（入库前形态；确认页可增删改）。
+// Tags 是已解析落表的词表 id；Signatures 的 ID 在入库时统一编 sig1..sigN。
 type StyleDraft struct {
-	Direction    string               `json:"direction"`
-	Subject      string               `json:"subject,omitempty"` // 原片题材一句话（只供浏览/检索，永不注入生成提示词）
-	Genre        string               `json:"genre"`
-	Keywords     []string             `json:"keywords"`
-	Photo        string               `json:"photo"`
-	Concept      string               `json:"concept,omitempty"`
-	Fonts        *contract.FontRoles  `json:"fonts,omitempty"`
-	Motion       *contract.MotionLang `json:"motion,omitempty"`
-	Device       *contract.DeviceSpec `json:"device,omitempty"`
-	AntiPatterns []string             `json:"anti_patterns,omitempty"`
-	Layouts      []StyleLayout        `json:"layouts"`
-	Tokens       json.RawMessage      `json:"tokens"` // 原样透传给 styles.json（引擎按字段取）
-	Samples      []struct {
-		Tag  string `json:"tag"`
-		Desc string `json:"desc"`
-		HTML string `json:"html"`
-	} `json:"samples"`
+	Name        string                 `json:"name"`              // 条目名（multi 用段名；single 缺省用主标签名）
+	Subject     string                 `json:"subject,omitempty"` // 原片题材一句话（只供检索，永不进生成提示词）
+	Tags        contract.StyleTags     `json:"tags"`
+	TagEvidence []contract.TagEvidence `json:"tag_evidence,omitempty"`
+	Signatures  []contract.Signature   `json:"signatures,omitempty"`
 }
 
-type StyleLayout struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Desc string `json:"desc"`
+// taggerOutput 打标作业的 LLM 原始输出（词表 id 与新词申请混排，Go 侧解析落表）。
+type taggerOutput struct {
+	Subject    string               `json:"subject"`
+	Name       string               `json:"name,omitempty"`
+	Tags       []rawTag             `json:"tags"`
+	Signatures []contract.Signature `json:"signatures"`
+}
+
+// rawTag 一个标签的原始形态：词表 id 或新词申请（二选一），带人话指认与证据帧。
+type rawTag struct {
+	ID     string   `json:"id"`              // 词表 id（词表里有的必须给这个）
+	New    *newWord `json:"new,omitempty"`   // 词表没有 → 申请新词
+	Note   string   `json:"note"`            // 人话指认：「第2段：紫青撞色+网格地平线」
+	Frames []string `json:"frames,omitempty"` // 证据帧文件名（frame-*.png）
+}
+
+// newWord 申请新词（§4.2）：查重通过后写 vocab.json。
+type newWord struct {
+	ID      string   `json:"id"`              // 小写蛇形英文 id（如 claymation），可缺省
+	Name    string   `json:"name"`            // 正式名（如 粘土定格）
+	Aliases []string `json:"aliases,omitempty"` // 中英+俗称
+	Brief   string   `json:"brief"`           // 一句机制描述：色域/质感/光/字体气质
+	Tells   string   `json:"tells,omitempty"` // 判别特征：帧里认什么
 }
 
 // videoFeatures features.json（ai/extract_video_features.py 产物）。
@@ -184,6 +196,32 @@ func (s *Store) MarkConfirmed(id string) error {
 	return s.saveRef(ref)
 }
 
+// UpdateDraft 确认页编辑草稿（§4.4：入库前可增删改特色）。
+// segIdx=0 表示 single（ref.Style）；≥1 表示 multi 的第 N 段。
+func (s *Store) UpdateDraft(id string, segIdx int, d *StyleDraft) error {
+	ref, err := s.loadRef(id)
+	if err != nil {
+		return err
+	}
+	if ref.Status != "done" {
+		return fmt.Errorf("解析未完成，不能编辑草稿")
+	}
+	if segIdx <= 0 {
+		if ref.Style == nil {
+			return fmt.Errorf("该引用不是单一风格（没有整片草稿）")
+		}
+		ref.Style = d
+		return s.saveRef(ref)
+	}
+	for i := range ref.Segments {
+		if ref.Segments[i].Index == segIdx {
+			ref.Segments[i].Style = d
+			return s.saveRef(ref)
+		}
+	}
+	return fmt.Errorf("没有第 %d 段", segIdx)
+}
+
 // Analyze 异步解析（同引用幂等：跑着就不重复起）。结果写 ref.json。
 func (s *Store) Analyze(id string) (bool, error) {
 	ref, err := s.loadRef(id)
@@ -216,7 +254,7 @@ func (s *Store) Analyze(id string) (bool, error) {
 	return true, nil
 }
 
-// analyzeCompositions 分批把关键帧喂 vision，逐帧记录构图观察。
+// analyzeCompositions 分批把关键帧喂 vision，逐帧记录构图观察（打标的构图证据）。
 func (s *Store) analyzeCompositions(ctx context.Context, prov *llm.Provider, frames []featureFrame) (string, error) {
 	var batches [][]featureFrame
 	for i := 0; i < len(frames) && i < 6; i += 3 {
@@ -263,11 +301,38 @@ func (s *Store) analyzeCompositions(ctx context.Context, prov *llm.Provider, fra
 	return all.String(), nil
 }
 
-// synthesize 色板+构图观察+节奏 → 完整风格包 JSON（tokens 用给定 hex，样张纯 CSS 仿帧）。
-// segName 非空表示合集分段模式：direction 优先采用段名（片中标题），事实用段内数据。
-// videoURL 非空 = 附原视频剪辑直读（动效/运镜以视频实测为准）；空 = 纯帧推断（老路径）。
+// synthesize 打标 + 特色提炼（§4.4 一次轻解析；结构校验失败重喂 ≤2 轮）。
+// segName 非空表示合集分段模式：条目名优先采用段名（片中标题）。
+// videoURL 非空 = 附原视频剪辑直读（运镜/转场以视频实测为准）；空 = 纯帧推断。
 func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name, segName string,
 	feats videoFeatures, notes string, videoURL string) (*StyleDraft, error) {
+	lib := stylelib.New(s.DataDir)
+	var lastErr error
+	for round := 0; round < 3; round++ {
+		var retryNote string
+		if lastErr != nil {
+			retryNote = "\n\n## 上一次输出被拒（修正后重出）\n" + lastErr.Error()
+		}
+		raw, err := s.callTagger(ctx, prov, lib, name, segName, feats, notes, videoURL, retryNote)
+		if err != nil {
+			return nil, err // 网络/生成错误不重喂（provider 自带重试）
+		}
+		d, rerr := s.resolveDraft(ctx, prov, lib, raw, feats)
+		if rerr == nil {
+			if errs := validateStyle(d, feats); len(errs) == 0 {
+				return d, nil
+			} else {
+				rerr = fmt.Errorf("结构自检未过: %s", strings.Join(errs, "; "))
+			}
+		}
+		lastErr = rerr
+	}
+	return nil, lastErr
+}
+
+// callTagger 一次打标 LLM 调用（词表快照随题注入 = 工具「查风格词表」）。
+func (s *Store) callTagger(ctx context.Context, prov *llm.Provider, lib *stylelib.Library,
+	name, segName string, feats videoFeatures, notes, videoURL, retryNote string) (*taggerOutput, error) {
 	rep := make([]string, 0, 3) // 代表帧：首/中/尾
 	for _, idx := range []int{0, len(feats.Frames) / 2, len(feats.Frames) - 1} {
 		if idx < 0 || idx >= len(feats.Frames) {
@@ -279,26 +344,26 @@ func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name, segNam
 		}
 		rep = append(rep, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(b))
 	}
-	system := "你是视频视觉分析师，把参考视频提炼成可复用的风格包。只输出 JSON。"
-	user := synthesizeUserPrompt(name, segName, feats, notes, videoURL != "")
-	var style StyleDraft
+	system := "你是视频风格策展人：给参考视频打公认风格标签、提炼它真正独有的手法特色。只输出 JSON。"
+	user := synthesizeUserPrompt(lib, name, segName, feats, notes, videoURL != "", retryNote)
+	var out taggerOutput
 	var err error
 	if videoURL != "" {
-		_, err = prov.GenerateJSONVisionVideoNoThink(ctx, system, user, rep, videoURL, 0.5, &style)
+		_, err = prov.GenerateJSONVisionVideoNoThink(ctx, system, user, rep, videoURL, 0.5, &out)
 	} else {
-		_, err = prov.GenerateJSONVisionNoThink(ctx, system, user, rep, 0.5, &style)
+		_, err = prov.GenerateJSONVisionNoThink(ctx, system, user, rep, 0.5, &out)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("风格合成失败: %w", err)
+		return nil, fmt.Errorf("打标作业失败: %w", err)
 	}
-	return &style, nil
+	return &out, nil
 }
 
-// synthesizeUserPrompt 风格合成作业正文（synthesize 与回归测试共用一份，防漂移）。
-// 核心纪律：风格/题材分离——除 subject 外所有字段只写「怎么画」，物件一律抽象描述，
-// 样张用几何元素演示构图（这份风格包会被用来制作题材完全不同的新片）。
-// withVideo 表示消息里附有原视频剪辑：动效/运镜/节奏以视频实测为准（静止帧看不出时间维度）。
-func synthesizeUserPrompt(name, segName string, feats videoFeatures, notes string, withVideo bool) string {
+// synthesizeUserPrompt 打标作业正文（callTagger 与回归测试共用一份，防漂移）。
+// 纪律：① 只收有公认视觉定义的风格名词（拒收「高级感」类空话）；② 特色写机制
+// 不写物件（这份清单会被用来制作题材完全不同的新片）；③ 题材只进 subject。
+func synthesizeUserPrompt(lib *stylelib.Library, name, segName string, feats videoFeatures,
+	notes string, withVideo bool, retryNote string) string {
 	pal := make([]string, 0, len(feats.Palette))
 	for _, c := range feats.Palette {
 		pal = append(pal, fmt.Sprintf("%s(覆盖率%.0f%%,亮度%.2f)", c.Hex, c.Share*100, c.Lum))
@@ -307,110 +372,247 @@ func synthesizeUserPrompt(name, segName string, feats videoFeatures, notes strin
 	if feats.SpanS[1]-feats.SpanS[0] < feats.DurationS-1 {
 		spanTxt = fmt.Sprintf("%.0f-%.0f 秒段", feats.SpanS[0], feats.SpanS[1])
 	}
+	// 关键帧清单（时间点+文件名）：证据帧指认的坐标系
+	frames := make([]string, 0, len(feats.Frames))
+	for _, f := range feats.Frames {
+		frames = append(frames, fmt.Sprintf("%s(t=%.1fs)", filepath.Base(f.Path), f.T))
+	}
 	nameHint := ""
 	if segName != "" {
-		nameHint = fmt.Sprintf("\n- 已知该段风格名「%s」（解析阶段从片中标题读出）——direction 优先直接采用它，可在 ≤6 字内微调；name 参数也以它为准", segName)
+		nameHint = fmt.Sprintf("\n- 已知该段在片中的标题「%s」——name 直接采用它（≤12 字微调）", segName)
+	}
+	// 工具「查风格词表」：词表快照随题注入（冷启动为空表，首批词条由申请新词长出）
+	var vocabB strings.Builder
+	if entries := lib.VocabList(); len(entries) > 0 {
+		for _, e := range entries {
+			line := "- " + e.ID + "（" + e.Name + "）：" + e.Brief
+			if e.Tells != "" {
+				line += "｜判别：" + e.Tells
+			}
+			vocabB.WriteString(line + "\n")
+		}
+	} else {
+		vocabB.WriteString("（词表还是空的——你打的每个标签都会作为第一批新词申请入库）\n")
 	}
 	videoBlock := ""
-	motionSrc := "看附上的连续关键帧推断"
+	dynamicSrc := "看附上的连续关键帧与构图观察推断"
 	if withVideo {
 		videoBlock = `
 ## 原视频直读（消息里附有可播放的原视频，范围即上方抽取范围）
-- 动效/运镜/转场/节奏是静止帧给不了的信息，**以视频实测为准**：元素怎么进场（淡入/位移/缩放/弹跳）、多快、错峰密度、镜头有没有推拉摇移、镜头间怎么过渡；
-- 颜色仍以测得色板 hex 为准（视频压缩会偏色），构图仍以下方逐帧观察为准。
+- 运镜/转场/动效节奏是静止帧给不了的信息，**以视频实测为准**：镜头有没有推拉摇移、
+  元素怎么进场、镜头间怎么过渡；
+- 颜色仍以测得色板 hex 为准（视频压缩会偏色），构图仍以逐帧观察为准。
 `
-		motionSrc = "以附上的原视频实测为准（你能直接看到运动）"
+		dynamicSrc = "以附上的原视频实测为准（你能直接看到运动）"
 	}
-	return fmt.Sprintf(`把参考视频「%s」（%s）提炼成一个风格包（挂到网页渲染视频管线上，与现有 token 引擎同一套 schema）。
+	return fmt.Sprintf(`给参考视频「%s」（%s）打风格标签、提炼独有特色。产物会进风格库，供制作题材完全不同的新片时做「强参考」。
 
 ## 已测得事实（必须遵守）
 - 抽取范围时长 %.1f 秒、%d 个镜头；色板 k-means 8 簇：
   %s
+- 关键帧清单（证据帧只能从这里挑）：
+  %s
 - 视觉逐帧构图观察：
 %s%s
-- font 只能用 Windows 系统字体栈：'Segoe UI'/'Microsoft YaHei'/'Georgia'/'KaiTi'/'STKaiti'/'Cambria'/'Arial Narrow'/'SimHei' 组合（示例：'Georgia','SimHei',serif），禁止 Noto/思源等未装字体
-- tokens 里的颜色必须从上面色板 hex 里选（可按角色微调明度但保持色相；覆盖率最高的暗色通常做 bg.from，最亮簇做 txt）；颜色之外的字段按画面气质定。
-- direction 是风格名（≤12 字，含一个括号副标）；**禁止出现「手绘」「扁平」二字**（引擎按名字路由）。
+## 风格词表（打标签先查这里）
 %s
-## 风格/题材分离（最高优先级纪律）
-这份风格包以后会被用来制作**题材完全不同**的新片。除 subject 外，每个字段落笔前自问：换一个题材这句话还成立吗？
-- 只写「怎么画」：构图骨架（主体位置/比例/留白/层次/元素数）、配色、字体、动效、质感；
-- 禁写原片的题材物件：原片画的是城市就禁写楼/街/车，画的是人物就禁写人物——物件一律
-  抽象成「色块/卡片/线条/图形」来描述（「楼宇剪影沿底边排布」→「几何色块沿底边排布」）；
-- subject：一句话记录原片画的是什么（如「等距视角的城市宣传动画」，≤30 字）——它只供
-  人浏览与检索，下游不会注入生成模型，题材信息只允许出现在这一处；
-- genre/keywords 只是检索词：画风词优先（如「等距」「低饱和」「硬几何」），题材词至多一个。
+## 作业一：打标签（主 1 + 辅 ≤2）
+- 只收有公认视觉定义的风格名词（设计史/影视行话立得住的，如 粘土定格/包豪斯/蒸汽波）；
+  拒收「高级感/简洁大气/氛围感」类空话——词表里有的直接引用 id；
+- 词表没有合适词条才「申请新词」：给 name（正式名）+ aliases（中英俗称）+ brief（一句
+  机制描述：色域/质感/光/字体气质）+ tells（帧里认什么）+ id（小写蛇形英文，如 claymation）；
+- 主标签定基调，辅标签只在真的并行存在第二种气质时给（没有就只给主标签）；
+- 每个标签的 note 是人话指认：「第2段：紫青撞色+网格地平线」这种看得见说得出的证据，
+  frames 从上面关键帧清单里挑 1–2 张。
 
-## 布局与样张
-- layouts 给 5 个该视频的标准构图版式（id 用 ASCII，name 中文 ≤6 字，desc ≤70 字写清主体位置/比例/留白/元素数，物件一律按上面纪律抽象描述；画布 1920×1080，安全区 x∈[160,1760] y∈[120,850]，底部 896 起字幕带禁放，每版式 ≥3 元素且不重叠）。
-- samples 给 2 张纯 CSS 样张（tag/desc/html），html 是完整自包含文档，画布固定 960×540：html,body{width:960px;height:540px;overflow:hidden}，内联一个 <style>，每张 ≤2000 字符，不要图片/网络资源。样张演示的是「怎么画」：用抽象几何元素（色块/线条/占位形状）搭出构图骨架与质感，参照关键帧取配色气质即可，**禁止临摹原片里的具体物件**——样张会原样出现在题材不同的新片生成现场。
+## 作业二：提炼特色（≤6 条，只写这支片真正独有的手法）
+- kind 六选一：%s（运镜/转场/母题/动效/素材质感/配色）；
+- mechanism 写机制不写物件：只描述「怎么做到的」（节拍/方向/层次/比例/速度），1–2 句，
+  换一个题材照做仍然成立——禁写原片画的具体东西（楼宇/人物/品牌字样等物件一律抽象成
+  「色块/卡片/线条/图形」）；use_hint 写什么节拍/场景适合用；
+- frames 每条 ≥1 张证据帧（从关键帧清单挑最能看清该手法的）；
+- 公认风格自带的手法（粘土片的逐帧跳动、赛博朋克的霓虹）不算特色——特色是「这支片
+  在该风格之上的独门绝活」，没有就少给甚至不给（signatures 可以为空数组）；
+- camera/transition/motion 类手法的判断%s。
 
-## 设计系统（神似的关键，逐项给全；下游与项目设计阶段同一套注入机制）
-- concept：一句话（≤40字）——这套风格的视觉概念（纯「怎么画」层面，不提原片画了什么）。
-- fonts：字体三角色 {"display":{"stack":"..","weight":"..","tracking":".."},"body":{...},"data":{...}}，display/body 必填；栈只能用上面列的 Windows 系统字体且必须含中文字体（中文会豆腐块）。
-- motion：动效语言 {"ease":"缓动族","dur_in":进场时长,"dur_settle":落定时长,"stagger":同组错峰,"notes":"性格一句话"}。%s：元素怎么进场（淡入/位移方向/缩放）、大概多快、错峰节奏；notes 写什么怎么动、禁什么动。时长档范围 dur_in 0.1–1.5 秒、dur_settle 0.05–1.0 秒、stagger 0–0.5 秒。
-- device：贯穿装置 {"name":"装置名","desc":"是什么、观众为什么记住它","per_seg":"逐段怎么重复/变奏"}——全片反复出现的签名画面机制（如「放射线强调」「红色印章盖角」）；描述只写机制与节拍，物件按分离纪律抽象；没有显式装置就从构图语法归纳一个。
-- anti_patterns：负面清单 3–6 条——这部片绝不会出现的手法（如「彩虹渐变」「emoji 贴纸」「圆角卡片堆砌」），出现即返工的俗手。
-
-## tokens schema（缺字段引擎走缺省）
-{"font":"系统字体栈","bg":{"type":"solid|linear","from":"#..","to":"#..","angle":0,"fx":["stars|dots|grid|glow|noise 子集"],"glow":[{"color":"#..","x":50,"y":50,"r":50,"alpha":"33"}]},"ink":"#..","txt":"#..","surface":"#..|rgba(..)","surface_txt":"#..","accent":["#..×6"],"primary":"#..","arrow":"#..","border_w":0,"radius":12,"shadow":"css 或 none","title":{"weight":800,"spacing":2},"cap":{"mode":"bar|pill|plain","bg":"rgba(..)","color":"#.."},"img":{"frame":"polaroid|clean|glass","shadow":"css"}}
+## 题材只进 subject
+- subject：一句话记录原片画的是什么（≤30 字，如「等距视角的城市宣传动画」）——
+  它只供人浏览与检索，下游不会注入生成模型；除 subject 外任何字段禁写题材词。%s
 
 ## 输出（只输出 JSON，无围栏）
-{"direction":"…","subject":"原片题材一句话（≤30字）","genre":"适用题材（检索用，≤30字）","keywords":["…×4-8"],"photo":"配图 query 调性（≤30字）","concept":"…","fonts":{…},"motion":{…},"device":{…},"anti_patterns":["…×3-6"],"layouts":[…5],"tokens":{…},"samples":[…2]}
-`, name, spanTxt, feats.SpanS[1]-feats.SpanS[0], feats.NShots, strings.Join(pal, "、"), notes, nameHint, videoBlock, motionSrc)
+{"name":"条目名（≤12 字；有段名用段名，否则主标签正式名）","subject":"原片题材一句话（≤30字）",
+"tags":[{"id":"词表id 或空","new":{"id":"..","name":"..","aliases":[".."],"brief":"..","tells":".."},"note":"人话指认","frames":["frame-xx.png"]}],
+"signatures":[{"kind":"六类之一","name":"人话短名","mechanism":"机制描述","frames":["frame-xx.png"],"use_hint":"什么节拍适合用"}]}%s`,
+		name, spanTxt, feats.SpanS[1]-feats.SpanS[0], feats.NShots, strings.Join(pal, "、"),
+		strings.Join(frames, "、"), notes, nameHint, vocabB.String(),
+		contract.SignatureKindNames(), dynamicSrc, videoBlock, retryNote)
 }
 
-// validateStyle 入库前自检（够注册表吃、引擎能配）。
-func validateStyle(st *StyleDraft) []string {
-	var errs []string
-	if st.Direction == "" || strings.Contains(st.Direction, "手绘") || strings.Contains(st.Direction, "扁平") {
-		errs = append(errs, "direction 缺失或含引擎保留词")
+// resolveDraft LLM 原始输出 → 落表草稿：词表 id 直用；新词申请走查重（归一化精确
+// 匹配 → LLM 语义查重）后建词条/挂别名。这是「申请新词」工具的 Go 侧执行体。
+func (s *Store) resolveDraft(ctx context.Context, prov *llm.Provider, lib *stylelib.Library,
+	raw *taggerOutput, feats videoFeatures) (*StyleDraft, error) {
+	if len(raw.Tags) < 1 || len(raw.Tags) > 3 {
+		return nil, fmt.Errorf("tags 数量 %d 不合法（主 1 + 辅 ≤2）", len(raw.Tags))
 	}
-	if len(st.Layouts) < 3 {
-		errs = append(errs, "layouts 不足 3 个")
+	vocab, err := lib.LoadVocab()
+	if err != nil {
+		return nil, fmt.Errorf("词表读取失败: %w", err)
 	}
-	if len(st.Samples) == 0 || st.Samples[0].HTML == "" {
-		errs = append(errs, "样张缺失")
+	// 先集中归一化精确查重 + 收集语义查重候选
+	var pend []*newWord
+	ids := make([]string, 0, len(raw.Tags))
+	names := make([]string, 0, len(raw.Tags)) // 各标签正式名（草稿名缺省回退用）
+	for i, t := range raw.Tags {
+		switch {
+		case t.ID != "" && vocab.Has(t.ID):
+			ids = append(ids, t.ID)
+			names = append(names, vocab.Entries[t.ID].Name)
+		case t.New != nil && strings.TrimSpace(t.New.Name) != "":
+			if hit, ok := vocab.Find(t.New.Name); ok {
+				ids = append(ids, hit.ID) // 精确撞车：复用词条
+				names = append(names, hit.Name)
+			} else {
+				ids = append(ids, "") // 占位：语义查重后落表
+				names = append(names, strings.TrimSpace(t.New.Name))
+				pend = append(pend, t.New)
+			}
+		default:
+			return nil, fmt.Errorf("第 %d 个标签既不在词表也没申请新词", i+1)
+		}
 	}
-	var tk struct {
-		BG     *json.RawMessage `json:"bg"`
-		Ink    string           `json:"ink"`
-		TXT    string           `json:"txt"`
-		Accent []string         `json:"accent"`
+	// 语义查重（一次 LLM 调用批处理全部候选；命中挂别名复用，未命中建词条）。
+	// blanks 预先记下占位下标——循环里逐个回填后空白位会变，边数边填会错位。
+	if len(pend) > 0 {
+		blanks := make([]int, 0, len(pend))
+		for i, id := range ids {
+			if id == "" {
+				blanks = append(blanks, i)
+			}
+		}
+		cands := make([]string, 0, len(pend))
+		for _, w := range pend {
+			cands = append(cands, w.Name)
+		}
+		hits, derr := semanticDedup(ctx, prov, lib, cands)
+		if derr != nil {
+			return nil, fmt.Errorf("新词语义查重失败: %w", derr)
+		}
+		for pi, w := range pend {
+			if exID := hits[w.Name]; exID != "" && vocab.Has(exID) {
+				if aerr := lib.VocabAttachAlias(exID, w.Name); aerr != nil {
+					return nil, aerr
+				}
+				ids[blanks[pi]] = exID
+				continue
+			}
+			id, cerr := lib.VocabCreate(stylelib.VocabEntry{
+				ID: w.ID, Name: w.Name, Aliases: w.Aliases, Brief: w.Brief, Tells: w.Tells,
+			})
+			if cerr != nil {
+				return nil, fmt.Errorf("新词 %q 入表失败: %w", w.Name, cerr)
+			}
+			ids[blanks[pi]] = id
+		}
 	}
-	if json.Unmarshal(st.Tokens, &tk) != nil || tk.BG == nil || tk.Ink == "" || tk.TXT == "" || len(tk.Accent) < 4 {
-		errs = append(errs, "tokens 不完整（bg/ink/txt/accent≥4）")
+	d := &StyleDraft{
+		Name:    strings.TrimSpace(raw.Name),
+		Subject: strings.TrimSpace(raw.Subject),
+		Tags:    contract.StyleTags{Main: ids[0], Aux: ids[1:]},
 	}
-	// 设计系统五件套与项目 design 阶段同纪律（contract.ValidateStyleSamplesDraft 同款阈值）：
-	// 没有它们风格条目退化回 v1 色板卡——神似的缺口，宁打回重析不放行
-	errs = append(errs, ValidateDesignSystem(st)...)
-	return errs
+	if d.Name == "" {
+		d.Name = names[0] // 缺省用主标签正式名
+	}
+	for i, t := range raw.Tags {
+		ev := contract.TagEvidence{Tag: ids[i], Note: strings.TrimSpace(t.Note), Frames: t.Frames}
+		d.TagEvidence = append(d.TagEvidence, ev)
+	}
+	d.Signatures = append(d.Signatures, raw.Signatures...)
+	if err := stylelib.ValidateSignatures(d.Signatures); err != nil {
+		return nil, err
+	}
+	return d, nil
 }
 
-// ValidateDesignSystem 设计系统五件套自检（concept/fonts/motion/device/anti_patterns），
-// 阈值与 contract.ValidateStyleSamplesDraft 同款。入库自检与老条目回填工具共用一套，
-// 阈值只放这一处。
-func ValidateDesignSystem(st *StyleDraft) []string {
+// semanticDedupFn 语义查重实现（var 化供测试注入；真实实现打一次 LLM）。
+type semanticDedupFn func(ctx context.Context, prov *llm.Provider, lib *stylelib.Library, words []string) (map[string]string, error)
+
+var semanticDedup semanticDedupFn = semanticDedupLLM
+
+// semanticDedupLLM 把候选词与现有词条列表给模型，问「有没有其实是同一个东西的
+// 不同名字」。返回 word → 命中的词条 id（未命中不出现在结果里）。
+func semanticDedupLLM(ctx context.Context, prov *llm.Provider, lib *stylelib.Library, words []string) (map[string]string, error) {
+	entries := lib.VocabList()
+	if len(entries) == 0 {
+		return map[string]string{}, nil // 空表无语义查重可言
+	}
+	var eb strings.Builder
+	for _, e := range entries {
+		eb.WriteString("- " + e.ID + "（" + e.Name + (")：" + e.Brief + "\n"))
+	}
+	var out struct {
+		Hits []struct {
+			Word    string `json:"word"`
+			EntryID string `json:"entry_id"`
+		} `json:"hits"`
+	}
+	_, err := prov.GenerateJSONNoThink(ctx,
+		"你是风格名词的策展查重员。只输出 JSON。",
+		fmt.Sprintf(`候选新词与现有风格词表如下。判断每个候选词是否与某个现有词条其实是同一个风格的不同名字（同义/译名/俗称）。
+
+## 现有词表
+%s
+## 候选词
+%s
+
+只报真命中（视觉定义一致的才合并；相近但不同的风格不合并）。
+输出：{"hits":[{"word":"候选词","entry_id":"命中的词条id"}]}，没有命中给空数组。`,
+			eb.String(), strings.Join(words, "、")),
+		&out)
+	if err != nil {
+		return nil, err
+	}
+	hits := map[string]string{}
+	for _, h := range out.Hits {
+		if h.Word != "" && h.EntryID != "" {
+			hits[h.Word] = h.EntryID
+		}
+	}
+	return hits, nil
+}
+
+// validateStyle 入库前结构自检（§4.1 规则；词表核对在 resolveDraft 已做）：
+// 证据帧/特色帧引用的文件必须真实存在于本段帧目录。
+func validateStyle(st *StyleDraft, feats videoFeatures) []string {
 	var errs []string
-	if strings.TrimSpace(st.Concept) == "" {
-		errs = append(errs, "concept 缺失")
+	if strings.TrimSpace(st.Tags.Main) == "" {
+		errs = append(errs, "tags.main 为空")
 	}
-	if st.Fonts == nil || strings.TrimSpace(st.Fonts.Display.Stack) == "" || strings.TrimSpace(st.Fonts.Body.Stack) == "" ||
-		!contract.HasCJKFont(st.Fonts.Display.Stack) || !contract.HasCJKFont(st.Fonts.Body.Stack) {
-		errs = append(errs, "fonts 不完整或字体栈缺中文字体")
+	if len(st.Tags.Aux) > 2 {
+		errs = append(errs, "tags.aux 超 2 个")
 	}
-	if st.Motion == nil || strings.TrimSpace(st.Motion.Ease) == "" || strings.TrimSpace(st.Motion.Notes) == "" ||
-		st.Motion.DurIn < 0.1 || st.Motion.DurIn > 1.5 ||
-		st.Motion.DurSettle < 0.05 || st.Motion.DurSettle > 1.0 ||
-		st.Motion.Stagger < 0 || st.Motion.Stagger > 0.5 {
-		errs = append(errs, "motion 缺失或时长档越界（dur_in 0.1–1.5 / dur_settle 0.05–1.0 / stagger 0–0.5）")
+	valid := map[string]bool{}
+	for _, f := range feats.Frames {
+		valid[filepath.Base(f.Path)] = true
 	}
-	if st.Device == nil || strings.TrimSpace(st.Device.Name) == "" ||
-		strings.TrimSpace(st.Device.Desc) == "" || strings.TrimSpace(st.Device.PerSeg) == "" {
-		errs = append(errs, "device 缺失（名称/是什么/逐段运用三件齐）")
+	check := func(what string, names []string) {
+		for _, n := range names {
+			if !valid[n] {
+				errs = append(errs, fmt.Sprintf("%s 引用了不存在的帧 %q", what, n))
+			}
+		}
 	}
-	if len(st.AntiPatterns) > 8 {
-		errs = append(errs, "anti_patterns 超 8 条")
+	for _, ev := range st.TagEvidence {
+		if strings.TrimSpace(ev.Note) == "" {
+			errs = append(errs, "tag_evidence 缺人话指认")
+		}
+		check("tag_evidence", ev.Frames)
+	}
+	for _, sg := range st.Signatures {
+		if len(sg.Frames) == 0 {
+			errs = append(errs, fmt.Sprintf("特色 %q 缺证据帧", sg.Name))
+		}
+		check("signature", sg.Frames)
 	}
 	return errs
 }

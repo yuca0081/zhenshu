@@ -1,15 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { NButton, NInput, NModal, NSelect } from 'naive-ui'
+import { NButton, NInput, NModal, NSelect, NSwitch, NTag } from 'naive-ui'
 import { api } from '../api'
-import { coverStyle } from '../format'
-import SampleFrame from './SampleFrame.vue'
-import type { ProjectView, Storyboard, Style } from '../types'
+import type { ProjectView, Storyboard, Style, VocabEntry } from '../types'
 
 // 三前置硬门弹窗（点对话栏上方的 文稿/分镜/风格 标签打开）：
 // - 文稿：编辑保存（PUT manuscript，article.txt 为真源）+ AI 按主题起草
 // - 分镜：只读展示整份分镜文档（改分镜走对话让 AI 重新生成）
-// - 风格：库内风格（预览后确认，即时亮灯）或文字描述（交给对话里的 AI 出样张）
+// - 风格（v3）：库内条目 = 标签气质 + 特色开关（默认全开），点开工即写「强参考」
+//   简报——不再即时生效：设计系统本片现发明，样张确认硬门照走；或文字描述交给 AI
 const props = defineProps<{ projectId: string; gate: 'manuscript' | 'storyboard' | 'style' | null; view: ProjectView | null }>()
 const emit = defineEmits<{ close: []; saved: []; 'chat-sent': [] }>()
 
@@ -78,19 +77,31 @@ async function save() {
 // ── 分镜 ─────────────────────────────────────────────
 const sb = ref<Storyboard | null>(null)
 
-// ── 风格 ─────────────────────────────────────────────
+// ── 风格（v3：条目 + 特色开关）─────────────────────────
 const packs = ref<Style[]>([])
+const vocab = ref<VocabEntry[]>([])
 
 const picked = ref('')
+const sigOff = ref<Record<string, boolean>>({}) // 关掉的特色 id（默认全开）
 const applying = ref(false)
 const direction = ref('')
+
+const vEntry = (id: string) => vocab.value.find(v => v.id === id)
+
+function pick(id: string) {
+  picked.value = picked.value === id ? '' : id
+  sigOff.value = {} // 换条目重置开关（默认全开）
+}
+
+const pickedPack = computed(() => packs.value.find(p => p.id === picked.value))
 
 async function apply() {
   if (!picked.value || applying.value) return
   applying.value = true
   saveErr.value = ''
   try {
-    await api.applyStyle(props.projectId, picked.value)
+    const disabled = Object.entries(sigOff.value).filter(([, off]) => off).map(([id]) => id)
+    await api.applyStyle(props.projectId, picked.value, disabled)
     emit('saved')
     emit('close')
   } catch (e: any) {
@@ -125,7 +136,9 @@ watch(() => props.gate, async g => {
     sb.value = await api.storyboard(props.projectId).catch(() => null)
   } else {
     packs.value = (await api.listLibrary().catch(() => [] as Style[])).filter(p => p.published)
+    vocab.value = await api.listVocab().catch(() => [] as VocabEntry[])
     picked.value = ''
+    sigOff.value = {}
     direction.value = ''
   }
 })
@@ -185,26 +198,47 @@ watch(() => props.gate, async g => {
       </div>
     </div>
 
-    <!-- 风格：库内直选 / 文字描述 -->
+    <!-- 风格：库内条目（标签+特色开关） / 文字描述 -->
     <div v-else-if="gate === 'style'" class="body">
-      <div class="sec-label">从风格库选（预览即所得）</div>
+      <div class="sec-label">从风格库选（标签定气质，特色清单逐条吸收；不想要的特色可关掉）</div>
       <div v-if="packs.length" class="style-cards">
         <button
           v-for="p in packs" :key="p.id" type="button"
-          class="style-card" :class="{ on: picked === p.id }" @click="picked = p.id"
+          class="style-card" :class="{ on: picked === p.id }" @click="pick(p.id)"
         >
-          <SampleFrame v-if="p.samples?.[0]?.html" :html="p.samples![0].html" />
-          <div v-else class="cover" :style="coverStyle(p)"><b>{{ p.name }}</b></div>
           <div class="meta">
             <b>{{ p.name }}</b>
-            <span>{{ p.genre || p.direction }}</span>
+            <span class="tagline">
+              <NTag size="tiny" :bordered="false" type="warning">{{ vEntry(p.tags.main)?.name ?? p.tags.main }}</NTag>
+              <NTag v-for="a in p.tags.aux ?? []" :key="a" size="tiny" :bordered="false">{{ vEntry(a)?.name ?? a }}</NTag>
+              <NTag v-if="p.signatures?.length" size="tiny" :bordered="false" type="info">特色×{{ p.signatures.length }}</NTag>
+            </span>
           </div>
         </button>
       </div>
-      <div v-else class="hint">风格库还是空的——出一条片后 Agent 会自动起草风格，或直接用文字描述。</div>
+      <div v-else class="hint">风格库还是空的——在「风格库」页上传参考视频解析入库，或直接用文字描述。</div>
+
+      <!-- 选中条目：气质 brief + 特色开关面板（默认全开） -->
+      <div v-if="pickedPack" class="sig-panel">
+        <p v-if="vEntry(pickedPack.tags.main)?.brief" class="panel-brief">
+          {{ vEntry(pickedPack.tags.main)!.name }}：{{ vEntry(pickedPack.tags.main)!.brief }}
+        </p>
+        <template v-if="pickedPack.signatures?.length">
+          <div class="sec-label">特色开关（关掉的不再要求吸收）</div>
+          <div v-for="sg in pickedPack.signatures" :key="sg.id" class="sig-row">
+            <NSwitch size="small" :value="!sigOff[sg.id]" @update:value="(v: boolean) => (sigOff[sg.id] = !v)" />
+            <div class="sig-txt">
+              <b>{{ sg.name }} <NTag size="tiny" :bordered="false" type="info">{{ sg.kind }}</NTag></b>
+              <span>{{ sg.mechanism }}</span>
+            </div>
+          </div>
+        </template>
+        <p v-else class="panel-brief">该条目没有特色清单——只对齐气质基调。</p>
+      </div>
+
       <div class="foot">
-        <span class="hint">选中后点确认，风格门立即亮灯</span>
-        <NButton type="primary" :disabled="!picked" :loading="applying" @click="apply">确认使用</NButton>
+        <span class="hint">选定后设计阶段按它「强参考」现发明设计系统，样张仍需在舞台确认</span>
+        <NButton type="primary" :disabled="!picked" :loading="applying" @click="apply">选定开工</NButton>
       </div>
       <div class="sec-label" style="margin-top: 18px;">或者用一句话描述方向（AI 出样张后你确认）</div>
       <NInput
@@ -267,6 +301,13 @@ watch(() => props.gate, async g => {
   font-size: 10.5px; color: #6f6f7c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .style-card.on .meta b { color: #f0c674; }
-.cover { height: 100%; min-height: 96px; display: grid; place-items: center; padding: 0 12px; }
-.cover b { color: #fff; font-size: 14px; text-align: center; text-shadow: 0 1px 6px rgba(0,0,0,.45); }
+.tagline { display: flex; gap: 4px; flex-wrap: wrap; }
+
+/* 特色开关面板 */
+.sig-panel { background: #101016; border: 1px solid #232329; border-radius: 10px; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+.panel-brief { margin: 0; font-size: 12px; color: #8a8a96; line-height: 1.6; }
+.sig-row { display: flex; gap: 10px; align-items: flex-start; }
+.sig-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sig-txt b { font-size: 12px; color: #d9d9e0; display: flex; align-items: center; gap: 6px; }
+.sig-txt span { font-size: 11.5px; color: #7c7c88; line-height: 1.6; }
 </style>

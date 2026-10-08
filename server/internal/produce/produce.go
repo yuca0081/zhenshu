@@ -35,7 +35,6 @@ import (
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
 	"webpage-video-agent/server/internal/store"
-	"webpage-video-agent/server/internal/stylelib"
 )
 
 type Runner struct {
@@ -1159,27 +1158,6 @@ func skinNote(p *pipeline.Project) string {
 	}
 	note += "\n- 配图 query 描述配色时往皮肤气质靠（底色/强调色的邻近词）；custom 特效底也用这套色"
 	return note
-}
-
-// layoutNote 本段版式注入块：指定版式（按段号轮换，相邻段天然不同）+ 全表可改选。
-// layouts 为空返回 ""，行为与旧版一致。校验硬底线（≥3 元素、不重叠）不放松。
-func layoutNote(layouts []stylelib.Layout, segIdx int) string {
-	if len(layouts) == 0 {
-		return ""
-	}
-	if segIdx < 1 {
-		segIdx = 1
-	}
-	asg := layouts[(segIdx-1)%len(layouts)]
-	var b strings.Builder
-	b.WriteString("\n## 本段版式（先定构图，再往里填元素；禁止退回「标题+小卡平铺」的默认网格）\n")
-	fmt.Fprintf(&b, "- 本段指定版式：%s（%s）——%s\n", asg.ID, asg.Name, asg.Desc)
-	b.WriteString("- 本风格可用版式（画面提示与指定版式明显冲突时可改选，note 首句写「版式：<id>」）：\n")
-	for _, l := range layouts {
-		fmt.Fprintf(&b, "  - %s（%s）：%s\n", l.ID, l.Name, l.Desc)
-	}
-	b.WriteString("- 元素数量与铺排以版式描述为准（下方 4–7 个的一般规则让位于版式；仍须 ≥3 个且不重叠）")
-	return b.String()
 }
 
 // styleSampleImages 已截图的风格样张（style/sample-N.png，ai/snap_samples.py 产物）→ data URL。

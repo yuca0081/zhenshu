@@ -86,7 +86,7 @@ func TestSfxConfigResolve(t *testing.T) {
 	if b, _ := os.ReadFile(p.Artifact("project.json")); !strings.Contains(string(b), `"transition_sfx": false`) {
 		t.Fatalf("off 应显式落 false（防风格默认开盖回）: %s", b)
 	}
-	// 风格 token：storyboard 带 StyleID → styles.json tokens.transition_sfx
+	// storyboard 带 StyleID：v3 库条目无 tokens，任何 style_id 都只走默认关
 	if err := os.MkdirAll(p.Artifact("storyboards"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -94,17 +94,16 @@ func TestSfxConfigResolve(t *testing.T) {
 		[]byte(`{"style_id":"neon-void","segments":[]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if !sfxFor(p) { // neon-void 若未配 token 则此断言校验默认关；配了则校验 token 生效
-		t.Log("neon-void 未配 transition_sfx token（默认关）")
+	if sfxFor(p) {
+		t.Fatal("v3 条目无 tokens，带 style_id 也应默认关")
 	}
-	// 显式 false 盖过风格 true
+	// 显式 false 落盘后保持关
 	if err := SetTransitionSFX(p, false); err != nil {
 		t.Fatal(err)
 	}
 	if sfxFor(p) {
-		t.Fatal("显式 false 不应被风格盖回")
+		t.Fatal("显式 false 不应被盖回")
 	}
-	_ = styleBool("neon-void", "transition_sfx") // 冒烟：不 panic 即可
 }
 
 // TestStitchComboFcStreamRefs 组合终装图的流引用必须落在实际输入序号内

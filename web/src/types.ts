@@ -87,33 +87,46 @@ export interface Msg {
   created_at: string
 }
 
-// 风格库条目（data/library/styles.json，唯一风格事实源）：
-// 身份（id/name/desc/genre/keywords）+ 外观（tokens/layouts）+ 证据（samples）+ 复用件（skin）
+// 风格库条目 v3（data/library/styles.json，唯一风格事实源）：
+// 标签（词表 id，引用模型固有知识）+ 特色清单（参考片独有手法，制作时整包生效单条可关）
+// + 证据（style_media 原片与抽帧）——不再携带 tokens/样张/皮肤（设计系统由各片现发明）
 export interface Style {
   id: string
   name: string
-  direction: string
-  desc?: string
-  genre?: string
-  keywords?: string[]
-  tokens?: StyleTokens
-  layouts?: RefVideoLayout[]
-  samples?: StyleLibrarySample[]
-  skin?: Skin          // 风格文件（应用时拷进项目）
-  concept?: string
-  fonts?: DesignFonts
-  motion?: DesignMotion
-  device?: DesignDevice
-  anti_patterns?: string[]
-  origin_project?: string
+  tags: StyleTags
+  tag_evidence?: TagEvidence[]
+  signatures?: Signature[]
+  subject?: string        // 原片题材一句话（只供检索，永不进生成提示词）
+  origin_project?: string // "video:<refID>" 或项目 id
   published: boolean
   created_at: string
 }
 
-export interface StyleLibrarySample {
+export interface StyleTags { main: string; aux?: string[] }
+
+export interface TagEvidence {
   tag: string
-  desc?: string
-  html: string
+  note: string
+  frames?: string[]
+}
+
+// 特色（§4.1）：六类枚举 + 机制化描述 + 证据帧。kind 决定 QA 考核方式（帧判/片判）
+export interface Signature {
+  id: string
+  kind: 'camera' | 'transition' | 'motif' | 'motion' | 'material' | 'palette'
+  name: string
+  mechanism: string
+  frames?: string[]
+  use_hint?: string
+}
+
+// 风格词表（data/library/vocab.json）：公认风格名词登记册，冷启动为空表
+export interface VocabEntry {
+  id: string
+  name: string
+  aliases?: string[]
+  brief: string
+  tells?: string
 }
 
 // 音频对齐产物（audio/audio_meta.json）：时间轴字幕/音频轨的数据源
@@ -145,55 +158,22 @@ export interface ChatRef {
   elementName?: string // 人话名（如 箭头：蓝光弹开）
 }
 
-// styles.json tokens 透传的已知字段（缺字段引擎走缺省，前端同样可缺省渲染）
-export interface StyleTokens {
-  font?: string
-  bg?: {
-    type?: string; from?: string; to?: string; angle?: number
-    fx?: string[]
-    glow?: { color: string; x: number; y: number; r: number; alpha?: string }[]
-  }
-  ink?: string
-  txt?: string
-  surface?: string
-  surface_txt?: string
-  accent?: string[]
-  primary?: string
-  arrow?: string
-  border_w?: number
-  radius?: number
-  shadow?: string
-  title?: { weight?: number; spacing?: number }
-  cap?: { mode?: string; bg?: string; color?: string }
-  img?: { frame?: string; shadow?: string }
-}
-
-// ── 设计系统五件套（视频解析新条目才有；与后端 contract.StyleSamples 同构）──
-export interface DesignFontRole { stack: string; weight?: string; tracking?: string }
-export interface DesignFonts { display: DesignFontRole; body: DesignFontRole; data?: DesignFontRole }
-export interface DesignMotion { ease: string; dur_in: number; dur_settle: number; stagger: number; notes?: string }
-export interface DesignDevice { name: string; desc?: string; per_seg?: string }
-
 // ── 参考视频解析（风格库页）────────────────────────────────
-export interface RefVideoLayout {
-  id: string
+export interface RefVideoStyle {
   name: string
-  desc: string
+  subject?: string
+  tags: StyleTags
+  tag_evidence?: TagEvidence[]
+  signatures?: Signature[]
 }
 
-export interface RefVideoStyle {
-  direction: string
-  genre: string
-  keywords: string[]
-  photo: string
-  concept?: string
-  fonts?: DesignFonts
-  motion?: DesignMotion
-  device?: DesignDevice
-  anti_patterns?: string[]
-  layouts: RefVideoLayout[]
-  samples: { tag: string; desc: string; html: string }[]
-  tokens?: StyleTokens // ref.json 原样透传（listReferences 已返回）
+export interface RefVideoSegment {
+  index: number
+  name: string
+  start: number
+  end: number
+  style?: RefVideoStyle // 解析失败为空（error 说明原因）
+  error?: string
 }
 
 export interface RefVideo {
@@ -203,33 +183,30 @@ export interface RefVideo {
   error?: string
   confirmed: boolean
   created_at: string
+  kind?: 'single' | 'multi'
   style?: RefVideoStyle
+  segments?: RefVideoSegment[]
 }
 
 // ── 风格详情抽屉（风格库/视频解析卡片点开共用）──────────────
-// 两个 tab 各自把数据规范化成这个结构（风格条目本体已带 tokens/layouts，无需 join）
+// 两个 tab 各自把数据规范化成这个结构；tags 带 vocab 名称（打开抽屉时 join）
 export interface TemplateDetailData {
   title: string
   status: { label: string; type: 'success' | 'warning' | 'error' | 'default' }
-  direction?: string
-  genre?: string
-  keywords?: string[]
-  layouts?: RefVideoLayout[]
-  tokens?: StyleTokens | null
-  concept?: string
-  fonts?: DesignFonts
-  motion?: DesignMotion
-  device?: DesignDevice
-  anti_patterns?: string[]
-  samples: { tag: string; desc?: string; html: string }[]
+  subject?: string
+  tags: { id: string; name: string; brief?: string }[]
+  tagEvidence?: TagEvidence[]
+  signatures?: Signature[]
   originLabel: string
   originHref?: string
   createdAt?: string
-  desc?: string
-  extraTags?: string[]
   packId?: string // 风格库条目：草稿态给「入库」
   published?: boolean
   refId?: string // 参考引用：抽帧截图 + 原视频；未入库给「入库」
+  segIdx?: number // multi 段序（编辑草稿时定位）
   libMediaId?: string // 风格条目自带媒体（video: 来源）：走 /api/library/:id/media
   confirmed?: boolean
+  editable?: boolean // 解析草稿（未入库）：特色可增删改
+  draft?: RefVideoStyle // editable 时的完整草稿（含 name/subject）
+  framesInSeg?: boolean // multi 段草稿：证据帧在 seg-NN/ 子目录
 }

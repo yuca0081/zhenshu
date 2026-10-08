@@ -1,4 +1,4 @@
-import type { AudioMeta, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, RefVideo, Storyboard, Style, StyleSamples } from './types'
+import type { AudioMeta, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, VocabEntry } from './types'
 
 // ── API token（服务端 .env 配了 API_TOKEN 时启用）──────────────
 // 401 时提示输入一次，存 localStorage；之后所有请求带头，媒体 URL 带 ?token=
@@ -71,9 +71,10 @@ export const api = {
       body: JSON.stringify({ content }),
     }),
 
-  // 风格弹窗选定库内风格（预览后显式确认 = 硬门通过）
-  applyStyle: (id: string, styleId: string) =>
-    post<{ ok: boolean; direction: string }>(`/api/projects/${id}/style/apply`, { style_id: styleId }),
+  // 风格弹窗选定库内条目（v3：写风格简报，特色开关默认全开；设计系统本片现发明，
+  // 样张确认硬门不再被跳过）。disabled = 关掉的特色 id 列表。
+  applyStyle: (id: string, styleId: string, disabled: string[] = []) =>
+    post<{ ok: boolean; name: string; signatures: number }>(`/api/projects/${id}/style/apply`, { style_id: styleId, disabled }),
 
   style: (id: string) => req<StyleSamples>(`/api/projects/${id}/style`),
 
@@ -111,6 +112,9 @@ export const api = {
   libraryFrames: (id: string) =>
     req<{ frames: string[]; has_video: boolean }>(`/api/library/${id}/frames`),
 
+  // 风格词表（只读；条目标签的 id→名称/简介 join 用）
+  listVocab: () => req<VocabEntry[]>('/api/vocab'),
+
   // ── 参考视频解析 ──
   uploadReference: (file: File) => {
     const fd = new FormData()
@@ -120,14 +124,26 @@ export const api = {
   listReferences: () => req<RefVideo[]>('/api/references'),
   referenceFrames: (id: string) =>
     req<{ frames: string[]; has_video: boolean }>(`/api/references/${id}/frames`),
+  // multi 段草稿的抽帧（证据帧在 seg-NN/ 子目录）
+  referenceSegFrames: (id: string, seg: number) =>
+    req<{ frames: string[] }>(`/api/references/${id}/seg/${seg}/frames`),
   analyzeReference: (id: string) => post<{ ok: boolean }>(`/api/references/${id}/analyze`),
   confirmReference: (id: string) =>
-    post<{ ok: boolean; style_id: string }>(`/api/references/${id}/confirm`),
+    post<{ ok: boolean; style_id?: string; style_ids?: string[] }>(`/api/references/${id}/confirm`),
+  // 确认页编辑解析草稿（入库前增删改特色）。seg 为段序（multi，1 起；缺省 = single）
+  updateReferenceDraft: (id: string, seg: number, style: RefVideoStyle) =>
+    req<{ ok: boolean }>(`/api/references/${id}/draft`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ seg, style }),
+    }),
 }
 
 // rev = 成片代次（重做完成后递增）：同 URL 会被 <video> 惰性复用，重做完必须换 URL 才能看到新画面
 export const videoURL = (id: string, rev = 0) => withToken(`/api/projects/${id}/video/main.mp4${rev ? `?v=${rev}` : ''}`)
 // 参考引用媒体（抽帧 frame-*.png / 原视频 video.mp4；详情抽屉用）
 export const referenceMediaURL = (id: string, file: string) => withToken(`/api/references/${id}/media/${file}`)
+// multi 段草稿的证据帧（seg-NN/ 子目录）
+export const referenceSegMediaURL = (id: string, seg: number, file: string) => withToken(`/api/references/${id}/seg/${seg}/media/${file}`)
 // 风格库媒体（入库快照；详情抽屉用）
 export const libraryMediaURL = (id: string, file: string) => withToken(`/api/library/${id}/media/${file}`)

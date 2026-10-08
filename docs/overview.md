@@ -40,7 +40,7 @@
 │  │     → 段级并行渲染 → 拼接                                        │  │
 │  │                                                                │  │
 │  │  ④ 任务队列（PG jobs 表 + worker 池）                             │  │
-│  │  ⑤ 方法库：风格模板 StylePack + 经验卡 MethodNote（沉淀/注入）       │  │
+│  │  ⑤ 风格库 v3（标签+特色）+ 方法库（scene 参考/构图公式，注入）        │  │
 │  │  ⑥ 聊天案卷 chat_messages（追加式事件流：SSE/审计/回放/挖经验）      │  │
 │  └────────┬────────────────────────────────────┬──────────────────┘  │
 │           │ 起渲染子进程                         │ 存元数据/传对象        │
@@ -102,9 +102,9 @@
  ▼
 ═════════ 阶段四 · 出片 + 沉淀 ═════════
   "出片" → 1080p 高清渲染（同样段级并行）→ 上传 MinIO → 下载 MP4
-  Agent 起草："这套风格存成模板？这次的坑记一条？" → 你点确认 → 入方法库
+  Agent 起草："这套风格沉淀入库？（打标签+提炼特色）这次的坑记一条？" → 你点确认 → 入风格库/方法库
       ↓
-  下次创作：选同款风格 + 经验卡自动注入 → 越用越熟练（飞轮）
+  下次创作：选同款风格（标签气质+特色清单强参考）+ 经验卡自动注入 → 越用越熟练（飞轮）
 ```
 
 ## 4. Agent 循环图（想 → 做 → 看 → 再想）
@@ -131,7 +131,7 @@
 |---|---|
 | 产品形态 | 聊天框驱动；左历史（会话中收起）/ 中舞台（文稿→分镜→风格图→视频+时间轴）/ 右聊天 |
 | 硬前置门 | **三件**：文稿 + 分镜 + 风格图（用户确认）；齐备 + AI 自检 → 才开工；代码硬检查 |
-| 风格图 | AI 用同一套风格参数渲 1–3 张 HTML 样张，用户点头才锁定为 StylePack（所见即所得） |
+| 风格图 | 设计系统**本片现发明**（皮肤/字体三角色/动效/装置/版式），AI 渲 1–3 张样张，用户点头才锁定；选了库内风格则按「强参考」简报发明并逐条吸收特色（v3：库=标签+特色清单，不再携带 tokens/样张） |
 | 时长策略 | 忠实原文，时长服从内容，硬上限 15 分钟（超限 AI 压缩+协商） |
 | 文稿 | 一等产物；来源可插拔（粘贴/链接提取/AI 起草，后两者二期） |
 | 默认画幅 | 9:16 竖屏默认，可切 16:9 |
@@ -141,7 +141,7 @@
 | 渲染 | HyperFrames 确定性渲染；段级并行 + 拼接；整条完成再展示 |
 | Agent | 主管（ReAct 循环 + 工具）+ 无人格技能 + Go 确定性编排；状态机门禁 + 步数≤10 |
 | 模型分层 | 对话=便宜快 / 分镜规划=中档 / 画面生成=最强；DeepSeek 主选，M0 三档实测冻结 |
-| 方法库 | 模板库（StylePack 成片提炼→确认入库→复用）+ 方法注入（scene 参考实现/高级感构图公式，按段内容关键词命中进 spec 生成，`data/library/methods/` 清单驱动） |
+| 方法库 | 方法注入（scene 参考实现/高级感构图公式，按段内容关键词命中进画面生成，`data/library/methods/` 清单驱动）；风格复用走**风格库 v3**（标签+特色+词表+简报，见 `docs/style-library-v3.md`） |
 | 对话存储 | chat_messages 追加式事件流（user/agent/system × text/tool_call/progress） |
 | 前端 | Vue 3 + Vite + **TypeScript** + Naive UI + Pinia；时间轴自研（三轨只读导航型） |
 | 后端 | Go + Gin 单二进制；GORM + PG；jobs 表 + worker 池；SSE 推流 |
@@ -170,6 +170,18 @@
 - 表达力扩展（2026-09-25）：**custom 自由元素**（kind 第 27 个，表达力逃生舱——LLM 直出容器内 html/css/js：css 自动 scope+keyframes 改名防撞，js 走 GSAP 片段（T=揭示秒/ID=容器/tl=时间线，node --check 门禁），每段≤2 个；禁 script/外链/内联事件/position:fixed/CSS transition·animation/repeat·yoyo——校验（contract.validateCustom）→修复轮→Sanitize→渲染侧 _BAN 再拦四道防呆）；**动效词表 v2**：元素级 `anim` 入场覆盖（pop/fade/rise/slide/wipe/blur/chars 逐字仅 title·big/none 直出，组合类 kind 不支持）与 `exit` 退场词位；段级 `camera` 整屏缓推（zoom_in/zoom_out/pan_left/pan_right/drift，内容层 cam 包装，字幕带不动）。全部走 GSAP timeline，seek 确定性（HyperFrames 硬规则 5）
 - 素材中心（2026-09-25）：**元素注册表** `ai/registry/elements.json`（27 kind 的 name/category/scene/menu 单一事实源；produce 的 spec 菜单与 kind 清单由它生成，`contract/registry_test.go` 漂移门禁强制与 specKinds 对齐）；**样张矩阵** `ai/element_gallery.py`（每风格 × 每 kind 一张定妆 PNG 到 `data/gallery/<style>/<kind>.png`，ffprobe 总时长均分段取 75% 处，可重入）；API `GET /api/registry|/api/gallery/:style/:file`；前端首页为 **素材中心**（风格库=方法库卡片墙 / 元素库=风格列+元素卡网格，点品牌「帧述」回首页），新建项目的风格选择升级为**样张卡片**（所见即所选）
 - 待办：10 篇真实文章 MVP 验收、`cancel_production`、帧/元素级寻址（M2）、LLM 风格师（描述→tokens→样张门）、StylePack v2（tokens 入包）、版式模板 templates.json
+
+### 风格库 v3（2026-10-08 实施完成，`docs/style-library-v3.md`）
+
+库降维成「**策展目录 + 绝活收藏夹**」：
+
+- **条目只打标签**（主 1 + 辅 ≤2，词表 id）：公认风格是模型固有知识，不再提取 tokens/样张/五件套去"教"它——解析从多轮校验降为 1 轮 + 失败重喂 ≤2 次；
+- **特色清单**（≤6 条：运镜/转场/母题/动效/素材/配色）：参考片真正独有的手法，机制化写作 + 证据帧指认，机制不写物件（题材中毒防线）；
+- **词表** `data/library/vocab.json`：冷启动空表，打标申请新词经查重（归一化精确 + LLM 语义，命中挂别名）后自动长出；
+- **使用流程**：选条目（特色开关默认全开）→ 写简报 `style/style_brief.json` → 设计阶段注入"必答特色"，交卷登记 `signature_absorption` 落点（机械数数校验，缺/越枚举打回）→ design.md 渲染落点表；
+- **QA 判据闭环**：成片审查按机制+落点生成是非题，逐条判 absorbed/drifted/missing，missing|drifted 判据原句进修复轮（转场判据看段边界前后帧序列）；
+- 证据保留：`style_media/<id>/` 原片+抽帧快照（打标证据/QA 考卷/回看）；成片反哺入库（extract_stylepack）改为起草"标签+特色"草稿。
+- 行为变化：选库内风格**不再即时生效**——v3 条目没有自带样张，设计系统必须本片现发明，样张确认硬门对所有人成立。
 
 ## 7. 文档地图
 

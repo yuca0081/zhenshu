@@ -141,6 +141,7 @@ function openSSE(id: string) {
     progressLine.value = typeof d === 'string' ? d : d.detail ?? ''
   })
   es.addEventListener('style_confirmed', () => loadProject(id).catch(() => {}))
+  es.addEventListener('style_applied', () => { loadProject(id).catch(() => {}); loadLibrary() })
   es.addEventListener('done', () => {
     stageState.value = {}
     progressLine.value = ''

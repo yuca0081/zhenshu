@@ -136,6 +136,10 @@ type StyleSamples struct {
 	Layouts      []DesignLayout `json:"layouts,omitempty"`       // 本片版式网格（段轮换的优先来源，注册表降为兜底）
 	AntiPatterns []string       `json:"anti_patterns,omitempty"` // 本片负面清单（出现即返工的俗手）
 
+	// v3（§4.5）：风格简报存在时，设计交卷必须逐条登记特色落点；覆盖校验在
+	// stageStyleSamples（草稿校验通过后追加），这里只承载不校验（老文件无此字段）。
+	SignatureAbsorption []SigAbsorption `json:"signature_absorption,omitempty"`
+
 	Confirmed bool `json:"confirmed"` // 硬门：用户点头后才允许开工
 }
 
