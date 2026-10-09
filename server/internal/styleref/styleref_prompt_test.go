@@ -20,7 +20,7 @@ func testLib(t *testing.T) *stylelib.Library {
 // 历史事故：城市宣传片解析出的条目连样张带描述全是城市物件，套到题材不同的新片上
 // 整片画出城市元素——v3 特色清单是同样的口子，机制化写作是纪律线。
 func TestSynthesizePromptDiscipline(t *testing.T) {
-	p := synthesizeUserPrompt(testLib(t), "城市宣传片", "", videoFeatures{
+	p := synthesizeUserPrompt(testLib(t), "城市宣传片", videoFeatures{
 		DurationS: 60, SpanS: [2]float64{0, 60}, NShots: 8,
 		Frames: []featureFrame{{Path: `C:\x\frame-0.8.png`, T: 0.8}},
 	}, "帧0: 主体居中", false, "")
@@ -47,7 +47,7 @@ func TestSynthesizePromptDiscipline(t *testing.T) {
 // 视频直读路径（PUBLIC_BASE_URL 配置后）：运镜/转场以视频实测为准，
 // 颜色/构图仍钉死在测得事实——视频是时间维度的证据源，不是全盘放飞的许可。
 func TestSynthesizePromptVideoDirectRead(t *testing.T) {
-	p := synthesizeUserPrompt(testLib(t), "合集段", "", videoFeatures{
+	p := synthesizeUserPrompt(testLib(t), "宣传片", videoFeatures{
 		DurationS: 30, SpanS: [2]float64{0, 30}, NShots: 4,
 	}, "帧0: 主体居中", true, "")
 	for _, want := range []string{
@@ -65,7 +65,7 @@ func TestSynthesizePromptVideoDirectRead(t *testing.T) {
 // 「上一次输出被拒」标题由 synthesize/retag 调用方包装）。
 func TestSynthesizePromptRetryNote(t *testing.T) {
 	note := "\n\n## 上一次输出被拒（修正后重出）\ntags 数量 4 不合法"
-	p := synthesizeUserPrompt(testLib(t), "x", "", videoFeatures{}, "", false, note)
+	p := synthesizeUserPrompt(testLib(t), "x", videoFeatures{}, "", false, note)
 	if !strings.Contains(p, "上一次输出被拒") || !strings.Contains(p, "tags 数量 4 不合法") {
 		t.Fatalf("重喂说明未注入:\n%s", p)
 	}

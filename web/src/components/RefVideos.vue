@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useMessage, NButton, NTag } from 'naive-ui'
 import TemplateDetail from './TemplateDetail.vue'
-import { api } from '../api'
-import type { RefVideo, RefVideoSegment, RefVideoStyle, StyleTags, TemplateDetailData, VocabEntry } from '../types'
+import { api, referenceMediaURL } from '../api'
+import type { RefVideo, RefVideoStyle, Signature, TemplateDetailData, VocabEntry } from '../types'
 
 const emit = defineEmits<{ ingested: [] }>()
 
@@ -29,44 +29,37 @@ onMounted(() => { refresh(); api.listVocab().then(v => (vocab.value = v)).catch(
 onUnmounted(() => { dead = true; window.clearTimeout(timer) })
 
 const message = useMessage()
-const vName = (id: string) => vocab.value.find(v => v.id === id)?.name ?? id
 
 function pick() { fileEl.value?.click() }
+// 批量解析：多选逐支提交，服务端排队解析（并发上限），列表轮询跟进
 async function onFile(e: Event) {
-  const f = (e.target as HTMLInputElement).files?.[0]
+  const files = Array.from((e.target as HTMLInputElement).files ?? [])
   ;(e.target as HTMLInputElement).value = ''
-  if (!f) return
+  if (!files.length) return
   uploading.value = true
-  try {
-    await api.uploadReference(f)
-    await refresh()
-    // 上传后立刻起一次忙轮询（refresh 内部已按 status 判断）
-  } catch (err) {
-    message.error(`上传失败：${(err as Error).message}`)
-  } finally {
-    uploading.value = false
+  let ok = 0
+  for (const f of files) {
+    try {
+      await api.uploadReference(f)
+      ok++
+    } catch (err) {
+      message.error(`「${f.name}」上传失败：${(err as Error).message}`)
+    }
   }
+  uploading.value = false
+  if (ok > 1) message.success(`已提交 ${ok} 支视频，解析按序进行`)
+  await refresh()
 }
 
 async function retry(id: string) {
   await api.analyzeReference(id).catch(e => message.error(`重试失败：${e.message}`))
   await refresh()
 }
-async function ingest(r: RefVideo) {
-  try {
-    await api.confirmReference(r.id)
-    await refresh()
-    show.value = false // 入库后 refs 刷新，关抽屉避免状态过期
-    emit('ingested') // 新条目出现在「风格库」tab
-  } catch (e) {
-    message.error(`入库失败：${(e as Error).message}`)
-  }
-}
 
 // 保存草稿编辑（特色增删改），成功后刷新列表（ref.json 已变）
-async function saveDraft(refId: string, seg: number, style: RefVideoStyle) {
+async function saveDraft(refId: string, style: RefVideoStyle) {
   try {
-    await api.updateReferenceDraft(refId, seg, style)
+    await api.updateReferenceDraft(refId, style)
     message.success('草稿已保存')
     detailEl.value?.markSaved()
     await refresh()
@@ -75,7 +68,66 @@ async function saveDraft(refId: string, seg: number, style: RefVideoStyle) {
   }
 }
 
-// ── 详情抽屉：single 用整片草稿；multi 点段行开该段草稿（可编辑） ──
+// ── 解析结果长方块：一视频一块；折叠显名称/标签，展开看详情 ──
+const kindLabel: Record<string, string> = {
+  camera: '运镜', transition: '转场', motif: '母题', motion: '动效', material: '素材', palette: '配色',
+}
+interface Unit {
+  name: string
+  subject: string                   // 内容行：题材一句话，缺省退特色名
+  tagChips: { id: string; name: string }[] // 折叠态标签（最多 3 个）
+  tagMore: number
+  tagsFull: { id: string; name: string; brief?: string }[]
+  sigs: Signature[]
+  confirmed: boolean
+}
+const vEntry = (id?: string) => (id ? vocab.value.find(v => v.id === id) : undefined)
+const vName = (id?: string) => (id ? vEntry(id)?.name ?? id : '')
+const tagIds = (style?: RefVideoStyle) =>
+  [style?.tags?.main, ...(style?.tags?.aux ?? [])].filter((x): x is string => !!x)
+
+// done 但没有草稿 = 旧版拆段数据（已退役），不出块，视频行给「重新解析」
+function unit(r: RefVideo): Unit | null {
+  if (r.status !== 'done' || !r.style) return null
+  const style = r.style
+  const ids = tagIds(style)
+  const sigs = style.signatures ?? []
+  const subject = style.subject
+    || (sigs.length ? `特色：${sigs.slice(0, 3).map(s => s.name).join('、')}${sigs.length > 3 ? ' 等' : ''}` : '')
+  return {
+    name: style.name || vName(ids[0]) || r.name,
+    subject,
+    tagChips: ids.slice(0, 3).map(id => ({ id, name: vName(id) })),
+    tagMore: Math.max(0, ids.length - 3),
+    tagsFull: ids.map(id => ({ id, name: vName(id), brief: vEntry(id)?.brief })),
+    sigs,
+    confirmed: r.confirmed,
+  }
+}
+const rows = computed(() => refs.value.map(r => ({ r, u: unit(r) })))
+
+const expanded = ref<Set<string>>(new Set())
+function toggle(r: RefVideo) {
+  const s = new Set(expanded.value)
+  if (s.has(r.id)) s.delete(r.id)
+  else s.add(r.id)
+  expanded.value = s
+}
+
+// 入库（幂等，重复入库服务端同 seed upsert）
+async function ingest(r: RefVideo, name: string) {
+  try {
+    await api.confirmReference(r.id)
+    message.success(`「${name}」已入库，新建项目可选用`)
+    show.value = false // 弹窗里点的入库：关弹窗避免状态过期
+    await refresh()
+    emit('ingested') // 新条目出现在「风格库」tab
+  } catch (e) {
+    message.error(`入库失败：${(e as Error).message}`)
+  }
+}
+
+// ── 详情弹窗（完整数据 + 草稿编辑 + 原片/抽帧回看）──
 const show = ref(false)
 const detail = ref<TemplateDetailData | null>(null)
 const detailEl = ref<InstanceType<typeof TemplateDetail> | null>(null)
@@ -83,44 +135,33 @@ function bvURL(name: string): { label: string; href: string } | null {
   const m = /^(BV[0-9A-Za-z]+)\.\w+$/.exec(name)
   return m ? { label: 'B站原片 ' + m[1], href: `https://www.bilibili.com/video/${m[1]}` } : null
 }
-function tagChips(tags: StyleTags) {
-  return [tags.main, ...(tags.aux ?? [])].filter(Boolean)
-    .map(id => ({ id, name: vName(id) }))
-}
-function buildDetail(r: RefVideo, style: RefVideoStyle, seg?: RefVideoSegment): TemplateDetailData {
+function buildDetail(r: RefVideo, style: RefVideoStyle): TemplateDetailData {
   const bv = bvURL(r.name)
-  const v = vocab.value
   return {
-    title: style.name || seg?.name || r.name,
+    title: style.name || r.name,
     status: r.confirmed
       ? { label: '已入库', type: 'success' }
       : { label: '已解析', type: 'success' },
     subject: style.subject,
-    tags: [style.tags.main, ...(style.tags.aux ?? [])].filter(Boolean)
-      .map(id => ({ id, name: v.find(x => x.id === id)?.name ?? id, brief: v.find(x => x.id === id)?.brief })),
+    tags: tagIds(style)
+      .map(id => ({ id, name: vEntry(id)?.name ?? id, brief: vEntry(id)?.brief })),
     tagEvidence: style.tag_evidence ?? [],
     signatures: style.signatures ?? [],
     originLabel: bv?.label ?? r.name,
     originHref: bv?.href,
     createdAt: new Date(r.created_at).toLocaleString(),
     refId: r.id,
-    segIdx: seg?.index ?? 0,
-    framesInSeg: !!seg,
     confirmed: r.confirmed,
     editable: !r.confirmed,
     draft: style,
   }
 }
-function openSingle(r: RefVideo) {
-  if (r.status !== 'done' || !r.style) return
+function openDetail(r: RefVideo) {
+  if (!r.style) return
   detail.value = buildDetail(r, r.style)
   show.value = true
 }
-function openSeg(r: RefVideo, seg: RefVideoSegment) {
-  if (!seg.style) return
-  detail.value = buildDetail(r, seg.style, seg)
-  show.value = true
-}
+const frameURL = (r: RefVideo, f: string) => referenceMediaURL(r.id, f)
 </script>
 
 <template>
@@ -128,67 +169,90 @@ function openSeg(r: RefVideo, seg: RefVideoSegment) {
     <header class="head">
       <div>
         <h2>视频解析</h2>
-        <p>上传一支参考视频，AI 打公认风格标签、提炼它独有的手法特色（词表没有的标签自动申请新词）——确认入库后新建项目可选用。点卡片/段落看标签、特色与证据帧，入库前可增删改特色。</p>
+        <p>上传参考视频（支持多选批量），AI 打公认风格标签、提炼它独有的手法特色（词表没有的标签自动申请新词）。一个视频解析出一个风格条目：点开看标签、特色与证据帧，右上角入库，入库后新建项目可选用。</p>
       </div>
       <NButton type="primary" :loading="uploading" @click="pick">上传视频</NButton>
-      <input ref="fileEl" type="file" accept="video/*" hidden @change="onFile" />
+      <input ref="fileEl" type="file" accept="video/*" multiple hidden @change="onFile" />
     </header>
 
-    <div v-if="!refs.length" class="none">还没有解析记录。上传一支 mp4/mov/webm 试试（建议 ≤ 200MB）。</div>
-    <div v-else class="grid">
-      <figure v-for="r in refs" :key="r.id" class="card" :class="{ bad: r.status === 'error' }">
-        <figcaption>
-          <div class="row1">
-            <b :title="r.name">{{ r.name }}</b>
-            <NTag size="small" :bordered="false" :type="r.status === 'done' ? 'success' : r.status === 'error' ? 'error' : 'warning'">
-              {{ r.status === 'done' ? '已解析' : r.status === 'error' ? '失败' : '解析中' }}
-            </NTag>
-          </div>
+    <div v-if="!refs.length" class="none">还没有解析记录。上传 mp4/mov/webm 试试（建议 ≤ 200MB）。</div>
+    <div v-else class="list">
+      <article v-for="row in rows" :key="row.r.id" class="refitem" :class="{ bad: row.r.status === 'error' }">
+        <!-- 视频行：文件名 + 状态 + 时间 -->
+        <div class="vhead">
+          <b class="vname" :title="row.r.name">{{ row.r.name }}</b>
+          <NTag size="small" :bordered="false"
+            :type="row.r.status === 'done' ? 'success' : row.r.status === 'error' ? 'error' : 'warning'">
+            {{ row.r.status === 'done' ? '已解析' : row.r.status === 'error' ? '失败' : '解析中' }}
+          </NTag>
+          <span class="vmeta">{{ new Date(row.r.created_at).toLocaleString() }}</span>
+          <span class="vgap" />
+          <NButton v-if="row.r.status === 'error'" size="tiny" ghost @click="retry(row.r.id)">重试</NButton>
+          <NButton v-else-if="row.r.status === 'done' && !row.u" size="tiny" ghost
+            title="旧版拆段数据已退役，重新解析为一个条目" @click="retry(row.r.id)">重新解析</NButton>
+        </div>
+        <p v-if="row.r.status === 'error'" class="verr">{{ row.r.error }}</p>
 
-          <!-- single：整片一个草稿，点开详情 -->
-          <template v-if="r.status === 'done' && r.style">
-            <div class="chips">
-              <NTag v-for="t in tagChips(r.style.tags)" :key="t.id" size="tiny" :bordered="false" type="warning">{{ t.name }}</NTag>
-              <NTag v-if="r.style.signatures?.length" size="tiny" :bordered="false" type="info">特色×{{ r.style.signatures.length }}</NTag>
+        <!-- 解析结果长方块 -->
+        <div v-if="row.u" class="block" :class="{ open: expanded.has(row.r.id) }">
+          <div class="bhead click" @click="toggle(row.r)">
+            <span class="caret">▶</span>
+            <div class="binfo">
+              <div class="brow1">
+                <b class="bname">{{ row.u.name }}</b>
+                <NTag v-for="t in row.u.tagChips" :key="t.id" size="tiny" :bordered="false" type="warning">{{ t.name }}</NTag>
+                <span v-if="row.u.tagMore" class="tagmore">+{{ row.u.tagMore }}</span>
+                <span v-if="row.u.sigs.length" class="bmeta">特色×{{ row.u.sigs.length }}</span>
+              </div>
+              <p v-if="row.u.subject" class="bsubject">{{ row.u.subject }}</p>
             </div>
-            <button type="button" class="draft-line" @click="openSingle(r)">
-              <span v-if="r.style.subject">{{ r.style.subject }}</span>
-              <span class="more">看标签/特色/证据帧 →</span>
-            </button>
-          </template>
-
-          <!-- multi：每段一行，点行开该段草稿 -->
-          <template v-if="r.status === 'done' && r.segments?.length">
-            <div v-for="seg in r.segments" :key="seg.index" class="segrow" :class="{ err: !seg.style }">
-              <button type="button" class="seg-btn" :disabled="!seg.style" @click="openSeg(r, seg)">
-                <b>{{ seg.index }}</b>
-                <span class="seg-name">{{ seg.name }}</span>
-                <span v-if="seg.style" class="seg-meta">
-                  {{ vName(seg.style.tags.main) }}
-                  <template v-if="seg.style.signatures?.length"> · 特色×{{ seg.style.signatures.length }}</template>
-                </span>
-                <span v-else class="seg-err">{{ seg.error || '解析失败' }}</span>
-              </button>
-            </div>
-          </template>
-
-          <span v-if="r.status === 'error'" class="err">{{ r.error }}</span>
-          <div class="row2">
-            <span class="origin">{{ new Date(r.created_at).toLocaleString() }}</span>
-            <span class="btns">
-              <NButton v-if="r.status === 'error'" size="small" ghost @click.stop="retry(r.id)">重试</NButton>
-              <NButton v-if="r.status === 'done' && !r.confirmed" size="small" type="primary" ghost @click.stop="ingest(r)">
-                入库
+            <div class="bact" @click.stop>
+              <NButton size="tiny" quaternary @click="openDetail(row.r)">
+                {{ row.u.confirmed ? '详情' : '编辑' }}
               </NButton>
-              <NTag v-if="r.confirmed" size="small" :bordered="false" type="success">已入库</NTag>
-            </span>
+              <NButton v-if="!row.u.confirmed" size="tiny" type="primary" ghost
+                @click="ingest(row.r, row.u.name)">入库</NButton>
+              <NTag v-else size="small" :bordered="false" type="success">已入库</NTag>
+            </div>
           </div>
-        </figcaption>
-      </figure>
+
+          <!-- 展开态：标签 brief + 特色机制 + 证据帧缩略图 -->
+          <div v-if="expanded.has(row.r.id)" class="bbody">
+            <div v-if="row.u.tagsFull.length" class="xrow">
+              <span class="xlab">标签</span>
+              <div class="xtags">
+                <div v-for="t in row.u.tagsFull" :key="t.id" class="xtag">
+                  <b>{{ t.name }}</b>
+                  <span v-if="t.brief">{{ t.brief }}</span>
+                </div>
+              </div>
+            </div>
+            <div v-if="row.u.sigs.length" class="xrow">
+              <span class="xlab">特色</span>
+              <div class="xsigs">
+                <div v-for="sg in row.u.sigs" :key="sg.id" class="xsig">
+                  <div class="xsig-head">
+                    <NTag size="tiny" :bordered="false" type="info">{{ kindLabel[sg.kind] ?? sg.kind }}</NTag>
+                    <b>{{ sg.name }}</b>
+                    <span v-if="sg.use_hint" class="xsig-hint">适用：{{ sg.use_hint }}</span>
+                  </div>
+                  <p class="xsig-mech">{{ sg.mechanism }}</p>
+                  <div v-if="sg.frames?.length" class="evframes">
+                    <img v-for="f in sg.frames" :key="f" :src="frameURL(row.r, f)" loading="lazy" alt="" />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-if="!row.u.tagsFull.length && !row.u.sigs.length" class="xempty">
+              这份草稿没有标签/特色数据（旧版解析产物），只有名称可入库参考。
+            </div>
+          </div>
+        </div>
+      </article>
     </div>
 
     <TemplateDetail ref="detailEl" :show="show" :detail="detail" @close="show = false"
-      @ingest="id => { const r = refs.find(x => x.id === id); if (r) ingest(r) }"
+      @ingest="id => { const r = refs.find(x => x.id === id); if (r) ingest(r, detail?.title ?? '') }"
       @save-draft="saveDraft" />
   </section>
 </template>
@@ -199,36 +263,44 @@ function openSeg(r: RefVideo, seg: RefVideoSegment) {
 .head h2 { font-size: 16px; color: #d9d9e0; }
 .head p { font-size: 12.5px; color: #7c7c88; margin: 4px 0 0; line-height: 1.6; }
 .none { color: #55555f; font-size: 13px; padding: 40px 0; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
-.card {
-  background: #14141a; border: 1px solid #232329; border-radius: 12px; overflow: hidden;
-}
-.card:hover { border-color: #3a3a44; }
-.card.bad { border-color: #5c2424; }
-figcaption { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 7px; }
-.row1 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.row1 b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chips { display: flex; gap: 6px; flex-wrap: wrap; }
-.draft-line {
-  display: flex; flex-direction: column; gap: 2px; text-align: left; cursor: pointer;
-  background: #101016; border: 1px solid #232329; border-radius: 8px; padding: 7px 9px; color: #8a8a96;
-}
-.draft-line:hover { border-color: #3a3a45; }
-.draft-line span { font-size: 11.5px; line-height: 1.5; }
-.draft-line .more { color: #7ea6d9; font-size: 11px; }
-.segrow.err .seg-btn { cursor: default; }
-.seg-btn {
-  display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left; cursor: pointer;
-  background: #101016; border: 1px solid #232329; border-radius: 8px; padding: 6px 9px; color: #c9c9d1;
-}
-.seg-btn:hover:not(:disabled) { border-color: #5c4d24; }
-.seg-btn:disabled { opacity: .55; cursor: default; }
-.seg-btn b { font-size: 11px; color: #f0c674; }
-.seg-name { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.seg-meta { margin-left: auto; font-size: 11px; color: #7c7c88; white-space: nowrap; }
-.seg-err { margin-left: auto; font-size: 10.5px; color: #d98a8a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
-.err { font-size: 11.5px; color: #d98a8a; word-break: break-all; }
-.row2 { display: flex; align-items: center; justify-content: space-between; }
-.origin { font-size: 11px; color: #55555f; }
-.btns { display: flex; gap: 8px; align-items: center; }
+
+.list { display: flex; flex-direction: column; gap: 22px; max-width: 1080px; }
+.refitem { display: flex; flex-direction: column; gap: 8px; }
+.vhead { display: flex; align-items: center; gap: 10px; }
+.vname { font-size: 14px; color: #e8e8ee; max-width: 40%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vmeta { font-size: 11.5px; color: #55555f; white-space: nowrap; }
+.vgap { flex: 1; }
+.verr { margin: 0; font-size: 11.5px; color: #d98a8a; word-break: break-all; }
+
+.block { background: #14141a; border: 1px solid #232329; border-radius: 10px; overflow: hidden; }
+.block.open { border-color: #3a3a46; }
+.bhead { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
+.bhead.click { cursor: pointer; }
+.bhead.click:hover { background: #17171f; }
+.caret { font-size: 9px; color: #7c7c88; transition: transform .15s; flex-shrink: 0; }
+.block.open .caret { transform: rotate(90deg); }
+.binfo { flex: 1; min-width: 0; }
+.brow1 { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.bname { font-size: 13.5px; color: #e8e8ee; }
+.tagmore { font-size: 11px; color: #7c7c88; }
+.bmeta { margin-left: auto; padding-left: 10px; font-size: 11px; color: #55555f; white-space: nowrap; }
+.bsubject { margin: 3px 0 0; font-size: 12px; color: #8a8a96; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bact { flex-shrink: 0; display: flex; align-items: center; }
+
+.bbody { border-top: 1px dashed #232329; padding: 12px 14px 12px 33px; display: flex; flex-direction: column; gap: 12px; background: #101016; }
+.xrow { display: flex; gap: 10px; }
+.xlab { flex-shrink: 0; width: 30px; font-size: 11.5px; color: #6f6f7c; padding-top: 2px; }
+.xtags { display: flex; flex-direction: column; gap: 5px; }
+.xtag { font-size: 12px; line-height: 1.6; }
+.xtag b { color: #e0c985; font-weight: 600; margin-right: 8px; }
+.xtag span { color: #8a8a96; }
+.xsigs { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.xsig { background: #14141a; border: 1px solid #232329; border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 5px; }
+.xsig-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.xsig-head b { font-size: 12.5px; color: #e0c985; }
+.xsig-hint { font-size: 11px; color: #6f6f7c; }
+.xsig-mech { margin: 0; font-size: 12px; color: #a8a8b4; line-height: 1.7; }
+.evframes { display: flex; gap: 6px; flex-wrap: wrap; }
+.evframes img { width: 110px; height: auto; display: block; border-radius: 6px; border: 1px solid #232329; background: #0a0a10; }
+.xempty { font-size: 12px; color: #6f6f7c; }
 </style>

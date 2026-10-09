@@ -52,7 +52,12 @@ type State struct {
 	StyleConfirmed bool
 	HasVideo       bool
 	VideoAt        time.Time
-	Producing      bool
+	// 三上游最近修改时间：任一晚于 VideoAt = 成片过期（api 层下发 video_stale，
+	// 前端页签黄灯）。改稿/重出分镜/换风格不用改管线——文件时间戳即事实。
+	ManuscriptAt time.Time
+	StoryboardAt time.Time
+	StyleAt      time.Time
+	Producing    bool
 	// 最近一轮制作终态（manifest 里 produce/rework 的 done|error|cancelled）。
 	// 不注入它，agent 会拿失败前渲染的旧成片把失败轮幻觉成「已完成」。
 	LastEvent  string
@@ -81,6 +86,20 @@ func (a *Agent) State(id string) State {
 	if info, err := os.Stat(p.Artifact("renders/main.mp4")); err == nil {
 		st.HasVideo = true
 		st.VideoAt = info.ModTime()
+	}
+	// 三上游 mtime（文稿真源 article.txt 缺时回退管线产物；风格取样张+简报较晚者）
+	if info, err := os.Stat(p.Artifact("input/article.txt")); err == nil {
+		st.ManuscriptAt = info.ModTime()
+	} else if info, err := os.Stat(p.Artifact("manuscripts/manuscript.json")); err == nil {
+		st.ManuscriptAt = info.ModTime()
+	}
+	if info, err := os.Stat(p.Artifact("storyboards/storyboard.json")); err == nil {
+		st.StoryboardAt = info.ModTime()
+	}
+	for _, f := range []string{"style/style_samples.json", "style/style_brief.json"} {
+		if info, err := os.Stat(p.Artifact(f)); err == nil && info.ModTime().After(st.StyleAt) {
+			st.StyleAt = info.ModTime()
+		}
 	}
 	if ev, detail, ts := lastProduceResult(p); ev != "" {
 		st.LastEvent, st.LastDetail = ev, detail

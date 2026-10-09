@@ -83,3 +83,6 @@ demo/iso-25d/sheet.png
 demo/soft-3d/node_modules/
 demo/soft-3d/renders/
 demo/soft-3d/sheet.png
+
+# web/public 本地测试上传件（浏览器手测上传接口用的样例视频，不入库）
+web/public/_*.mp4

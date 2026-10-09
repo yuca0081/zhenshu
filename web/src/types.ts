@@ -28,7 +28,12 @@ export interface ProjectView {
   total_hint: number
   has_video: boolean
   producing: boolean
+  // 成片生成后上游又改过（后端按文件 mtime 对比）：页签黄灯 + 重做整片入口
+  video_stale: { manuscript: boolean; storyboard: boolean; style: boolean }
 }
+
+// 工作区中央页签（文稿/分镜/风格/视频四页占据中间区域）
+export type TabID = 'manuscript' | 'storyboard' | 'style' | 'video'
 
 export interface Segment {
   id: string
@@ -158,22 +163,13 @@ export interface ChatRef {
   elementName?: string // 人话名（如 箭头：蓝光弹开）
 }
 
-// ── 参考视频解析（风格库页）────────────────────────────────
+// ── 参考视频解析（风格库页）：一视频 = 一条目 ────────────────
 export interface RefVideoStyle {
   name: string
   subject?: string
   tags: StyleTags
   tag_evidence?: TagEvidence[]
   signatures?: Signature[]
-}
-
-export interface RefVideoSegment {
-  index: number
-  name: string
-  start: number
-  end: number
-  style?: RefVideoStyle // 解析失败为空（error 说明原因）
-  error?: string
 }
 
 export interface RefVideo {
@@ -183,9 +179,7 @@ export interface RefVideo {
   error?: string
   confirmed: boolean
   created_at: string
-  kind?: 'single' | 'multi'
   style?: RefVideoStyle
-  segments?: RefVideoSegment[]
 }
 
 // ── 风格详情抽屉（风格库/视频解析卡片点开共用）──────────────
@@ -203,10 +197,8 @@ export interface TemplateDetailData {
   packId?: string // 风格库条目：草稿态给「入库」
   published?: boolean
   refId?: string // 参考引用：抽帧截图 + 原视频；未入库给「入库」
-  segIdx?: number // multi 段序（编辑草稿时定位）
   libMediaId?: string // 风格条目自带媒体（video: 来源）：走 /api/library/:id/media
   confirmed?: boolean
   editable?: boolean // 解析草稿（未入库）：特色可增删改
   draft?: RefVideoStyle // editable 时的完整草稿（含 name/subject）
-  framesInSeg?: boolean // multi 段草稿：证据帧在 seg-NN/ 子目录
 }

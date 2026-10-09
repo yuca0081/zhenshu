@@ -57,7 +57,21 @@ export const api = {
 
   project: (id: string) => req<ProjectView>(`/api/projects/${id}`),
 
+  // 删除项目（磁盘目录+聊天记录全删；制作中后端 409 拒绝）
+  deleteProject: (id: string) => req<{ ok: boolean }>(`/api/projects/${id}`, { method: 'DELETE' }),
+
+  // 整片制作（三前置齐后开跑；重做整片同入口——管线按指纹复用未变产物）
+  produce: (id: string) => post<{ ok: boolean; started: boolean }>(`/api/projects/${id}/produce`),
+
   storyboard: (id: string) => req<Storyboard>(`/api/projects/${id}/storyboard`),
+
+  // 手动编辑分镜落盘（段数/段序不可变；改完成片过期灯自动亮）
+  saveStoryboard: (id: string, sb: Storyboard) =>
+    req<{ ok: boolean }>(`/api/projects/${id}/storyboard`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sb),
+    }),
 
   audioMeta: (id: string) => req<AudioMeta>(`/api/projects/${id}/audio_meta`),
 
@@ -83,8 +97,9 @@ export const api = {
   chat: (id: string, content: string, refs: ChatRef[] = []) =>
     post<{ ok: boolean }>(`/api/projects/${id}/chat`, { content, refs }),
 
-  draftManuscript: (topic: string, minutes = 1) =>
-    post<{ content: string }>('/api/draft/manuscript', { topic, minutes }),
+  // AI 起草文稿：按目标字数直驱（分钟换算在 UI 侧）
+  draftManuscript: (topic: string, words = 500) =>
+    post<{ content: string }>('/api/draft/manuscript', { topic, words }),
 
   // 链接导入（readability 正文提取，文稿弹窗用）
   extractLink: (url: string) =>
@@ -124,18 +139,15 @@ export const api = {
   listReferences: () => req<RefVideo[]>('/api/references'),
   referenceFrames: (id: string) =>
     req<{ frames: string[]; has_video: boolean }>(`/api/references/${id}/frames`),
-  // multi 段草稿的抽帧（证据帧在 seg-NN/ 子目录）
-  referenceSegFrames: (id: string, seg: number) =>
-    req<{ frames: string[] }>(`/api/references/${id}/seg/${seg}/frames`),
   analyzeReference: (id: string) => post<{ ok: boolean }>(`/api/references/${id}/analyze`),
   confirmReference: (id: string) =>
-    post<{ ok: boolean; style_id?: string; style_ids?: string[] }>(`/api/references/${id}/confirm`),
-  // 确认页编辑解析草稿（入库前增删改特色）。seg 为段序（multi，1 起；缺省 = single）
-  updateReferenceDraft: (id: string, seg: number, style: RefVideoStyle) =>
+    post<{ ok: boolean; style_id?: string }>(`/api/references/${id}/confirm`),
+  // 确认页编辑解析草稿（入库前增删改特色）
+  updateReferenceDraft: (id: string, style: RefVideoStyle) =>
     req<{ ok: boolean }>(`/api/references/${id}/draft`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ seg, style }),
+      body: JSON.stringify({ style }),
     }),
 }
 
@@ -143,7 +155,5 @@ export const api = {
 export const videoURL = (id: string, rev = 0) => withToken(`/api/projects/${id}/video/main.mp4${rev ? `?v=${rev}` : ''}`)
 // 参考引用媒体（抽帧 frame-*.png / 原视频 video.mp4；详情抽屉用）
 export const referenceMediaURL = (id: string, file: string) => withToken(`/api/references/${id}/media/${file}`)
-// multi 段草稿的证据帧（seg-NN/ 子目录）
-export const referenceSegMediaURL = (id: string, seg: number, file: string) => withToken(`/api/references/${id}/seg/${seg}/media/${file}`)
 // 风格库媒体（入库快照；详情抽屉用）
 export const libraryMediaURL = (id: string, file: string) => withToken(`/api/library/${id}/media/${file}`)

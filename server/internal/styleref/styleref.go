@@ -1,7 +1,7 @@
 // Package styleref：参考视频 → 风格条目（风格库「视频解析」后端，v3）。
 //
 // 链路：上传视频存 data/references/<id>/ → ai/extract_video_features.py 抽帧+取色
-// （确定性，不碰 LLM）→ 解析智能体两阶段（结构理解 + 逐段打标提炼，见 analyze.go）
+// （确定性，不碰 LLM）→ 解析智能体两阶段（构图观察 + 打标提炼，见 analyze.go）
 // → 用户确认入库（api 层调 stylelib.IngestVideoRef 写 data/library/styles.json）。
 //
 // v3 作业 = 打标 + 特色提炼（一次轻解析，§4.4）：
@@ -32,21 +32,19 @@ import (
 )
 
 type Ref struct {
-	ID        string         `json:"id"`
-	Name      string         `json:"name"`   // 原始文件名（含扩展名）
-	Status    string         `json:"status"` // pending | running | done | error
-	Error     string         `json:"error,omitempty"`
-	Confirmed bool           `json:"confirmed"` // 已入库（styles.json）
-	CreatedAt time.Time      `json:"created_at"`
-	Kind      string         `json:"kind,omitempty"`     // single | multi（解析智能体判定）
-	Style     *StyleDraft    `json:"style,omitempty"`    // single 时有
-	Segments  []SegmentDraft `json:"segments,omitempty"` // multi 时有，每段一个标签+特色草稿
+	ID        string      `json:"id"`
+	Name      string      `json:"name"`   // 原始文件名（含扩展名）
+	Status    string      `json:"status"` // pending | running | done | error
+	Error     string      `json:"error,omitempty"`
+	Confirmed bool        `json:"confirmed"` // 已入库（styles.json）
+	CreatedAt time.Time   `json:"created_at"`
+	Style     *StyleDraft `json:"style,omitempty"` // 解析产出的草稿（一视频一条目）
 }
 
 // StyleDraft 解析产出的标签+特色草稿（入库前形态；确认页可增删改）。
 // Tags 是已解析落表的词表 id；Signatures 的 ID 在入库时统一编 sig1..sigN。
 type StyleDraft struct {
-	Name        string                 `json:"name"`              // 条目名（multi 用段名；single 缺省用主标签名）
+	Name        string                 `json:"name"`              // 条目名（缺省用主标签正式名）
 	Subject     string                 `json:"subject,omitempty"` // 原片题材一句话（只供检索，永不进生成提示词）
 	Tags        contract.StyleTags     `json:"tags"`
 	TagEvidence []contract.TagEvidence `json:"tag_evidence,omitempty"`
@@ -83,7 +81,7 @@ type videoFeatures struct {
 	DurationS float64          `json:"duration_s"`
 	SpanS     [2]float64       `json:"span_s"` // 本次抽取的时间范围（全片=[0,duration]）
 	NShots    int              `json:"n_shots"`
-	Cuts      []float64        `json:"cuts"`   // 镜头硬切点（拆段的边界候选信号）
+	Cuts      []float64        `json:"cuts"`   // 镜头硬切点
 	Sheets    []string         `json:"sheets"` // 关键帧网格图（相对引用目录）
 	Frames    []featureFrame   `json:"frames"`
 	Palette   []paletteCluster `json:"palette"`
@@ -106,10 +104,11 @@ type Store struct {
 
 	mu      sync.Mutex
 	running map[string]bool
+	sem     chan struct{} // 解析并发上限（批量上传排队，防 LLM/ffmpeg 抢资源）
 }
 
 func NewStore(dataDir, rootDir string) *Store {
-	return &Store{DataDir: dataDir, RootDir: rootDir, running: map[string]bool{}}
+	return &Store{DataDir: dataDir, RootDir: rootDir, running: map[string]bool{}, sem: make(chan struct{}, 2)}
 }
 
 func (s *Store) dir(id string) string { return filepath.Join(s.DataDir, "references", id) }
@@ -197,8 +196,7 @@ func (s *Store) MarkConfirmed(id string) error {
 }
 
 // UpdateDraft 确认页编辑草稿（§4.4：入库前可增删改特色）。
-// segIdx=0 表示 single（ref.Style）；≥1 表示 multi 的第 N 段。
-func (s *Store) UpdateDraft(id string, segIdx int, d *StyleDraft) error {
+func (s *Store) UpdateDraft(id string, d *StyleDraft) error {
 	ref, err := s.loadRef(id)
 	if err != nil {
 		return err
@@ -206,20 +204,11 @@ func (s *Store) UpdateDraft(id string, segIdx int, d *StyleDraft) error {
 	if ref.Status != "done" {
 		return fmt.Errorf("解析未完成，不能编辑草稿")
 	}
-	if segIdx <= 0 {
-		if ref.Style == nil {
-			return fmt.Errorf("该引用不是单一风格（没有整片草稿）")
-		}
-		ref.Style = d
-		return s.saveRef(ref)
+	if ref.Style == nil {
+		return fmt.Errorf("该引用没有解析草稿")
 	}
-	for i := range ref.Segments {
-		if ref.Segments[i].Index == segIdx {
-			ref.Segments[i].Style = d
-			return s.saveRef(ref)
-		}
-	}
-	return fmt.Errorf("没有第 %d 段", segIdx)
+	ref.Style = d
+	return s.saveRef(ref)
 }
 
 // Analyze 异步解析（同引用幂等：跑着就不重复起）。结果写 ref.json。
@@ -249,6 +238,8 @@ func (s *Store) Analyze(id string) (bool, error) {
 				_ = s.saveRef(ref)
 			}
 		}()
+		s.sem <- struct{}{} // 批量上传多支视频同时起解析：排队限流
+		defer func() { <-s.sem }()
 		s.runAgent(context.Background(), ref)
 	}()
 	return true, nil
@@ -302,9 +293,8 @@ func (s *Store) analyzeCompositions(ctx context.Context, prov *llm.Provider, fra
 }
 
 // synthesize 打标 + 特色提炼（§4.4 一次轻解析；结构校验失败重喂 ≤2 轮）。
-// segName 非空表示合集分段模式：条目名优先采用段名（片中标题）。
 // videoURL 非空 = 附原视频剪辑直读（运镜/转场以视频实测为准）；空 = 纯帧推断。
-func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name, segName string,
+func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name string,
 	feats videoFeatures, notes string, videoURL string) (*StyleDraft, error) {
 	lib := stylelib.New(s.DataDir)
 	var lastErr error
@@ -313,7 +303,7 @@ func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name, segNam
 		if lastErr != nil {
 			retryNote = "\n\n## 上一次输出被拒（修正后重出）\n" + lastErr.Error()
 		}
-		raw, err := s.callTagger(ctx, prov, lib, name, segName, feats, notes, videoURL, retryNote)
+		raw, err := s.callTagger(ctx, prov, lib, name, feats, notes, videoURL, retryNote)
 		if err != nil {
 			return nil, err // 网络/生成错误不重喂（provider 自带重试）
 		}
@@ -332,7 +322,7 @@ func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name, segNam
 
 // callTagger 一次打标 LLM 调用（词表快照随题注入 = 工具「查风格词表」）。
 func (s *Store) callTagger(ctx context.Context, prov *llm.Provider, lib *stylelib.Library,
-	name, segName string, feats videoFeatures, notes, videoURL, retryNote string) (*taggerOutput, error) {
+	name string, feats videoFeatures, notes, videoURL, retryNote string) (*taggerOutput, error) {
 	rep := make([]string, 0, 3) // 代表帧：首/中/尾
 	for _, idx := range []int{0, len(feats.Frames) / 2, len(feats.Frames) - 1} {
 		if idx < 0 || idx >= len(feats.Frames) {
@@ -345,7 +335,7 @@ func (s *Store) callTagger(ctx context.Context, prov *llm.Provider, lib *styleli
 		rep = append(rep, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(b))
 	}
 	system := "你是视频风格策展人：给参考视频打公认风格标签、提炼它真正独有的手法特色。只输出 JSON。"
-	user := synthesizeUserPrompt(lib, name, segName, feats, notes, videoURL != "", retryNote)
+	user := synthesizeUserPrompt(lib, name, feats, notes, videoURL != "", retryNote)
 	var out taggerOutput
 	var err error
 	if videoURL != "" {
@@ -362,7 +352,7 @@ func (s *Store) callTagger(ctx context.Context, prov *llm.Provider, lib *styleli
 // synthesizeUserPrompt 打标作业正文（callTagger 与回归测试共用一份，防漂移）。
 // 纪律：① 只收有公认视觉定义的风格名词（拒收「高级感」类空话）；② 特色写机制
 // 不写物件（这份清单会被用来制作题材完全不同的新片）；③ 题材只进 subject。
-func synthesizeUserPrompt(lib *stylelib.Library, name, segName string, feats videoFeatures,
+func synthesizeUserPrompt(lib *stylelib.Library, name string, feats videoFeatures,
 	notes string, withVideo bool, retryNote string) string {
 	pal := make([]string, 0, len(feats.Palette))
 	for _, c := range feats.Palette {
@@ -376,10 +366,6 @@ func synthesizeUserPrompt(lib *stylelib.Library, name, segName string, feats vid
 	frames := make([]string, 0, len(feats.Frames))
 	for _, f := range feats.Frames {
 		frames = append(frames, fmt.Sprintf("%s(t=%.1fs)", filepath.Base(f.Path), f.T))
-	}
-	nameHint := ""
-	if segName != "" {
-		nameHint = fmt.Sprintf("\n- 已知该段在片中的标题「%s」——name 直接采用它（≤12 字微调）", segName)
 	}
 	// 工具「查风格词表」：词表快照随题注入（冷启动为空表，首批词条由申请新词长出）
 	var vocabB strings.Builder
@@ -413,7 +399,7 @@ func synthesizeUserPrompt(lib *stylelib.Library, name, segName string, feats vid
 - 关键帧清单（证据帧只能从这里挑）：
   %s
 - 视觉逐帧构图观察：
-%s%s
+%s
 ## 风格词表（打标签先查这里）
 %s
 ## 作业一：打标签（主 1 + 辅 ≤2）
@@ -440,11 +426,11 @@ func synthesizeUserPrompt(lib *stylelib.Library, name, segName string, feats vid
   它只供人浏览与检索，下游不会注入生成模型；除 subject 外任何字段禁写题材词。%s
 
 ## 输出（只输出 JSON，无围栏）
-{"name":"条目名（≤12 字；有段名用段名，否则主标签正式名）","subject":"原片题材一句话（≤30字）",
+{"name":"条目名（≤12 字，主标签正式名）","subject":"原片题材一句话（≤30字）",
 "tags":[{"id":"词表id 或空","new":{"id":"..","name":"..","aliases":[".."],"brief":"..","tells":".."},"note":"人话指认","frames":["frame-xx.png"]}],
 "signatures":[{"kind":"六类之一","name":"人话短名","mechanism":"机制描述","frames":["frame-xx.png"],"use_hint":"什么节拍适合用"}]}%s`,
 		name, spanTxt, feats.SpanS[1]-feats.SpanS[0], feats.NShots, strings.Join(pal, "、"),
-		strings.Join(frames, "、"), notes, nameHint, vocabB.String(),
+		strings.Join(frames, "、"), notes, vocabB.String(),
 		contract.SignatureKindNames(), dynamicSrc, videoBlock, retryNote)
 }
 

@@ -26,16 +26,17 @@ const draftSearchBudget = 2
 const draftMaxSteps = 5
 
 // DraftManuscript 起草一篇口播文稿。时效性题材自主联网核实后再写，返回文稿正文。
-func DraftManuscript(ctx context.Context, prov react.ChatClient, topic string, minutes float64) (string, error) {
-	return draftWithTools(ctx, prov, drafterTools(), topic, minutes)
+// words 是目标字数（口播节奏由字数决定，分钟数换算交给调用方/UI）。
+func DraftManuscript(ctx context.Context, prov react.ChatClient, topic string, words int) (string, error) {
+	return draftWithTools(ctx, prov, drafterTools(), topic, words)
 }
 
 // draftWithTools 循环本体（工具可注入，测试走假搜索不打网络）。
-func draftWithTools(ctx context.Context, prov react.ChatClient, tools []react.Tool, topic string, minutes float64) (string, error) {
+func draftWithTools(ctx context.Context, prov react.ChatClient, tools []react.Tool, topic string, words int) (string, error) {
 	core := react.New(prov, tools, draftMaxSteps, react.Hooks{}) // 起草工位无舞台播报与聊天案卷，钩子留空
 	msgs := []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleSystem, Content: draftSystemPrompt},
-		{Role: openai.ChatMessageRoleUser, Content: draftUserPrompt(topic, minutes)},
+		{Role: openai.ChatMessageRoleUser, Content: draftUserPrompt(topic, words)},
 	}
 	final, err := core.Run(ctx, msgs)
 	if err != nil {
@@ -91,11 +92,9 @@ const draftSystemPrompt = "你是「帧述」的口播撰稿人，为短视频�
 	"搜索额度有限非必要不搜；要细读某条结果用 fetch_url。研究完直接输出文稿全文（纯正文，" +
 	"不带 JSON 包装、不带工具汇报），那将作为最终交付。"
 
-func draftUserPrompt(topic string, minutes float64) string {
-	// 口播语速 ≈ 4.7 字/秒（Edge TTS 实测：苏格拉底片 1207 字出 256s 语音；
-	// 旧值 4.2 偏慢，同字数实际成片比目标短 ~12%）
-	words := int(minutes * 60 * 4.7)
-	return fmt.Sprintf("主题：%s\n目标时长：约 %.0f 分钟（正文约 %d 字，±20%%）。", strings.TrimSpace(topic), minutes, words)
+func draftUserPrompt(topic string, words int) string {
+	// 篇幅由字数直驱（用户按字数要稿）；4.7 字/秒的口播换算只作节奏参考留给分镜阶段
+	return fmt.Sprintf("主题：%s\n目标篇幅：正文约 %d 字（±20%%）。", strings.TrimSpace(topic), words)
 }
 
 // stripContentWrapper 兜底：模型按老习惯把成稿包进 {"content":...} JSON 时剥出正文。

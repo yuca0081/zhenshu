@@ -6,12 +6,11 @@ import {
 import HistoryRail from './components/HistoryRail.vue'
 import StagePanel from './components/StagePanel.vue'
 import ChatPanel from './components/ChatPanel.vue'
-import GatesModal from './components/GatesModal.vue'
 import NewProjectModal from './components/NewProjectModal.vue'
 import LibraryCenter from './components/LibraryCenter.vue'
 import HomeView from './components/HomeView.vue'
-import { api, sseURL, videoURL } from './api'
-import type { AudioMeta, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, Storyboard, Style, StyleSamples } from './types'
+import { api, sseURL } from './api'
+import type { AudioMeta, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, Storyboard, Style, StyleSamples, TabID } from './types'
 import { segAt, segTable } from './segtime'
 
 const projects = ref<ProjectRow[]>([])
@@ -79,6 +78,7 @@ function selectProject(id: string) {
   msgs.value = []
   chatRefs.value = []
   stageState.value = {}
+  manualTab.value = null // 换项目回到自动落页
   // 先清上一项目的全部展示数据：loadProject 是异步的，不清会在新项目页闪现旧内容
   view.value = null
   storyboard.value = null
@@ -154,6 +154,7 @@ function openSSE(id: string) {
 
 watch(current, id => {
   if (id) { openSSE(id); refresh() }
+  else es?.close() // 项目删空/切换到空：断开上一个项目的订阅
 })
 
 onBeforeUnmount(() => {
@@ -190,15 +191,54 @@ function applyHash() {
   }
 }
 window.addEventListener('hashchange', applyHash)
-applyHash()
+// applyHash() 的首启调用放 script 末尾：它会走 selectProject → manualTab 等
+// 后文才声明的状态，提前调用 = TDZ ReferenceError（直链 #/workspace/<id> 进项目必炸）。
 
 const showNew = ref(false)
-// 三前置弹窗：文稿/分镜/风格（点对话栏标签打开）
-const gateModal = ref<'manuscript' | 'storyboard' | 'style' | null>(null)
+
+// ── 中央页签（弹窗体系退役）：未手动选择时按管线进度自动落页，点过就以用户为准 ──
+const manualTab = ref<TabID | null>(null)
+const autoTab = computed<TabID>(() => {
+  const v = view.value
+  if (!v) return 'manuscript'
+  if (v.has_video || v.producing) return 'video'
+  if (v.gates.style_draft) return 'style'
+  if (v.gates.storyboard) return 'storyboard'
+  return 'manuscript'
+})
+const activeTab = computed<TabID>(() => manualTab.value ?? autoTab.value)
+function setTab(t: TabID) { manualTab.value = t }
+
 async function onCreated(id: string) {
   showNew.value = false
   await loadProjects()
   selectProject(id)
+}
+
+// 删除项目：磁盘目录+聊天全删（制作中后端 409 拒）。删的是当前项目则清空工作区。
+async function onDeleteProject(id: string) {
+  const p = projects.value.find(x => x.id === id)
+  if (!p) return
+  if (!window.confirm(`删除项目「${p.name}」？成片与全部过程文件都会删除，不可恢复。`)) return
+  try {
+    await api.deleteProject(id)
+  } catch (e) {
+    window.alert(`删除失败：${e instanceof Error ? e.message : e}`)
+    return
+  }
+  if (current.value === id) {
+    current.value = '' // watch(current) 关 SSE；下方手动清展示数据
+    view.value = null
+    storyboard.value = null
+    style.value = null
+    manuscript.value = null
+    audioMeta.value = null
+    msgs.value = []
+    chatRefs.value = []
+    stageState.value = {}
+    manualTab.value = null
+  }
+  await loadProjects()
 }
 
 const stageSummary = computed(() => {
@@ -217,6 +257,9 @@ const themeOverrides = {
     borderRadius: '8px',
   },
 }
+
+// 首启按 URL hash 恢复页面（必须在全部状态声明之后，见上方注释）
+applyHash()
 </script>
 
 <template>
@@ -249,23 +292,15 @@ const themeOverrides = {
 
         <!-- 工作区：项目三栏 -->
         <div v-else class="shell">
-          <HistoryRail :projects="projects" :current="current" @select="selectProject" />
+          <HistoryRail :projects="projects" :current="current" @select="selectProject" @delete="onDeleteProject" />
           <main class="center">
-            <header class="topbar">
-              <div class="title">
-                <span class="name">{{ view?.name ?? '未选择项目' }}</span>
-              </div>
-              <!-- 成片态操作（状态 chips 在对话栏顶部） -->
-              <div v-if="view?.has_video" class="ops">
-                <a class="op-btn" :href="videoURL(current)" :download="`${view.name}.mp4`">下载成片</a>
-              </div>
-            </header>
             <StagePanel
               v-if="current"
-              :view="view" :storyboard="storyboard" :style-samples="style" :manuscript="manuscript"
+              :tab="activeTab" :view="view" :storyboard="storyboard" :style-samples="style" :manuscript="manuscript"
               :stage-summary="stageSummary" :video-id="current" :audio-meta="audioMeta"
               :picked-idx="chatRefs.map(r => r.idx)" :video-rev="videoRev" :progress-line="progressLine"
-              @edit-manuscript="gateModal = 'manuscript'"
+              @tab="setTab" @go-tab="setTab"
+              @saved="refresh" @chat-sent="markBusy"
               @confirm-style="async () => { if (current) { await api.confirmStyle(current); refresh() } }"
               @seg="addRef"
               @pick-time="addTimeRef"
@@ -279,16 +314,12 @@ const themeOverrides = {
           </main>
           <ChatPanel
             :project-id="current" :msgs="msgs" :busy="agentBusy" v-model:draft="chatDraft" :refs="chatRefs" :view="view"
-            @sent="markBusy" @remove-ref="removeRef" @clear-refs="chatRefs = []" @open-gate="g => (gateModal = g)"
+            @sent="markBusy" @remove-ref="removeRef" @clear-refs="chatRefs = []" @open-gate="setTab"
           />
         </div>
       </div>
       </n-message-provider>
       <NewProjectModal v-model:show="showNew" @created="onCreated" />
-      <GatesModal
-        :project-id="current" :gate="gateModal" :view="view"
-        @close="gateModal = null" @saved="refresh" @chat-sent="markBusy"
-      />
     </n-config-provider>
   </template>
 
@@ -331,26 +362,11 @@ body {
 /* ── 工作区三栏 ─────────────────────────────── */
 .shell { flex: 1; min-height: 0; display: flex; }
 .center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.topbar {
-  height: 46px; flex: none; display: flex; align-items: center; justify-content: space-between;
-  padding: 0 20px; border-bottom: 1px solid #232329; background: #121217;
-}
-.title { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
-.name { font-size: 15px; font-weight: 600; color: #c9c9d1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ops { display: flex; gap: 8px; }
-.op-btn {
-  border: 1px solid #5c4d24; background: #211d12; color: #f0c674;
-  font-size: 12px; padding: 4px 14px; border-radius: 999px; cursor: pointer;
-  text-decoration: none; display: inline-flex; align-items: center;
-}
-.op-btn:hover { background: #2a2416; }
-.op-btn.on { background: #f0c674; color: #14140f; font-weight: 600; }
-.op-btn:disabled { opacity: .4; cursor: not-allowed; }
 .empty-ws { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; color: #55555f; }
 .link { border: 0; background: transparent; color: #8fc7ff; cursor: pointer; font-size: 14px; }
 .link:hover { text-decoration: underline; }
 
-/* ── 弹窗通用皮（NModal teleport 到 body，必须全局）：GatesModal/NewProjectModal 共用，
+/* ── 弹窗通用皮（NModal teleport 到 body，必须全局）：NewProjectModal/重做弹窗用，
       各自只留宽高等差异 ── */
 .app-modal {
   background: #14141a; border: 1px solid #26262e; border-radius: 14px;

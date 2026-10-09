@@ -12,7 +12,8 @@ import (
 //（data/library/style_media/<id>/），参考视频库删除后详情抽屉仍可回看。
 // v3 里它是三重证据：打标证据帧（TagEvidence）、特色证据帧（Signature）、
 // 简报证据（BuildBrief.Evidence）都从这里取图。
-// 硬链接优先（同卷零拷贝），跨卷/不支持时降级整拷；已存在的文件跳过（幂等）。
+// 硬链接优先（同卷零拷贝），跨卷/不支持时降级整拷；帧/原片已存在的跳过（幂等），
+// cover.png 例外：代表帧会随解析/重入库变化，每次快照都覆盖。
 
 // MediaDir 风格媒体目录（无则不代表没有媒体——老条目走 references 回退）。
 func (l *Library) MediaDir(id string) string {
@@ -42,7 +43,9 @@ func (l *Library) SnapshotMedia(styleID, sourceDir string) error {
 			continue
 		}
 		dst := filepath.Join(dstDir, name)
-		if _, err := os.Stat(dst); err == nil {
+		if name == "cover.png" {
+			_ = os.Remove(dst) // 代表帧随重入库更新：先删旧（硬链接占位会挡 os.Link）
+		} else if _, err := os.Stat(dst); err == nil {
 			continue // 已快照过
 		}
 		src := filepath.Join(sourceDir, name)

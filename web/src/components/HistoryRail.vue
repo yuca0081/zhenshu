@@ -5,7 +5,7 @@ import { dateOf, statusDotCls, statusLabel } from '../format'
 import type { ProjectRow } from '../types'
 
 defineProps<{ projects: ProjectRow[]; current: string }>()
-const emit = defineEmits<{ select: [id: string] }>()
+const emit = defineEmits<{ select: [id: string]; delete: [id: string] }>()
 
 // 折叠状态本地记忆：展开 = 宽栏（全名+状态），收起 = 56px 图标栏
 const collapsed = ref(localStorage.getItem('rail-collapsed') === '1')
@@ -42,11 +42,13 @@ const statusOf = (s: string) => ({ label: statusLabel[s] ?? s, cls: statusDotCls
                 <em>{{ dateOf(p.created_at) }}</em>
               </span>
             </span>
+            <button v-if="!collapsed" class="del" title="删除项目（不可恢复）" @click.stop="emit('delete', p.id)">✕</button>
           </div>
         </template>
         <div class="pop">
           <div class="pop-name">{{ p.name }}</div>
           <div class="pop-meta">{{ statusOf(p.status).label }}{{ p.has_video ? ' · 可下载成片' : '' }}</div>
+          <button class="pop-del" @click="emit('delete', p.id)">删除项目…</button>
         </div>
       </NPopover>
     </NScrollbar>
@@ -80,6 +82,19 @@ const statusOf = (s: string) => ({ label: statusLabel[s] ?? s, cls: statusDotCls
 .mini .item { margin: 4px auto; padding: 0; border-radius: 10px; width: 36px; height: 36px; justify-content: center; }
 .item:hover { background: #17171e; }
 .item.active { background: #1d1a12; border-color: rgba(240, 198, 116, .4); }
+/* 删除钮：hover 行才露出，平时不占视觉；NPopover 气泡内常驻（折叠态唯一入口） */
+.del {
+  flex: none; border: 0; background: transparent; color: #4c4c56; cursor: pointer;
+  font-size: 11px; width: 20px; height: 20px; line-height: 1; border-radius: 6px;
+  opacity: 0; transition: opacity .12s;
+}
+.item:hover .del { opacity: 1; }
+.del:hover { color: #ff9d9d; background: #2a1a1a; }
+.pop-del {
+  border: 0; background: transparent; color: #ff9d9d; cursor: pointer;
+  font-size: 12px; padding: 6px 0 0; text-align: left;
+}
+.pop-del:hover { text-decoration: underline; }
 .ava {
   width: 32px; height: 32px; flex: none; border-radius: 9px; overflow: hidden;
   display: flex; align-items: center; justify-content: center;

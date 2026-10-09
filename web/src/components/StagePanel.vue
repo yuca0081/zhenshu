@@ -1,13 +1,19 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { useMessage, NButton, NInput, NModal, NScrollbar, NSpin, NTag } from 'naive-ui'
-import type { AudioMeta, Manuscript, ProjectView, Storyboard, StyleSamples } from '../types'
-import { fmtClock, segTable, type SegCol } from '../segtime'
-import { api, videoURL } from '../api'
-import Timeline from './Timeline.vue'
-import SampleFrame from './SampleFrame.vue'
+import { KeepAlive, computed, ref, watch } from 'vue'
+import { NButton, NInput, NInputNumber, NSelect } from 'naive-ui'
+import { api } from '../api'
+import { useMessage } from 'naive-ui'
+import type { AudioMeta, Manuscript, ProjectView, Storyboard, StyleSamples, TabID } from '../types'
+import ManuscriptPane from './ManuscriptPane.vue'
+import StylePane from './StylePane.vue'
+import VideoPane from './VideoPane.vue'
 
+// 舞台页签宿主（弹窗体系退役）：文稿/分镜/风格/视频四页占据中间区域。
+// 页签常亮 + 红绿灯（门过没过）+ 过期点（成片落后上游）——App 持有 activeTab
+// （未手动选择时按管线进度自动落页）。KeepAlive 缓存三个组件页签：切页不丢
+// 文稿编辑态/风格开关态/视频播放位置。
 const props = defineProps<{
+  tab: TabID
   view: ProjectView | null
   storyboard: Storyboard | null
   styleSamples: StyleSamples | null
@@ -16,223 +22,226 @@ const props = defineProps<{
   videoId: string
   audioMeta: AudioMeta | null
   pickedIdx: number[]
-  videoRev: number // 成片代次（重做完成递增）：换 URL 强制重载
-  progressLine: string // 制作/重做细粒度进度（App 转发 SSE progress）
+  videoRev: number
+  progressLine: string
 }>()
-const emit = defineEmits<{ 'confirm-style': []; seg: [idx: number, key: string]; cancel: []; 'pick-time': [t: number]; 'edit-manuscript': []; 'rework-started': [] }>()
+const emit = defineEmits<{
+  tab: [t: TabID]
+  seg: [idx: number, key: string]
+  cancel: []
+  'pick-time': [t: number]
+  'rework-started': []
+  'confirm-style': []
+  saved: []
+  'chat-sent': []
+  'go-tab': [t: TabID]
+}>()
 
-const stageName: Record<string, string> = {
-  tts: '配音', compositions: '画面', assemble: '组装', check: '检查', render: '渲染', frameqa: '画面审查',
-}
+// 页签状态灯（title 悬停说明）：ok=门已过；stale=成片生成后又改过；
+// 风格 wait=样张待确认；视频 run=制作中
+const tabs = [
+  { id: 'manuscript', label: '文稿' },
+  { id: 'storyboard', label: '分镜' },
+  { id: 'style', label: '风格' },
+  { id: 'video', label: '视频' },
+] as const
 
-// 视频播放 ↔ 时间轴播放头同步
-const videoEl = ref<HTMLVideoElement | null>(null)
-const cur = ref(0)
-const dur = ref(0)
-const playing = ref(false) // 播放中隐藏「引用此刻」悬浮钮
-function onSeek(t: number) {
-  cur.value = t
-  if (videoEl.value) videoEl.value.currentTime = t
-}
-function pickSeg(idx: number, key: string) { emit('seg', idx, key) }
-// 时刻引用：播放器「引用此刻」按钮 / 时间轴双击（全局秒，随消息结构化发出）
-function pickTime(t: number) { emit('pick-time', t) }
-
-// 皮肤槽位色板（非颜色槽位不进 chips，字体单独展示）
-const skinChips = computed(() => {
-  const sl = props.styleSamples?.skin?.slots
-  if (!sl) return []
-  const out = [
-    { label: '底色', value: sl.bg },
-    { label: '文字', value: sl.txt },
-    { label: '强调', value: sl.accent },
-  ]
-  if (sl.mute) out.push({ label: '次级', value: sl.mute })
-  if (sl.surface) out.push({ label: '面板', value: sl.surface })
-  return out.filter(c => c.value)
-})
-
-const segsT = computed(() => segTable(props.storyboard, props.audioMeta))
-// tts 显示「配音不动」：重做/复用链路跳过配音，后续阶段已有动静时 tts 恒 pending
-const ttsIdle = computed(() => !!props.stageSummary?.some(x => x.state !== 'pending'))
-
-// ── 成片代次刷新：换 URL 重载并回到原播放位置（重做完立刻看新画面）──
-watch(() => props.videoRev, () => {
-  const t = cur.value
-  const el = videoEl.value
-  if (!el) return
-  el.load()
-  if (t > 0) {
-    const restore = () => { el.currentTime = Math.min(t, el.duration || t) }
-    el.addEventListener('loadedmetadata', restore, { once: true })
+function tabState(id: TabID): { cls: string[]; title: string; label: string } {
+  const v = props.view
+  if (!v) return { cls: [], title: '', label: '' }
+  const stale = v.video_stale
+  switch (id) {
+    case 'manuscript':
+      return {
+        cls: [v.gates.manuscript ? 'ok' : '', stale.manuscript ? 'stale' : ''].filter(Boolean),
+        title: v.gates.manuscript ? (stale.manuscript ? '已有文稿（成片生成后又改过，重做才进片）' : '已有文稿') : '还没有文稿——点开编辑或 AI 起草',
+        label: '',
+      }
+    case 'storyboard':
+      return {
+        cls: [v.gates.storyboard ? 'ok' : '', stale.storyboard ? 'stale' : ''].filter(Boolean),
+        title: v.gates.storyboard ? (stale.storyboard ? '已有分镜（成片生成后又改过，重做才进片）' : `已有分镜（${v.seg_count} 段）`) : '还没有分镜——补好文稿后在对话里说「生成分镜」',
+        label: v.gates.storyboard ? `·${v.seg_count}段` : '',
+      }
+    case 'style':
+      return {
+        cls: [v.gates.style_confirmed ? 'ok' : '', !v.gates.style_confirmed && v.gates.style_draft ? 'wait' : '', stale.style ? 'stale' : ''].filter(Boolean),
+        title: v.gates.style_confirmed ? (stale.style ? '风格已确认（成片生成后又改过，重做才进片）' : '风格已确认') : v.gates.style_draft ? '样张已出，待确认' : '还没有风格——选库内条目或描述方向',
+        label: v.gates.style_confirmed ? '已确认' : '',
+      }
+    default:
+      return {
+        cls: [v.has_video ? 'ok' : '', stale.manuscript || stale.storyboard || stale.style ? 'stale' : '', v.producing ? 'run' : ''].filter(Boolean),
+        title: v.has_video
+          ? (stale.manuscript || stale.storyboard || stale.style ? '成片是旧版——文稿/分镜/风格改过，可按最新重做' : '成片就绪')
+          : v.producing ? '制作中' : '还没有成片',
+        label: v.has_video ? (stale.manuscript || stale.storyboard || stale.style ? '旧版' : '') : '',
+      }
   }
-})
-
-// ── 一键重做此段（时间轴段块按钮）：预填该段上次指令，确认直连 REST（不走对话轮）──
-const reworkShow = ref(false)
-const reworkInstr = ref('')
-const reworkBusy = ref(false)
-const reworkSeg = ref<SegCol | null>(null)
-const message = useMessage()
-async function openRework(idx: number, key: string) {
-  const s = segsT.value.find(x => x.idx === idx && x.key === key)
-  if (!s) return
-  reworkSeg.value = s
-  reworkInstr.value = ''
-  const r = await api.reworkLast(props.videoId, s.segId).catch(() => null)
-  reworkInstr.value = r?.instruction ?? ''
-  reworkShow.value = true
 }
-async function confirmRework() {
-  const s = reworkSeg.value
-  if (!s || reworkBusy.value) return
-  reworkBusy.value = true
+
+// ── 分镜目标时长（时长概念归分镜：这里定总时长，AI 按它重排各段）──
+const targetMin = ref(1)
+const replanning = ref(false)
+const minOptions = [1, 2, 3, 5].map(m => ({ label: `约 ${m} 分钟`, value: m }))
+// 有分镜时按当前总时长就近回填档位（total_hint 秒）
+watch(() => props.view?.total_hint, t => {
+  if (!t) return
+  const near = [1, 2, 3, 5].reduce((a, b) => (Math.abs(b * 60 - t) < Math.abs(a * 60 - t) ? b : a))
+  targetMin.value = near
+}, { immediate: true })
+async function replanStoryboard() {
+  if (!props.videoId || replanning.value) return
+  replanning.value = true
   try {
-    await api.reworkStart(props.videoId, [s.segId], reworkInstr.value.trim())
-    reworkShow.value = false
-    emit('rework-started') // REST 直连不经 agent：让 App 重拉 view（producing 态/停止按钮）
+    await api.chat(props.videoId,
+      `请按目标总时长约 ${targetMin.value} 分钟重新规划分镜：重排各段的时长与画面要点（旁白可微调篇幅），总时长贴合目标，改完告诉我。`)
+    emit('chat-sent')
+  } finally {
+    replanning.value = false
+  }
+}
+
+// ── 分镜手动编辑：表格 inline 改文案/时长，保存落盘（段数/段序服务端锁死）──
+// 本地副本编辑（不动 props）；Agent 重排/重新生成后 props 变化且未 dirty 才回灌。
+const edSb = ref<Storyboard | null>(null)
+const sbDirty = ref(false)
+const savingSb = ref(false)
+watch(() => props.storyboard, sb => {
+  if (!sbDirty.value) edSb.value = sb ? JSON.parse(JSON.stringify(sb)) : null
+}, { immediate: true })
+const edTotalSec = computed(() =>
+  (edSb.value?.segments ?? []).reduce((a, s) => a + (s.duration_hint || 0), 0))
+function resetSb() {
+  sbDirty.value = false
+  edSb.value = props.storyboard ? JSON.parse(JSON.stringify(props.storyboard)) : null
+}
+async function saveSb() {
+  if (!edSb.value || !props.videoId || savingSb.value) return
+  savingSb.value = true
+  try {
+    const body: Storyboard = {
+      ...edSb.value,
+      segments: edSb.value.segments.map(s => ({ ...s, duration_hint: s.duration_hint || 5 })),
+    }
+    await api.saveStoryboard(props.videoId, body)
+    sbDirty.value = false
+    emit('saved') // App 重拉 storyboard/view：mtime 变 → 成片过期灯亮
   } catch (e) {
     message.error((e as Error).message)
   } finally {
-    reworkBusy.value = false
+    savingSb.value = false
+  }
+}
+
+// ── 整片过期重做（页签行右侧）：上游（文稿/分镜/风格）在成片生成后又改过 ──
+// 按钮收进页签行靠右（原视频页整行黄条太占地），悬停 title 说明具体哪几样改过。
+const message = useMessage()
+const redoNames = computed(() => {
+  const v = props.view
+  if (!v?.has_video) return []
+  return [
+    v.video_stale.manuscript ? '文稿' : '',
+    v.video_stale.storyboard ? '分镜' : '',
+    v.video_stale.style ? '风格' : '',
+  ].filter(Boolean)
+})
+const showRedo = computed(() =>
+  props.tab === 'video' && !!props.view?.has_video && !props.view.producing && !props.stageSummary && redoNames.value.length > 0)
+const redoing = ref(false)
+async function redoFull() {
+  if (redoing.value || !props.view) return
+  if (!window.confirm('按最新的文稿/分镜/风格整片重做？管线会复用没变的产物，只重做出入的部分。')) return
+  redoing.value = true
+  try {
+    await api.produce(props.videoId)
+    emit('rework-started') // App 重拉 view（producing 态/停止按钮）
+  } catch (e) {
+    message.error((e as Error).message)
+  } finally {
+    redoing.value = false
   }
 }
 </script>
 
 <template>
   <section class="stage">
-    <!-- 舞台四态：文稿 → 分镜 → 风格样张 → 视频 -->
-    <template v-if="view">
-      <!-- 状态 1：文稿（前置未齐时的底稿展示） -->
-      <div v-if="!view.gates.storyboard && manuscript" class="pane">
-        <div class="pane-head">
-          文稿 <NTag size="small" :bordered="false">{{ manuscript.word_count }} 字</NTag>
-          <NButton size="tiny" quaternary class="edit-btn" @click="emit('edit-manuscript')">编辑</NButton>
-        </div>
-        <NScrollbar class="ms-scroll">
-          <article class="manuscript">{{ manuscript.content }}</article>
-        </NScrollbar>
-      </div>
+    <div class="pane">
+      <!-- 页签行：四页 + 状态灯（红绿灯/过期点） -->
+      <header v-if="view" class="tabs">
+        <button
+          v-for="t in tabs" :key="t.id" class="tab" :class="[tabState(t.id).cls, { on: tab === t.id }]"
+          :title="tabState(t.id).title" @click="emit('tab', t.id)"
+        >
+          <span class="dot" />{{ t.label }}<span v-if="tabState(t.id).label" class="tab-sub">{{ tabState(t.id).label }}</span>
+        </button>
+        <!-- 整片过期重做：页签行靠右，悬停显示哪几样改过 -->
+        <NButton
+          v-if="showRedo" class="redo-btn" size="tiny" type="warning" :loading="redoing"
+          :title="`${redoNames.join('、')}在成片生成后又改过——成片还是旧版。点此按最新内容重做：没变的产物会复用，只重做出入的部分。`"
+          @click="redoFull"
+        >按最新内容重做</NButton>
+      </header>
 
-      <!-- 状态 2：分镜表 -->
-      <div v-else-if="view.gates.storyboard && !view.gates.style_draft && storyboard" class="pane">
-        <div class="pane-head">
-          分镜 <NTag size="small" :bordered="false">{{ storyboard.segments.length }} 段 / 约 {{ Math.round(view.total_hint) }} 秒</NTag>
-        </div>
-        <NScrollbar class="ms-scroll">
-          <table class="sb">
-            <thead><tr><th style="width:56px">段</th><th style="width:130px">标题</th><th>旁白</th><th style="width:170px">画面</th><th style="width:64px">秒</th></tr></thead>
-            <tbody>
-              <tr v-for="s in storyboard.segments" :key="s.id" class="sb-row" @click="emit('seg', s.idx, s.key)">
-                <td class="c">{{ s.idx }}</td>
-                <td><b>{{ s.key }}</b></td>
-                <td class="narr">{{ s.narration }}</td>
-                <td class="brief">{{ s.visual_brief }}</td>
-                <td class="c">{{ Math.round(s.duration_hint) }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <div class="hint">点任意段加入聊天引用列表（可删），随下一条消息发给 Agent</div>
-        </NScrollbar>
-      </div>
-
-      <!-- 状态 3：风格样张（硬门：用户确认；制作中切到进度面板） -->
-      <div v-else-if="view.gates.style_draft && styleSamples && !view.has_video && !view.producing && !stageSummary" class="pane">
-        <div class="pane-head">
-          风格样张 · {{ styleSamples.direction }}
-          <NTag size="small" :bordered="false" :type="styleSamples.confirmed ? 'success' : 'warning'">
-            {{ styleSamples.confirmed ? '已确认' : '待确认' }}
-          </NTag>
-        </div>
-        <NScrollbar class="ms-scroll">
-          <!-- 风格文件（§12.2）：确认样张 = 确认这份皮肤——四槽位色板 + 字体直读 -->
-          <div v-if="styleSamples.skin" class="skin-bar">
-            <span class="skin-name">皮肤 {{ styleSamples.skin.name }}</span>
-            <span v-for="c in skinChips" :key="c.label" class="chip" :title="c.value">
-              <i :style="{ background: c.value }" />{{ c.label }}
-            </span>
-            <code>{{ styleSamples.skin.slots.font }}</code>
-          </div>
-          <div class="samples">
-            <figure v-for="s in styleSamples.samples" :key="s.tag" class="sample">
-              <!-- 样张 HTML 固定 960×540，卡片只有半宽——必须整体缩放（SampleFrame），裸 iframe 只会露出左上局部 -->
-              <SampleFrame :html="s.html" />
-              <figcaption>
-                <b>{{ s.tag }}</b>
-                <span>{{ s.desc }}</span>
-              </figcaption>
-            </figure>
-          </div>
-          <div class="confirm-bar">
-            <p>样张与成片同一套皮肤，所见即所得。确认后风格文件锁定进项目（这是唯一必须你拍板的门）。</p>
-            <NButton v-if="!styleSamples.confirmed" type="primary" size="large" @click="emit('confirm-style')">
-              确认风格，开工
-            </NButton>
-            <NButton v-else type="success" ghost size="large" disabled>已确认</NButton>
-          </div>
-        </NScrollbar>
-      </div>
-
-      <!-- 状态 4：成片（下载在标题行，「引用此刻」悬浮视频右上；舞台只留画面+时间轴） -->
-      <div v-else-if="view.has_video" class="pane video-pane" :class="{ vertical: view.aspect === '9:16' }">
-        <!-- 段级重做中：细进度条（其余段的画面/音频不动） -->
-        <div v-if="stageSummary" class="rework-strip">
-          <div
-            v-for="st in stageSummary" :key="st.key" class="pstage"
-            :data-state="st.state" :data-skip="st.key === 'tts' && st.state === 'pending' && ttsIdle"
-          >
-            <span class="dot" />{{ st.key === 'tts' && st.state === 'pending' && ttsIdle ? '配音不动' : stageName[st.key] ?? st.key }}
-          </div>
-          <span class="rework-hint">段级重做中</span>
-          <button v-if="view.producing" class="stop-btn" @click="emit('cancel')">■ 停止</button>
-        </div>
-        <div v-if="progressLine && stageSummary" class="progress-line">{{ progressLine }}</div>
-        <div class="player">
-          <video
-            ref="videoEl" :src="videoURL(videoId, videoRev)" controls preload="metadata"
-            @timeupdate="cur = videoEl!.currentTime" @loadedmetadata="dur = videoEl!.duration || 0"
-            @play="playing = true" @pause="playing = false" @ended="playing = false"
+      <template v-if="view">
+        <!-- KeepAlive 要求恰好一个子节点：内部不许放注释/多根（v-if 链整体算一个） -->
+        <KeepAlive>
+          <ManuscriptPane
+            v-if="tab === 'manuscript'"
+            :project-id="videoId" :topic="view.topic" :manuscript="manuscript"
+            :video-stale="view.video_stale.manuscript"
+            @saved="emit('saved')"
           />
-          <button v-show="!playing" class="now-btn" @click="pickTime(cur)">
-            引用此刻 {{ fmtClock(cur) }}
-          </button>
-        </div>
-        <NModal v-model:show="reworkShow" preset="dialog" title="重做此段画面" positive-text="开始重做" negative-text="取消" :loading="reworkBusy" @positive-click="confirmRework">
-          <p class="rework-modal-hint">只重生成这一段的画面（配音/时长/其余段不动），改完整片自动重缝。留空 = 用上次的要求再试一次。</p>
-          <NInput v-model:value="reworkInstr" type="textarea" :rows="3" placeholder="画面修改要求，例：标题缩小放左上，配图换成战场全景" />
-        </NModal>
-        <Timeline
-          v-if="storyboard"
-          :storyboard="storyboard" :audio-meta="audioMeta" :current-time="cur" :duration="dur"
-          :picked-idx="pickedIdx" :rework="!stageSummary" @seek="onSeek" @pick="pickSeg" @pick-time="pickTime"
-          @rework="openRework"
-        />
-      </div>
-
-      <!-- 制作中：进度面板（其余状态都不满足 = 管线在跑或等待中） -->
-      <div v-else class="pane producing">
-        <template v-if="!view.producing && !stageSummary">
-          <div class="prod-title">三件事齐了就开工</div>
-          <p class="prep-hint">
-            点右侧对话栏上方的标签补齐：<b>文稿</b>（编辑或 AI 起草）、<b>分镜</b>（我来生成）、<b>风格</b>（选库内或描述方向），然后在对话里说「开始」。
-          </p>
-          <NButton type="primary" @click="emit('edit-manuscript')">先填文稿</NButton>
-        </template>
-        <template v-else>
-          <NSpin size="large" />
-          <div class="prod-title">制作管线运行中</div>
-          <div v-if="stageSummary" class="stages">
-            <div v-for="st in stageSummary" :key="st.key" class="pstage" :data-state="st.state">
-              <span class="dot" />{{ stageName[st.key] ?? st.key }}
+          <div v-else-if="tab === 'storyboard' && storyboard" class="sb-wrap">
+            <div class="sb-head">
+              分镜表
+              <span class="sb-meta">{{ edSb?.segments.length ?? storyboard.segments.length }} 段 / 约 {{ Math.round(edTotalSec || view.total_hint) }} 秒</span>
+              <span class="sb-dur">
+                <NSelect v-model:value="targetMin" size="tiny" :options="minOptions" style="width: 108px" />
+                <NButton size="tiny" :loading="replanning" @click="replanStoryboard">按此时长重排</NButton>
+                <NButton v-if="sbDirty" size="tiny" @click="resetSb">还原</NButton>
+                <NButton size="tiny" type="primary" :disabled="!sbDirty" :loading="savingSb" @click="saveSb">保存修改</NButton>
+              </span>
+            </div>
+            <div class="sb-scroll">
+              <table class="sb">
+                <thead><tr><th style="width:44px">段</th><th style="width:130px">标题</th><th>旁白</th><th style="width:200px">画面</th><th style="width:86px">秒</th></tr></thead>
+                <tbody>
+                  <tr v-for="s in edSb!.segments" :key="s.id" class="sb-row edit">
+                    <td class="c">{{ s.idx }}</td>
+                    <td><NInput v-model:value="s.key" size="tiny" @update:value="sbDirty = true" /></td>
+                    <td><NInput v-model:value="s.narration" type="textarea" size="tiny" :autosize="{ minRows: 2, maxRows: 7 }" @update:value="sbDirty = true" /></td>
+                    <td><NInput v-model:value="s.visual_brief" type="textarea" size="tiny" :autosize="{ minRows: 2, maxRows: 7 }" @update:value="sbDirty = true" /></td>
+                    <td class="c"><NInputNumber v-model:value="s.duration_hint" size="tiny" :min="0.5" :max="180" :step="0.5" style="width: 80px" @update:value="sbDirty = true" /></td>
+                  </tr>
+                </tbody>
+              </table>
+              <div class="hint">直接在表格里改文案和秒数，改完点右上「保存修改」（保存后成片会标记为旧版）；要增删段或大改结构，在对话里说。加聊天引用请到时间轴点段。</div>
             </div>
           </div>
-          <button v-if="view.producing" class="stop-btn" @click="emit('cancel')">■ 停止制作</button>
-        </template>
-      </div>
-    </template>
+          <div v-else-if="tab === 'storyboard'" class="sb-empty">
+            还没有分镜。先补好文稿（「文稿」页签），然后在对话里说「生成分镜」——我会拆段、写画面、标时长。
+          </div>
+          <StylePane
+            v-else-if="tab === 'style'"
+            :project-id="videoId" :view="view" :style-samples="styleSamples"
+            :video-stale="view.video_stale.style"
+            @saved="emit('saved')" @confirm-style="emit('confirm-style')" @chat-sent="emit('chat-sent')"
+          />
+          <VideoPane
+            v-else
+            :view="view" :storyboard="storyboard" :audio-meta="audioMeta" :picked-idx="pickedIdx"
+            :video-id="videoId" :video-rev="videoRev" :progress-line="progressLine" :stage-summary="stageSummary"
+            @seg="(i, k) => emit('seg', i, k)" @pick-time="t => emit('pick-time', t)"
+            @cancel="emit('cancel')" @rework-started="emit('rework-started')"
+            @go-tab="t => emit('go-tab', t)"
+          />
+        </KeepAlive>
+      </template>
 
-    <div v-else class="pane empty">
-      <div class="none">← 左侧新建或选择一个项目</div>
+      <div v-else class="empty">
+        <div class="none">← 左侧新建或选择一个项目</div>
+      </div>
     </div>
   </section>
 </template>
@@ -243,89 +252,47 @@ async function confirmRework() {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
   background: #14141a; border: 1px solid #232329; border-radius: 12px; overflow: hidden;
 }
-.pane-head {
+
+/* ── 页签行 ── */
+.tabs {
+  flex: none; display: flex; align-items: center; gap: 4px;
+  padding: 8px 12px 0; border-bottom: 1px solid #202027;
+}
+.tab {
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  border: 0; border-bottom: 2px solid transparent; background: transparent;
+  color: #8a8a96; font-size: 13px; padding: 7px 14px 9px; margin-bottom: -1px;
+}
+.tab:hover { color: #d9d9e0; background: #191920; }
+.tab.on { color: #f0c674; border-bottom-color: #f0c674; font-weight: 600; }
+.tab-sub { font-size: 11px; color: #7c7c88; font-weight: 400; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: #3a3a45; flex: none; }
+.redo-btn { margin-left: auto; margin-bottom: 6px; }
+.tab.ok .dot { background: #7ee2a8; }
+.tab.wait .dot { background: #f0c674; animation: pulse 1.4s infinite; }
+.tab.run .dot { background: #8fc7ff; animation: pulse 1.2s infinite; }
+/* 过期：整颗页签描琥珀边（黄灯语义=成片落后于我） */
+.tab.stale { color: #f0c674; box-shadow: inset 0 0 0 1px rgba(240, 198, 116, .35); border-radius: 8px 8px 0 0; }
+.tab.stale .dot { background: #f0c674; }
+.tab.on.stale { border-bottom-color: #f0c674; }
+@keyframes pulse { 50% { opacity: .35; } }
+
+.empty { flex: 1; display: flex; align-items: center; justify-content: center; }
+.none { color: #55555f; }
+
+/* ── 分镜表 ── */
+.sb-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.sb-head {
   flex: none; display: flex; align-items: center; gap: 10px;
   padding: 12px 18px; font-weight: 600; border-bottom: 1px solid #202027; color: #d9d9e0;
 }
-.pane-head .edit-btn { margin-left: auto; font-weight: 400; }
-.ms-scroll { flex: 1; }
-.manuscript { padding: 26px 34px; line-height: 2.1; font-size: 15px; color: #cfcfd8; white-space: pre-wrap; max-width: 860px; margin: 0 auto; font-family: 'KaiTi', 'STKaiti', serif; font-size: 17px; }
-
-/* 分镜表 */
+.sb-meta { font-size: 12px; font-weight: 400; color: #7c7c88; }
+.sb-dur { margin-left: auto; display: flex; align-items: center; gap: 6px; font-weight: 400; }
+.sb-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .sb { width: 100%; border-collapse: collapse; font-size: 13px; }
 .sb th { position: sticky; top: 0; background: #14141a; text-align: left; padding: 10px 12px; color: #7c7c88; font-weight: 600; border-bottom: 1px solid #232329; }
-.sb td { padding: 10px 12px; border-bottom: 1px solid #1d1d24; vertical-align: top; }
-.sb-row { cursor: pointer; }
-.sb-row:hover td { background: #191920; }
-.c { color: #7c7c88; text-align: center; }
-.narr { color: #c3c3cd; }
-.brief { color: #8a8a96; }
+.sb td { padding: 6px 8px; border-bottom: 1px solid #1d1d24; vertical-align: top; }
+.c { color: #7c7c88; text-align: center; vertical-align: middle; }
 .hint { padding: 10px 14px; color: #55555f; font-size: 12px; }
-
-/* 皮肤槽位条 */
-.skin-bar {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 12px 20px 0; font-size: 12px; color: #8a8a96;
-}
-.skin-name { color: #c3c3cd; font-weight: 600; }
-.skin-bar code { background: #1b1b22; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
-.chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #2b2b33; border-radius: 999px; padding: 2px 10px; }
-.chip i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid rgba(255,255,255,.18); }
-
-/* 样张 */
-.samples { display: flex; gap: 16px; padding: 20px; flex-wrap: wrap; }
-.sample { flex: 1; min-width: 320px; max-width: 480px; }
-.sample :deep(.sf) { border: 1px solid #2b2b33; border-radius: 8px; }
-figcaption { margin-top: 8px; display: flex; flex-direction: column; gap: 2px; }
-figcaption b { font-size: 13px; }
-figcaption span { font-size: 12px; color: #8a8a96; }
-.confirm-bar { padding: 4px 20px 20px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
-.confirm-bar p { color: #8a8a96; font-size: 13px; max-width: 560px; }
-
-/* 成片 */
-.video-pane { align-items: center; justify-content: center; gap: 12px; padding: 16px 20px; }
-/* 播放器吃剩余高度，其余行（重做条/时间轴）保持固有高度不被挤出面板 */
-.video-pane > .rework-strip, .video-pane > .tl { flex: none; }
-.player { position: relative; width: min(100%, 1080px); flex: 1 1 0; min-height: 0; display: flex; justify-content: center; align-items: center; }
-/* video 铺满播放器、画面 contain 居中（letterbox 同为黑底）——悬浮钮/控制条贴视频框 */
-.player video { width: 100%; height: 100%; object-fit: contain; border-radius: 8px; background: #000; display: block; }
-.video-pane.vertical .player { width: auto; }
-/* 「引用此刻」悬浮在视频右上角（播放中隐藏），避开底部原生控制条 */
-.now-btn {
-  position: absolute; right: 10px; top: 10px; z-index: 4; cursor: pointer;
-  border: 1px solid rgba(240, 198, 116, .45); background: rgba(16, 14, 8, .72); color: #f0c674;
-  font-size: 12px; padding: 4px 12px; border-radius: 999px; backdrop-filter: blur(3px);
-}
-.now-btn:hover { background: rgba(42, 36, 22, .9); }
-.rework-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.rework-hint { font-size: 12px; color: #f0c674; }
-.progress-line { flex: none; width: 100%; font-size: 12px; color: #8a8a96; padding: 0 4px; }
-.pstage[data-skip="true"] { opacity: .45; border-style: dashed; }
-.rework-modal-hint { font-size: 13px; color: #8a8a96; line-height: 1.8; margin: 0 0 10px; }
-
-/* 制作中（pstage = 进度胶囊；不能叫 .stage，会和外层舞台 section 撞类名导致 align/padding 污染） */
-.producing { align-items: center; justify-content: center; gap: 18px; }
-.prod-title { color: #c3c3cd; font-size: 15px; }
-.prep-hint { max-width: 480px; text-align: center; color: #8a8a96; font-size: 13px; line-height: 1.9; }
-.prep-hint b { color: #f0c674; font-weight: 600; }
-.stages { display: flex; gap: 10px; }
-.pstage {
-  display: flex; align-items: center; gap: 6px; font-size: 13px; color: #7c7c88;
-  border: 1px solid #2b2b33; border-radius: 999px; padding: 5px 14px;
-}
-.dot { width: 8px; height: 8px; border-radius: 50%; background: #3a3a45; }
-.pstage[data-state="running"] { color: #8fc7ff; border-color: #2b4a66; }
-.pstage[data-state="running"] .dot { background: #8fc7ff; animation: pulse 1.2s infinite; }
-.pstage[data-state="done"] { color: #7ee2a8; border-color: #2c5c40; }
-.pstage[data-state="done"] .dot { background: #7ee2a8; }
-.pstage[data-state="error"] { color: #ff9d9d; border-color: #66302b; }
-.pstage[data-state="error"] .dot { background: #ff9d9d; }
-.stop-btn {
-  align-self: center; padding: 6px 16px; border-radius: 8px; cursor: pointer;
-  color: #ffb3b3; background: #2a1a1c; border: 1px solid #5a3230; font-size: 13px;
-}
-.stop-btn:hover { background: #3a2224; border-color: #7a403e; }
-@keyframes pulse { 50% { opacity: .35; } }
-.empty { align-items: center; justify-content: center; }
-.none { color: #55555f; }
+.sb-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: #55555f; font-size: 13px; line-height: 1.9; text-align: center; padding: 20px 40px; }
 </style>

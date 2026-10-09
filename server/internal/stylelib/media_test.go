@@ -17,6 +17,7 @@ func TestSnapshotMediaLinksAndSkipsExisting(t *testing.T) {
 	mustWrite("video.mp4", "fakevideo")
 	mustWrite("frame-0.8.png", "png0")
 	mustWrite("frame-2.5.png", "png1")
+	mustWrite("cover.png", "cover0")
 	mustWrite("ref.json", `{}`) // 非媒体文件，不应快照
 
 	if err := l.SnapshotMedia("vid-x", src); err != nil {
@@ -32,8 +33,11 @@ func TestSnapshotMediaLinksAndSkipsExisting(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "ref.json")); err == nil {
 		t.Fatal("ref.json 不应被快照")
 	}
-	// 幂等：重跑不改写已有文件
+	// 幂等：重跑不改写已有文件；封面例外——代表帧随重入库更新，必须覆盖
 	if err := os.WriteFile(filepath.Join(dir, "video.mp4"), []byte("v2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "cover.png"), []byte("cover1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := l.SnapshotMedia("vid-x", src); err != nil {
@@ -42,6 +46,10 @@ func TestSnapshotMediaLinksAndSkipsExisting(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(dir, "video.mp4"))
 	if string(b) != "v2" {
 		t.Fatal("重跑覆盖了已有快照")
+	}
+	b, _ = os.ReadFile(filepath.Join(dir, "cover.png"))
+	if string(b) != "cover1" {
+		t.Fatal("封面未随重快照刷新")
 	}
 }
 

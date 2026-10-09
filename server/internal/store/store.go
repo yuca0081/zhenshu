@@ -99,6 +99,7 @@ type Store interface {
 	CreateProject(diskID, name string) error
 	EnsureProject(diskID, name string) error // 已存在则跳过
 	UpdateStatus(diskID, status string) error
+	DeleteProject(diskID string) error // 行+聊天+任务镜像全删（磁盘目录由调用方删）
 	SaveMsg(m *Msg) error
 	ListMsgs(projectID string, afterID int64, limit int) ([]Msg, error)
 	// render_jobs 记账：起跑插 running 行，终态回写该项目最近一行 running
@@ -168,6 +169,21 @@ func (s *pgStore) EnsureProject(diskID, name string) error {
 
 func (s *pgStore) UpdateStatus(diskID, status string) error {
 	return s.db.Exec(`UPDATE projects SET status = ? WHERE disk_id = ?`, status, diskID).Error
+}
+
+// DeleteProject 删项目镜像：聊天、任务、行。无行不报错（磁盘才是事实源）。
+func (s *pgStore) DeleteProject(diskID string) error {
+	uuid, err := s.findUUID(diskID)
+	if err != nil {
+		return nil
+	}
+	if err := s.db.Exec(`DELETE FROM chat_messages WHERE project_id = ?`, uuid).Error; err != nil {
+		return err
+	}
+	if err := s.db.Exec(`DELETE FROM render_jobs WHERE project_id = ?`, uuid).Error; err != nil {
+		return err
+	}
+	return s.db.Exec(`DELETE FROM projects WHERE id = ?`, uuid).Error
 }
 
 func (s *pgStore) StartRenderJob(projectID, kind string) error {
@@ -269,6 +285,33 @@ func (s *memStore) UpdateStatus(diskID, status string) error {
 			s.projects[i].Status = status
 		}
 	}
+	return nil
+}
+
+func (s *memStore) DeleteProject(diskID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	projects := s.projects[:0]
+	for _, p := range s.projects {
+		if p.ID != diskID {
+			projects = append(projects, p)
+		}
+	}
+	s.projects = projects
+	msgs := s.msgs[:0]
+	for _, m := range s.msgs {
+		if m.ProjectID != diskID {
+			msgs = append(msgs, m)
+		}
+	}
+	s.msgs = msgs
+	jobs := s.jobs[:0]
+	for _, j := range s.jobs {
+		if j.ProjectID != diskID {
+			jobs = append(jobs, j)
+		}
+	}
+	s.jobs = jobs
 	return nil
 }
 

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,9 +57,11 @@ func (s *Server) Router() *gin.Engine {
 	api.POST("/projects", s.createProject)
 	api.GET("/projects", s.listProjects)
 	api.GET("/projects/:id", s.projectView)
+	api.DELETE("/projects/:id", s.deleteProject)
 	api.GET("/projects/:id/overview", s.overview)
 	api.GET("/projects/:id/manuscript", s.manuscript)
 	api.PUT("/projects/:id/manuscript", s.saveManuscript)
+	api.PUT("/projects/:id/storyboard", s.saveStoryboard)
 	api.GET("/projects/:id/storyboard", s.storyboard)
 	api.GET("/projects/:id/style", s.style)
 	api.POST("/projects/:id/style/apply", s.applyStyle)
@@ -87,8 +90,6 @@ func (s *Server) Router() *gin.Engine {
 	api.POST("/references/:id/analyze", s.analyzeReference)
 	api.POST("/references/:id/confirm", s.confirmReference)
 	api.PUT("/references/:id/draft", s.updateReferenceDraft)
-	api.GET("/references/:id/seg/:seg/frames", s.referenceSegFrames)
-	api.GET("/references/:id/seg/:seg/media/:file", s.referenceSegMedia)
 	// 临时视频接口不进 tokened 组（大模型不会带 X-API-Token）：防线是 HMAC 签名 +
 	// 有效期 + clip-*.mp4 白名单（styleref.VerifyVideo/VideoFile），只暴露解析剪辑。
 	r.GET("/api/llm-video/:id/:name", s.llmVideo)
@@ -319,7 +320,33 @@ func (s *Server) projectView(c *gin.Context) {
 		},
 		"seg_count": st.SegCount, "total_hint": st.TotalHint,
 		"has_video": st.HasVideo, "producing": st.Producing,
+		"video_stale": gin.H{ // 成片生成后上游又改过 → 前端页签黄灯 + 重做入口
+			"manuscript": st.HasVideo && st.VideoAt.Before(st.ManuscriptAt),
+			"storyboard": st.HasVideo && st.VideoAt.Before(st.StoryboardAt),
+			"style":      st.HasVideo && st.VideoAt.Before(st.StyleAt),
+		},
 	})
+}
+
+// deleteProject 删除项目：磁盘目录 + DB 镜像（行/聊天/任务）。
+// 制作中拒绝——管线还在写目录，RemoveAll 会与写方竞速留半删残骸。
+func (s *Server) deleteProject(c *gin.Context) {
+	id := c.Param("id")
+	if s.Producer != nil && s.Producer.IsRunning(id) {
+		c.JSON(409, gin.H{"error": "制作/重做进行中，先停止再删除"})
+		return
+	}
+	p := pipeline.NewProject(s.DataDir, id)
+	if _, err := os.Stat(p.Dir); err != nil {
+		c.JSON(404, gin.H{"error": "项目不存在"})
+		return
+	}
+	if err := os.RemoveAll(p.Dir); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	_ = s.Store.DeleteProject(id)
+	c.JSON(200, gin.H{"ok": true})
 }
 
 func (s *Server) manuscript(c *gin.Context) {
@@ -455,6 +482,53 @@ func (s *Server) storyboard(c *gin.Context) {
 	c.Data(200, "application/json", pipeline.MustJSONBytes(sb))
 }
 
+// saveStoryboard 手动编辑分镜落盘（storyboards/storyboard.json，与主管生成同格式同文件）。
+// 段身份字段（id/idx）锁死——它们是时间轴/画面注册表/聊天引用的锚；文案/画面要点/时长自由改。
+// 段数不可变：增删段走对话重新生成。落盘即换 mtime，成片过期灯（video_stale.storyboard）自动亮。
+func (s *Server) saveStoryboard(c *gin.Context) {
+	p := pipeline.NewProject(s.DataDir, c.Param("id"))
+	if _, err := os.Stat(p.Dir); err != nil {
+		c.JSON(404, gin.H{"error": "项目不存在"})
+		return
+	}
+	prev, err := p.LoadStoryboard()
+	if err != nil {
+		c.JSON(400, gin.H{"error": "还没有分镜——先在对话里生成分镜"})
+		return
+	}
+	var in contract.Storyboard
+	if err := c.ShouldBindJSON(&in); err != nil || len(in.Segments) == 0 {
+		c.JSON(400, gin.H{"error": "分镜格式不对（缺 segments）"})
+		return
+	}
+	if len(in.Segments) != len(prev.Segments) {
+		c.JSON(400, gin.H{"error": fmt.Sprintf("段数不能变（现在 %d 段）；要增删段请在对话里让我重新生成分镜", len(prev.Segments))})
+		return
+	}
+	byIdx := map[int]string{}
+	for _, sg := range prev.Segments {
+		byIdx[sg.Idx] = sg.ID
+	}
+	for i := range in.Segments {
+		id, ok := byIdx[in.Segments[i].Idx]
+		if !ok {
+			c.JSON(400, gin.H{"error": fmt.Sprintf("第 %d 段不存在——段序不可增删改", in.Segments[i].Idx)})
+			return
+		}
+		if strings.TrimSpace(in.Segments[i].Narration) == "" {
+			c.JSON(400, gin.H{"error": fmt.Sprintf("第 %d 段旁白为空", in.Segments[i].Idx)})
+			return
+		}
+		in.Segments[i].ID = id
+	}
+	if err := pipeline.WriteFileAtomic(p.Artifact("storyboards/storyboard.json"), pipeline.MustJSONBytes(&in), 0o644); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	p.Manifest("storyboard.edited", fmt.Sprintf("手动编辑分镜（%d 段）", len(in.Segments)))
+	c.JSON(200, gin.H{"ok": true})
+}
+
 func (s *Server) style(c *gin.Context) {
 	p := pipeline.NewProject(s.DataDir, c.Param("id"))
 	b, err := os.ReadFile(p.Artifact("style/style_samples.json"))
@@ -507,20 +581,21 @@ func (s *Server) confirmStyle(c *gin.Context) {
 
 // draftManuscript 主题 → 口播文稿草稿（创建前 AI 辅助起草）。
 // 文稿硬门不变：草稿仍进文稿框，用户可改可删，创建时照常校验非空。
+// 篇幅按字数直驱（分钟换算在 UI 侧，文稿环节不再出现时间概念）。
 func (s *Server) draftManuscript(c *gin.Context) {
 	var in struct {
-		Topic   string  `json:"topic"`
-		Minutes float64 `json:"minutes"`
+		Topic string `json:"topic"`
+		Words int    `json:"words"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil || strings.TrimSpace(in.Topic) == "" {
 		c.JSON(400, gin.H{"error": "主题不能为空"})
 		return
 	}
-	if in.Minutes <= 0 {
-		in.Minutes = 1
+	if in.Words <= 0 {
+		in.Words = 500
 	}
-	if in.Minutes > 5 {
-		in.Minutes = 5
+	if in.Words > 5000 { // 上限：更长的一次性成稿后半段易注水，宜分段起草
+		in.Words = 5000
 	}
 	p, err := llm.FromEnv(llm.RoleDialogue)
 	if err != nil {
@@ -530,7 +605,7 @@ func (s *Server) draftManuscript(c *gin.Context) {
 	// 180s：撰稿工位是自主循环，时事题材会先联网核实（预算帽 2 次搜索）再成稿
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 180*time.Second)
 	defer cancel()
-	content, err := agent.DraftManuscript(ctx, p, in.Topic, in.Minutes)
+	content, err := agent.DraftManuscript(ctx, p, in.Topic, in.Words)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "起草失败：" + err.Error()})
 		return
@@ -957,49 +1032,19 @@ func (s *Server) analyzeReference(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true})
 }
 
-// confirmReference 解析结果入库：styles.json 写「标签+特色」条目。
-// single = 全片一个条目；multi（合集）= 每段一个条目。
+// confirmReference 解析结果入库：styles.json 写「标签+特色」条目（一视频一条目）。
 func (s *Server) confirmReference(c *gin.Context) {
 	ref, err := s.Refs.Get(c.Param("id"))
 	if err != nil {
 		c.JSON(404, gin.H{"error": "引用不存在"})
 		return
 	}
-	if ref.Status != "done" || (ref.Style == nil && len(ref.Segments) == 0) {
+	if ref.Status != "done" || ref.Style == nil {
 		c.JSON(400, gin.H{"error": "还没解析完成，不能入库"})
 		return
 	}
 
-	refDir := filepath.Join(s.DataDir, "references", ref.ID)
-	if ref.Kind == "multi" { // 合集：每段一个条目
-		ids := []string{}
-		for i := range ref.Segments {
-			seg := &ref.Segments[i]
-			if seg.Style == nil {
-				continue // 该段解析失败（原因在 segments[i].error），跳过
-			}
-			st, err := s.ingestRefStyle(fmt.Sprintf("%s-s%02d", ref.ID, seg.Index), seg.Style,
-				filepath.Join(refDir, seg.Dir))
-			if err != nil {
-				c.JSON(500, gin.H{"error": err.Error()})
-				return
-			}
-			ids = append(ids, st.ID)
-		}
-		if len(ids) == 0 {
-			c.JSON(500, gin.H{"error": "没有任何段可入库（全部解析失败）"})
-			return
-		}
-		if err := s.Refs.MarkConfirmed(ref.ID); err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(200, gin.H{"ok": true, "style_ids": ids})
-		return
-	}
-
-	// single：全片一个条目
-	st, err := s.ingestRefStyle(ref.ID, ref.Style, refDir)
+	st, err := s.ingestRefStyle(ref.ID, ref.Name, ref.Style, filepath.Join(s.DataDir, "references", ref.ID))
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -1012,10 +1057,11 @@ func (s *Server) confirmReference(c *gin.Context) {
 }
 
 // ingestRefStyle 一条参考风格入库：帧引用存在性校验（对着解析帧目录）+ 代表帧
-// 封面 + IngestVideoRef（新载荷：标签+特色+题材一句话）+ 原片/抽帧快照，
-// multi/single 两路径共用。seedID 是 IngestVideoRef 的 refID 种子（multi 为
-// "<refID>-sNN"，single 为 refID）。
-func (s *Server) ingestRefStyle(seedID string, d *styleref.StyleDraft, dir string) (*stylelib.Style, error) {
+// 封面 + IngestVideoRef（新载荷：标签+特色+题材一句话）+ 原片/抽帧快照。
+// 条目名继承原视频标题（origName=上传文件名），风格名只在标题清洗不出时兜底——
+// 风格标签是家族名，多条目会撞名，不能当条目名用。
+// seedID 是 IngestVideoRef 的 refID 种子（重复入库同 seed upsert 幂等）。
+func (s *Server) ingestRefStyle(seedID, origName string, d *styleref.StyleDraft, dir string) (*stylelib.Style, error) {
 	feats := styleref.ReadFeatures(dir)
 	valid := map[string]bool{}
 	for _, f := range feats {
@@ -1036,9 +1082,9 @@ func (s *Server) ingestRefStyle(seedID string, d *styleref.StyleDraft, dir strin
 			}
 		}
 	}
-	makeCover(dir, feats) // 代表帧拷成 cover.png（卡片封面/回看），失败不挡入库
+	makeCover(dir, feats, firstEvidenceFrame(d)) // 代表帧拷成 cover.png（卡片封面/回看），失败不挡入库
 	st, err := s.Lib.IngestVideoRef(seedID, stylelib.VideoStyleIn{
-		Name:        d.Name,
+		Name:        videoTitle(origName, d.Name),
 		Subject:     d.Subject,
 		Tags:        d.Tags,
 		TagEvidence: d.TagEvidence,
@@ -1086,10 +1132,8 @@ func (s *Server) listVocab(c *gin.Context) {
 }
 
 // updateReferenceDraft 确认页编辑解析草稿（§4.4：入库前可增删改特色）。
-// seg 为段序（multi 用，1 起；缺省/0 = single 整片草稿）。
 func (s *Server) updateReferenceDraft(c *gin.Context) {
 	var in struct {
-		Seg   int                  `json:"seg"`
 		Style *styleref.StyleDraft `json:"style"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil || in.Style == nil {
@@ -1100,27 +1144,73 @@ func (s *Server) updateReferenceDraft(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "特色清单不合格：" + err.Error()})
 		return
 	}
-	if err := s.Refs.UpdateDraft(c.Param("id"), in.Seg, in.Style); err != nil {
+	if err := s.Refs.UpdateDraft(c.Param("id"), in.Style); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(200, gin.H{"ok": true})
 }
 
-// makeCover 代表帧（中位帧）拷成 cover.png，返回其时间点；无帧返回 -1。
-func makeCover(dir string, frames []styleref.FeatureFrame) float64 {
-	if len(frames) == 0 {
-		return -1
+// firstEvidenceFrame 大模型标的第一个标签证据帧（它认定的风格代表画面），作封面首选。
+func firstEvidenceFrame(d *styleref.StyleDraft) string {
+	for _, ev := range d.TagEvidence {
+		if len(ev.Frames) > 0 {
+			return ev.Frames[0]
+		}
 	}
-	f := frames[len(frames)/2]
-	b, err := os.ReadFile(f.Path)
+	return ""
+}
+
+// videoTitle 上传文件名清洗成可读标题：NN_标题_BVxxx[_P 后缀].mp4 → 标题（多P补 P 号）。
+// 清洗不出非编号内容时回退 fallback（解析草稿的风格名）。
+func videoTitle(filename, fallback string) string {
+	base := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
+	part := ""
+	if i := strings.Index(base, "__"); i > 0 { // 批量上传的多P标签「标题_BVxxx__P02_标题 p02」
+		if m := partNumRe.FindStringSubmatch(base[i+2:]); m != nil {
+			part = " P" + m[1]
+		}
+		base = base[:i]
+	}
+	base = strings.TrimSpace(leadNumRe.ReplaceAllString(bvSuffixRe.ReplaceAllString(base, ""), ""))
+	if base == "" || strings.EqualFold(base, "video") { // 裸 video.mp4 没有标题信息
+		return fallback
+	}
+	return base + part
+}
+
+var (
+	leadNumRe = regexp.MustCompile(`^\d+\s*[_-]\s*`)
+	bvSuffixRe = regexp.MustCompile(`[_\s]*BV[0-9A-Za-z]{6,14}\s*$`)
+	partNumRe = regexp.MustCompile(`(?i)^\s*P0?(\d+)`)
+)
+
+// makeCover 代表帧拷成 cover.png，返回其时间点；无帧返回 -1。
+// 优先用 prefer 指定的帧（标签证据首选帧），没有/对不上退中位帧。
+func makeCover(dir string, frames []styleref.FeatureFrame, prefer string) float64 {
+	pick := -1
+	if prefer != "" {
+		for i, f := range frames {
+			if filepath.Base(f.Path) == prefer {
+				pick = i
+				break
+			}
+		}
+	}
+	if pick < 0 {
+		if len(frames) == 0 {
+			return -1
+		}
+		pick = len(frames) / 2
+	}
+	b, err := os.ReadFile(frames[pick].Path)
 	if err != nil || len(b) == 0 {
 		return -1
 	}
 	if err := os.WriteFile(filepath.Join(dir, "cover.png"), b, 0o644); err != nil {
 		return -1
 	}
-	return f.T
+	return frames[pick].T
 }
 
 // scanMediaDir 目录抽帧清单：frame-*.png（白名单名校验）+ 是否带原视频。
@@ -1243,55 +1333,4 @@ func (s *Server) referenceMedia(c *gin.Context) {
 		return
 	}
 	serveFile(c, filepath.Join(s.DataDir, "references", id, name), name, "max-age=3600")
-}
-
-// segNo multi 段目录名（seg-01..seg-40）：白名单校验 + 目录实存。
-func (s *Server) segDir(id, seg string) (string, bool) {
-	n, err := strconv.Atoi(seg)
-	if err != nil || n < 1 || n > 40 {
-		return "", false
-	}
-	dir := filepath.Join(s.DataDir, "references", id, fmt.Sprintf("seg-%02d", n))
-	if _, err := os.Stat(dir); err != nil {
-		return "", false
-	}
-	return dir, true
-}
-
-// referenceSegFrames multi 段草稿的抽帧清单（证据帧在 seg-NN/ 子目录，确认页指认用）。
-func (s *Server) referenceSegFrames(c *gin.Context) {
-	id := c.Param("id")
-	if !isSlug(id) {
-		c.JSON(400, gin.H{"error": "非法路径"})
-		return
-	}
-	dir, ok := s.segDir(id, c.Param("seg"))
-	if !ok {
-		c.JSON(404, gin.H{"error": "段目录不存在"})
-		return
-	}
-	frames, _ := scanMediaDir(dir)
-	if frames == nil {
-		frames = []string{}
-	}
-	c.JSON(200, gin.H{"frames": frames})
-}
-
-// referenceSegMedia multi 段草稿的证据帧本体（白名单同 refMediaName）。
-func (s *Server) referenceSegMedia(c *gin.Context) {
-	id, name := c.Param("id"), c.Param("file")
-	if !isSlug(id) {
-		c.JSON(400, gin.H{"error": "非法路径"})
-		return
-	}
-	if !refMediaName(name) {
-		c.JSON(400, gin.H{"error": "非法文件名"})
-		return
-	}
-	dir, ok := s.segDir(id, c.Param("seg"))
-	if !ok {
-		c.JSON(404, gin.H{"error": "段目录不存在"})
-		return
-	}
-	serveFile(c, filepath.Join(dir, name), name, "max-age=3600")
 }

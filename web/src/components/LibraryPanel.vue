@@ -69,11 +69,12 @@ function onPublish(id: string) {
     <div v-else class="grid">
       <figure v-for="s in packs" :key="s.id" class="card" :class="{ draft: !s.published }" @click="open(s)">
         <div class="cover">
-          <img v-if="s.origin_project?.startsWith('video:')" :src="libraryMediaURL(s.id, 'cover.png')"
-            loading="lazy" alt="" @error="($event.target as HTMLImageElement).style.display = 'none'" />
+          <!-- 兜底文字在下垫层：图加载成功即盖住它，失败/无图时它才是可见封面 -->
           <div class="cover-fallback">
             <b>{{ s.name }}</b>
           </div>
+          <img v-if="s.origin_project?.startsWith('video:')" :src="libraryMediaURL(s.id, 'cover.png')"
+            loading="lazy" alt="" @error="($event.target as HTMLImageElement).style.display = 'none'" />
         </div>
         <figcaption>
           <div class="row1">
