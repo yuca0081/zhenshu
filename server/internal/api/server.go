@@ -252,11 +252,12 @@ func (s *Server) listProjects(c *gin.Context) {
 	// 扫磁盘（事实源），确保 DB 有行；合并状态
 	entries, _ := os.ReadDir(filepath.Join(s.DataDir, "projects"))
 	type row struct {
-		ID        string `json:"id"`
-		Name      string `json:"name"`
-		Status    string `json:"status"`
-		CreatedAt string `json:"created_at"`
-		HasVideo  bool   `json:"has_video"`
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Status      string `json:"status"`
+		CreatedAt   string `json:"created_at"`
+		HasVideo    bool   `json:"has_video"`
+		LastProduce any    `json:"last_produce"`
 	}
 	// 预分配非 nil：空列表必须序列化成 [] 而不是 null（前端读 .length 会崩）
 	out := make([]row, 0, len(entries))
@@ -285,7 +286,14 @@ func (s *Server) listProjects(c *gin.Context) {
 		} else if hasVideo == nil {
 			meta.Status = "video"
 		}
-		out = append(out, row{e.Name(), meta.Name, meta.Status, meta.CreatedAt, hasVideo == nil})
+		// last_produce：最近一轮制作终态（与 agent 状态摘要同一读法 produce.LastTerminal）。
+		// status 故意不动（video/style 语义下游都吃），失败由前端按 last_produce 标红，
+		// 否则「失败后被抹平成 video」的老问题换个视图继续活。
+		var lastProduce any
+		if ev, _, ts := produce.LastTerminal(pipeline.NewProject(s.DataDir, e.Name())); ev != "" {
+			lastProduce = gin.H{"event": ev, "ts": ts}
+		}
+		out = append(out, row{e.Name(), meta.Name, meta.Status, meta.CreatedAt, hasVideo == nil, lastProduce})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
 	c.JSON(200, out)
@@ -312,6 +320,10 @@ func (s *Server) projectView(c *gin.Context) {
 			topic = meta.Topic
 		}
 	}
+	var lastProduce any
+	if ev, _, ts := produce.LastTerminal(p); ev != "" {
+		lastProduce = gin.H{"event": ev, "ts": ts}
+	}
 	c.JSON(200, gin.H{
 		"id": id, "name": st.Name, "aspect": aspect, "topic": topic,
 		"gates": gin.H{
@@ -321,10 +333,10 @@ func (s *Server) projectView(c *gin.Context) {
 		"seg_count": st.SegCount, "total_hint": st.TotalHint,
 		"has_video": st.HasVideo, "producing": st.Producing,
 		"video_stale": gin.H{ // 成片生成后上游又改过 → 前端页签黄灯 + 重做入口
-			"manuscript": st.HasVideo && st.VideoAt.Before(st.ManuscriptAt),
-			"storyboard": st.HasVideo && st.VideoAt.Before(st.StoryboardAt),
-			"style":      st.HasVideo && st.VideoAt.Before(st.StyleAt),
+			"manuscript": st.Stale.Manuscript, "storyboard": st.Stale.Storyboard, "style": st.Stale.Style,
 		},
+		// 最近一轮制作终态（与 agent 摘要同一事实源 produce.LastTerminal），前端标"上次制作失败"
+		"last_produce": lastProduce,
 	})
 }
 

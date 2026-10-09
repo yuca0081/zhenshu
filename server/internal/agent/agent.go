@@ -57,8 +57,15 @@ type State struct {
 	ManuscriptAt time.Time
 	StoryboardAt time.Time
 	StyleAt      time.Time
-	Producing    bool
-	// 最近一轮制作终态（manifest 里 produce/rework 的 done|error|cancelled）。
+	// 成片过期三轴（VideoAt 早于对应上游 mtime）：与 api 下发的 video_stale 是
+	// 同一事实。模型侧必须同样可见——只喂前端会让 agent 拿过期成片当最新递给用户。
+	Stale struct {
+		Manuscript bool `json:"manuscript"`
+		Storyboard bool `json:"storyboard"`
+		Style      bool `json:"style"`
+	}
+	Producing bool
+	// 最近一轮制作终态（manifest 里 produce/rework 的终态，含 interrupted）。
 	// 不注入它，agent 会拿失败前渲染的旧成片把失败轮幻觉成「已完成」。
 	LastEvent  string
 	LastDetail string
@@ -101,7 +108,12 @@ func (a *Agent) State(id string) State {
 			st.StyleAt = info.ModTime()
 		}
 	}
-	if ev, detail, ts := lastProduceResult(p); ev != "" {
+	if st.HasVideo {
+		st.Stale.Manuscript = st.VideoAt.Before(st.ManuscriptAt)
+		st.Stale.Storyboard = st.VideoAt.Before(st.StoryboardAt)
+		st.Stale.Style = st.VideoAt.Before(st.StyleAt)
+	}
+	if ev, detail, ts := produce.LastTerminal(p); ev != "" {
 		st.LastEvent, st.LastDetail = ev, detail
 		st.LastAt, _ = time.Parse(time.RFC3339, ts)
 	}
@@ -140,19 +152,30 @@ func (s State) summary() string {
 		add(false, "风格样张")
 	}
 	// 最近一轮制作终态不看 HasVideo：首做失败没有旧成片，藏了它模型就看着
-	// 三门全✓把失败轮幻觉成「制作还在后台跑」，永远不再开工。
-	if s.LastEvent != "" && strings.HasSuffix(s.LastEvent, ".error") {
+	// 三门全✓把失败轮幻觉成「制作还在后台跑」，永远不再开工。中断/取消同理——
+	// 终态一律无条件汇报，靠消费方自行取舍必漏。
+	failed := strings.HasSuffix(s.LastEvent, ".error")
+	interrupted := strings.HasSuffix(s.LastEvent, ".interrupted")
+	cancelled := strings.HasSuffix(s.LastEvent, ".cancelled")
+	switch {
+	case failed:
 		lines = append(lines, fmt.Sprintf("✗ 最近一轮制作失败（%s）：%s", s.LastAt.Format("15:04"), pipeline.FirstLine(s.LastDetail, 140)))
 		if s.HasVideo {
 			lines = append(lines, "⚠ 舞台上若能播成片，那是失败前的旧版（不要当成本轮结果）")
 		} else {
 			lines = append(lines, "⚠ 成片从未出过，制作现在也没在跑。用户说「继续/修复」就调 start_production 重新开工（检查修复轮会在制作里自动跑）")
 		}
-	} else if s.LastEvent != "" && strings.HasSuffix(s.LastEvent, ".cancelled") {
+	case interrupted:
+		lines = append(lines, fmt.Sprintf("⏹ 上次制作因服务重启中断（%s），产物已保留。用户要继续就调 start_production，做完的段自动复用", s.LastAt.Format("15:04")))
+	case cancelled:
 		lines = append(lines, fmt.Sprintf("⏹ 最近一轮制作被取消（%s）", s.LastAt.Format("15:04")))
 	}
-	if s.HasVideo && !strings.HasSuffix(s.LastEvent, ".error") && !strings.HasSuffix(s.LastEvent, ".cancelled") {
-		lines = append(lines, "✓ 成片已就绪")
+	if s.HasVideo {
+		if axes := staleAxes(s); len(axes) > 0 {
+			lines = append(lines, fmt.Sprintf("⚠ 成片是旧版（出片后改过 %s），重新制作才套用新内容", strings.Join(axes, "、")))
+		} else if !failed && !interrupted && !cancelled {
+			lines = append(lines, "✓ 成片已就绪")
+		}
 	}
 	if s.Producing {
 		lines = append(lines, "⏳ 制作管线运行中（成片/失败都会自动汇报到对话）")
@@ -160,29 +183,39 @@ func (s State) summary() string {
 	return strings.Join(lines, "\n")
 }
 
-// lastProduceResult 读 manifest 最近一条制作终态事件（produce/rework 的 done|error|cancelled）。
-// 事件名与 produce 包共协议（produce.Event* 常量），不再手写魔法字符串。
-func lastProduceResult(p *pipeline.Project) (event, detail, ts string) {
-	b, err := os.ReadFile(p.Artifact("manifest.jsonl"))
-	if err != nil {
-		return "", "", ""
+// staleAxes 成片过期的轴（中文名，空 = 未过期）。摘要与工具门禁共用同一判别，
+// 不许各写一套——这正是防失败机制要收敛的那类漂移。
+func staleAxes(s State) []string {
+	var axes []string
+	if s.Stale.Manuscript {
+		axes = append(axes, "文稿")
 	}
-	for _, line := range strings.Split(string(b), "\n") {
-		var e struct {
-			Event  string `json:"event"`
-			Detail string `json:"detail"`
-			TS     string `json:"ts"`
-		}
-		if json.Unmarshal([]byte(line), &e) != nil {
-			continue
-		}
-		switch e.Event {
-		case produce.EventProduceDone, produce.EventProduceError, produce.EventProduceCancelled,
-			produce.EventReworkDone, produce.EventReworkError, produce.EventReworkCancelled:
-			event, detail, ts = e.Event, e.Detail, e.TS
-		}
+	if s.Stale.Storyboard {
+		axes = append(axes, "分镜")
 	}
-	return event, detail, ts
+	if s.Stale.Style {
+		axes = append(axes, "风格")
+	}
+	return axes
+}
+
+// lastFailedOrInterrupted 最近一轮制作以失败或服务重启中断告终（整片重做的合法理由）。
+func lastFailedOrInterrupted(s State) bool {
+	return strings.HasSuffix(s.LastEvent, ".error") || strings.HasSuffix(s.LastEvent, ".interrupted")
+}
+
+// videoFresh 成片就绪且为最新（无过期轴、无失败/中断终态）——此时整片重做挡回
+// rework；旧版/失败/中断后 start_production 放行（与舞台「按最新内容重做」同权）。
+func videoFresh(s State) bool {
+	return s.HasVideo && len(staleAxes(s)) == 0 && !lastFailedOrInterrupted(s)
+}
+
+// reworkStaleNote 文稿/分镜过期时 rework 结果语必须带上的边界说明（只重画不重配）。
+func reworkStaleNote(s State) string {
+	if !s.HasVideo || (!s.Stale.Manuscript && !s.Stale.Storyboard) {
+		return ""
+	}
+	return "。注意：文稿/分镜在出片后改过——换旁白/换内容要整片重做（start_production），rework 只重画不重配"
 }
 
 // selectedStyle 建项目时选定的风格库条目（project.json style_id，旧字段 stylepack_id 兜底）。
@@ -395,8 +428,8 @@ func (a *Agent) systemPrompt(id string, s State) string {
 %s
 
 工作准则：
-- 上面这份状态是唯一事实：状态说成片就绪就是已就绪，直接给下载地址 /api/projects/%s/video/main.mp4；不确定就先 read_project 核对，禁止按聊天历史想象状态。
-- 三前置硬门：文稿、分镜、风格样张（用户确认）——齐了才能 start_production，代码强制，别硬闯；缺哪项就引导用户补齐——文稿直接粘进对话由你 save_manuscript 存下，分镜/风格点对话栏上方的同名标签，成片就绪后不再 start_production。
+- 上面这份状态是唯一事实，说话前先对照它：「成片已就绪」才给下载地址 /api/projects/%s/video/main.mp4；状态说「旧版/失败/中断/未出过」就按它说，制作没在跑（无 ⏳ 行）就绝不说「在跑/渲染中」；不确定先 read_project 核对，禁止按聊天历史想象状态。
+- 三前置硬门：文稿、分镜、风格样张（用户确认）——齐了才能 start_production，代码强制，别硬闯；缺哪项就引导用户补齐——文稿直接粘进对话由你 save_manuscript 存下，分镜/风格点对话栏上方的同名标签。成片就绪且未过期时不再 start_production；成片过期（「成片是旧版」）或上次失败/中断后用户要重做，就调 start_production 整片重来。
 - 换风格/调样张：调 draft_style_samples 并把用户要求原样放进 instruction，样张没重新生成就不能说「已出新样张」——没做工具调用就当没做。
 - 成片就绪后：改某段画面用 rework（整段重生成画面、音频不动）；用户带 📎 段/元素引用的消息几乎都是 rework 意图。元素引用指名了改哪个元素，rework 的 instruction 里点名它（人话名，必要时带元素 id 与时刻）。要精确定位段与元素先 list_segments。换配音音色用 set_voice（空参列音色，设置后自动整片重制）。出片后主动 extract_stylepack 沉淀风格（一次就够，已提炼过不必重复）。
 - 默认自主连贯：能做的直接做（出分镜→出样张→自检一路做下去），到用户门（风格确认）停下说清楚等什么。
@@ -610,7 +643,13 @@ func (a *Agent) history(projectID string, n int) []openai.ChatCompletionMessage 
 	}
 	var hist []openai.ChatCompletionMessage
 	for _, m := range msgs {
-		if m.Type != "text" || m.Role == "system" {
+		if m.Role == "system" {
+			continue
+		}
+		// error 类型放行 agent 的失败/中断通告：它是对话里发生过的事实，被滤掉
+		// 模型就对自己报过的失败失忆（状态摘要是唯一感知腿，断一条即全盲）。
+		// tool_call 仍排除——工具每轮按实时状态重新门禁执行，旧结果只会误导。
+		if m.Type != "text" && !(m.Role == "agent" && m.Type == "error") {
 			continue
 		}
 		role := openai.ChatMessageRoleUser

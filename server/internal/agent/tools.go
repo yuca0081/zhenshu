@@ -239,6 +239,23 @@ var tools = []tool{
 				r = append(r, "分镜：缺")
 			}
 			r = append(r, fmt.Sprintf("风格：%s", map[bool]string{true: "已确认", false: "未确认"}[s.StyleConfirmed]))
+			// 成片新旧与最近制作终态也报：自检是模型的开工前盘点，漏了这两样
+			// 就会在过期/失败现场做出「成片已就绪」的错误结论
+			if s.HasVideo {
+				if axes := staleAxes(s); len(axes) > 0 {
+					r = append(r, "成片：旧版（"+strings.Join(axes, "、")+"过期）")
+				} else {
+					r = append(r, "成片：最新")
+				}
+			}
+			switch {
+			case strings.HasSuffix(s.LastEvent, ".error"):
+				r = append(r, fmt.Sprintf("最近制作：%s 失败", s.LastAt.Format("15:04")))
+			case strings.HasSuffix(s.LastEvent, ".interrupted"):
+				r = append(r, fmt.Sprintf("最近制作：%s 被服务重启中断", s.LastAt.Format("15:04")))
+			case strings.HasSuffix(s.LastEvent, ".cancelled"):
+				r = append(r, fmt.Sprintf("最近制作：%s 被取消", s.LastAt.Format("15:04")))
+			}
 			if s.HasManuscript && s.HasStoryboard && s.StyleConfirmed {
 				r = append(r, "结论：三前置齐备，可以开工")
 			} else {
@@ -248,7 +265,7 @@ var tools = []tool{
 		},
 	},
 	{
-		def: toolDef("start_production", "启动制作管线（TTS→画面→检查→渲染，全程自动，进度实时播报）", nil),
+		def: toolDef("start_production", "启动制作管线（TTS→画面→检查→渲染，全程自动，进度实时播报）。成片过期或上次失败/中断后的整片重做也走这里", nil),
 		gate: func(s State) string {
 			var missing []string
 			if !s.HasManuscript {
@@ -263,9 +280,10 @@ var tools = []tool{
 			if s.Producing {
 				return "制作已在运行中"
 			}
-			if s.HasVideo {
-				return "成片已就绪，无需重新制作（要改画面/重做某段用 rework；要下载地址用 export）"
+			if s.HasVideo && videoFresh(s) {
+				return "成片已就绪且为最新，无需重新制作（要改画面/重做某段用 rework；要下载地址用 export）"
 			}
+			// 成片旧版/上次失败·中断：整片重做合法（与舞台「按最新内容重做」按钮同权），放行
 			if len(missing) > 0 {
 				return "前置未齐（缺 " + strings.Join(missing, "、") + "）。补齐路径，向用户说明：文稿——点「文稿」标签粘贴保存，或把文稿直接发进对话由你调 save_manuscript 存下；分镜——你调用 draft_storyboard 生成；风格——点「风格」标签选库内风格（选定后你调 draft_style_samples 出样张）或描述方向出样张"
 			}
@@ -347,7 +365,10 @@ var tools = []tool{
 				return "制作/重做已在运行中"
 			}
 			a.Emit(p.ID, "stage", "pipeline", "rework")
-			return fmt.Sprintf("段级重做已启动（%s）：只重生成目标段画面 → 检查 → 整片重渲，进度随时报", strings.Join(labels, "、"))
+			msg := fmt.Sprintf("段级重做已启动（%s）：只重生成目标段画面 → 检查 → 整片重渲，进度随时报", strings.Join(labels, "、"))
+			// 旁白真源已变时必须点名 rework 的边界：它只重画不重配，别让用户
+			// 以为改了文稿再 rework 就能换旁白
+			return msg + reworkStaleNote(a.State(p.ID))
 		},
 	},
 	{
@@ -735,7 +756,20 @@ var tools = []tool{
 			return ""
 		},
 		run: func(a *Agent, p *pipeline.Project, _ string) string {
-			return "成片下载地址：/api/projects/" + p.ID + "/video/main.mp4（1080p，含旁白与逐词字幕）"
+			st := a.State(p.ID)
+			addr := "成片下载地址：/api/projects/" + p.ID + "/video/main.mp4（1080p，含旁白与逐词字幕）"
+			// 地址照给，版本事实必须说：旧版/失败前旧片不许包装成最新成果递出去
+			var notes []string
+			if axes := staleAxes(st); len(axes) > 0 {
+				notes = append(notes, fmt.Sprintf("成片是旧版（出片后改过 %s），要最新版先重新制作", strings.Join(axes, "、")))
+			}
+			if strings.HasSuffix(st.LastEvent, ".error") {
+				notes = append(notes, "上次制作失败，这是失败前的旧片")
+			}
+			if len(notes) > 0 {
+				return "注意：" + strings.Join(notes, "；") + "。" + addr
+			}
+			return addr
 		},
 	},
 }

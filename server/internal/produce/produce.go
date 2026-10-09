@@ -48,18 +48,55 @@ type Runner struct {
 	stopping atomic.Bool    // 停机中：取消语义从「用户取消」改「服务停机中断」，并拒绝新任务
 }
 
-// manifest 制作事件协议（跨包契约：本包写、Reconcile 启动对账扫、agent.lastProduceResult
-// 读——此前三处各写魔法字符串，改名一处即静默破坏对账与终态汇报，收敛为唯一来源）。
+// manifest 制作事件协议（跨包契约：本包写、Reconcile 启动对账扫、agent 状态摘要与
+// api last_produce 读——此前多处各写魔法字符串，改名一处即静默破坏对账与终态汇报，
+// 收敛为唯一来源；终态判别走 terminalEvent，新增终态必须在此登记）。
 const (
-	EventProduceStart     = "produce.start"
-	EventProduceDone      = "produce.done"
-	EventProduceError     = "produce.error"
-	EventProduceCancelled = "produce.cancelled"
-	EventReworkStart      = "rework.start"
-	EventReworkDone       = "rework.done"
-	EventReworkError      = "rework.error"
-	EventReworkCancelled  = "rework.cancelled"
+	EventProduceStart       = "produce.start"
+	EventProduceDone        = "produce.done"
+	EventProduceError       = "produce.error"
+	EventProduceCancelled   = "produce.cancelled"
+	EventProduceInterrupted = "produce.interrupted"
+	EventReworkStart        = "rework.start"
+	EventReworkDone         = "rework.done"
+	EventReworkError        = "rework.error"
+	EventReworkCancelled    = "rework.cancelled"
+	EventReworkInterrupted  = "rework.interrupted"
 )
+
+// terminalEvent 该事件是否制作/重做终态。对账扫描、LastTerminal 共用同一判别，
+// 防止「写入的新终态读取方不认」再次造成悬挂。
+func terminalEvent(ev string) bool {
+	switch ev {
+	case EventProduceDone, EventProduceError, EventProduceCancelled, EventProduceInterrupted,
+		EventReworkDone, EventReworkError, EventReworkCancelled, EventReworkInterrupted:
+		return true
+	}
+	return false
+}
+
+// LastTerminal 读 manifest 最近一条制作/重做终态（done/error/cancelled/interrupted）。
+// 磁盘审计口径的唯一读取点：agent 状态摘要、api last_produce 共用，不再各写一套扫描。
+func LastTerminal(p *pipeline.Project) (event, detail, ts string) {
+	b, err := os.ReadFile(p.Artifact("manifest.jsonl"))
+	if err != nil {
+		return "", "", ""
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		var e struct {
+			Event  string `json:"event"`
+			Detail string `json:"detail"`
+			TS     string `json:"ts"`
+		}
+		if json.Unmarshal([]byte(line), &e) != nil {
+			continue
+		}
+		if terminalEvent(e.Event) {
+			event, detail, ts = e.Event, e.Detail, e.TS
+		}
+	}
+	return event, detail, ts
+}
 
 var (
 	mu      sync.Mutex
@@ -199,31 +236,43 @@ type jobTail struct {
 	stopDetail     string // 服务停机中断时给用户看的话
 }
 
-// finishJob 制作/重做 goroutine 的终态收尾（共用）：emit 事件、manifest 记账、
-// render_jobs 终态回写、聊天汇报（OnDone）。err == nil（成功）时不动——成功路径
-// 两边形态差异大，由调用方各自处理。
+// finishJob 制作/重做 goroutine 的终态收尾（共用）：manifest 记账、render_jobs 终态
+// 回写、emit 事件、聊天汇报（OnDone）。err == nil（成功）时不动——成功路径两边形态
+// 差异大，由调用方各自处理。
+// 顺序铁律：终态落盘先行，广播/聊天在后——账本是 Reconcile 与 agent 状态摘要的
+// 唯一依据，下游展示出乱子（panic/断连）不许拖累它；OnDone 曾无 recover，panic
+// 会带崩整个进程并把已写一半的终态变成悬挂 start。
 func (r *Runner) finishJob(p *pipeline.Project, projectID string, err error, t jobTail) {
 	if err == nil {
 		return
+	}
+	swallow := func(what string) func() {
+		return func() {
+			if rec := recover(); rec != nil {
+				log.Printf("[produce] %s panic（已吞，不影响已落盘终态）: %v\n", what, rec)
+			}
+		}
 	}
 	if errors.Is(err, context.Canceled) {
 		detail := t.cancelDetail
 		if r.stopping.Load() {
 			detail = t.stopDetail
 		}
-		r.emit(projectID, "stage", "pipeline", "cancelled")
-		r.emit(projectID, "cancelled", "", detail)
 		r.Manifest(p, t.evCancelled, t.manifestPrefix+detail)
 		r.jobTerminal(projectID, "cancelled", "", detail)
+		defer swallow("取消收尾")()
+		r.emit(projectID, "stage", "pipeline", "cancelled")
+		r.emit(projectID, "cancelled", "", detail)
 		if r.OnDone != nil {
 			r.OnDone(projectID, "cancelled", detail)
 		}
 		return
 	}
-	r.emit(projectID, "stage", "pipeline", "error: "+err.Error())
-	r.emit(projectID, "error", "", err.Error())
 	r.Manifest(p, t.evError, t.manifestPrefix+err.Error())
 	r.jobTerminal(projectID, "failed", "", err.Error())
+	defer swallow("失败收尾")()
+	r.emit(projectID, "stage", "pipeline", "error: "+err.Error())
+	r.emit(projectID, "error", "", err.Error())
 	if r.OnDone != nil {
 		r.OnDone(projectID, "failed", err.Error())
 	}
@@ -397,11 +446,10 @@ func (r *Runner) Reconcile() {
 			if json.Unmarshal([]byte(line), &ev) != nil || ev.Event == "" {
 				continue
 			}
-			switch ev.Event {
-			case EventProduceStart, EventReworkStart:
+			switch {
+			case ev.Event == EventProduceStart || ev.Event == EventReworkStart:
 				started = ev.Event
-			case EventProduceDone, EventProduceError, EventProduceCancelled,
-				EventReworkDone, EventReworkError, EventReworkCancelled:
+			case terminalEvent(ev.Event):
 				started = ""
 			}
 		}
@@ -414,11 +462,12 @@ func (r *Runner) Reconcile() {
 			what = "重做"
 		}
 		detail := fmt.Sprintf("上次服务重启时%s中断（产物已保留，重新开工即按段复用）", what)
-		// 中断补写的终态与被中断的任务同族（rework 中断写 rework.error），
-		// agent 侧两种终态都认，但审计口径必须自洽
-		ev := EventProduceError
+		// 中断补写专用终态（不与真失败混用 *.error）：agent 摘要/聊天话术说「中断」，
+		// 用户不必以为画面出了问题；本轮 detail 文案保留供审计。幂等：上方扫描已把
+		// interrupted 记为终态，重复启动不会二次补写。
+		ev := EventProduceInterrupted
 		if isRework {
-			ev = EventReworkError
+			ev = EventReworkInterrupted
 		}
 		r.Manifest(p, ev, detail)
 		r.jobTerminal(id, "failed", "", detail)

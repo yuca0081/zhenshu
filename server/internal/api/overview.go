@@ -93,8 +93,8 @@ func scanManifest(b []byte) (stages map[string]string, run *lastRun, durations m
 			inRun = true
 			clear(open)
 			clear(durations) // 每轮重开：durations 恒指最近一轮
-		case ev.Event == produce.EventProduceDone, ev.Event == produce.EventProduceError, ev.Event == produce.EventProduceCancelled,
-			ev.Event == produce.EventReworkDone, ev.Event == produce.EventReworkError, ev.Event == produce.EventReworkCancelled:
+		case ev.Event == produce.EventProduceDone, ev.Event == produce.EventProduceError, ev.Event == produce.EventProduceCancelled, ev.Event == produce.EventProduceInterrupted,
+			ev.Event == produce.EventReworkDone, ev.Event == produce.EventReworkError, ev.Event == produce.EventReworkCancelled, ev.Event == produce.EventReworkInterrupted:
 			term = &mark{i, ev}
 			inRun = false
 		}

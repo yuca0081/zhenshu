@@ -77,23 +77,29 @@ func (p *Project) LoadStoryboard() (*contract.Storyboard, error) {
 	return &sb, nil
 }
 
-// Manifest 每步事件落盘（审计与重放依据）。写失败打 stderr——manifest 是 Reconcile
-// 启动对账与 agent 终态汇报的唯一依据，静默失明比失败更危险。
+// Manifest 每步事件落盘（审计与重放依据）。manifest 是 Reconcile 启动对账与 agent
+// 终态汇报的唯一依据，终态一行丢失=对账全盲，写失败重试一次再放弃（仍只打 stderr
+// 不上抛——记账失败不该挡制作主链路）。
 func (p *Project) Manifest(event, detail string) {
 	f := p.Artifact("manifest.jsonl")
 	line, _ := json.Marshal(map[string]any{
 		"ts": time.Now().Format(time.RFC3339), "event": event, "detail": detail,
 	})
+	line = append(line, '\n')
 	p.manifestMu.Lock()
 	defer p.manifestMu.Unlock()
-	fh, err := os.OpenFile(f, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[manifest] 打开失败 %s: %v\n", f, err)
-		return
-	}
-	defer fh.Close()
-	if _, err := fh.Write(append(line, '\n')); err != nil {
-		fmt.Fprintf(os.Stderr, "[manifest] 写入失败 %s: %v\n", f, err)
+	for attempt := 0; attempt < 2; attempt++ {
+		fh, err := os.OpenFile(f, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[manifest] 打开失败 %s: %v\n", f, err)
+			continue
+		}
+		_, werr := fh.Write(line)
+		_ = fh.Close()
+		if werr == nil {
+			return
+		}
+		fmt.Fprintf(os.Stderr, "[manifest] 写入失败 %s: %v\n", f, werr)
 	}
 }
 

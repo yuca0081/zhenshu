@@ -57,3 +57,71 @@ func TestSummaryCleanVideoReady(t *testing.T) {
 		t.Fatalf("summary 不应有失败行：\n%s", sum)
 	}
 }
+
+// ── 全警报矩阵：每条异常事实都必须有出口，负断言钉住"不虚报" ──────────
+
+// 成片过期（改稿后未重做）：必须说旧版并点名过期轴，不许再说"已就绪"。
+func TestSummaryStaleVideo(t *testing.T) {
+	s := State{
+		HasManuscript: true, HasStoryboard: true, HasStyle: true, StyleConfirmed: true,
+		HasVideo: true,
+	}
+	s.Stale.Manuscript = true
+	s.Stale.Style = true
+	sum := s.summary()
+	if !strings.Contains(sum, "成片是旧版") || !strings.Contains(sum, "文稿") || !strings.Contains(sum, "风格") {
+		t.Fatalf("summary 缺旧版事实：\n%s", sum)
+	}
+	if strings.Contains(sum, "成片已就绪") {
+		t.Fatalf("过期成片不该说已就绪：\n%s", sum)
+	}
+}
+
+// 服务重启中断（首做，无旧片）：必须可见且给出继续动作。
+func TestSummaryInterruptedNoVideo(t *testing.T) {
+	s := State{
+		HasManuscript: true, HasStoryboard: true, HasStyle: true, StyleConfirmed: true,
+		LastEvent: produce.EventProduceInterrupted, LastDetail: "上次服务重启时制作中断",
+		LastAt: time.Date(2026, 10, 9, 20, 0, 0, 0, time.Local),
+	}
+	sum := s.summary()
+	if !strings.Contains(sum, "服务重启中断") || !strings.Contains(sum, "start_production") {
+		t.Fatalf("summary 缺中断事实/继续动作：\n%s", sum)
+	}
+}
+
+// 取消 + 旧成片仍在：报取消，不说"已就绪"（旧片不是本轮结果）。
+func TestSummaryCancelledWithOldVideo(t *testing.T) {
+	s := State{
+		HasManuscript: true, HasStoryboard: true, HasStyle: true, StyleConfirmed: true,
+		HasVideo: true, LastEvent: produce.EventProduceCancelled,
+	}
+	sum := s.summary()
+	if !strings.Contains(sum, "被取消") {
+		t.Fatalf("summary 缺取消行：\n%s", sum)
+	}
+	if strings.Contains(sum, "成片已就绪") {
+		t.Fatalf("取消后不该说成片已就绪：\n%s", sum)
+	}
+}
+
+// 制作运行中：⏳ 行必须出现（这是"制作在跑"唯一合法依据）。
+func TestSummaryProducing(t *testing.T) {
+	s := State{HasManuscript: true, HasStoryboard: true, HasStyle: true, StyleConfirmed: true, Producing: true}
+	if sum := s.summary(); !strings.Contains(sum, "制作管线运行中") {
+		t.Fatalf("summary 缺运行中行：\n%s", sum)
+	}
+}
+
+// 失败 + 过期叠加：失败行与旧版行必须同时在。
+func TestSummaryFailureAndStale(t *testing.T) {
+	s := State{
+		HasManuscript: true, HasStoryboard: true, HasStyle: true, StyleConfirmed: true,
+		HasVideo: true, LastEvent: produce.EventReworkError, LastDetail: "✗ boom",
+	}
+	s.Stale.Storyboard = true
+	sum := s.summary()
+	if !strings.Contains(sum, "最近一轮制作失败") || !strings.Contains(sum, "成片是旧版") {
+		t.Fatalf("summary 失败/旧版事实不全：\n%s", sum)
+	}
+}
