@@ -790,8 +790,11 @@ func (r *Runner) sceneReplayCheck(ctx context.Context, p *pipeline.Project) erro
 	frames := make([][]string, 2)
 	snap := func(atArg, dir string) ([]string, error) {
 		_ = os.RemoveAll(p.Artifact(dir))
+		// --no-browser-gpu 强制 SwiftShader：渲染器 auto-detect 会在硬件 GPU 与
+		// 软件光栅间掷硬币（GPU 初始化抖动即回退），两轮各拿一种渲染器时纹理层
+		// 差异高达 42% 像素——确定性探针必须自己先确定（2026-10-09 seg07 事故）。
 		out, err := pipeline.RunCLI(p, "npx", "hyperframes@0.8.55", "snapshot", ".",
-			"--at", atArg, "--no-end", "-o", dir)
+			"--at", atArg, "--no-end", "--no-browser-gpu", "-o", dir)
 		if err != nil {
 			return nil, fmt.Errorf("scene 回放 snapshot 失败: %s", pipeline.TailLines(out, 8))
 		}
@@ -807,7 +810,8 @@ func (r *Runner) sceneReplayCheck(ctx context.Context, p *pipeline.Project) erro
 		}
 		return names, nil
 	}
-	// 逐帧比对（带 LSB 容差）：返回未过容差的帧名与按段去重的报错行。
+	// 逐帧比对（带 LSB 容差 + 感知二级判据）：返回未过容差的帧名与按段去重的报错行。
+	textureFrames := 0
 	diffRounds := func(dir1, dir2 string, names []string) (badFrames, msgs []string, err error) {
 		seen := map[string]bool{}
 		for _, name := range names {
@@ -818,6 +822,18 @@ func (r *Runner) sceneReplayCheck(ctx context.Context, p *pipeline.Project) erro
 				return nil, nil, derr
 			}
 			if maxD <= replayMaxChannelDiff && (tot == 0 || float64(nD) <= replayDiffRatioMax*float64(tot)) {
+				continue
+			}
+			// 逐像素超差 → 感知二级判据：纹理相位抖动（噪点/混合层/缩放画布的
+			// LSB 级绘制路径差）整块放行，位置/配色/元素有无级真差异仍拦
+			bm, bp, perr := pngDiffPerceptual(
+				filepath.Join(p.Artifact(dir1), name),
+				filepath.Join(p.Artifact(dir2), name))
+			if perr != nil {
+				return nil, nil, perr
+			}
+			if bm <= perceptualMeanMax && bp <= perceptualPixMax {
+				textureFrames++
 				continue
 			}
 			segID := ""
@@ -831,7 +847,10 @@ func (r *Runner) sceneReplayCheck(ctx context.Context, p *pipeline.Project) erro
 			}
 			seen[segID] = true
 			badFrames = append(badFrames, name)
-			msgs = append(msgs, fmt.Sprintf("✗ %s: scene 确定性回放未过（%s 两次截图像素不一致：max差=%d、差异像素 %d/%d——code 藏了非确定性：只用注入的 rng，运动必须写成 t 的函数，禁任何自管时间/真随机路径）", segID, name, maxD, nD, tot))
+			msgs = append(msgs, fmt.Sprintf("✗ %s: scene 确定性回放未过（%s 两轮差异超感知容差：块均差 %.1f、块内峰值 %.1f——code 藏了非确定性：只用注入的 rng，运动必须写成 t 的函数，禁任何自管时间/真随机路径）", segID, name, bm, bp))
+		}
+		if len(badFrames) == 0 && textureFrames > 0 {
+			r.Manifest(p, "check.replay_texture", fmt.Sprintf("%d 帧逐像素超差但感知比对通过（纹理相位抖动，非代码非确定）", textureFrames))
 		}
 		return badFrames, msgs, nil
 	}
@@ -895,7 +914,7 @@ var reSnapAt = regexp.MustCompile(`at-([\d.]+)s\.png$`)
 
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
 
-// 回放比对容差：加色混合下 GPU 光栅化存在 LSB 级抖动（实测 900 粒子 scene：
+// 回放比对容差：加色混合下光栅化存在 LSB 级抖动（实测 900 粒子 scene：
 // 两轮 16/2073600 像素差 1/255；拉普拉斯妖 seg38：1/2073600 像素差 8/255——
 // alpha 临界值上抗锯齿覆盖判断翻转，非逻辑非确定）。大字号文字跨浏览器会话
 // 抖动更大（实测 96px 标题带：1394/2073600=0.067% 像素差 1/255，同内容重测
@@ -905,6 +924,81 @@ const (
 	replayMaxChannelDiff = 8    // 任一像素通道差超此值 = 硬失败（实测 GPU 噪声上限内）
 	replayDiffRatioMax   = 2e-3 // 差异像素占比超此值 = 疑似失败（≈0.2%，实测文字抖动 0.067% 的 3 倍余量），进确认重测
 )
+
+// 感知二级判据：纹理类合规场景（噪点颗粒/混合模式扫描线/锥形渐变/被缩放的画布）
+// 即使固定渲染器也存在绘制路径级的 LSB 相位抖动（2026-10-09 seg07 实测：强制
+// SwiftShader 双会话 69 帧中 3 帧块均差 ≤4.3、块内峰值 ≤16；auto-detect 下渲染器
+// 掷硬币可把差异放大到 45% 像素/通道差 16——已用 --no-browser-gpu 根除）。逐像素
+// 等值判据对这类抖动必然误杀。8×8 盒滤波降采样把独立噪声平均掉：位置/配色/
+// 元素有无级的结构差异（LLM 作弊的实际形态）在块统计里保留，纹理相位差抹平。
+const (
+	perceptualBlock   = 8    // 盒滤波边长（px）
+	perceptualStep    = 2    // 块内抽样步长（均值口径足够）
+	perceptualMeanMax = 8.0  // 块均差上限（0-255；实测合规最坏 4.3，1.9 倍裕量）
+	perceptualPixMax  = 32.0 // 块内单像素差上限（实测合规最坏 16，2 倍裕量）
+)
+
+// pngDiffPerceptual 感知比对：两帧各做 8×8 盒滤波降采样后逐块比较，
+// 返回（最坏块均差, 最坏块内单像素差, err），0-255 口径。
+func pngDiffPerceptual(pathA, pathB string) (blockMean, blockMax float64, err error) {
+	fa, err := os.Open(pathA)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer fa.Close()
+	ia, err := png.Decode(fa)
+	if err != nil {
+		return 0, 0, err
+	}
+	fb, err := os.Open(pathB)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer fb.Close()
+	ib, err := png.Decode(fb)
+	if err != nil {
+		return 0, 0, err
+	}
+	if ia.Bounds() != ib.Bounds() {
+		return 1e9, 1e9, nil // 与 pngDiffStats 同口径：尺寸不一致按最严重处理
+	}
+	b := ia.Bounds()
+	abs := func(a, c uint8) float64 {
+		if a > c {
+			return float64(a - c)
+		}
+		return float64(c - a)
+	}
+	for by := b.Min.Y; by < b.Max.Y; by += perceptualBlock {
+		for bx := b.Min.X; bx < b.Max.X; bx += perceptualBlock {
+			var sum float64
+			n := 0
+			blockPeak := 0.0
+			for y := by; y < by+perceptualBlock && y < b.Max.Y; y += perceptualStep {
+				for x := bx; x < bx+perceptualBlock && x < b.Max.X; x += perceptualStep {
+					ar, ag, ab, _ := ia.At(x, y).RGBA()
+					br, bg, bb, _ := ib.At(x, y).RGBA()
+					d := (abs(uint8(ar>>8), uint8(br>>8)) + abs(uint8(ag>>8), uint8(bg>>8)) + abs(uint8(ab>>8), uint8(bb>>8))) / 3
+					sum += d
+					if d > blockPeak {
+						blockPeak = d
+					}
+					n++
+				}
+			}
+			if n == 0 {
+				continue
+			}
+			if m := sum / float64(n); m > blockMean {
+				blockMean = m
+			}
+			if blockPeak > blockMax {
+				blockMax = blockPeak
+			}
+		}
+	}
+	return blockMean, blockMax, nil
+}
 
 // pngDiffStats 解码两 PNG 逐像素比较 → (最大通道差, 差异像素数, 总像素)。
 func pngDiffStats(pathA, pathB string) (maxDiff, nDiff, total int, err error) {
