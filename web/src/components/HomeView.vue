@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { dateOf, statusLabel } from '../format'
+import { dateOf, lastProduceFailed, statusLabel } from '../format'
 import type { ProjectRow } from '../types'
 
 // 首页：品牌落地 + 快速开始（新建/继续最近项目/逛风格库）
@@ -36,8 +36,8 @@ const recent = computed(() => props.projects.slice(0, 6))
         <button v-for="p in recent" :key="p.id" class="proj" @click="emit('open', p.id)">
           <b>{{ p.name }}</b>
           <span class="meta">
-            <i :class="['st', p.status === 'video' ? 'done' : p.status === 'producing' ? 'run' : '']">
-              {{ statusLabel[p.status] ?? p.status }}
+            <i :class="['st', p.status === 'video' ? 'done' : p.status === 'producing' ? 'run' : '', { fail: lastProduceFailed(p) }]">
+              {{ statusLabel[p.status] ?? p.status }}{{ lastProduceFailed(p) ? ' · 上次制作失败' : '' }}
             </i>
             <em>{{ dateOf(p.created_at) }}</em>
           </span>
@@ -113,5 +113,6 @@ const recent = computed(() => props.projects.slice(0, 6))
 .meta i { font-style: normal; font-size: 11px; color: #8a8a96; }
 .meta i.done { color: #7ed491; }
 .meta i.run { color: #f0c674; }
+.meta i.fail { color: #ff7a7a; }
 .meta em { font-style: normal; font-size: 11px; color: #55555f; }
 </style>

@@ -12,3 +12,7 @@ export const statusDotCls: Record<string, string> = {
 
 // iso → "10/02"（首页卡片 / 侧栏短日期）
 export const dateOf = (iso: string) => (iso ?? '').slice(5, 10).replace('-', '/')
+
+// 上次制作是否以失败/中断告终（列表标红依据；重做成功后 last_produce 变 done 自然消失）
+export const lastProduceFailed = (p: { last_produce?: { event: string } | null }) =>
+  !!p.last_produce && (p.last_produce.event.endsWith('.error') || p.last_produce.event.endsWith('.interrupted'))

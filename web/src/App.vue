@@ -149,8 +149,21 @@ function openSSE(id: string) {
     refresh()
   })
   es.addEventListener('cancelled', () => { stageState.value = {}; progressLine.value = ''; refresh() })
-  es.addEventListener('error', () => refresh()) // SSE 层错误 → 全量刷新
+  // 制作失败同样清场：只 refresh 不清 stageState 的话，has_video=false + 残留阶段态
+  // 会让视频页签永远转圈显示「制作管线运行中」且没有停止按钮（假运行中）。
+  // 本监听也接 EventSource 原生连接错误——顺势清场属自愈，无害。
+  es.addEventListener('error', () => { stageState.value = {}; progressLine.value = ''; refresh() })
 }
+
+// 自愈兜底（覆盖 SSE 断连/丢事件/服务重启）：producing 一旦变 false 就清制作中的
+// 瞬时态并换代成片——磁盘事实（producing=false）永远压过前端内存态。
+watch(() => view.value?.producing, (now, was) => {
+  if (was && now === false) {
+    stageState.value = {}
+    progressLine.value = ''
+    videoRev.value++
+  }
+})
 
 watch(current, id => {
   if (id) { openSSE(id); refresh() }

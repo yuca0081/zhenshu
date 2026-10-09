@@ -4,6 +4,8 @@ export interface ProjectRow {
   status: string
   created_at: string
   has_video: boolean
+  // 最近一轮制作终态（后端与 agent 状态摘要同源）：error/interrupted 时列表标"上次制作失败"
+  last_produce?: { event: string; ts: string } | null
 }
 
 // 文稿（GET/PUT /manuscript；api.ts / App.vue / StagePanel 共用）
@@ -30,6 +32,8 @@ export interface ProjectView {
   producing: boolean
   // 成片生成后上游又改过（后端按文件 mtime 对比）：页签黄灯 + 重做整片入口
   video_stale: { manuscript: boolean; storyboard: boolean; style: boolean }
+  // 最近一轮制作终态（error/interrupted = 失败/中断，与列表 last_produce 同源）
+  last_produce?: { event: string; ts: string } | null
 }
 
 // 工作区中央页签（文稿/分镜/风格/视频四页占据中间区域）

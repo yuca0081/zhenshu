@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { NPopover, NScrollbar } from 'naive-ui'
-import { dateOf, statusDotCls, statusLabel } from '../format'
+import { dateOf, lastProduceFailed, statusDotCls, statusLabel } from '../format'
 import type { ProjectRow } from '../types'
 
 defineProps<{ projects: ProjectRow[]; current: string }>()
@@ -38,7 +38,7 @@ const statusOf = (s: string) => ({ label: statusLabel[s] ?? s, cls: statusDotCls
             <span v-if="!collapsed" class="info">
               <span class="nm">{{ p.name }}</span>
               <span class="sub">
-                <i class="st" :class="statusOf(p.status).cls" />{{ statusOf(p.status).label }}
+                <i class="st" :class="[statusOf(p.status).cls, { 's-fail': lastProduceFailed(p) }]" />{{ statusOf(p.status).label }}{{ lastProduceFailed(p) ? ' · 上次制作失败' : '' }}
                 <em>{{ dateOf(p.created_at) }}</em>
               </span>
             </span>
@@ -47,7 +47,7 @@ const statusOf = (s: string) => ({ label: statusLabel[s] ?? s, cls: statusDotCls
         </template>
         <div class="pop">
           <div class="pop-name">{{ p.name }}</div>
-          <div class="pop-meta">{{ statusOf(p.status).label }}{{ p.has_video ? ' · 可下载成片' : '' }}</div>
+          <div class="pop-meta">{{ statusOf(p.status).label }}{{ p.has_video ? ' · 可下载成片' : '' }}{{ lastProduceFailed(p) ? ' · 上次制作失败' : '' }}</div>
           <button class="pop-del" @click="emit('delete', p.id)">删除项目…</button>
         </div>
       </NPopover>
@@ -110,6 +110,7 @@ const statusOf = (s: string) => ({ label: statusLabel[s] ?? s, cls: statusDotCls
 .st.s-draft { background: #8fc7ff; }
 .st.s-run { background: #f0c674; animation: blink 1.2s infinite; }
 .st.s-done { background: #7ee2a8; }
+.st.s-fail { background: #ff7a7a; }
 @keyframes blink { 50% { opacity: .3; } }
 
 .pop { max-width: 220px; }
