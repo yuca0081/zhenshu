@@ -139,15 +139,20 @@ func (s State) summary() string {
 	} else {
 		add(false, "风格样张")
 	}
-	if s.HasVideo {
-		if s.LastEvent != "" && strings.HasSuffix(s.LastEvent, ".error") {
-			lines = append(lines, fmt.Sprintf("✗ 最近一轮制作失败（%s）：%s", s.LastAt.Format("15:04"), pipeline.FirstLine(s.LastDetail, 140)))
+	// 最近一轮制作终态不看 HasVideo：首做失败没有旧成片，藏了它模型就看着
+	// 三门全✓把失败轮幻觉成「制作还在后台跑」，永远不再开工。
+	if s.LastEvent != "" && strings.HasSuffix(s.LastEvent, ".error") {
+		lines = append(lines, fmt.Sprintf("✗ 最近一轮制作失败（%s）：%s", s.LastAt.Format("15:04"), pipeline.FirstLine(s.LastDetail, 140)))
+		if s.HasVideo {
 			lines = append(lines, "⚠ 舞台上若能播成片，那是失败前的旧版（不要当成本轮结果）")
-		} else if s.LastEvent != "" && strings.HasSuffix(s.LastEvent, ".cancelled") {
-			lines = append(lines, fmt.Sprintf("⏹ 最近一轮制作被取消（%s）", s.LastAt.Format("15:04")))
 		} else {
-			lines = append(lines, "✓ 成片已就绪")
+			lines = append(lines, "⚠ 成片从未出过，制作现在也没在跑。用户说「继续/修复」就调 start_production 重新开工（检查修复轮会在制作里自动跑）")
 		}
+	} else if s.LastEvent != "" && strings.HasSuffix(s.LastEvent, ".cancelled") {
+		lines = append(lines, fmt.Sprintf("⏹ 最近一轮制作被取消（%s）", s.LastAt.Format("15:04")))
+	}
+	if s.HasVideo && !strings.HasSuffix(s.LastEvent, ".error") && !strings.HasSuffix(s.LastEvent, ".cancelled") {
+		lines = append(lines, "✓ 成片已就绪")
 	}
 	if s.Producing {
 		lines = append(lines, "⏳ 制作管线运行中（成片/失败都会自动汇报到对话）")
