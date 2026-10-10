@@ -99,6 +99,35 @@ func joinLines(ls []string) string {
 	return s
 }
 
+// tailManifest 是 activity 接口（事件流面板）的数据口：坏行剔除、尾部截断、ms 字段透传。
+func TestTailManifest(t *testing.T) {
+	lines := []string{
+		`{"event":"produce.start","detail":"","ts":"2026-09-30T10:00:00+08:00","ms":1791000000000}`,
+		`not json`,
+		`{"event":"stage.start","detail":"tts","ts":"2026-09-30T10:00:05+08:00"}`, // 老条目：无 ms
+		``,
+	}
+	got := tailManifest([]byte(joinLines(lines)), 500)
+	if len(got) != 2 {
+		t.Fatalf("坏行/空行应剔除，得 %d 条: %+v", len(got), got)
+	}
+	if got[0].MS != 1791000000000 {
+		t.Fatalf("ms 字段应透传: %+v", got[0])
+	}
+	if got[1].MS != 0 || got[1].Event != "stage.start" {
+		t.Fatalf("老条目 ms 缺省、事件保留: %+v", got[1])
+	}
+	// 尾部截断：只要最后 1 条
+	got = tailManifest([]byte(joinLines(lines)), 1)
+	if len(got) != 1 || got[0].Event != "stage.start" {
+		t.Fatalf("应只留尾部 1 条 stage.start: %+v", got)
+	}
+	// 空 manifest（新建项目没开过工）：空切片而非 nil（JSON 必须 [] 不能 null）
+	if got := tailManifest(nil, 500); got == nil || len(got) != 0 {
+		t.Fatalf("空输入应为空切片: %+v", got)
+	}
+}
+
 func TestScanArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	p := pipeline.NewProject(dir, "p1")

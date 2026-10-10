@@ -23,6 +23,7 @@ import (
 
 type manifestEvent struct {
 	TS     string `json:"ts"`
+	MS     int64  `json:"ms,omitempty"` // unix 毫秒（前端算每步用时；老条目缺省时按 ts 兜底解析）
 	Event  string `json:"event"`
 	Detail string `json:"detail,omitempty"`
 }
@@ -224,6 +225,41 @@ func scanArtifacts(p *pipeline.Project) []artifactEntry {
 		}
 	}
 	return out
+}
+
+// tailManifest manifest 尾部 n 条（坏行剔除，时间正序）。activity 接口与
+// scanManifest 的 tail 各取所需：前者给事件流面板 500 条全量回放，后者只要 20 条。
+func tailManifest(b []byte, n int) []manifestEvent {
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	out := make([]manifestEvent, 0, len(lines))
+	for _, line := range lines {
+		var e manifestEvent
+		if json.Unmarshal([]byte(line), &e) != nil || e.Event == "" {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// activity 制作活动流：GET /projects/:id/activity —— manifest.jsonl 原样事件
+// （尾部 500 条，时间正序）。前端中间区右上角事件流面板的数据源：每步用时由
+// stage.start/finish 的毫秒差算出，打回（check.repair / prereview / frameqa）
+// 与终态事件原样给前端翻译。轻量只读（不像 overview 全树扫产物），供制作中轮询。
+// 无 manifest（新建项目没开过工）回 [] 而不是 404/null：前端 .length/.map 直吃。
+func (s *Server) activity(c *gin.Context) {
+	p, ok := s.project(c)
+	if !ok {
+		return
+	}
+	rows := []manifestEvent{}
+	if b, err := os.ReadFile(p.Artifact("manifest.jsonl")); err == nil {
+		rows = tailManifest(b, 500)
+	}
+	c.JSON(200, rows)
 }
 
 func (s *Server) overview(c *gin.Context) {

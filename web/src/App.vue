@@ -10,7 +10,7 @@ import NewProjectModal from './components/NewProjectModal.vue'
 import LibraryCenter from './components/LibraryCenter.vue'
 import HomeView from './components/HomeView.vue'
 import { api, sseURL } from './api'
-import type { AudioMeta, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, Storyboard, Style, StyleSamples, TabID } from './types'
+import type { ActivityEvent, AudioMeta, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, Storyboard, Style, StyleSamples, TabID } from './types'
 import { segAt, segTable } from './segtime'
 
 const projects = ref<ProjectRow[]>([])
@@ -35,9 +35,11 @@ const agentBusy = ref(false)
 const library = ref<Style[]>([])
 const videoRev = ref(0) // 成片代次：done 后递增 → video 换 URL 强制重载（重做完立刻看到新画面）
 const progressLine = ref('') // 制作/重做细粒度进度（SSE progress，瞬时态不入聊天史）
+const activity = ref<ActivityEvent[]>([]) // 制作事件流（manifest 原样事件，右上角面板数据源）
 
 let es: EventSource | null = null
 let busyTimer: number | null = null
+let activityTimer: number | null = null
 
 const stageOrder = ['tts', 'compositions', 'assemble', 'check', 'render', 'frameqa']
 
@@ -72,12 +74,18 @@ async function loadMsgs() {
   if (fresh.length) msgs.value.push(...fresh)
 }
 
+async function loadActivity() {
+  if (!current.value) return
+  activity.value = (await api.activity(current.value).catch(() => activity.value)) ?? activity.value
+}
+
 function selectProject(id: string) {
   current.value = id
   page.value = 'workspace'
   msgs.value = []
   chatRefs.value = []
   stageState.value = {}
+  activity.value = []
   manualTab.value = null // 换项目回到自动落页
   // 先清上一项目的全部展示数据：loadProject 是异步的，不清会在新项目页闪现旧内容
   view.value = null
@@ -108,6 +116,7 @@ async function refresh() {
   if (!current.value) return
   await loadProject(current.value).catch(() => {})
   await loadMsgs()
+  loadActivity() // 事件流跟随刷新（done/cancelled/error 等 SSE 监听都走 refresh）
 }
 
 function markBusy() {
@@ -135,10 +144,12 @@ function openSSE(id: string) {
       : d.detail.startsWith('error') || d.detail.startsWith('repair') ? 'error' : 'running'
     stageState.value = { ...stageState.value, [d.stage]: st }
     loadMsgs()
+    loadActivity() // 阶段推进即拉事件流（用时/打回记帐在 manifest 里）
   })
   es.addEventListener('progress', ev => {
     const d = JSON.parse((ev as MessageEvent).data)
     progressLine.value = typeof d === 'string' ? d : d.detail ?? ''
+    loadActivity()
   })
   es.addEventListener('style_confirmed', () => loadProject(id).catch(() => {}))
   es.addEventListener('style_applied', () => { loadProject(id).catch(() => {}); loadLibrary() })
@@ -163,6 +174,16 @@ watch(() => view.value?.producing, (now, was) => {
     progressLine.value = ''
     videoRev.value++
   }
+})
+
+// 制作中每 5s 轮询事件流：render.seg / 预审轮次这类 manifest 细粒度事件没有对应
+// SSE，SSE stage/progress 只兜住粗粒度推进，细账靠轮询补。
+watch(() => view.value?.producing, p => {
+  if (p && activityTimer == null) activityTimer = window.setInterval(loadActivity, 5000)
+  if (!p && activityTimer != null) { clearInterval(activityTimer); activityTimer = null }
+})
+onBeforeUnmount(() => {
+  if (activityTimer != null) clearInterval(activityTimer)
 })
 
 watch(current, id => {
@@ -313,6 +334,7 @@ applyHash()
               :tab="activeTab" :view="view" :storyboard="storyboard" :style-samples="style" :manuscript="manuscript"
               :stage-summary="stageSummary" :video-id="current" :audio-meta="audioMeta"
               :picked-idx="chatRefs.map(r => r.idx)" :video-rev="videoRev" :progress-line="progressLine"
+              :activity="activity"
               @tab="setTab" @go-tab="setTab"
               @saved="refresh" @chat-sent="markBusy"
               @confirm-style="async () => { if (current) { await api.confirmStyle(current); refresh() } }"

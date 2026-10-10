@@ -71,6 +71,7 @@ func (s *Server) Router() *gin.Engine {
 	api.POST("/extract_link", s.extractLink)
 	api.GET("/projects/:id/messages", s.messages)
 	api.GET("/projects/:id/events", s.sse)
+	api.GET("/projects/:id/activity", s.activity)
 	api.POST("/projects/:id/produce", s.startProduce)
 	api.POST("/projects/:id/rework", s.startRework)
 	api.GET("/projects/:id/rework/last", s.reworkLast)

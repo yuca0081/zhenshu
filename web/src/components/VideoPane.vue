@@ -161,7 +161,6 @@ async function confirmRework() {
           @timeupdate="cur = videoEl!.currentTime" @loadedmetadata="dur = videoEl!.duration || 0"
           @play="playing = true" @pause="playing = false" @ended="playing = false"
         />
-        <a class="dl-btn" :href="videoURL(videoId, videoRev)" :download="`${view.name}.mp4`">↓ 下载成片</a>
         <button v-show="!playing" class="now-btn" @click="pickTime(cur)">
           引用此刻 {{ fmtClock(cur) }}
         </button>
@@ -199,14 +198,6 @@ async function confirmRework() {
   font-size: 12px; padding: 4px 12px; border-radius: 999px; backdrop-filter: blur(3px);
 }
 .now-btn:hover { background: rgba(42, 36, 22, .9); }
-/* 「下载成片」悬浮在视频左上角（与右侧「引用此刻」对称） */
-.dl-btn {
-  position: absolute; left: 10px; top: 10px; z-index: 4;
-  border: 1px solid rgba(240, 198, 116, .45); background: rgba(16, 14, 8, .72); color: #f0c674;
-  font-size: 12px; padding: 4px 12px; border-radius: 999px; backdrop-filter: blur(3px);
-  text-decoration: none; display: inline-flex; align-items: center;
-}
-.dl-btn:hover { background: rgba(42, 36, 22, .9); }
 .rework-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .rework-hint { font-size: 12px; color: #f0c674; }
 .progress-line { flex: none; width: 100%; font-size: 12px; color: #8a8a96; padding: 0 4px; }

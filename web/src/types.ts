@@ -171,6 +171,15 @@ export interface ChatRef {
   elementName?: string // 人话名（如 箭头：蓝光弹开）
 }
 
+// 制作活动流（GET /activity，manifest.jsonl 原样事件，时间正序）：
+// 每步用时由 stage.start/finish 的毫秒差算出；老条目无 ms 时前端按 ts 解析兜底
+export interface ActivityEvent {
+  ts: string
+  ms?: number
+  event: string
+  detail: string
+}
+
 // ── 参考视频解析（风格库页）：一视频 = 一条目 ────────────────
 export interface RefVideoStyle {
   name: string

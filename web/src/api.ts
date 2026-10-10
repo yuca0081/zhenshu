@@ -1,4 +1,4 @@
-import type { AudioMeta, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, VocabEntry } from './types'
+import type { ActivityEvent, AudioMeta, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, VocabEntry } from './types'
 
 // ── API token（服务端 .env 配了 API_TOKEN 时启用）──────────────
 // 401 时提示输入一次，存 localStorage；之后所有请求带头，媒体 URL 带 ?token=
@@ -115,6 +115,9 @@ export const api = {
     req<{ instruction: string }>(`/api/projects/${id}/rework/last?seg=${encodeURIComponent(seg)}`),
 
   cancel: (id: string) => post<{ ok: boolean }>(`/api/projects/${id}/cancel`),
+
+  // 制作活动流（manifest 原样事件，尾部 500 条正序；事件流面板数据源）
+  activity: (id: string) => req<ActivityEvent[]>(`/api/projects/${id}/activity`),
 
   listLibrary: () => req<Style[]>('/api/library'),
 

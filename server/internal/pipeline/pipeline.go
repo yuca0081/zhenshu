@@ -82,8 +82,10 @@ func (p *Project) LoadStoryboard() (*contract.Storyboard, error) {
 // 不上抛——记账失败不该挡制作主链路）。
 func (p *Project) Manifest(event, detail string) {
 	f := p.Artifact("manifest.jsonl")
+	now := time.Now()
+	// ms（unix 毫秒）与 ts 同刻双写：ts 是秒级给人看的，活动流算每步用时吃毫秒差
 	line, _ := json.Marshal(map[string]any{
-		"ts": time.Now().Format(time.RFC3339), "event": event, "detail": detail,
+		"ts": now.Format(time.RFC3339), "ms": now.UnixMilli(), "event": event, "detail": detail,
 	})
 	line = append(line, '\n')
 	p.manifestMu.Lock()
