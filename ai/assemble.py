@@ -2,6 +2,7 @@
 """组装 hyperframes 工程：index.html + assets/gsap.min.js + package.json + meta.json。
 用法：python ai/assemble.py <项目目录>
 """
+import hashlib
 import json
 import pathlib
 import re
@@ -115,22 +116,26 @@ def subtitle_text_color(slots):
     return '#F2F2EA'
 
 
-def subtitle_blocks(scenes, meta_voices, slots, base=0.0):
+def subtitle_blocks(scenes, meta_voices, slots, proj, w=1080, h=1920):
     """平台字幕带（v2：字幕=TTS 时间戳机械装配，模型永不写 cue）。
-    每段一个父级 clip（z=55，字幕带占底部 ~17%），短语硬切 + 词级渐亮，
-    时间轴挂主 tl（绝对时刻 = 段起点 + 词相对时刻；单段工程传 base 使段内归零）。
-    返回 (html 片段, 主 tl 的 JS 语句)，与 overlay_block 同一注入位。"""
+    每段字幕落成子组合文件 compositions/caps/cap-{sid}.html（样式+词级点亮 JS，
+    局部时间轴用段内相对时刻），index/单段工程只留挂载元素——lint 三连同源根治
+    （主文件过大 / 时间轴轨道密度 / timeline 元素禁嵌套 div，挂载与子组合全部豁免），
+    段级重渲缓存经挂载上的 data-cap-v 指纹感知字幕内容变化。
+    返回 (挂载 html 片段, '')，与 overlay_block 同一注入位。"""
     per = {v['id']: v for v in meta_voices}
     txt = subtitle_text_color(slots)
     font = slots.get('font') or "'Segoe UI','Microsoft YaHei',sans-serif"
-    html_parts, js_parts = [], []
+    capdir = proj / 'compositions' / 'caps'
+    capdir.mkdir(parents=True, exist_ok=True)
+    html_parts = []
     for sid, start, dur, adur in scenes:
         v = per.get(sid)
         if not v or not v.get('phrases'):
             continue
         words, phrases = v['words'], v['phrases']
         en = v.get('phrases_en') or []
-        t0 = base + start
+        cap_id = f'cap-{sid}'
         ph_html = []
         for pi, rng in enumerate(phrases):
             i0, i1 = int(rng[0]), int(rng[1])
@@ -140,36 +145,51 @@ def subtitle_blocks(scenes, meta_voices, slots, base=0.0):
             spans = ''.join(f'<span class="cap-w" data-layout-allow-overlap data-layout-allow-occlusion data-sw="{i}">{_esc_html(words[i]["text"])}</span>'
                             for i in range(i0, i1 + 1))
             ph_html.append(f'<div class="cap-ph" data-layout-allow-overlap data-layout-allow-occlusion data-sph="{pi}"><div class="cap-line">{spans}{enline}</div></div>')
-        html_parts.append(
-            f'<div id="cap-{sid}" class="clip" data-start="{start}" data-duration="{dur}" '
-            f'data-track-index="8" data-hf-name="字幕带">\n'
-            f'  <style>\n'
-            f'    #cap-{sid} {{ position: absolute; inset: 0; pointer-events: none; z-index: 55; }}\n'
-            f'    #cap-{sid} .cap-zone {{ position: absolute; left: 0; right: 0; bottom: 0; height: 17%; '
-            f'display: flex; align-items: center; justify-content: center; }}\n'
-            f'    #cap-{sid} .cap-ph {{ position: absolute; inset: 0; display: flex; align-items: center; '
-            f'justify-content: center; opacity: 0; max-width: 90%; margin: 0 auto; }}\n'
-            f'    #cap-{sid} .cap-line {{ background: rgba(10,10,14,.62); border-radius: 14px; '
-            f'padding: 12px 40px; color: {txt}; font-family: {font}; font-size: 34px; line-height: 1.4; '
-            f'font-weight: 600; text-align: center; text-shadow: 0 1px 8px rgba(0,0,0,.5); }}\n'
-            f'    #cap-{sid} .cap-w {{ opacity: .3; margin: 0 2px; }}\n'
-            f'    #cap-{sid} .cap-en {{ font-size: .56em; font-style: italic; opacity: .72; '
-            f'font-family: Georgia, "Times New Roman", serif; letter-spacing: .04em; margin-top: .12em; }}\n'
-            f'  </style>\n'
-            f'  <div class="cap-zone"><div class="cap-body">'
-            + ''.join(ph_html) + '</div></div>\n'
-            f'</div>')
-        js = [f"gsap.set('#cap-{sid} .cap-ph',{{opacity:0}});"]
+        # 局部时间轴：0 = 段首（挂载点 data-start 对齐），词级时刻本就是段内相对值
+        js = [f"gsap.set('#{cap_id} .cap-ph',{{opacity:0}});"]
         for pi, rng in enumerate(phrases):
             i0, i1 = int(rng[0]), int(rng[1])
             a, b = words[i0]['start'], words[min(i1 + 1, len(words) - 1)]['start'] if i1 + 1 < len(words) else words[i1]['end']
-            js.append(f"tl.set('#cap-{sid} [data-sph=\"{pi}\"]',{{opacity:1}},{t0 + a:.3f});")
+            js.append(f"tl.set('#{cap_id} [data-sph=\"{pi}\"]',{{opacity:1}},{a:.3f});")
             if b > a + 0.05:
-                js.append(f"tl.set('#cap-{sid} [data-sph=\"{pi}\"]',{{opacity:0}},{t0 + b:.3f});")
+                js.append(f"tl.set('#{cap_id} [data-sph=\"{pi}\"]',{{opacity:0}},{b:.3f});")
             for i in range(i0, i1 + 1):
-                js.append(f"tl.to('#cap-{sid} [data-sw=\"{i}\"]',{{opacity:1,duration:.1,ease:'none'}},{t0 + words[i]['start']:.3f});")
-        js_parts.append('\n        '.join(js))
-    return '\n'.join(html_parts), '\n        '.join(js_parts)
+                js.append(f"tl.to('#{cap_id} [data-sw=\"{i}\"]',{{opacity:1,duration:.1,ease:'none'}},{words[i]['start']:.3f});")
+        js.append(f"tl.to({{}},{{duration:{dur:.3f}}},0);")  # 占位撑满段长，越尾寻址不塌
+        body = '\n'.join(js)
+        cap_html = f"""<template>
+  <style>
+    {fontface_css(font)}
+    #{cap_id} {{ position: absolute; inset: 0; pointer-events: none; z-index: 55; }}
+    #{cap_id} .cap-zone {{ position: absolute; left: 0; right: 0; bottom: 0; height: 17%; display: flex; align-items: center; justify-content: center; }}
+    #{cap_id} .cap-ph {{ position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; opacity: 0; max-width: 90%; margin: 0 auto; }}
+    #{cap_id} .cap-line {{ background: rgba(10,10,14,.62); border-radius: 14px; padding: 12px 40px; color: {txt}; font-family: {font}; font-size: 34px; line-height: 1.4; font-weight: 600; text-align: center; text-shadow: 0 1px 8px rgba(0,0,0,.5); }}
+    #{cap_id} .cap-w {{ opacity: .3; margin: 0 2px; }}
+    #{cap_id} .cap-en {{ font-size: .56em; font-style: italic; opacity: .72; font-family: Georgia, "Times New Roman", serif; letter-spacing: .04em; margin-top: .12em; }}
+  </style>
+  <div data-composition-id="{cap_id}" data-width="{w}" data-height="{h}">
+    <div id="{cap_id}">
+      <div class="cap-zone"><div class="cap-body">{''.join(ph_html)}</div></div>
+    </div>
+  </div>
+  <script>
+    (function(){{
+      var tl=gsap.timeline({{paused:true}});
+      {body}
+      window.__timelines["{cap_id}"]=tl;
+    }})();
+  </script>
+</template>"""
+        fp = hashlib.md5(cap_html.encode('utf-8')).hexdigest()[:8]
+        out = capdir / f'{cap_id}.html'
+        if not out.exists() or out.read_text(encoding='utf-8') != cap_html:
+            out.write_text(cap_html, encoding='utf-8')
+        html_parts.append(
+            f'<div id="{cap_id}" class="scene clip" data-composition-id="{cap_id}" '
+            f'data-composition-src="compositions/caps/{cap_id}.html" '
+            f'data-start="{start}" data-duration="{dur}" data-track-index="8" '
+            f'data-hf-name="字幕带" data-cap-v="{fp}" style="z-index:55;"></div>')
+    return '\n'.join(html_parts), ''
 
 
 def _esc_html(s):
@@ -335,7 +355,7 @@ def main(proj_dir: str) -> int:
     trans = str(tokens.get('transition') or 'fade').strip().lower()
     xfade = trans == 'fade'
     cap_body, cap_js = subtitle_blocks(
-        [(sid, starts[sid], scene[sid], durs[sid]) for sid in ids], meta['voices'], slots)
+        [(sid, starts[sid], scene[sid], durs[sid]) for sid in ids], meta['voices'], slots, proj, W, H)
     (proj / 'index.html').write_text(
         project_html(W, H, total,
                      scenes_html([(sid, starts[sid], scene[sid], durs[sid]) for sid in ids]),
@@ -353,7 +373,7 @@ def main(proj_dir: str) -> int:
         seg_html = project_html(W, H, scene[sid],
                                 scenes_html([(sid, 0, scene[sid], durs[sid])]),
                                 *overlay_block(chapters.get(sid, ''), scene[sid], starts[sid]),
-                                *subtitle_blocks([(sid, 0, scene[sid], durs[sid])], meta['voices'], slots),
+                                *subtitle_blocks([(sid, 0, scene[sid], durs[sid])], meta['voices'], slots, proj, W, H),
                                 xfade=xfade)
         out = segdir / f'{sid}.html'
         # 内容没变就保住 mtime：段级重渲缓存按"段片旧于段工程"判旧（pipeline segStale），
@@ -361,6 +381,15 @@ def main(proj_dir: str) -> int:
         if out.exists() and out.read_text(encoding='utf-8') == seg_html:
             continue
         out.write_text(seg_html, encoding='utf-8')
+
+    # 字幕子组合清仓：段没了/段没声了，旧 cap 文件不留（挂载 404 = 渲染必炸）
+    capdir = proj / 'compositions' / 'caps'
+    if capdir.exists():
+        voices = {v['id']: v for v in meta['voices']}
+        want = {f'cap-{sid}' for sid in ids if voices.get(sid, {}).get('phrases')}
+        for f in capdir.glob('cap-*.html'):
+            if f.stem not in want:
+                f.unlink()
 
     (proj / 'assets').mkdir(exist_ok=True)
     if not (proj / 'assets' / 'gsap.min.js').exists():
