@@ -563,6 +563,13 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 		return err
 	}
 
+	// ── 4.5 渲染前预审（snapshot 截帧+视觉模型，自修复见 prereview.go）：
+	//    画面问题拦在最贵的渲染之前，渲后 frameQA 据此降级为薄保险 ───
+	pr, err := r.preReview(ctx, p)
+	if err != nil {
+		return err
+	}
+
 	// ── 5. 渲染成片（按段增量渲 + concat，段片复用见 stageRender）──
 	r.emit(id, "stage", "render", "running")
 	r.Manifest(p, "stage.start", "render")
@@ -575,9 +582,20 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 	r.emit(id, "stage", "render", "done")
 	r.Manifest(p, "stage.finish", "render")
 
-	// ── 6. 画面审查（抽帧+视觉模型，自修复见 frameQA）────────────
-	if err := r.frameQA(ctx, p, "", ""); err != nil {
-		return err
+	// ── 6. 画面审查（抽帧+视觉模型，自修复见 frameQA）：预审干净且无动态特色
+	//    判据 → 跳过（预审已覆盖；stitch 已在步骤 5 完成，无缺口）；预审动过的段
+	//    → 只复查这些；动态判据或预审未跑（pre_review=false/前置缺失）→ 全量现状
+	switch {
+	case pr.Ran && !pr.ReviewAll && len(pr.Repaired) == 0:
+		r.Manifest(p, "frameqa.skipped_by_prereview", "预审全过，渲后免审")
+	case pr.Ran && !pr.ReviewAll:
+		if err := r.frameQA(ctx, p, "", strings.Join(pr.Repaired, ",")); err != nil {
+			return err
+		}
+	default:
+		if err := r.frameQA(ctx, p, "", ""); err != nil {
+			return err
+		}
 	}
 	r.emit(id, "done", "", "renders/main.mp4")
 	r.Manifest(p, EventProduceDone, "renders/main.mp4")

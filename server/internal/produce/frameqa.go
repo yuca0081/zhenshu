@@ -360,7 +360,7 @@ func specHasScene(p *pipeline.Project, segID string) bool {
 // 段边界前后帧序列（transition 判据的考核证据）附在最末。crits 是特色判据清单（§4.6）。
 func reviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta, keys []string, crits []sigCriterion, boundaryN int) string {
 	samples := styleSampleImages(p)
-	styleBlock := styleCheckBlock(designOf(p), len(samples), len(keys))
+	styleBlock := styleCheckBlock(designOf(p), len(samples), len(keys), 4)
 	var b strings.Builder
 	header := "这是同一段视频的四帧渲染画面（底部字幕带是画面一部分，字幕文字不算元素）。"
 	switch {
@@ -444,24 +444,25 @@ pass 标准：无 high 问题即 true；medium/low 记录但不算失败` +
 	return b.String()
 }
 
-// styleCheckBlock 风格一致性检查块（图5+ = 样张/原片真迹）：笼子二的回路，两条判据——
-// 风格漂移（Tier1 非题，「这段和样张像不像同一部片」，只报「像另一部片」级漂移，medium
-// 报告项不阻断，plan-v2 §4）与题材中毒（high，进修复轮回喂）：渲染画面出现真迹里的
-// 题动物件且不是画面提示要求的主体。双皮肤与任一皮肤气质一致即算一致；两者都无返回 ""。
+// styleCheckBlock 风格一致性检查块（图 base+1 起 = 样张/原片真迹）：笼子二的回路，
+// 两条判据——风格漂移（Tier1 非题，「这段和样张像不像同一部片」，只报「像另一部片」
+// 级漂移，medium 报告项不阻断，plan-v2 §4）与题材中毒（high，进修复轮回喂）：渲染
+// 画面出现真迹里的题动物件且不是画面提示要求的主体。base = 考卷内容帧数（frameQA
+// 四帧传 4，预审三帧传 3）。双皮肤与任一皮肤气质一致即算一致；两者都无返回 ""。
 // 真迹只当气质参照（配色/字体/质感）——内容与真迹不同是应该的，真迹是另一部片。
-func styleCheckBlock(ss *contract.StyleSamples, samples, keys int) string {
+func styleCheckBlock(ss *contract.StyleSamples, samples, keys, base int) string {
 	if samples <= 0 && keys <= 0 {
 		return ""
 	}
 	var b strings.Builder
 	switch {
 	case samples > 0 && keys > 0:
-		fmt.Fprintf(&b, "\n## 风格一致性（图5–图%d 风格样张；图%d–图%d 原片真迹）\n最后 %d 张是本片确认过的风格样张（网页转译），随后 %d 张是本风格来源视频的原片真迹（关键帧）。\n",
-			4+samples, 5+samples, 4+samples+keys, samples, keys)
+		fmt.Fprintf(&b, "\n## 风格一致性（图%d–图%d 风格样张；图%d–图%d 原片真迹）\n最后 %d 张是本片确认过的风格样张（网页转译），随后 %d 张是本风格来源视频的原片真迹（关键帧）。\n",
+			base+1, base+samples, base+samples+1, base+samples+keys, samples, keys)
 	case keys > 0:
-		fmt.Fprintf(&b, "\n## 风格一致性（对照原片真迹，图5–图%d）\n最后 %d 张是本风格来源视频的原片真迹（关键帧）。\n", 4+keys, keys)
+		fmt.Fprintf(&b, "\n## 风格一致性（对照原片真迹，图%d–图%d）\n最后 %d 张是本风格来源视频的原片真迹（关键帧）。\n", base+1, base+keys, keys)
 	default:
-		fmt.Fprintf(&b, "\n## 风格一致性（对照样张，图5–图%d）\n最后 %d 张是本片确认过的风格样张。\n", 4+samples, samples)
+		fmt.Fprintf(&b, "\n## 风格一致性（对照样张，图%d–图%d）\n最后 %d 张是本片确认过的风格样张。\n", base+1, base+samples, samples)
 	}
 	if ss != nil && len(ss.EffectiveSkins()) == 2 && strings.TrimSpace(ss.SkinRule) != "" {
 		b.WriteString("- 本片是双皮肤（切换规则：" + ss.SkinRule + "）；与任一皮肤气质一致即算一致\n")
@@ -484,10 +485,11 @@ func designOf(p *pipeline.Project) *contract.StyleSamples {
 }
 
 // issuesFeedback high/medium 问题 → 回喂 sceneGen 的修正要求（low 噪音不回喂）。
+// 渲后 frameQA 与渲染前预审共用（预审的帧位是 open/mid/last，"mid" 映射中段帧）。
 func issuesFeedback(v frameVerdict) string {
-	frameNames := map[string]string{"first": "首帧", "open": "开场帧", "last": "落定帧", "final": "尾帧", "sample": "风格样张对照"}
+	frameNames := map[string]string{"first": "首帧", "open": "开场帧", "mid": "中段帧", "last": "落定帧", "final": "尾帧", "sample": "风格样张对照"}
 	var b strings.Builder
-	b.WriteString("渲染后的画面审查发现以下问题，重出 spec 时必须逐条修正（调整坐标/大小/删减元素/给提前可见的元素安排入场动画）:\n")
+	b.WriteString("画面审查发现以下问题，重出 spec 时必须逐条修正（调整坐标/大小/删减元素/给提前可见的元素安排入场动画）:\n")
 	for _, i := range v.Issues {
 		if i.Severity != "high" && i.Severity != "medium" {
 			continue

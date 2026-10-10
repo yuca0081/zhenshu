@@ -9,7 +9,7 @@ import (
 // 要修的 high（题材中毒）。历史事故：苏格拉底生平片套用城市等距风格，整片画出
 // 城市元素——根因就是考卷「以真迹为最终准绳」把画面往原片题材推。
 func TestStyleCheckBlockDetoxAndPoison(t *testing.T) {
-	b := styleCheckBlock(nil, 2, 3)
+	b := styleCheckBlock(nil, 2, 3, 4)
 	for _, want := range []string{
 		"内容与真迹不同是应该的", // 真迹是另一部片，内容本来就不该像
 		"题材中毒",        // 反向检查：真迹物件入画 = high，进修复轮回喂
