@@ -695,6 +695,11 @@ func (s *Server) messages(c *gin.Context) {
 	if err != nil {
 		msgs = nil
 	}
+	if msgs == nil {
+		// 空 must 回 [] 不能回 null：内存存储（未配 PG）重启后历史清零是常态，
+		// 前端 loadMsgs 拿到 null 直接 .filter 崩掉对话栏（与 activity 接口同一纪律）
+		msgs = []store.Msg{}
+	}
 	c.JSON(200, msgs)
 }
 

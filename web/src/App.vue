@@ -68,7 +68,8 @@ async function loadProject(id: string) {
 async function loadMsgs() {
   if (!current.value) return
   const after = msgs.value.length ? Math.max(...msgs.value.map(m => m.id)) : 0
-  const inc = await api.messages(current.value, after).catch(() => [])
+  // ?? [] 兜底：服务端把空历史序列化成 null（老接口），null.filter 会崩掉对话栏
+  const inc = (await api.messages(current.value, after).catch(() => [])) ?? []
   const seen = new Set(msgs.value.map(m => m.id))
   const fresh = inc.filter(m => !seen.has(m.id))
   if (fresh.length) msgs.value.push(...fresh)
