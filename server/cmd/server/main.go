@@ -50,6 +50,7 @@ func main() {
 	lib := stylelib.New(cfg.DataDir)
 	producer := &produce.Runner{
 		DataDir: cfg.DataDir, RootDir: root, Hub: hub, Store: st,
+		AutoResume: true, // 启动对账时自动续跑被重启打断的整片制作，不让用户再打「继续」
 	}
 	ag := &agent.Agent{
 		DataDir: cfg.DataDir, Store: st, Lib: lib, Producer: producer,
@@ -58,6 +59,7 @@ func main() {
 	}
 	// 制作终态（成片/失败/取消）必须落进聊天框——异步管线跑完时对话轮早已结束
 	producer.OnDone = ag.NotifyResult
+	producer.OnNotice = ag.PostNotice // 非终态插话（如自动续跑通知）：让用户知道流程自己在走
 	// 启动对账：上次进程死在制作中途的项目补写终态+聊天通知（必须先于任何新任务）
 	producer.Reconcile()
 	refs := styleref.NewStore(cfg.DataDir, root)

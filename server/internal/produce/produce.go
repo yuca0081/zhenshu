@@ -38,11 +38,13 @@ import (
 )
 
 type Runner struct {
-	DataDir string // 仓库根 data/（项目在 data/projects/<id>）
-	RootDir string // 仓库根（ai/ 脚本所在）
-	Hub     *events.Hub
-	Store   store.Store                            // render_jobs 记账（nil = 不记账，测试场景）；manifest 仍是事实源
-	OnDone  func(projectID, status, detail string) // 终态回写（status: video|failed|cancelled；detail 供聊天汇报失败原因等）
+	DataDir    string // 仓库根 data/（项目在 data/projects/<id>）
+	RootDir    string // 仓库根（ai/ 脚本所在）
+	Hub        *events.Hub
+	Store      store.Store                            // render_jobs 记账（nil = 不记账，测试场景）；manifest 仍是事实源
+	OnDone     func(projectID, status, detail string) // 终态回写（status: video|failed|cancelled；detail 供聊天汇报失败原因等）
+	OnNotice   func(projectID, content string)        // 非终态插话（如开机自动续跑通知），落聊天框但不改项目状态
+	AutoResume bool                                   // 启动对账时自动续跑被重启打断的整片制作（main 置 true；测试默认关，防拖起真管线）
 
 	wg       sync.WaitGroup // 在跑的制作/重做 goroutine（优雅停机等待终态落盘）
 	stopping atomic.Bool    // 停机中：取消语义从「用户取消」改「服务停机中断」，并拒绝新任务
@@ -57,11 +59,13 @@ const (
 	EventProduceError       = "produce.error"
 	EventProduceCancelled   = "produce.cancelled"
 	EventProduceInterrupted = "produce.interrupted"
+	EventProduceRetry       = "produce.retry"
 	EventReworkStart        = "rework.start"
 	EventReworkDone         = "rework.done"
 	EventReworkError        = "rework.error"
 	EventReworkCancelled    = "rework.cancelled"
 	EventReworkInterrupted  = "rework.interrupted"
+	EventReworkRetry        = "rework.retry"
 )
 
 // terminalEvent 该事件是否制作/重做终态。对账扫描、LastTerminal 共用同一判别，
@@ -129,8 +133,9 @@ func (r *Runner) Start(projectID string) (bool, error) {
 			mu.Unlock()
 			r.wg.Done()
 		}()
-		// panic 兜底：audio_meta 等产物结构异常不该崩掉整个服务（goroutine panic 直接退进程）
-		err := safeRun(func() error { return r.run(ctx, p) })
+		// panic 兜底：audio_meta 等产物结构异常不该崩掉整个服务（goroutine panic 直接退进程）；
+		// 真失败自动重跑（≤2 次），重跑烧完才终态落盘+聊天汇报
+		err := r.runWithAutoRetry(ctx, p, projectID, EventProduceRetry, func() error { return r.run(ctx, p) })
 		r.finishJob(p, projectID, err, jobTail{
 			evCancelled:  EventProduceCancelled,
 			evError:      EventProduceError,
@@ -149,6 +154,40 @@ func safeRun(f func() error) (err error) {
 		}
 	}()
 	return f()
+}
+
+// 自动重跑：制作/重做的真失败（LLM 超时、质检随机性、渲染偶发抖动等）不需要用户
+// 做任何决策——产物按段落盘复用，重跑的代价与用户手打「继续」完全一样，那就该
+// 自己做掉。只有重跑烧完还失败才惊动用户。取消/停机是用户意图，绝不重跑。
+const maxAutoRetries = 2
+
+var autoRetryDelays = [maxAutoRetries]time.Duration{10 * time.Second, 30 * time.Second} // var：测试可缩成 0
+
+// runWithAutoRetry 首跑 + 至多 maxAutoRetries 次自动重跑；ev 是重跑的 manifest 事件名
+// （produce.retry / rework.retry，事件流面板可见）。重跑轮次耗尽仍失败时 err 带
+// 「已自动重跑」标记（%w 保错误链，取消分支的 errors.Is 不受影响），聊天话术据此
+// 说明「自动重跑也没救回来」。ctx 已死（用户取消/停机）原样返回，走取消分支。
+func (r *Runner) runWithAutoRetry(ctx context.Context, p *pipeline.Project, projectID, ev string, run func() error) error {
+	err := safeRun(run)
+	retried := 0
+	for n := 1; err != nil && n <= maxAutoRetries && ctx.Err() == nil && !r.stopping.Load(); n++ {
+		delay := autoRetryDelays[n-1]
+		r.Manifest(p, ev, fmt.Sprintf("自动重跑 %d/%d（%s 后开始）；上次失败：%s",
+			n, maxAutoRetries, delay, pipeline.FirstLine(err.Error(), 160)))
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		retried = n
+		err = safeRun(run)
+	}
+	if err != nil && retried > 0 {
+		err = fmt.Errorf("%w（已自动重跑 %d 次仍未过）", err, retried)
+	}
+	return err
 }
 
 // Cancel 请求取消进行中的制作/重做（协作式：杀子进程 + 阶段边界退出）。
@@ -215,7 +254,7 @@ func (r *Runner) Rework(projectID string, segIDs []string, instruction string) (
 			mu.Unlock()
 			r.wg.Done()
 		}()
-		err := safeRun(func() error { return r.runRework(ctx, p, segs, instruction) })
+		err := r.runWithAutoRetry(ctx, p, projectID, EventReworkRetry, func() error { return r.runRework(ctx, p, segs, instruction) })
 		r.finishJob(p, projectID, err, jobTail{
 			evCancelled:    EventReworkCancelled,
 			evError:        EventReworkError,
@@ -471,10 +510,26 @@ func (r *Runner) Reconcile() {
 		}
 		r.Manifest(p, ev, detail)
 		r.jobTerminal(id, "failed", "", detail)
+		log.Printf("[produce] 对账：%s %s中断，已补写终态\n", id, what)
+		// 整片制作中断 → 自动续跑，用户不再需要打「继续」：续跑走的就是
+		// start_production 同一条路（manifest 按段复用产物）。上面已补写 interrupted
+		// 终态（幂等标记：续跑途中再崩，下次启动至多多续一轮，不会无限循环）。
+		// 重做不续：段级微调而已，该段旧画面仍在成片里，中断无害；且 rework.start
+		// 的 detail 只留了前 80 字指令，照它重跑会拿残缺指令。
+		if !isRework && r.AutoResume {
+			if ok, err := r.Start(id); ok {
+				log.Printf("[produce] 对账：%s 已自动续跑\n", id)
+				if r.OnNotice != nil {
+					r.OnNotice(id, "↻ 上次服务重启把制作打断了，已自动续跑——做完的段直接复用，不用重头再来。")
+				}
+				continue
+			} else if err != nil {
+				log.Printf("[produce] 对账：%s 自动续跑没起来（%v），退回通知用户\n", id, err)
+			}
+		}
 		if r.OnDone != nil {
 			r.OnDone(id, "failed", detail)
 		}
-		log.Printf("[produce] 对账：%s %s中断，已补写终态\n", id, what)
 	}
 }
 
@@ -710,7 +765,7 @@ var segIDRe = regexp.MustCompile(`seg\d{2,}`)
 
 // blockingCheckErrors 取 check 诊断里真正阻塞门禁的错误行：Layout/Motion/Lint 段的
 // ✗ 行。Contrast 段的 ✗ 是 warning 级不判门禁死，且已由 applyContrastFixes 廉价回填
-//（LLM 回喂修对比度从未收敛）；把它的行喂进修复反馈只会让健康段被反复重出、
+// （LLM 回喂修对比度从未收敛）；把它的行喂进修复反馈只会让健康段被反复重出、
 // 把已修好的段改坏——2026-10-10 宗教裁判所片实测：一处 Layout error + 八条 Contrast
 // warning 的诊断整包回喂，修复轮连烧三轮重出十余段仍不过，正是本函数要斩的循环。
 func blockingCheckErrors(out string) string {

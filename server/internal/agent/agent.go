@@ -166,7 +166,12 @@ func (s State) summary() string {
 			lines = append(lines, "⚠ 成片从未出过，制作现在也没在跑。用户说「继续/修复」就调 start_production 重新开工（检查修复轮会在制作里自动跑）")
 		}
 	case interrupted:
-		lines = append(lines, fmt.Sprintf("⏹ 上次制作因服务重启中断（%s），产物已保留。用户要继续就调 start_production，做完的段自动复用", s.LastAt.Format("15:04")))
+		if s.Producing {
+			// 开机对账已自动续跑（produce.AutoResume）：别再让用户/模型去「继续」——活已经在跑
+			lines = append(lines, fmt.Sprintf("↻ 上次制作因服务重启中断（%s），开机时已自动续跑，现在正在跑", s.LastAt.Format("15:04")))
+		} else {
+			lines = append(lines, fmt.Sprintf("⏹ 上次制作因服务重启中断（%s），产物已保留。用户要继续就调 start_production，做完的段自动复用", s.LastAt.Format("15:04")))
+		}
 	case cancelled:
 		lines = append(lines, fmt.Sprintf("⏹ 最近一轮制作被取消（%s）", s.LastAt.Format("15:04")))
 	}
@@ -623,6 +628,13 @@ func (a *Agent) setDoneStatus(projectID, status string) {
 	_ = a.Store.UpdateStatus(projectID, status)
 }
 
+// PostNotice 制作运行器的非终态插话（如开机自动续跑通知）：落聊天框、推 SSE，
+// 但不动项目状态——它不是终态，只是让用户知道流程自己在走，不用他做任何事。
+func (a *Agent) PostNotice(projectID, content string) {
+	_ = a.Store.SaveMsg(&store.Msg{ProjectID: projectID, Role: "agent", Type: "text", Content: content})
+	a.Emit(projectID, "agent_msg", "", content)
+}
+
 // NotifyResult 制作管线终态回聊天。制作/重做是对话轮结束后异步跑的，
 // 成败必须由这里兜底写进对话框，否则用户无从得知结果（OnDone 由 main 接线到本方法）。
 // 同时回写项目状态：启动时标了 producing，终态不回写会让项目列表永远「制作中」。
@@ -647,24 +659,37 @@ func (a *Agent) NotifyResult(projectID, status, detail string) {
 		content = "⏹ 已取消：" + detail
 		typ = "text"
 	default: // failed
-		msg := detail
-		if strings.Contains(detail, "✗") { // check 类失败：只挑 ✗ 行与计数，对话框不刷屏
-			var keep []string
-			for _, ln := range strings.Split(detail, "\n") {
-				t := strings.TrimSpace(ln)
-				if strings.HasPrefix(t, "✗") || strings.Contains(t, "error(s)") {
-					keep = append(keep, t)
-				}
-			}
-			if len(keep) > 0 {
-				msg = strings.Join(keep, "\n")
-			}
+		// 对话栏只说人话：✗ 诊断 / lint 转储 / CSS 选择器用户读不了也修不了，
+		// 一律不上对话（技术细节留在 manifest 与事实清单，模型侧随时可查）。
+		// 走到这说明自动重跑已烧完（真失败才惊动用户），「继续」走 start_production
+		// 重跑，修复轮拿的是全新诊断，不靠旧报错。
+		note := ""
+		if strings.Contains(detail, "已自动重跑") {
+			note = "自动重跑也没能救回来——"
 		}
-		content = "❌ 制作失败：" + pipeline.TruncRunes(msg, 500) + "\n回我一句「继续」，我就接着修。"
+		content = "❌ 这次制作没能跑完：" + note + friendlyFailReason(detail) + "\n回我一句「继续」，我就接着修。"
 		typ = "error"
 	}
 	_ = a.Store.SaveMsg(&store.Msg{ProjectID: projectID, Role: "agent", Type: typ, Content: content})
 	a.Emit(projectID, "agent_msg", "", content)
+}
+
+// friendlyFailReason 把失败细节翻译成一句用户能懂的话；中间过程（质检没过但
+// 修复轮还在跑）本就不进对话，只有流程真停下来才走到这里。
+func friendlyFailReason(detail string) string {
+	switch {
+	case strings.Contains(detail, "context deadline exceeded"):
+		return "AI 服务这次响应太慢，等超时了"
+	case strings.Contains(detail, "三轮未过"):
+		// check 与场景契约的修复轮上限都是三轮，同因：AI 画面质量有随机性
+		return "画面自动质检三轮都没通过——AI 画面的质量有随机性，重跑一次通常就能过"
+	case strings.Contains(detail, "组装失败"):
+		return "画面拼装环节出了问题"
+	case strings.Contains(detail, "渲染失败"), strings.Contains(detail, "render failed"):
+		return "渲染环节出了问题"
+	default:
+		return "中途出了点技术问题，已停下"
+	}
 }
 
 // capRunes 截断到 n 个 rune（多行保留，失败诊断往往跨行）。
