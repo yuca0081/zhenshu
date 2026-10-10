@@ -78,9 +78,14 @@ func designBrief(p *Project, sb *contract.Storyboard) string {
 - data 数据/标签/代码：等宽优先，栈尾必须带 CJK 字体回退（数据标签也有中文）；
 - 每个角色的栈都必须含中文字体（渲染端是本机字体，豆腐块=废片）。
 
-### 4. motion 动效语言（全片节奏一致性的来源，档次分水岭）
-- ease 缓动族（如 power3.out）；dur_in 进场时长档 / dur_settle 落定档 / stagger 同组错峰间隔（秒）；
-- notes 一句话性格：什么怎么动、禁什么动、段间转场习惯。全片所有段的动效都在这套档位里取值。
+### 4. motion 动效语言（全片节奏一致性的来源，档次分水岭——生动还是像PPT，在这里定档）
+可补间只有 opacity/x/y/scale/rotation 系（数字滚动用 count）。动效必须设计成**一套编排**，不是一个档位：
+- entrances 入场手法菜单 3–5 条：每条 name/how/use_for 三件齐，手法之间必须一眼不同（参考族：逐行点亮/滑入揭示/字卡打字机/缩放落定/计数滚动/描边生长——按本片气质现场发明）；只交一种「淡入+浮入」=整片像PPT，打回；
+- rhythm 段内节奏下限：旁白每推进一个信息点，画面必须有一次可见响应（新元素入场/已有元素强调/运镜变向）；写出量化档（如「每 3–5 秒一个可见事件」）；入场完成后静坐到段尾=失败；
+- exits 出场：该退的元素在旁白收尾前退完，怎么退（淡出/反向滑出/缩小回收）写成规矩，禁拖尾；
+- camera 运镜：全段持续的背景运动必须有**可感知**的幅度基准（如 10 秒内 scale≥1.08 或位移≥画面宽度 5%%）；看不见的推镜不算动；
+- transition 段间转场政策：发明一个配本片气质的招牌转场（简报含转场类特色时必须按其机制实现）；「黑场一瞬」只在气质确实需要时用且须在 notes 里论证——它是观众感知里的「翻页」，滥用=PPT；
+- 全片所有段从这套菜单取用并轮换，段间节奏一致性靠统一档位（ease/时长档）而不是靠「都一样呆」。
 
 ### 5. device 贯穿装置
 - 全片反复出现、随内容变奏的招牌画面机制——观众记住这部片靠它（参考形态：同一张卡片每章亮相、单版式状态机）。
@@ -174,7 +179,17 @@ func designJSONShape() string {
     "data":    { "stack": "Consolas,'Microsoft YaHei',monospace", "weight": "700", "tracking": "0.02em" }
   },
   "motion": { "ease": "power3.out", "dur_in": 0.5, "dur_settle": 0.25, "stagger": 0.08,
-              "notes": "大字从下方浮入+淡入；数字用 count 滚动；禁弹跳/回弹；段尾安静 0.25s 再切" },
+    "entrances": [
+      { "name": "终端逐行点亮", "how": "整块 opacity:0→1，子元素 y:14→0 逐个 stagger 0.09", "use_for": "标题/面板组" },
+      { "name": "滑入揭示", "how": "x:±60→0 配 power2.inOut，底层面板先行 0.15s", "use_for": "左右分栏的主画面" },
+      { "name": "字卡打字机", "how": "文字按字符 span 化，opacity 逐字点亮 0.03s/字", "use_for": "等宽日志/数据行" },
+      { "name": "缩放落定", "how": "scale:1.06→1 配 back.out(1.5)，用于强调单主体", "use_for": "大字海报主体/关键证据卡" }
+    ],
+    "rhythm": "旁白每推进一个信息点画面响应一次；约每 3–5 秒一个可见事件（新元素入场/已有元素强调变色/运镜变向），入场后静坐到段尾=失败",
+    "exits": "旁白收尾前 0.3s 该退的退完：淡出或反向滑出，禁拖尾",
+    "camera": "全段持续运动：10 秒内 scale≥1.08 或位移≥画面宽度 5%，方向与叙事呼应",
+    "transition": "本片招牌转场（简报含转场特色时按其机制实现；「黑场一瞬」须在 notes 论证才可用）",
+    "notes": "性格一句话：什么怎么动、禁什么动" },
   "device": { "name": "装置名（如：访客卡片）", "desc": "装置是什么、观众为什么会记住它",
               "per_seg": "seg01 首次亮相…seg02 变奏…seg03 起每章复现…" },
   "layouts": [ { "id": "hero-title", "name": "大字海报", "desc": "构图描述：主体位置/元素铺排/留白方向" } ],
@@ -193,7 +208,7 @@ func designAbsorptionNote(p *Project) string {
 	if brief == nil || len(brief.Signatures) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("\n- signature_absorption：简报里每条开启的特色（%s）都必须登记，lands_in 只能取 %s；漏登/越界会被打回重出\n",
+	return fmt.Sprintf("\n- signature_absorption：简报里每条开启的特色（%s）都必须登记，lands_in 只能取 %s；漏登/越界会被打回重出\n- 动态特色必须「真实现」不只登记：transition 类 → motion.transition、camera 类 → motion.camera、motion 类 → motion.entrances，都按特色机制写成可用手法；登记了却没落地一样打回\n",
 		joinSigIDs(brief), contract.AbsorptionLandNames())
 }
 
@@ -222,7 +237,8 @@ func designRequest(p *Project, sb *contract.Storyboard, out string) string {
 
 ## 校验（缺一件都会被拒）
 - direction/concept 非空；skins 1–2 套（双皮肤必须给 skin_rule）；samples 1–3 张且每张 html 非空
-- fonts.display/body 栈含中文字体；motion.ease/notes 非空、dur_in 0.1–1.5、dur_settle 0.05–1.0、stagger 0–0.5
+- fonts.display/body 栈含中文字体；motion.ease/notes 非空、dur_in 0.1–1.5、dur_settle 0.05–1.0、stagger 0–0.5；
+  entrances 3–5 条（name/how/use_for 三件齐、手法名互异）、rhythm/exits/camera/transition 各自非空
 - device.name/desc/per_seg 三件齐
 `, designBrief(p, sb), out, designJSONShape(), designAbsorptionNote(p))
 }
@@ -301,6 +317,24 @@ func DesignDocWithBrief(ss *contract.StyleSamples, segIdx int, brief *contract.S
 	if m := ss.Motion; m != nil && strings.TrimSpace(m.Ease) != "" {
 		w("\n### 动效语言（可补间只有 opacity/x/y/scale/rotation 系；数字滚动用 hf.count）\n")
 		w("- 缓动族 %s；进场 %.2fs / 落定 %.2fs / 同组错峰 %.2fs\n", m.Ease, m.DurIn, m.DurSettle, m.Stagger)
+		if len(m.Entrances) > 0 {
+			w("- 入场手法菜单（全片轮换取用，禁整片只用一条；每段至少两种）：\n")
+			for _, mv := range m.Entrances {
+				w("  · %s——%s（适用：%s）\n", mv.Name, mv.How, mv.UseFor)
+			}
+		}
+		if strings.TrimSpace(m.Rhythm) != "" {
+			w("- 段内节奏（下限，违反=返工）：%s\n", m.Rhythm)
+		}
+		if strings.TrimSpace(m.Exits) != "" {
+			w("- 出场：%s\n", m.Exits)
+		}
+		if strings.TrimSpace(m.Camera) != "" {
+			w("- 运镜：%s\n", m.Camera)
+		}
+		if strings.TrimSpace(m.Transition) != "" {
+			w("- 段间转场（按此执行，禁退回黑场默认）：%s\n", m.Transition)
+		}
 		if strings.TrimSpace(m.Notes) != "" {
 			w("- %s\n", m.Notes)
 		}

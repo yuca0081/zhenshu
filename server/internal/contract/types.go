@@ -192,6 +192,22 @@ type MotionLang struct {
 	DurSettle float64 `json:"dur_settle"` // 落定/强调时长档（秒）
 	Stagger   float64 `json:"stagger"`    // 同组元素错峰间隔（秒）
 	Notes     string  `json:"notes"`      // 本片动效语言：什么怎么动、禁什么动（含转场习惯）
+	// ↓ 动效编排（设计阶段的结构化章节）：生动感的源头在这里定档——只给一句话
+	// 档位时，模型会全片复用同一种浮入（实测即「PPT 感」的来源），故菜单/节奏/
+	// 出场/运镜/转场必须分开设计。全部 omitempty：旧设计文件读侧不炸。
+	Entrances  []MotionMove `json:"entrances,omitempty"`  // 入场手法菜单 3–5 条，手法之间必须一眼不同
+	Rhythm     string       `json:"rhythm,omitempty"`     // 段内节奏下限：隔几秒必须有一个可见事件、旁白信息点如何驱动画面
+	Exits      string       `json:"exits,omitempty"`      // 出场：何时退、怎么退（干脆不拖尾）
+	Camera     string       `json:"camera,omitempty"`     // 运镜计划：全段持续的背景运动，幅度必须可感知
+	Transition string       `json:"transition,omitempty"` // 段间转场政策：简报含转场特色时必须按特色机制实现
+}
+
+// MotionMove 入场手法菜单的一条：设计阶段现场发明、全片段落轮换取用——
+// 「同一张卡片的 N 种亮相」正是段间呼应的来源（与 device 逐段变奏同理）。
+type MotionMove struct {
+	Name   string `json:"name"`    // 手法名，如「终端逐行点亮」「滑入揭示」「字卡打字机」
+	How    string `json:"how"`     // 初始态→终态怎么补间（物理内：opacity/x/y/scale/rotation/count）
+	UseFor string `json:"use_for"` // 适用：哪类元素/哪类版式（标题/面板组/数据卡/满幅场景）
 }
 
 // DeviceSpec 贯穿装置：全片反复出现、随内容变奏的招牌画面机制
@@ -374,6 +390,33 @@ func ValidateStyleSamplesDraft(ss *StyleSamples) error {
 	}
 	if ss.Motion.Stagger < 0 || ss.Motion.Stagger > 0.5 {
 		return fmt.Errorf("motion.stagger=%.2f 超范围 0–0.5 秒", ss.Motion.Stagger)
+	}
+	// 动效编排四件套：只给档位+一句话时，模型全片复用同一种浮入（实测「PPT感」
+	// 来源）——入场手法菜单/节奏下限/出场/运镜/转场必须分开设计，缺件打回重出。
+	if len(ss.Motion.Entrances) < 3 || len(ss.Motion.Entrances) > 5 {
+		return fmt.Errorf("motion.entrances 须为 3–5 条入场手法（得到 %d 条）——手法菜单是全片生动感的来源，只给一种=整片像PPT", len(ss.Motion.Entrances))
+	}
+	seen := map[string]bool{}
+	for i, mv := range ss.Motion.Entrances {
+		if strings.TrimSpace(mv.Name) == "" || strings.TrimSpace(mv.How) == "" || strings.TrimSpace(mv.UseFor) == "" {
+			return fmt.Errorf("motion.entrances[%d] 三件齐（name/how/use_for）才可用", i)
+		}
+		if seen[mv.Name] {
+			return fmt.Errorf("motion.entrances[%d] 手法名 %q 重复——菜单里的手法必须一眼不同", i, mv.Name)
+		}
+		seen[mv.Name] = true
+	}
+	if strings.TrimSpace(ss.Motion.Rhythm) == "" {
+		return fmt.Errorf("motion.rhythm 为空——段内节奏下限（隔几秒一个可见事件、旁白信息点如何驱动画面）必须成文")
+	}
+	if strings.TrimSpace(ss.Motion.Exits) == "" {
+		return fmt.Errorf("motion.exits 为空——出场何时退怎么退必须成文")
+	}
+	if strings.TrimSpace(ss.Motion.Camera) == "" {
+		return fmt.Errorf("motion.camera 为空——运镜计划（持续背景运动+可感知幅度基准）必须成文")
+	}
+	if strings.TrimSpace(ss.Motion.Transition) == "" {
+		return fmt.Errorf("motion.transition 为空——段间转场政策必须成文（黑场一瞬须论证才可用）")
 	}
 	if ss.Device == nil || strings.TrimSpace(ss.Device.Name) == "" ||
 		strings.TrimSpace(ss.Device.Desc) == "" || strings.TrimSpace(ss.Device.PerSeg) == "" {

@@ -411,8 +411,11 @@ func stageStyleSamples(p *Project) error {
 		if err := contract.ValidateStyleSamples(&ss); err != nil {
 			return err // 包括 confirmed=false：等待用户确认
 		}
-		// 会话模式（人工/上轮产物）也过落点校验：简报存在时特色必须登记齐
+		// 会话模式（人工/上轮产物）也过落点校验：简报存在时特色必须登记齐且真实现
 		if err := LoadStyleBrief(p).CheckAbsorption(ss.SignatureAbsorption); err != nil {
+			return fmt.Errorf("人工样张产物不合格: %w", err)
+		}
+		if err := LoadStyleBrief(p).CheckDynamicLanding(&ss); err != nil {
 			return fmt.Errorf("人工样张产物不合格: %w", err)
 		}
 		if err := writeFile(final, mustJSON(ss)); err != nil {
@@ -444,6 +447,9 @@ func stageStyleSamples(p *Project) error {
 			verr := contract.ValidateStyleSamplesDraft(&ss)
 			if verr == nil {
 				verr = LoadStyleBrief(p).CheckAbsorption(ss.SignatureAbsorption)
+			}
+			if verr == nil {
+				verr = LoadStyleBrief(p).CheckDynamicLanding(&ss)
 			}
 			if verr == nil {
 				ss.Confirmed = false

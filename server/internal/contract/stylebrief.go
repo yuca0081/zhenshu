@@ -146,3 +146,31 @@ func (b *StyleBrief) CheckAbsorption(got []SigAbsorption) error {
 	}
 	return nil
 }
+
+// CheckDynamicLanding 动态特色的「真实现」校验（CheckAbsorption 只查登记齐，
+// 这里查落进动效语言没有）：转场/运镜/动效类特色承诺的手法必须在 motion 的
+// 结构化字段里有实现——登记了 lands_in 却没落字段，特色就停在纸面上（实测：
+// 「噪点吞没转场」登记丢失+无处可落，全片退化为黑场一切，观众感知=PPT）。
+// brief 为 nil（未选库内风格）或 motion 缺失（旧设计）时不约束。
+func (b *StyleBrief) CheckDynamicLanding(ss *StyleSamples) error {
+	if b == nil || len(b.Signatures) == 0 || ss == nil || ss.Motion == nil {
+		return nil
+	}
+	for _, sg := range b.Signatures {
+		switch sg.Kind {
+		case SigKindTransition:
+			if strings.TrimSpace(ss.Motion.Transition) == "" {
+				return fmt.Errorf("特色[%s]（transition）登记了落点但 motion.transition 为空——段间转场政策必须按该特色机制设计", sg.Name)
+			}
+		case SigKindCamera:
+			if strings.TrimSpace(ss.Motion.Camera) == "" {
+				return fmt.Errorf("特色[%s]（camera）登记了落点但 motion.camera 为空——运镜计划必须按该特色机制设计", sg.Name)
+			}
+		case SigKindMotion:
+			if len(ss.Motion.Entrances) == 0 {
+				return fmt.Errorf("特色[%s]（motion）登记了落点但 motion.entrances 为空——入场手法菜单必须按该特色机制设计", sg.Name)
+			}
+		}
+	}
+	return nil
+}

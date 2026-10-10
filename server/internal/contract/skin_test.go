@@ -80,7 +80,17 @@ func goodDesign() *StyleSamples {
 			Body:    FontRole{Stack: "'KaiTi','Microsoft YaHei',serif", Weight: "400"},
 			Data:    FontRole{Stack: "Consolas,'Microsoft YaHei',monospace", Weight: "700"},
 		},
-		Motion: &MotionLang{Ease: "power3.out", DurIn: 0.5, DurSettle: 0.25, Stagger: 0.08, Notes: "大字浮入，禁弹跳"},
+		Motion: &MotionLang{Ease: "power3.out", DurIn: 0.5, DurSettle: 0.25, Stagger: 0.08, Notes: "大字浮入，禁弹跳",
+			Entrances: []MotionMove{
+				{Name: "逐行点亮", How: "opacity 0→1 + y:14→0 逐个 stagger", UseFor: "标题/面板组"},
+				{Name: "滑入揭示", How: "x:-60→0 配 power2.inOut", UseFor: "分栏主画面"},
+				{Name: "字卡打字机", How: "按字符 span 化逐字点亮", UseFor: "等宽日志"},
+			},
+			Rhythm:     "每 3–5 秒一个可见事件，旁白信息点必有画面响应",
+			Exits:      "旁白收尾前 0.3s 淡出，禁拖尾",
+			Camera:     "10 秒内 scale≥1.08 或位移≥画面宽 5%",
+			Transition: "章节门牌翻转切入，禁无论证黑场",
+		},
 		Device: &DeviceSpec{Name: "章节门牌", Desc: "每章开场的金属铭牌", PerSeg: "seg01 亮相，此后每章复现并换章名"},
 	}
 }
