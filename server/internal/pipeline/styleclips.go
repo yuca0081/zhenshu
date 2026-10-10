@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -99,12 +100,16 @@ func EnsureSampleClips(p *Project, ss *contract.StyleSamples, sb *contract.Story
 			continue
 		}
 		id := "clip-" + strconv.Itoa(idx)
-		if err := writeFile(p.Artifact("style/clips/"+id+".html"), d.HTML); err != nil {
+		if err := writeFile(p.Artifact("style/clips/"+id+".html"), normalizeClipHTML(d.HTML, id)); err != nil {
 			ss.Samples[idx].ClipNote = "小样落盘失败: " + err.Error()
 			continue
 		}
 		ss.Samples[idx].ClipHTML = "style/clips/" + id + ".html"
-		jobs = append(jobs, clipJob{idx: idx, id: id, narration: clipNarration(sb, idx)})
+		desc := ""
+		if idx < len(ss.Samples) {
+			desc = ss.Samples[idx].Desc
+		}
+		jobs = append(jobs, clipJob{idx: idx, id: id, narration: clipNarration(sb, idx, desc)})
 	}
 	if len(jobs) == 0 {
 		fail("没有一条小样通过机械校验")
@@ -180,13 +185,98 @@ func clipHTMLPlausible(html string) bool {
 		!strings.Contains(h, "http://") && !strings.Contains(h, "https://")
 }
 
+// clipTplAttrRe 匹配被误写在 <template> 开标签上的组合物属性。
+var clipTplAttrRe = regexp.MustCompile(`\s+(?:data-composition-id|data-width|data-height)\s*=\s*("[^"]*"|'[^']*')`)
+
+// normalizeClipHTML 落盘侧机械纠偏：模型偶发把 data-composition-id/尺寸写在
+// <template> 开标签上，而渲染器要求它们在 template 内部的第一个元素上
+//（正式段形状：裸 <template> + 内部根 div 带 id，见 pipeline.go stageCompositions）。
+// 这类形状错误不值得烧修复轮——落盘前直接搬正；形状本来对的原样返回。
+func normalizeClipHTML(html, id string) string {
+	t := strings.Index(strings.ToLower(html), "<template")
+	if t < 0 {
+		return html
+	}
+	te := strings.Index(html[t:], ">")
+	if te < 0 {
+		return html
+	}
+	te += t
+	tag := html[t : te+1]
+	if !strings.Contains(tag, "data-composition-id") {
+		return html
+	}
+	props := ` data-composition-id="` + id + `"`
+	if w := clipTplAttrVal(tag, "data-width"); w != "" {
+		props += ` data-width="` + w + `"`
+	}
+	if h := clipTplAttrVal(tag, "data-height"); h != "" {
+		props += ` data-height="` + h + `"`
+	}
+	// template 后跳过空白，找到第一个元素开标签的元素名（<后紧跟字母），属性插在元素名后
+	ns, ne := -1, -1
+	for i := te + 1; i < len(html)-1; i++ {
+		c := html[i]
+		if c == ' ' || c == '\n' || c == '\r' || c == '\t' {
+			continue
+		}
+		if c == '<' && isASCIILetter(html[i+1]) {
+			ns, ne = i+1, i+2
+			for ne < len(html) && isNameChar(html[ne]) {
+				ne++
+			}
+		}
+		break
+	}
+	if ns < 0 {
+		return html
+	}
+	return html[:t] + clipTplAttrRe.ReplaceAllString(tag, "") + html[te+1:ne] + props + html[ne:]
+}
+
+func isNameChar(c byte) bool {
+	return isASCIILetter(c) || (c >= '0' && c <= '9') || c == '-' || c == '_'
+}
+
+// clipTplAttrVal 从开标签文本里取单个属性值（单双引号都接）。
+func clipTplAttrVal(tag, name string) string {
+	m := regexp.MustCompile(regexp.QuoteMeta(name) + `\s*=\s*("([^"]*)"|'([^']*)')`).FindStringSubmatch(tag)
+	if m == nil {
+		return ""
+	}
+	if m[2] != "" {
+		return m[2]
+	}
+	return m[3]
+}
+
+func isASCIILetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// segRefRe 样张 desc 里的展示段引用（「展示 seg06 裁判所成立章首页」）。
+var segRefRe = regexp.MustCompile(`(?i)seg\s*0*(\d+)`)
+
 // clipNarration 字幕带文案 = 分镜真实旁白截首句（超长截 32 rune 加省略号）。
 // 小样的意义在「所见即所得」，字幕文案必须是真的，不许模型编。
-func clipNarration(sb *contract.Storyboard, sampleIdx int) string {
+// 段落取自样张 desc 点名的展示段（画面演的是那段，文案也得是那段——
+// 2026-10-10 实测按样张下标直取会张冠李戴）；desc 没点名才退回样张下标。
+func clipNarration(sb *contract.Storyboard, sampleIdx int, desc string) string {
 	if sb == nil || len(sb.Segments) == 0 {
 		return ""
 	}
 	i := sampleIdx
+	if m := segRefRe.FindStringSubmatch(desc); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			id := fmt.Sprintf("seg%02d", n)
+			for k, s := range sb.Segments {
+				if s.ID == id {
+					i = k
+					break
+				}
+			}
+		}
+	}
 	if i >= len(sb.Segments) {
 		i = len(sb.Segments) - 1
 	}
@@ -279,7 +369,7 @@ func clipUserPrompt(ss *contract.StyleSamples, sb *contract.Storyboard, need []i
 		}
 		seed := ""
 		if seg := clipSegment(sb, idx); seg != nil && strings.TrimSpace(seg.Narration) != "" {
-			seed = fmt.Sprintf("｜旁白种子（字幕带文案，逐字用）：「%s」", clipNarration(sb, idx))
+			seed = fmt.Sprintf("｜旁白种子（字幕带文案，逐字用）：「%s」", clipNarration(sb, idx, ss.Samples[idx].Desc))
 		}
 		fmt.Fprintf(&list, "%d. data-composition-id=\"clip-%d\" ← %s%s%s\n", k+1, idx, ref, layout, seed)
 	}
@@ -287,8 +377,10 @@ func clipUserPrompt(ss *contract.StyleSamples, sb *contract.Storyboard, need []i
 	return fmt.Sprintf(`为这一部片的风格样张写 %d 条「迷你真段」场景 HTML：每条 %.1f 秒、真实画幅，平台会用与正式片完全相同的渲染器渲成 mp4 给用户预览。用户看小样决定整套风格是否确认——小样必须就是成片某一段开头 3 秒的真的样子，不许做简化演示版。
 
 ## 场景契约（与正式段同一份；违反会被渲染器拒收）
-1. 整个文件 = 一个 <template> 片段，无 DOCTYPE/html/head/body
-2. 根元素 data-composition-id="clip-<N>" data-width="%d" data-height="%d"；内部 #root 为舞台
+1. 整个文件 = 一个 <template> 片段，无 DOCTYPE/html/head/body；
+   <template> 标签本身不带任何属性
+2. template 内部第一个元素（通常是最外层 div）带 data-composition-id="clip-<N>"
+   data-width="%d" data-height="%d"；它内部的 #root 为舞台
 3. 恰好一个 gsap.timeline({paused:true})，末尾注册 window.__timelines["clip-<N>"]
 4. 全屏轨道层（背景等）带 class="clip" + data-start="0" data-duration="%.1f" data-track-index
 5. 每个有意义的可见元素带 data-hf-name="人话名"（≥3 个）

@@ -669,19 +669,23 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 		}
 		// 修复目标 = 重做段（可逗号多段）∪ 本轮报错涉及的段：check 是全片门禁，
 		// 重做段之外的段报错时若只重生成重做段，那些错误永远修不掉（结构性死锁）。
-		targets := failingSegs(err.Error())
+		targets := failingSegs(blockingCheckErrors(err.Error()))
 		for _, id := range strings.Split(only, ",") {
 			if id = strings.TrimSpace(id); id != "" && !slices.Contains(targets, id) {
 				targets = append([]string{id}, targets...)
 			}
 		}
 		repairOnly := strings.Join(targets, ",")
-		feedback := "上一版画面被自动检查拒绝，报错摘要（✗ 行逐项都要修）：\n" + pipeline.TailLines(err.Error(), 25) +
+		feedback := "上一版画面被自动检查拒绝，报错摘要（✗ 行逐项都要修）：\n" + pipeline.TailLines(blockingCheckErrors(err.Error()), 25) +
 			"\n修复规则：\n" +
 			"- 重叠/越界：整体重排拉开间距，避开底部字幕带（禁放区见布局规则），必要时减少元素。\n" +
 			"- 对比度 ✗：文字色与它实际压着的背景太接近。检查器的建议色不可信（实测往往不达标）——" +
 			"文字压在照片/深色底上一律改极浅色（#EFE9DA、#E3E3E3 级），浅色底上用深色（#2D2D2D 级）；" +
 			"中灰（#616161、#9E9E9E）做正文/标注色直接不达标，禁用。\n" +
+			"- 字体 ✗（font_family_without_font_face）：报的字体渲染端不存在、也没有合法下载渠道（专有字体永远下不了）。" +
+			"修复＝把该字体从 font-family 栈里删掉、退到栈内或设计系统字体角色的后备字体——" +
+			"这算合规修复，不算违反设计系统（渲染端不存在的字体本来就守护不了设计）；" +
+			"除此之外画面一切照旧，不要顺手改构图/配色/动效。\n" +
 			"逐项修完再输出。"
 		// 本轮 check 失败收口（计时），修复轮重生成的时间不计入 check
 		r.Manifest(p, "stage.finish", "check")
@@ -703,6 +707,31 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 
 // segIDRe 段 id（seg01、seg02…）。
 var segIDRe = regexp.MustCompile(`seg\d{2,}`)
+
+// blockingCheckErrors 取 check 诊断里真正阻塞门禁的错误行：Layout/Motion/Lint 段的
+// ✗ 行。Contrast 段的 ✗ 是 warning 级不判门禁死，且已由 applyContrastFixes 廉价回填
+//（LLM 回喂修对比度从未收敛）；把它的行喂进修复反馈只会让健康段被反复重出、
+// 把已修好的段改坏——2026-10-10 宗教裁判所片实测：一处 Layout error + 八条 Contrast
+// warning 的诊断整包回喂，修复轮连烧三轮重出十余段仍不过，正是本函数要斩的循环。
+func blockingCheckErrors(out string) string {
+	var keep []string
+	inContrast := false
+	for _, line := range strings.Split(out, "\n") {
+		t := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(t, "Contrast"):
+			inContrast = true
+			continue
+		case strings.HasPrefix(t, "Lint"), strings.HasPrefix(t, "Layout"),
+			strings.HasPrefix(t, "Motion"), strings.HasPrefix(t, "Runtime"), strings.HasPrefix(t, "Snapshots"):
+			inContrast = false
+		}
+		if !inContrast && strings.Contains(t, "✗") {
+			keep = append(keep, t)
+		}
+	}
+	return strings.Join(keep, "\n")
+}
 
 // failingSegs 从 check 诊断提取报错（✗ 行）涉及的段 id：选择器前缀 #segNN-… 与
 // 对比度项的 source 路径都算。info 行不取——健康段没必要重生成。

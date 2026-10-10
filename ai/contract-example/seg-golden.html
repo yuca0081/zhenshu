@@ -1,58 +1,42 @@
 <template>
+  <!-- ⚠⚠ 本样例只示范「结构骨架」：文件形状 / 时间轴注册 / canvas 驱动接线 / 字体声明。
+       时间线动效被刻意清空——入场、出场、节奏、缓动、元素联动完全由你为本段原创设计，
+       不存在需要模仿的动效。只有「必须能跑」的部分照抄结构；画面怎么动，听你的。 -->
   <style>
 @font-face{font-family:"Segoe UI";src:local("Segoe UI");}
 @font-face{font-family:"Microsoft YaHei";src:local("Microsoft YaHei");}
 #root{position:relative;width:1920px;height:1080px;overflow:hidden;background:transparent;
   font-family:'Segoe UI','Microsoft YaHei',sans-serif;color:#E5E7EB;}
 .s-clip{position:absolute;inset:0;}
-.s-paper{position:absolute;inset:0;background-color:#0D0D1F;background-image:
-  radial-gradient(ellipse at 50% 44%,transparent 52%,rgba(0,0,0,.46) 100%),
-  radial-gradient(44% 44% at 22% 18%,#7C3AED3D 0%,transparent 70%),
-  linear-gradient(#7C3AED30 1px,transparent 1px),
-  linear-gradient(90deg,#7C3AED30 1px,transparent 1px),
-  linear-gradient(170deg,#0D0D1F 0%,#1A103A 100%);}
 .s-el{position:absolute;}
-.s-label{position:absolute;font-size:38px;font-weight:700;color:#E5E7EB;white-space:nowrap;
-  text-shadow:0 0 10px #A78BFA45;}
   </style>
   <div data-composition-id="seg01" data-width="1920" data-height="1080">
     <div id="root">
-      <div id="s-paper" class="s-clip clip s-paper" data-start="0" data-duration="5.198" data-track-index="0" data-hf-name="背景纸面"></div>
-      <div id="seg01-cam" data-layout-allow-overflow style="position:absolute;inset:0;"><canvas id="seg01-scene" width="1920" height="1080" data-hf-name="程序化画布：星轨与轨道" style="position:absolute;left:0;top:0;width:1920px;height:1080px;"></canvas>
-    <div class="s-el" id="seg01-big2" data-hf-name="大字：1814" style="top:300px;left:330px;font-size:150px;font-weight:900;color:#A78BFA;"><span data-c style="display:inline-block;">1</span><span data-c style="display:inline-block;">8</span><span data-c style="display:inline-block;">1</span><span data-c style="display:inline-block;">4</span></div>
-    <div class="s-label s-el" id="seg01-label3" data-hf-name="标注：Mécanique céleste" style="top:480px;left:330px;color:#E5E7EB;font-size:34px;">Mécanique céleste</div>
-    <div class="s-el" id="seg01-chip4" data-hf-name="标签：拉普拉斯妖 · 前奏" style="top:750px;left:1180px;background:#AE5BBB;color:#FFFFFF;border:1px solid rgba(229,231,235,.35);border-radius:24px;padding:10px 28px;font-size:34px;font-weight:800;white-space:nowrap;">拉普拉斯妖 · 前奏</div>
+      <div id="s-paper" class="s-clip clip s-paper" data-start="0" data-duration="5.198" data-track-index="0" data-hf-name="背景层"></div>
+      <div id="seg01-cam" data-layout-allow-overflow style="position:absolute;inset:0;"><canvas id="seg01-scene" width="1920" height="1080" data-hf-name="程序化画布（可选，仅当本段需要时保留）" style="position:absolute;left:0;top:0;width:1920px;height:1080px;"></canvas>
+    <div class="s-el" id="seg01-el1" data-hf-name="示例元素：起个具体的人话名" style="top:300px;left:330px;font-size:150px;font-weight:900;color:#A78BFA;"><span data-c style="display:inline-block;">字</span><span data-c style="display:inline-block;">元</span></div>
       </div>
     </div>
   </div>
   <script>
     (function() {
       var tl = gsap.timeline({ paused: true });
-      // T4：canvas = t 的纯函数 + 种子化 rng（contract.md §2）
+      // ── 动效区：全部由你写。这里刻意留空。 ──
+      // 可以用的词汇（都是 GSAP 标准能力，自选自组合，数量与顺序按叙事需要）：
+      //   stagger 逐字/逐项错峰、back.out/elastic/expo 等带性格缓动、rotate/scale/x/y/skew、
+      //   call() 分支、嵌套 label、对 #seg01-cam 的整层运镜……
+      // 硬约束只有契约里那几条：确定性（无随机/时间函数）、无 CSS animation、注册在同一 timeline。
+
+      // （仅当保留 canvas 时，驱动接线三行必须存在且逐字同构——这是结构，不是动效）
       var __c=document.getElementById("seg01-scene"),__x=__c.getContext("2d");
       function __rng32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
       window["__draw_seg01-scene"]=function(t,ctx,W,H,rng){
+        // t 的纯函数：每帧从零重画；运动写成 t 的函数；缓动画进 f(t) 包络
         ctx.fillStyle='#0B0F1A';ctx.fillRect(0,0,W,H);
-        for(var i=0;i<130;i++){var r1=rng(),r2=rng(),r3=rng(),r4=rng();var x=r1*W,y=r2*H;var tw=0.25+0.3*Math.sin(t*(1+r3*2)+r4*6.28);ctx.fillStyle='rgba(230,238,255,'+Math.max(0,tw).toFixed(3)+')';ctx.beginPath();ctx.arc(x,y,1+r3*1.8,0,6.2832);ctx.fill();}
-        var cx=W*0.60,cy=H*0.44,prog=Math.min(1,t/3.2);
-        ctx.globalCompositeOperation='lighter';
-        var glow=ctx.createRadialGradient(cx,cy,0,cx,cy,120);glow.addColorStop(0,'rgba(255,214,130,0.55)');glow.addColorStop(1,'rgba(255,214,130,0)');ctx.fillStyle=glow;ctx.beginPath();ctx.arc(cx,cy,120,0,6.2832);ctx.fill();
-        var orbits=[[190,'rgba(255,214,130,0.75)'],[300,'rgba(120,220,232,0.65)'],[400,'rgba(255,214,130,0.5)']];
-        var total=2*Math.PI*(190+300+400)*prog, acc=0;
-        for(var k=0;k<orbits.length;k++){var R=orbits[k][0],col=orbits[k][1];var arcLen=2*Math.PI*R;var frac=Math.max(0,Math.min(1,(total-acc)/arcLen));ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();ctx.arc(cx,cy,R,-Math.PI/2,-Math.PI/2+frac*2*Math.PI);ctx.stroke();acc+=arcLen;
-        if(frac>=1){var ang=t*(0.35-k*0.1)+k*2.1;var px=cx+R*Math.cos(ang),py=cy+R*Math.sin(ang);ctx.fillStyle=col;ctx.beginPath();ctx.arc(px,py,7-k,0,6.2832);ctx.fill();}}
-        ctx.fillStyle='rgba(255,230,170,0.95)';ctx.beginPath();ctx.arc(cx,cy,18,0,6.2832);ctx.fill();
       };
-      gsap.set("#seg01-scene",{opacity:0});
-      tl.to("#seg01-scene",{opacity:1,duration:.3,ease:"none"},0);
       tl.to({},{duration:5.198,ease:"none",onUpdate:function(){var t=tl.time();__x.clearRect(0,0,1920,1080);window["__draw_seg01-scene"](t,__x,1920,1080,__rng32(1814));}},0);
-      gsap.set('#seg01-big2 [data-c]',{opacity:0,y:40});
-      tl.to('#seg01-big2 [data-c]',{opacity:1,y:0,duration:.3,stagger:0.22,ease:'power2.out'},0.05);
-      gsap.set('#seg01-label3',{opacity:0});
-      tl.to('#seg01-label3',{opacity:1,duration:0.4,ease:'power2.out'},2.18);
-      gsap.set('#seg01-chip4',{opacity:0,y:30,scale:.9});
-      tl.to('#seg01-chip4',{opacity:1,y:0,scale:1,duration:.4,ease:'back.out(1.6)'},2.86);
-      tl.fromTo('#seg01-cam',{scale:1,x:0},{scale:1.035,x:-22,duration:5.198,ease:'none'},0);
+
+      tl.to({},{duration:0,ease:"none"},0); // ← 动效写在这条的位置上（示例占位，交付前删除或替换）
       window.__timelines["seg01"] = tl;
     })();
   </script>

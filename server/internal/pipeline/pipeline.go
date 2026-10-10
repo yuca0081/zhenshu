@@ -568,7 +568,7 @@ func stageCompositions(p *Project) error {
 
 // stageCheck 质量门禁：调 hyperframes check（lint+runtime+layout+motion+contrast）。
 func stageCheck(p *Project) error {
-	out, err := runCLI(p, "npx", "--yes", "hyperframes@0.8.55", "check")
+	out, err := runCLI(p, "npx", "--yes", "hyperframes@0.8.55", "check", "--no-browser-gpu")
 	if err != nil {
 		// 完整输出：上游修复轮要从 ✗ 行提取报错段（截断会丢 Layout 段的重叠错误）；
 		// 对话/清单侧各自再做 tail/挑行

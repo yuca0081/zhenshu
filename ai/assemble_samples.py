@@ -145,6 +145,13 @@ def main(proj_dir: str) -> int:
     if not (proj / 'meta.json').exists():
         (proj / 'meta.json').write_text(json.dumps(
             {'id': proj.name, 'name': pj.get('name', proj.name)}, ensure_ascii=False), encoding='utf-8')
+    # render -c 从 index.html 提取 render shell（2026-10-10 实测：缺它整批小样渲染必炸，
+    # 报「requires a project index.html」）。shell 只取 head/资产引用，拿第一条小样工程即可。
+    first = next((e for e in entries if (segdir / (pathlib.Path(e['file']).stem + '.html')).exists()), None)
+    if first:
+        (proj / 'index.html').write_text(
+            (segdir / (pathlib.Path(first['file']).stem + '.html')).read_text(encoding='utf-8'),
+            encoding='utf-8')
     print(f'迷你真段工程壳 ✓ {done}/{len(entries)} 条（.hf-clip/）')
     return 0
 
