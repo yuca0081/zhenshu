@@ -158,6 +158,14 @@ type Sample struct {
 	Tag  string `json:"tag"`  // 「样张 A · 标题帧」
 	Desc string `json:"desc"` // 一句话说明
 	HTML string `json:"html"` // 样张内容（与成片同一套风格 token，所见即所得）
+
+	// 迷你真段（样张升级）：同一设计系统的 2-4s 动态小样，与正式段走同一份场景
+	// 契约 + 同一台渲染器。ClipHTML 落 style/clips/clip-N.html（场景片段），
+	// Video = 渲出的 mp4（相对项目根）。两者为空 = 该条降级静态预览（生成/渲染
+	// 失败，原因记 ClipNote）；老文件无这些字段，读侧一律按可选处理。
+	ClipHTML string `json:"clip_html,omitempty"`
+	Video    string `json:"video,omitempty"`
+	ClipNote string `json:"clip_note,omitempty"`
 }
 
 // FontRole 单一字体角色：字体栈 + 字重 + 字距（三模型对比评审：字距普遍拉开是高档片签名）。

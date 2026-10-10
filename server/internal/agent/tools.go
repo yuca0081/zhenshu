@@ -202,28 +202,12 @@ var tools = []tool{
 				if err := pipeline.Run(context.Background(), p, "style_samples"); err != nil {
 					return "样张生成失败：" + err.Error()
 				}
-				var ss contract.StyleSamples
-				dir, n := "", 0
-				if b, rerr := os.ReadFile(out); rerr == nil && json.Unmarshal(b, &ss) == nil {
-					dir, n = ss.Direction, len(ss.Samples)
-				}
-				if a.OnEvent != nil {
-					a.OnEvent(p.ID, "style_draft", dir)
-				}
-				return fmt.Sprintf("风格样张已出（强参考「%s」：标签气质+特色逐条吸收）：%s（%d 张，舞台可预览）。硬门——用户在舞台点头确认后才能开工", st.Name, dir, n)
+				return a.styleDraftReport(p, out, "强参考「"+st.Name+"」：标签气质+特色逐条吸收")
 			}
 			if err := pipeline.Run(context.Background(), p, "style_samples"); err != nil {
 				return "样张生成失败：" + err.Error()
 			}
-			var ss contract.StyleSamples
-			dir, n := "", 0
-			if b, rerr := os.ReadFile(out); rerr == nil && json.Unmarshal(b, &ss) == nil {
-				dir, n = ss.Direction, len(ss.Samples)
-			}
-			if a.OnEvent != nil {
-				a.OnEvent(p.ID, "style_draft", dir)
-			}
-			return fmt.Sprintf("风格样张已出（自由发挥）：%s（%d 张，舞台可预览）。硬门——用户在舞台点头确认后才能开工", dir, n)
+			return a.styleDraftReport(p, out, "自由发挥")
 		},
 	},
 	{

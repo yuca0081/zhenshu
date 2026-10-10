@@ -76,6 +76,7 @@ func (s *Server) Router() *gin.Engine {
 	api.GET("/projects/:id/rework/last", s.reworkLast)
 	api.POST("/projects/:id/cancel", s.cancelProduce)
 	api.GET("/projects/:id/video/main.mp4", s.video)
+	api.GET("/projects/:id/style/clips/:file", s.styleClip)
 	api.GET("/projects/:id/audio_meta", s.audioMeta)
 	api.GET("/library", s.listLibrary)
 	api.DELETE("/library/:id", s.deleteLibraryEntry)
@@ -456,13 +457,16 @@ func (s *Server) applyStyle(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	// 旧样张产物作废（强参考换了，设计必须重发明）：样张/皮肤/设计文档/LLM 中间产物
+	// 旧样张产物作废（强参考换了，设计必须重发明）：样张/皮肤/设计文档/LLM 中间产物，
+	// 迷你真段（style/clips + .hf-clip 工程壳）整目录作废
 	for _, f := range []string{
 		"style/style_samples.json", "style/skin.json", "style/design.md", "llm/style_samples.json",
 		"style/sample-0.png", "style/sample-1.png", "style/sample-2.png",
 	} {
 		_ = os.Remove(p.Artifact(f))
 	}
+	_ = os.RemoveAll(p.Artifact("style/clips"))
+	_ = os.RemoveAll(p.Artifact(".hf-clip"))
 	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil {
 		var meta map[string]any
 		if json.Unmarshal(b, &meta) == nil {
@@ -852,6 +856,24 @@ func (s *Server) video(c *gin.Context) {
 		return
 	}
 	serveFile(c, path, "main.mp4", "no-store")
+}
+
+// styleClip 迷你真段 mp4（样张动态小样）。文件名白名单 clip-<N>.mp4——
+// style/clips/ 里还有场景片段 html 和装配清单，那些不对外。
+var styleClipRe = regexp.MustCompile(`^clip-\d+\.mp4$`)
+
+func (s *Server) styleClip(c *gin.Context) {
+	name := c.Param("file")
+	if !styleClipRe.MatchString(name) {
+		c.JSON(404, gin.H{"error": "文件不存在"})
+		return
+	}
+	path := pipeline.NewProject(s.DataDir, c.Param("id")).Artifact("style/clips/" + name)
+	if _, err := os.Stat(path); err != nil {
+		c.JSON(404, gin.H{"error": "小样未就绪"})
+		return
+	}
+	serveFile(c, path, name, "no-store")
 }
 
 // ── 风格库（起草自动 + 入库确认）─────────────────────────────

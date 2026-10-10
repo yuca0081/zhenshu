@@ -336,6 +336,8 @@ func (a *Agent) regenerateStyle(p *pipeline.Project, instruction, out string) st
 	for i := 0; i < 3; i++ { // 截图缓存一并清掉，防 produce 把旧图配新样张
 		_ = os.Remove(p.Artifact(fmt.Sprintf("style/sample-%d.png", i)))
 	}
+	_ = os.RemoveAll(p.Artifact("style/clips")) // 迷你真段随旧样张作废（片段/清单/mp4 一锅端）
+	_ = os.RemoveAll(p.Artifact(".hf-clip"))    // 小样单段工程壳同上
 	_ = os.Remove(p.Artifact("style/skin.json"))   // 旧皮肤随旧样张作废，确认新样张时重落
 	_ = os.Remove(p.Artifact("style/design.md"))   // 旧设计系统文档同样作废（确认新样张时机械重渲）
 	_ = os.Remove(p.Artifact("style/style_brief.json")) // 用户点名换方向：强参考简报一并作废
@@ -366,11 +368,48 @@ func (a *Agent) regenerateStyle(p *pipeline.Project, instruction, out string) st
 	if a.OnEvent != nil {
 		a.OnEvent(p.ID, "style_draft", dir)
 	}
-	msg := fmt.Sprintf("样张已按要求「%s」重新生成，新方向：%s（舞台可预览）。confirmed 已复位——用户须在舞台重新点「确认风格」才能开工", instruction, dir)
+	msg := fmt.Sprintf("样张已按要求「%s」重新生成，新方向：%s%s（舞台可预览）。confirmed 已复位——用户须在舞台重新点「确认风格」才能开工", instruction, dir, clipSummary(&ss))
 	if a.State(p.ID).HasVideo {
 		msg += "；已有成片仍是旧风格，重新制作才会套用"
 	}
 	return msg
+}
+
+// styleDraftReport 首次出样张的工具回话：方向/张数/小样条数如实报，硬门提醒固定带。
+func (a *Agent) styleDraftReport(p *pipeline.Project, out, source string) string {
+	var ss contract.StyleSamples
+	dir := ""
+	if b, err := os.ReadFile(out); err == nil && json.Unmarshal(b, &ss) == nil && ss.Direction != "" {
+		dir = ss.Direction
+	}
+	if a.OnEvent != nil {
+		a.OnEvent(p.ID, "style_draft", dir)
+	}
+	return fmt.Sprintf("风格样张已出（%s）：%s%s。硬门——用户在舞台点头确认后才能开工", source, dir, clipSummary(&ss))
+}
+
+// clipSummary 迷你真段条数的事实摘要（工具回话用）：几条就报几条，没出成
+// 不装没出——舞台里每条样张下有降级原因，对话侧如实转述。
+func clipSummary(ss *contract.StyleSamples) string {
+	n, clips := 0, 0
+	if ss != nil {
+		n = len(ss.Samples)
+		for _, s := range ss.Samples {
+			if s.Video != "" {
+				clips++
+			}
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	if clips == 0 {
+		return fmt.Sprintf("（%d 张静态样张；动态小样这次没出成，原因见舞台每条样张下方）", n)
+	}
+	if clips < n {
+		return fmt.Sprintf("（%d 张，其中 %d 条带迷你真段小样，其余降级静态、原因见舞台）", n, clips)
+	}
+	return fmt.Sprintf("（%d 张全部带迷你真段小样，所见即所得）", n)
 }
 
 func mustReadFile(path string) []byte {

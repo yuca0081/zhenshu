@@ -57,6 +57,10 @@ export interface StyleSample {
   tag: string
   desc: string
   html: string
+  // 迷你真段（样张升级）：3s 动态小样 mp4（相对项目根）；空 = 降级静态（clip_note 记原因）
+  clip_html?: string
+  video?: string
+  clip_note?: string
 }
 
 export interface StyleSamples {

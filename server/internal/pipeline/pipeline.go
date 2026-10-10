@@ -395,6 +395,11 @@ func stageStyleSamples(p *Project) error {
 		if err := contract.ValidateStyleSamples(&ss); err != nil {
 			return err
 		}
+		// 迷你真段补渲（幂等，只补缺）：确认门还没拍板才有意义——已确认的老项目
+		// 不为预览烧渲染。中途断电重跑在这里续上。
+		if !ss.Confirmed && EnsureSampleClips(p, &ss, nil) {
+			_ = writeFile(final, mustJSON(ss))
+		}
 		return LockDesign(p, &ss)
 	}
 	out := p.LLMOutput("style_samples")
@@ -449,6 +454,11 @@ func stageStyleSamples(p *Project) error {
 					usage.PromptTokens, usage.CompletionTokens))
 				p.Manifest("style.drafted", ss.Direction)
 				p.Manifest("style_samples.api", prov.Name+"/"+prov.Model)
+				// 迷你真段：草稿落定后立刻出动态小样（任何失败只降级静态，见 styleclips.go），
+				// 完成后把 Video/ClipNote 回写进样张文件
+				if EnsureSampleClips(p, &ss, sb) {
+					_ = writeFile(final, mustJSON(ss))
+				}
 				return nil
 			}
 			lastErr = verr

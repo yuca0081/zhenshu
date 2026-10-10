@@ -157,3 +157,5 @@ export const videoURL = (id: string, rev = 0) => withToken(`/api/projects/${id}/
 export const referenceMediaURL = (id: string, file: string) => withToken(`/api/references/${id}/media/${file}`)
 // 风格库媒体（入库快照；详情抽屉用）
 export const libraryMediaURL = (id: string, file: string) => withToken(`/api/library/${id}/media/${file}`)
+// 迷你真段 mp4（样张动态小样；后端白名单 clip-<N>.mp4）
+export const styleClipURL = (id: string, file: string) => withToken(`/api/projects/${id}/style/clips/${file}`)
