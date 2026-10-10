@@ -33,31 +33,27 @@ func noGate(State) string { return "" }
 // voiceAliases 项目音色别名（与 ai/tts_align.py VOICE_ALIASES 保持一致，
 // voice_alias_test.go 钉住两表不漂移）。
 var voiceAliases = map[string]string{
-	"晓晓": "zh-CN-XiaoxiaoNeural",
-	"晓伊": "zh-CN-YiyiNeural",
-	"云健": "zh-CN-YunjianNeural",
-	"云希": "zh-CN-YunxiNeural",
-	"云扬": "zh-CN-YunyangNeural",
-	"云野": "zh-CN-YunyeNeural",
+	"晓晓":   "zh-CN-XiaoxiaoNeural",
+	"晓伊":   "zh-CN-YiyiNeural",
+	"云健":   "zh-CN-YunjianNeural",
+	"云希":   "zh-CN-YunxiNeural",
+	"云扬":   "zh-CN-YunyangNeural",
+	"云野":   "zh-CN-YunyeNeural",
+	"龙安灵心": "longanlingxin",
+	"龙安鲁风": "longanlufeng",
 }
 
-// cosyVoiceNames CosyVoice2 内置音色短名（与 ai/tts_align.py COSY_VOICES 同步；
-// 付费档 TTS，需 .env 配 SILICONFLOW_API_KEY）。
-var cosyVoiceNames = map[string]bool{
-	"alex": true, "benjamin": true, "charles": true, "david": true,
-}
-
-// isEdgeVoice / isCosyVoice 音色 id 判别：Edge 完整 id（zh-CN-YunjianNeural）
-// 或 CosyVoice 短名/完整 id（alex / FunAudioLLM/CosyVoice2-0.5B:alex）。
+// isEdgeVoice / isBailianVoice 音色 id 判别：Edge 完整 id（zh-CN-YunjianNeural）、
+// 百炼 Qwen-Audio-TTS 音色（longan* 龙安系 / loong* 英文系 / xunanchuan，含 _v3.x 后缀）。
+// TTS 引擎 2026-10-10 起只有百炼（DASHSCOPE_API_KEY）→ Edge 兜底两档，CosyVoice 档退役。
 func isEdgeVoice(id string) bool {
 	return strings.Contains(id, "-") && strings.Contains(id, "Neural")
 }
 
-func isCosyVoice(id string) bool {
-	if strings.HasPrefix(id, "FunAudioLLM/CosyVoice") {
-		return true
-	}
-	return cosyVoiceNames[id]
+func isBailianVoice(id string) bool {
+	return strings.HasPrefix(id, "longan") ||
+		strings.HasPrefix(id, "loong") ||
+		strings.HasPrefix(id, "xunanchuan")
 }
 
 var tools = []tool{
@@ -616,7 +612,7 @@ var tools = []tool{
 		def: toolDef("set_voice", "换配音音色：voice 留空=列出可用音色；设置后音频全量重配并自动整片重制（成片好了自动在对话里报结果）", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"voice": map[string]any{"type": "string", "description": "音色中文名（晓晓/晓伊/云健/云希/云扬/云野）、完整 Edge 音色 id，或 CosyVoice 音色（alex/benjamin/charles/david，付费档需 SILICONFLOW_API_KEY）；留空只列音色"},
+				"voice": map[string]any{"type": "string", "description": "音色中文名（龙安灵心/龙安鲁风/晓晓/晓伊/云健/云希/云扬/云野）、完整 Edge 音色 id，或百炼音色 id（longanlingxin/longanlufeng，需 DASHSCOPE_API_KEY）；留空只列音色"},
 			},
 		}),
 		gate: func(s State) string {
@@ -635,14 +631,14 @@ var tools = []tool{
 			_ = json.Unmarshal([]byte(args), &in)
 			want := strings.TrimSpace(in.Voice)
 			if want == "" {
-				return "可用音色：晓晓（女·温暖，默认）、晓伊（女·清亮）、云健（男·磁性浑厚）、云希（男·年轻阳光）、云扬（男·新闻专业）、云野（男·沉稳）；CosyVoice 付费档（更自然，需 SILICONFLOW_API_KEY）：alex/benjamin/charles/david。用 voice=名字 设置"
+				return "可用音色：龙安灵心（女·知心温暖，百炼·默认，需 DASHSCOPE_API_KEY）、龙安鲁风（男·明亮开朗，百炼）、晓晓（女·温暖）、晓伊（女·清亮）、云健（男·磁性浑厚）、云希（男·年轻阳光）、云扬（男·新闻专业）、云野（男·沉稳）。用 voice=名字 设置"
 			}
 			id := voiceAliases[want]
 			if id == "" {
-				id = want // 允许直接给完整 id（Edge 或 CosyVoice）
+				id = want // 允许直接给完整 id（Edge/百炼）
 			}
-			if !isEdgeVoice(id) && !isCosyVoice(id) {
-				return fmt.Sprintf("不认识音色 %q。可用：晓晓/晓伊/云健/云希/云扬/云野、完整 Edge 音色 id，或 CosyVoice 音色 alex/benjamin/charles/david（付费档）", want)
+			if !isEdgeVoice(id) && !isBailianVoice(id) {
+				return fmt.Sprintf("不认识音色 %q。可用：龙安灵心/龙安鲁风（百炼）、晓晓/晓伊/云健/云希/云扬/云野，或完整 Edge 音色 id", want)
 			}
 			if err := pipeline.SetVoice(p, id); err != nil {
 				return "设置失败：" + err.Error()

@@ -481,13 +481,11 @@ func stageStyleSamples(p *Project) error {
 }
 
 // stageTTS 配音：每段音频 + 逐词时间戳。
-// 生成命令（引擎 Kokoro 离线，验证通过的调用形态）：
-//
-//	npx hyperframes@0.8.55 tts --text-file audio/segNN.txt -v zf_xiaobei -l zh -o audio/segNN.wav --json
-//	faster-whisper medium + initial_prompt=旁白原文 → 字级时间戳 → audio_meta.json
+// 批量生成器在 ai/ 侧（ai/tts_align.py）：引擎百炼（DASHSCOPE_API_KEY，qwen-audio-3.0-tts-plus）
+// → Edge 兜底（微软免费）；FunASR paraformer 字级时间戳 → audio_meta.json。
 //
 // ⚠️ --text-file 文件必须存在，否则路径字符串会被当文本朗读（已踩坑）。
-// 本阶段校验产物齐全；批量生成器在 ai/ 侧（ai/tts_align.py，下一里程碑并入）。
+// 本阶段校验产物齐全。
 func stageTTS(p *Project) error {
 	sb, err := p.LoadStoryboard()
 	if err != nil {

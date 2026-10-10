@@ -6,11 +6,11 @@
 
 链路（幂等，缺什么补什么）：
   1. storyboard.json 每段旁白 → audio/segNN.txt
-  2. TTS 引擎按优先级（逐段级联，前者失败落后者）：
-       a. SILICONFLOW_API_KEY（CosyVoice2，中文自然度高；.env 配 key 即启用）
-       b. Edge TTS（微软免费，zh-CN-XiaoxiaoNeural 晓晓；EDGE_TTS_VOICE 可换音色，
+  2. TTS 引擎按优先级（逐段级联，前者失败落后者；2026-10-10 精简为两档）：
+       a. 百炼 Qwen-Audio-TTS（DASHSCOPE_API_KEY，qwen-audio-3.0-tts-plus；
+          ¥1.4/万字符，free-style 指令控情绪/语速；BAILIAN_TTS_MODEL/VOICE 可换）
+       b. Edge TTS（微软免费兜底，zh-CN-XiaoxiaoNeural 晓晓；EDGE_TTS_VOICE 可换音色，
           如 zh-CN-YunxiNeural 云希男声；EDGE_TTS_RATE 可调速，如 +5%）
-       c. hyperframes tts（Kokoro zf_xiaobei，离线兜底，音质差仅应急）
   3. 时间轴锚点：FunASR paraformer-zh（本地，字级时间戳）；
      不可用降级 faster-whisper（词级→字级均分）。
   4. 对齐策略（断句质量的关键）：ASR 只提供「字符 → 时刻」锚点，
@@ -25,7 +25,8 @@
   phrases 缺省时渲染层回落整段胶囊（v1 行为）。
 
 依赖：pip install funasr modelscope jieba soundfile torch(CPU) edge-tts；
-     SILICONFLOW_API_KEY 可选；ffmpeg 在 PATH（edge 产物 mp3→wav 转码用）
+     DASHSCOPE_API_KEY 可选（百炼引擎另需 pip install dashscope，无 key 纯 Edge）；
+     ffmpeg 在 PATH（edge/百炼产物 mp3→wav 转码用）
 """
 import difflib
 import hashlib
@@ -38,30 +39,21 @@ import subprocess
 import sys
 import urllib.request
 
-VOICE_KOKORO, PINNED = 'zf_xiaobei', 'hyperframes@0.8.55'
 PUNCT = set('，。！？；、：,.!?;:…—·')
-SF_URL = 'https://api.siliconflow.cn/v1/audio/speech'
-# 付费档可配（TTS-付费档评估 2026-09-28：默认 CosyVoice2 alex，A/B 见
-# docs/analyes/tts-paid-tier-evaluation.md；TTS_MODEL/TTS_VOICE 环境变量可换）
-SF_MODEL = os.environ.get('TTS_MODEL', 'FunAudioLLM/CosyVoice2-0.5B')
-SF_VOICE = os.environ.get('TTS_VOICE', 'FunAudioLLM/CosyVoice2-0.5B:alex')
-SF_KEY = ''
-
-# CosyVoice2 内置音色（SiliconFlow）：短名补全成完整 id；项目 voice 字段命中即走付费档
-COSY_VOICES = ('alex', 'benjamin', 'charles', 'david')
+# 百炼档（2026-10-10 用户定档 qwen-audio-3.0-tts-plus：free-style 指令控情绪/语速，
+# 内置音色见 help.aliyun.com/zh/model-studio/qwen-audio-tts-voice-list；
+# 音色必须属于当前模型，跨模型混用报 cosyvoice Engine error 411）
+BL_MODEL = os.environ.get('BAILIAN_TTS_MODEL', 'qwen-audio-3.0-tts-plus')
+BL_VOICE = os.environ.get('BAILIAN_TTS_VOICE', 'longanlingxin')
 
 
-def cosy_voice_id(v):
-    """'alex' 短名 → 完整 CosyVoice 音色 id；已是完整 id 透传；非 cosy 音色返回 ''。"""
-    if v.startswith('FunAudioLLM/CosyVoice'):
-        return v
-    name = v.split(':')[-1].strip()
-    if name in COSY_VOICES:
-        return f'FunAudioLLM/CosyVoice2-0.5B:{name}'
-    return ''
+def bailian_voice_id(v):
+    """百炼 Qwen-Audio-TTS 音色判别：longan*（中文龙安系）/loong*（英文系）/
+    xunanchuan（许南川），含 _v3.x 后缀；非百炼音色返回 ''。"""
+    return v if v.startswith(('longan', 'loong', 'xunanchuan')) else ''
 
-# 项目级音色（project.json "voice" 字段）：Edge 音色中文名或完整 id；CosyVoice 短名
-# （alex 等，需 SILICONFLOW_API_KEY，未配自动回落 Edge）。设置后锁定对应引擎并以此
+# 项目级音色（project.json "voice" 字段）：百炼音色（longanlingxin 等，需 DASHSCOPE_API_KEY，
+# 未配自动回落 Edge）或 Edge 音色中文名/完整 id。设置后锁定对应引擎并以此
 # 音色全量重配（audio_meta.json 的 voice 字段变更即触发）。
 VOICE_ALIASES = {
     '晓晓': 'zh-CN-XiaoxiaoNeural',   # 女 · 温暖（默认）
@@ -70,6 +62,8 @@ VOICE_ALIASES = {
     '云希': 'zh-CN-YunxiNeural',      # 男 · 年轻阳光
     '云扬': 'zh-CN-YunyangNeural',    # 男 · 新闻专业
     '云野': 'zh-CN-YunyeNeural',      # 男 · 沉稳
+    '龙安灵心': 'longanlingxin',      # 百炼 女 · 知心温暖（旗舰，需 DASHSCOPE_API_KEY）
+    '龙安鲁风': 'longanlufeng',       # 百炼 男 · 明亮开朗（需 DASHSCOPE_API_KEY）
 }
 
 
@@ -90,29 +84,48 @@ _WHISPER = None
 
 # ── 第 2 步：TTS ─────────────────────────────────────────────
 
-def tts_siliconflow(text, out_wav, voice=None):
-    """硅基流动 CosyVoice2（付费档）→ wav。失败返回 False（回落 Edge/Kokoro）。"""
-    body = json.dumps({
-        'model': SF_MODEL, 'input': text, 'voice': voice or SF_VOICE,
-        'response_format': 'wav', 'sample_rate': 32000,
-    }).encode('utf-8')
-    req = urllib.request.Request(SF_URL, data=body, headers={
-        'Authorization': f'Bearer {SF_KEY}', 'Content-Type': 'application/json',
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=180) as r:
-            audio = r.read()
-        if len(audio) < 2000:
-            return False
-        out_wav.write_bytes(audio)
-        return True
-    except Exception as e:
-        print(f'  siliconflow tts 失败（回落 kokoro）: {e}')
+def _ffmpeg_mp3_to_wav(mp3, out_wav):
+    """mp3 文件 → 32kHz 单声道 wav。失败清产物（半截 wav 会毒化幂等重跑）返回 False。"""
+    ff = shutil.which('ffmpeg')
+    if not ff:
+        print('  ffmpeg 缺失，mp3 无法转 wav')
+        mp3.unlink(missing_ok=True)
         return False
+    r = subprocess.run(
+        [ff, '-y', '-v', 'error', '-i', str(mp3), '-ar', '32000', '-ac', '1', str(out_wav)],
+        capture_output=True, text=True, timeout=120)
+    mp3.unlink(missing_ok=True)
+    if r.returncode != 0:
+        out_wav.unlink(missing_ok=True)
+        print(f'  mp3→wav FAIL: {(r.stderr or "")[-150:]}')
+        return False
+    return out_wav.exists()
+
+
+def tts_bailian(text, out_wav, voice=None):
+    """百炼 Qwen-Audio-TTS（websocket tts_v2，¥1.4/万字符）→ mp3 → wav。
+    失败返回 False（逐段级联回落 Edge）。音色/模型见 BL_MODEL/BL_VOICE。"""
+    try:
+        from dashscope.audio.tts_v2 import SpeechSynthesizer
+    except ImportError:
+        print('  bailian tts 跳过: dashscope 未安装（pip install dashscope）')
+        return False
+    try:
+        syn = SpeechSynthesizer(model=BL_MODEL, voice=voice or BL_VOICE)
+        audio = syn.call(text)
+        if not audio or len(audio) < 2000:
+            print(f'  bailian tts 返回过短: {len(audio) if audio else 0} bytes')
+            return False
+    except Exception as e:
+        print(f'  bailian tts 失败: {str(e)[:200]}')
+        return False
+    mp3 = out_wav.with_suffix('.mp3')
+    mp3.write_bytes(audio)
+    return _ffmpeg_mp3_to_wav(mp3, out_wav)
 
 
 def tts_edge(text_file, out_wav, voice=None):
-    """Edge TTS（微软免费）→ mp3 → ffmpeg 转 wav。失败返回 False（回落 Kokoro）。"""
+    """Edge TTS（微软免费兜底）→ mp3 → ffmpeg 转 wav。失败返回 False（该段失败）。"""
     voice = voice or os.environ.get('EDGE_TTS_VOICE', 'zh-CN-XiaoxiaoNeural')
     rate = os.environ.get('EDGE_TTS_RATE', '+0%')
     mp3 = out_wav.with_suffix('.mp3')
@@ -123,37 +136,7 @@ def tts_edge(text_file, out_wav, voice=None):
     if not (mp3.exists() and mp3.stat().st_size > 2000):
         print(f'  edge-tts FAIL: {(r.stderr or r.stdout)[-150:]}')
         return False
-    ff = shutil.which('ffmpeg')
-    if not ff:
-        print('  ffmpeg 缺失，edge-tts mp3 无法转 wav')
-        mp3.unlink(missing_ok=True)
-        return False
-    r2 = subprocess.run(
-        [ff, '-y', '-v', 'error', '-i', str(mp3), '-ar', '32000', '-ac', '1', str(out_wav)],
-        capture_output=True, text=True, timeout=120)
-    mp3.unlink(missing_ok=True)
-    if r2.returncode != 0:
-        # 半截 wav 会毒化后续重跑（存在即被当成品跳过），失败必须清掉
-        out_wav.unlink(missing_ok=True)
-        print(f'  edge mp3→wav FAIL: {(r2.stderr or "")[-150:]}')
-        return False
-    return out_wav.exists()
-
-
-def tts_kokoro(text_file, out_wav):
-    npx = shutil.which('npx') or shutil.which('npx.cmd')
-    if not npx:
-        print('  kokoro FAIL: npx 不在 PATH')
-        return False
-    r = subprocess.run(
-        [npx, '--offline', '--yes', PINNED, 'tts', '--text-file', str(text_file),
-         '-v', VOICE_KOKORO, '-l', 'zh', '-o', str(out_wav), '--json'],
-        capture_output=True, text=True, timeout=300)
-    ok = any(l.startswith('{"ok":true') for l in r.stdout.splitlines())
-    if not ok:
-        out_wav.unlink(missing_ok=True)
-        print(f'  kokoro FAIL: {(r.stderr or r.stdout)[-150:]}')
-    return ok
+    return _ffmpeg_mp3_to_wav(mp3, out_wav)
 
 
 # ── 第 3 步：时间轴锚点（ASR，只出「字符→时刻」）────────────
@@ -208,7 +191,7 @@ def seg_words_and_phrases(narration, anchors):
     """旁白原文 + ASR 锚点 → (words, phrases, 匹配率)。文本严格来自旁白。
 
     匹配率 = 锚点字符直接命中的旁白字符占比；过低说明 ASR 听错太多
-    （Kokoro 音质差时常见），调用方应换锚点源重算。
+    （TTS 音质差/混入杂音时常见），调用方应换锚点源重算。
     """
     import jieba
     chars = [ch for ch in narration if ch.strip()]
@@ -287,8 +270,7 @@ def wav_duration(path):
 
 def main(proj_dir: str) -> int:
     proj = pathlib.Path(proj_dir)
-    global SF_KEY
-    SF_KEY = os.environ.get('SILICONFLOW_API_KEY', '')
+    DASHSCOPE_KEY = os.environ.get('DASHSCOPE_API_KEY', '')
     sb = json.load(open(proj / 'storyboards' / 'storyboard.json', encoding='utf-8'))
     (proj / 'audio').mkdir(exist_ok=True)
 
@@ -296,19 +278,19 @@ def main(proj_dir: str) -> int:
     for seg in sb['segments']:
         (proj / 'audio' / f"{seg['id']}.txt").write_text(seg['narration'], encoding='utf-8')
     pv = project_voice(proj)
-    # 引擎决策（M-C TTS 付费档）：项目音色是 CosyVoice 且配了 key → 锁付费档；
-    # 是 Edge 音色 → 锁 edge；未设音色 → 有 key 用付费档，无 key 免费 edge。
-    # cosy 音色未配 key → 警告并回落 Edge 默认（别拿 'alex' 去调 edge-tts）。
-    cosy = cosy_voice_id(pv) if pv else ''
-    if cosy and SF_KEY:
-        engine, sf_voice = 'siliconflow', cosy
-    elif cosy:
-        print('警告: voice 是 CosyVoice 音色但未配 SILICONFLOW_API_KEY → 回落 Edge 晓晓')
-        engine, sf_voice, pv = 'edge', '', ''
-    elif pv:
-        engine, sf_voice = 'edge', ''
-    else:
-        engine, sf_voice = ('siliconflow', SF_VOICE) if SF_KEY else ('edge', '')
+    # 引擎决策（2026-10-10 精简：百炼 → Edge 兜底，硅基/Kokoro 档退役）：
+    # 项目音色是百炼音色 → 锁百炼（未配 key 警告回落 Edge）；是 Edge 音色 → 锁 Edge；
+    # 陌生音色（CosyVoice 短名 alex 等已随硅基档退役）→ 警告回落 Edge 默认；
+    # 未设音色 → 有 DASHSCOPE_API_KEY 走百炼默认龙安灵心，无 key 纯 Edge。
+    bl = bailian_voice_id(pv) if pv else ''
+    if bl and not DASHSCOPE_KEY:
+        print('警告: voice 是百炼音色但未配 DASHSCOPE_API_KEY → 回落 Edge 晓晓')
+        pv = ''
+    elif pv and not bl and not ('-' in pv and 'Neural' in pv):
+        print(f'警告: voice {pv!r} 非百炼/Edge 音色（CosyVoice 档已退役）→ 回落 Edge 晓晓')
+        pv = ''
+    engine = 'bailian' if DASHSCOPE_KEY else 'edge'
+    bl_use = bl or (BL_VOICE if DASHSCOPE_KEY else '')
     edge_voice = pv or os.environ.get('EDGE_TTS_VOICE', 'zh-CN-XiaoxiaoNeural')
 
     # 项目音色切换 → 旧 wav 全部作废重配（audio_meta.json 的 voice 字段对不上即触发）
@@ -346,12 +328,10 @@ def main(proj_dir: str) -> int:
                 continue
             wav.unlink(missing_ok=True)
             print(seg['id'], '旁白已变，重配')
-        if engine == 'siliconflow' and tts_siliconflow(seg['narration'], wav, sf_voice):
-            print(seg['id'], f"wav ✓ (cosyvoice {sf_voice.split(':')[-1]})")
+        if engine == 'bailian' and tts_bailian(seg['narration'], wav, bl_use):
+            print(seg['id'], f"wav ✓ (bailian {bl_use or BL_VOICE})")
         elif tts_edge(proj / 'audio' / f"{seg['id']}.txt", wav, edge_voice):
             print(seg['id'], f"wav ✓ (edge {edge_voice})")
-        elif tts_kokoro(proj / 'audio' / f"{seg['id']}.txt", wav):
-            print(seg['id'], 'wav ✓ (kokoro)')
         else:
             return 1
         src.write_text(fp, encoding='utf-8')
