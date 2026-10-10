@@ -5,7 +5,7 @@ import type { ProjectRow } from '../types'
 
 // 首页：品牌落地 + 快速开始（新建/继续最近项目/逛风格库）
 const props = defineProps<{ projects: ProjectRow[] }>()
-const emit = defineEmits<{ new: []; open: [id: string]; materials: [] }>()
+const emit = defineEmits<{ new: []; open: [id: string]; materials: []; delete: [id: string] }>()
 
 const recent = computed(() => props.projects.slice(0, 6))
 </script>
@@ -33,15 +33,17 @@ const recent = computed(() => props.projects.slice(0, 6))
         <span class="count">{{ projects.length }} 个</span>
       </div>
       <div class="grid">
-        <button v-for="p in recent" :key="p.id" class="proj" @click="emit('open', p.id)">
+        <!-- 卡片用 div+button 组合（button 里不能再套 button）；删除钮 hover 露出，同左侧项目栏 -->
+        <div v-for="p in recent" :key="p.id" class="proj" role="button" tabindex="0" @click="emit('open', p.id)" @keydown.enter="emit('open', p.id)">
           <b>{{ p.name }}</b>
+          <button class="del" title="删除项目（不可恢复）" @click.stop="emit('delete', p.id)">✕</button>
           <span class="meta">
             <i :class="['st', p.status === 'video' ? 'done' : p.status === 'producing' ? 'run' : '', { fail: lastProduceFailed(p) }]">
               {{ statusLabel[p.status] ?? p.status }}{{ lastProduceFailed(p) ? ' · 上次制作失败' : '' }}
             </i>
             <em>{{ dateOf(p.created_at) }}</em>
           </span>
-        </button>
+        </div>
       </div>
     </div>
   </section>
@@ -104,11 +106,20 @@ const recent = computed(() => props.projects.slice(0, 6))
 .sec .count { font-size: 11.5px; color: #55555f; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
 .proj {
-  display: flex; flex-direction: column; gap: 10px; text-align: left; cursor: pointer;
+  position: relative; display: flex; flex-direction: column; gap: 10px; text-align: left; cursor: pointer;
   background: #14141a; border: 1px solid #232329; border-radius: 12px; padding: 14px 16px; color: #d9d9e0;
 }
 .proj:hover { border-color: #f0c674; }
-.proj b { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proj b { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 22px; }
+/* 删除钮：hover 卡片才露出，平时不占视觉（同 HistoryRail 行删除钮） */
+.del {
+  position: absolute; top: 10px; right: 10px;
+  border: 0; background: transparent; color: #4c4c56; cursor: pointer;
+  font-size: 12px; width: 22px; height: 22px; line-height: 1; border-radius: 6px;
+  opacity: 0; transition: opacity .12s;
+}
+.proj:hover .del { opacity: 1; }
+.del:hover { color: #ff9d9d; background: #2a1a1a; }
 .meta { display: flex; justify-content: space-between; align-items: center; }
 .meta i { font-style: normal; font-size: 11px; color: #8a8a96; }
 .meta i.done { color: #7ed491; }

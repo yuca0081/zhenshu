@@ -296,6 +296,7 @@ applyHash()
         <HomeView
           v-if="page === 'home'" :projects="projects"
           @new="showNew = true" @open="selectProject" @materials="page = 'materials'"
+          @delete="onDeleteProject"
         />
 
         <!-- 风格库页：风格 + 视频解析 -->
