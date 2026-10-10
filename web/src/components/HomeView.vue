@@ -111,15 +111,15 @@ const recent = computed(() => props.projects.slice(0, 6))
 }
 .proj:hover { border-color: #f0c674; }
 .proj b { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 22px; }
-/* 删除钮：hover 卡片才露出，平时不占视觉（同 HistoryRail 行删除钮） */
+/* 删除钮：hover 卡片才露出；红色一眼可见，悬停它本身再加红框红底强化 */
 .del {
-  position: absolute; top: 10px; right: 10px;
-  border: 0; background: transparent; color: #4c4c56; cursor: pointer;
-  font-size: 12px; width: 22px; height: 22px; line-height: 1; border-radius: 6px;
+  position: absolute; top: 9px; right: 9px;
+  border: 1px solid transparent; background: transparent; color: #ff7a7a; cursor: pointer;
+  font-size: 13px; width: 24px; height: 24px; line-height: 1; border-radius: 6px;
   opacity: 0; transition: opacity .12s;
 }
 .proj:hover .del { opacity: 1; }
-.del:hover { color: #ff9d9d; background: #2a1a1a; }
+.del:hover { color: #ff6b6b; background: #2a1518; border-color: #ff7a7a; }
 .meta { display: flex; justify-content: space-between; align-items: center; }
 .meta i { font-style: normal; font-size: 11px; color: #8a8a96; }
 .meta i.done { color: #7ed491; }

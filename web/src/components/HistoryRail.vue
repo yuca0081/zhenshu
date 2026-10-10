@@ -82,14 +82,15 @@ const statusOf = (s: string) => ({ label: statusLabel[s] ?? s, cls: statusDotCls
 .mini .item { margin: 4px auto; padding: 0; border-radius: 10px; width: 36px; height: 36px; justify-content: center; }
 .item:hover { background: #17171e; }
 .item.active { background: #1d1a12; border-color: rgba(240, 198, 116, .4); }
-/* 删除钮：hover 行才露出，平时不占视觉；NPopover 气泡内常驻（折叠态唯一入口） */
+/* 删除钮：hover 行才露出，平时不占视觉；红色一眼可见，悬停它本身再加红框红底（同首页卡片）；
+   NPopover 气泡内常驻（折叠态唯一入口） */
 .del {
-  flex: none; border: 0; background: transparent; color: #4c4c56; cursor: pointer;
-  font-size: 11px; width: 20px; height: 20px; line-height: 1; border-radius: 6px;
+  flex: none; border: 1px solid transparent; background: transparent; color: #ff7a7a; cursor: pointer;
+  font-size: 12px; width: 20px; height: 20px; line-height: 1; border-radius: 6px;
   opacity: 0; transition: opacity .12s;
 }
 .item:hover .del { opacity: 1; }
-.del:hover { color: #ff9d9d; background: #2a1a1a; }
+.del:hover { color: #ff6b6b; background: #2a1518; border-color: #ff7a7a; }
 .pop-del {
   border: 0; background: transparent; color: #ff9d9d; cursor: pointer;
   font-size: 12px; padding: 6px 0 0; text-align: left;
