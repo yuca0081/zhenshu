@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { NButton, NPopconfirm, NTag, useMessage } from 'naive-ui'
+import { computed, ref } from 'vue'
+import { NButton, NInput, NPopconfirm, NSelect, NTag, useMessage } from 'naive-ui'
 import { api, libraryMediaURL } from '../api'
 import TemplateDetail from './TemplateDetail.vue'
 import type { Style, TemplateDetailData, VocabEntry } from '../types'
@@ -8,6 +8,34 @@ import type { Style, TemplateDetailData, VocabEntry } from '../types'
 const props = defineProps<{ packs: Style[] }>()
 const emit = defineEmits<{ publish: [id: string]; deleted: [] }>()
 const message = useMessage()
+
+// 标签下拉筛选 + 搜索（客户端做——库列表是全量小 JSON，几百条内无压力，同 StylePane；
+// 标签用下拉不用 chips——标签会越养越多，铺开放不下）
+const tagFilter = ref('')
+const search = ref('')
+const tagNames = computed(() => {
+  const counts = new Map<string, number>()
+  for (const p of props.packs) {
+    for (const id of [p.tags.main, ...(p.tags.aux ?? [])]) counts.set(id, (counts.get(id) ?? 0) + 1)
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => ({ id, name: vEntry(id)?.name ?? id }))
+})
+const tagOptions = computed(() => [
+  { label: '全部标签', value: '' },
+  ...tagNames.value.map(t => ({ label: t.name, value: t.id })),
+])
+const filteredPacks = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  return props.packs.filter(p => {
+    if (tagFilter.value && p.tags.main !== tagFilter.value && !(p.tags.aux ?? []).includes(tagFilter.value)) return false
+    if (q) {
+      const tagNames = [p.tags.main, ...(p.tags.aux ?? [])].map(id => vEntry(id)?.name ?? id)
+      const hay = [p.name, p.subject ?? '', ...tagNames].join(' ').toLowerCase()
+      if (!hay.includes(q)) return false
+    }
+    return true
+  })
+})
 
 // 词表（条目标签 id → 名称/简介 join 用；加载失败退裸 id）
 const vocab = ref<VocabEntry[]>([])
@@ -66,46 +94,53 @@ function onPublish(id: string) {
     <div v-if="!packs.length" class="none">
       风格库还是空的。在「视频解析」上传参考视频解析入库（词表会自动长出第一批词条）；出片后 Agent 也会自动起草。
     </div>
-    <div v-else class="grid">
-      <figure v-for="s in packs" :key="s.id" class="card" :class="{ draft: !s.published }" @click="open(s)">
-        <div class="cover">
-          <!-- 兜底文字在下垫层：图加载成功即盖住它，失败/无图时它才是可见封面 -->
-          <div class="cover-fallback">
-            <b>{{ s.name }}</b>
+    <template v-else>
+      <div class="filter-bar">
+        <NSelect v-model:value="tagFilter" :options="tagOptions" size="small" class="tag-select" />
+        <NInput v-model:value="search" size="small" clearable placeholder="搜名称 / 标签 / 题材" class="search" />
+      </div>
+      <div v-if="filteredPacks.length" class="grid">
+        <figure v-for="s in filteredPacks" :key="s.id" class="card" :class="{ draft: !s.published }" @click="open(s)">
+          <div class="cover">
+            <!-- 兜底文字在下垫层：图加载成功即盖住它，失败/无图时它才是可见封面 -->
+            <div class="cover-fallback">
+              <b>{{ s.name }}</b>
+            </div>
+            <img v-if="s.origin_project?.startsWith('video:')" :src="libraryMediaURL(s.id, 'cover.png')"
+              loading="lazy" alt="" @error="($event.target as HTMLImageElement).style.display = 'none'" />
           </div>
-          <img v-if="s.origin_project?.startsWith('video:')" :src="libraryMediaURL(s.id, 'cover.png')"
-            loading="lazy" alt="" @error="($event.target as HTMLImageElement).style.display = 'none'" />
-        </div>
-        <figcaption>
-          <div class="row1">
-            <b>{{ s.name }}</b>
-            <NTag size="small" :bordered="false" :type="s.published ? 'success' : 'warning'">
-              {{ s.published ? '已入库' : '草稿' }}
-            </NTag>
-          </div>
-          <div class="chips">
-            <NTag size="tiny" :bordered="false" type="warning">{{ vEntry(s.tags.main)?.name ?? s.tags.main }}</NTag>
-            <NTag v-for="a in s.tags.aux ?? []" :key="a" size="tiny" :bordered="false">{{ vEntry(a)?.name ?? a }}</NTag>
-            <NTag v-if="s.signatures?.length" size="tiny" :bordered="false" type="info">特色×{{ s.signatures.length }}</NTag>
-          </div>
-          <span v-if="s.subject" class="sub" :title="s.subject">{{ s.subject }}</span>
-          <div class="row2">
-            <span class="origin">{{ s.id }}</span>
-            <span class="btns">
-              <NPopconfirm @positive-click="onDelete(s.id)">
-                <template #trigger>
-                  <NButton size="small" quaternary type="error" @click.stop>删除</NButton>
-                </template>
-                删除后新建项目不能再选它；已出片项目不受影响。
-              </NPopconfirm>
-              <NButton v-if="!s.published" size="small" type="primary" ghost @click.stop="emit('publish', s.id)">
-                入库
-              </NButton>
-            </span>
-          </div>
-        </figcaption>
-      </figure>
-    </div>
+          <figcaption>
+            <div class="row1">
+              <b>{{ s.name }}</b>
+              <NTag size="small" :bordered="false" :type="s.published ? 'success' : 'warning'">
+                {{ s.published ? '已入库' : '草稿' }}
+              </NTag>
+            </div>
+            <div class="chips">
+              <NTag size="tiny" :bordered="false" type="warning">{{ vEntry(s.tags.main)?.name ?? s.tags.main }}</NTag>
+              <NTag v-for="a in s.tags.aux ?? []" :key="a" size="tiny" :bordered="false">{{ vEntry(a)?.name ?? a }}</NTag>
+              <NTag v-if="s.signatures?.length" size="tiny" :bordered="false" type="info">特色×{{ s.signatures.length }}</NTag>
+            </div>
+            <span v-if="s.subject" class="sub" :title="s.subject">{{ s.subject }}</span>
+            <div class="row2">
+              <span class="origin">{{ s.id }}</span>
+              <span class="btns">
+                <NPopconfirm @positive-click="onDelete(s.id)">
+                  <template #trigger>
+                    <NButton size="small" quaternary type="error" @click.stop>删除</NButton>
+                  </template>
+                  删除后新建项目不能再选它；已出片项目不受影响。
+                </NPopconfirm>
+                <NButton v-if="!s.published" size="small" type="primary" ghost @click.stop="emit('publish', s.id)">
+                  入库
+                </NButton>
+              </span>
+            </div>
+          </figcaption>
+        </figure>
+      </div>
+      <div v-else class="none">没有匹配的风格——换个筛选词试试。</div>
+    </template>
 
     <TemplateDetail :show="show" :detail="detail" @close="show = false" @publish="onPublish" />
   </section>
@@ -116,6 +151,12 @@ function onPublish(id: string) {
 .head h2 { font-size: 16px; color: #d9d9e0; }
 .head p { font-size: 12.5px; color: #7c7c88; margin: 4px 0 18px; line-height: 1.6; }
 .none { color: #55555f; font-size: 13px; padding: 40px 0; line-height: 1.8; }
+
+/* 筛选行：标签下拉 + 搜索框（同 StylePane） */
+.filter-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.tag-select { width: 190px; flex: none; }
+.search { width: 190px; flex: none; margin-left: auto; }
+
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
 .card {
   background: #14141a; border: 1px solid #232329; border-radius: 12px; overflow: hidden;
