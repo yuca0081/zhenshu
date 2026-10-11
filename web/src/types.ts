@@ -24,7 +24,6 @@ export interface ProjectView {
     storyboard: boolean
     style_confirmed: boolean
     style_draft: boolean
-    style_direction: string
   }
   seg_count: number
   total_hint: number
@@ -58,7 +57,6 @@ export interface StyleSample {
   desc: string
   html: string
   // 迷你真段（样张升级）：3s 动态小样 mp4（相对项目根）；空 = 降级静态（clip_note 记原因）
-  clip_html?: string
   video?: string
   clip_note?: string
 }
@@ -96,7 +94,6 @@ export interface Msg {
   type: 'text' | 'tool_call' | 'progress' | 'error'
   content: string
   refs?: ChatRef[]
-  tool_name?: string
   created_at: string
 }
 

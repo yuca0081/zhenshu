@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { KeepAlive, computed, ref, watch } from 'vue'
-import { NButton, NInput, NInputNumber, NSelect } from 'naive-ui'
+import { NButton, NInput, NInputNumber, NSelect, useMessage } from 'naive-ui'
 import { api, videoURL } from '../api'
-import { useMessage } from 'naive-ui'
 import type { ActivityEvent, AudioMeta, Manuscript, ProjectView, Storyboard, StyleSamples, TabID } from '../types'
 import ManuscriptPane from './ManuscriptPane.vue'
 import StylePane from './StylePane.vue'

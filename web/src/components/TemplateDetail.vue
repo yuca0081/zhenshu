@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { NButton, NInput, NModal, NSelect, NTag } from 'naive-ui'
 import { api, libraryMediaURL, referenceMediaURL } from '../api'
+import { kindLabel } from '../format'
 import type { RefVideoStyle, Signature, TemplateDetailData } from '../types'
 
 // 风格详情弹窗（v3）：标签（词表名+brief）+ 特色清单（机制+证据帧缩略图）+ 打标证据
@@ -48,10 +49,6 @@ watch(
   { immediate: true },
 )
 
-const kindLabel: Record<string, string> = {
-  camera: '运镜', transition: '转场', motif: '母题', motion: '动效', material: '素材', palette: '配色',
-}
-
 // ── 草稿编辑（特色增删改）──────────────────────────────
 const draft = reactive<{
   name: string
@@ -90,10 +87,13 @@ function toggleAddFrame(f: string) {
   if (i >= 0) adding.frames.splice(i, 1)
   else if (adding.frames.length < 3) adding.frames.push(f)
 }
+// 新增特色 id：独立递增计数。用 length+1 会先删一条再添加撞出重复 id
+// （v-for :key 重复，patch 异常），且可能与草稿已有的 sigN 跨源冲突
+let sigSeq = 0
 function addSig() {
   if (!adding.name.trim() || !adding.mechanism.trim()) return
   draft.signatures.push({
-    id: `sig${draft.signatures.length + 1}`,
+    id: `sig-new-${Date.now().toString(36)}-${++sigSeq}`,
     kind: adding.kind as Signature['kind'],
     name: adding.name.trim(),
     mechanism: adding.mechanism.trim(),
@@ -111,7 +111,10 @@ function saveDraft() {
   saving.value = true
   emit('save-draft', d.refId, style)
 }
-defineExpose({ markSaved: () => { saving.value = false; editing.value = false } })
+defineExpose({
+  markSaved: () => { saving.value = false; editing.value = false },
+  markFailed: () => { saving.value = false }, // 保存失败复位按钮，编辑态保留便于重试
+})
 </script>
 
 <template>

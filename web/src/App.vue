@@ -40,6 +40,8 @@ const activity = ref<ActivityEvent[]>([]) // 制作事件流（manifest 原样�
 let es: EventSource | null = null
 let busyTimer: number | null = null
 let activityTimer: number | null = null
+let reqSeq = 0 // 会话内自增：切项目即作废在途响应——A 项目的数据晚到不许覆盖 B 的页
+const inflight = new Set<string>() // 同项目同名加载进行中就跳过：SSE 密集期不重复打同一接口
 
 const stageOrder = ['tts', 'compositions', 'assemble', 'check', 'render', 'frameqa']
 
@@ -57,36 +59,76 @@ async function publishPack(id: string) {
 }
 
 async function loadProject(id: string) {
-  view.value = await api.project(id)
-  storyboard.value = view.value.gates.storyboard ? await api.storyboard(id).catch(() => null) : null
-  style.value = view.value.gates.style_draft ? await api.style(id).catch(() => null) : null
-  // 无条件重拉：门未过也要清掉旧项目的残留（否则新项目会显示上一个项目的文稿/分镜/样张）
-  manuscript.value = view.value.gates.manuscript ? await api.manuscript(id).catch(() => null) : null
-  audioMeta.value = await api.audioMeta(id).catch(() => null)
+  const key = `project:${id}`
+  if (inflight.has(key)) return
+  const seq = reqSeq
+  inflight.add(key)
+  try {
+    const v = await api.project(id)
+    if (seq !== reqSeq) return
+    view.value = v
+    const [sb, st, ms, am] = await Promise.all([
+      v.gates.storyboard ? api.storyboard(id).catch(() => null) : Promise.resolve(null),
+      v.gates.style_draft ? api.style(id).catch(() => null) : Promise.resolve(null),
+      // 门未过给 null：清掉旧项目的残留（否则新项目页会闪现上一个项目的文稿/分镜/样张）
+      v.gates.manuscript ? api.manuscript(id).catch(() => null) : Promise.resolve(null),
+      api.audioMeta(id).catch(() => null),
+    ])
+    if (seq !== reqSeq) return
+    storyboard.value = sb
+    style.value = st
+    manuscript.value = ms
+    audioMeta.value = am
+  } finally {
+    inflight.delete(key)
+  }
 }
 
 async function loadMsgs() {
-  if (!current.value) return
-  const after = msgs.value.length ? Math.max(...msgs.value.map(m => m.id)) : 0
-  // ?? [] 兜底：服务端把空历史序列化成 null（老接口），null.filter 会崩掉对话栏
-  const inc = (await api.messages(current.value, after).catch(() => [])) ?? []
-  const seen = new Set(msgs.value.map(m => m.id))
-  const fresh = inc.filter(m => !seen.has(m.id))
-  if (fresh.length) msgs.value.push(...fresh)
+  const id = current.value
+  if (!id) return
+  const key = `msgs:${id}`
+  if (inflight.has(key)) return
+  const seq = reqSeq
+  inflight.add(key)
+  try {
+    const after = msgs.value.length ? Math.max(...msgs.value.map(m => m.id)) : 0
+    // ?? [] 兜底：服务端把空历史序列化成 null（老接口），null.filter 会崩掉对话栏
+    const inc = (await api.messages(id, after).catch(() => [])) ?? []
+    if (seq !== reqSeq || id !== current.value) return // 切项目了：旧消息不许混进新对话栏
+    const seen = new Set(msgs.value.map(m => m.id))
+    const fresh = inc.filter(m => !seen.has(m.id))
+    if (fresh.length) msgs.value.push(...fresh)
+  } finally {
+    inflight.delete(key)
+  }
 }
 
 async function loadActivity() {
-  if (!current.value) return
-  activity.value = (await api.activity(current.value).catch(() => activity.value)) ?? activity.value
+  const id = current.value
+  if (!id) return
+  const key = `activity:${id}`
+  if (inflight.has(key)) return
+  const seq = reqSeq
+  inflight.add(key)
+  try {
+    const rows = await api.activity(id).catch(() => null)
+    if (rows === null || seq !== reqSeq || id !== current.value) return
+    activity.value = rows
+  } finally {
+    inflight.delete(key)
+  }
 }
 
 function selectProject(id: string) {
   current.value = id
   page.value = 'workspace'
+  ++reqSeq // 在途响应全部作废：先于清场，晚到的旧数据在 resolve 处直接丢弃
   msgs.value = []
   chatRefs.value = []
   stageState.value = {}
   activity.value = []
+  agentBusy.value = false // 上一项目的「Agent 工作中」不带给新项目（不然转圈挂到 90s 超时）
   manualTab.value = null // 换项目回到自动落页
   // 先清上一项目的全部展示数据：loadProject 是异步的，不清会在新项目页闪现旧内容
   view.value = null
@@ -118,6 +160,16 @@ async function refresh() {
   await loadProject(current.value).catch(() => {})
   await loadMsgs()
   loadActivity() // 事件流跟随刷新（done/cancelled/error 等 SSE 监听都走 refresh）
+}
+
+// 断连自愈刷新节流：EventSource 原生错误后端一起、浏览器就重连一次，15s 内只刷
+// 一轮——断连期间的重连风暴不放大成接口风暴
+let lastNetRefresh = 0
+function throttledRefresh() {
+  const now = Date.now()
+  if (now - lastNetRefresh < 15_000) return
+  lastNetRefresh = now
+  refresh()
 }
 
 function markBusy() {
@@ -163,8 +215,18 @@ function openSSE(id: string) {
   es.addEventListener('cancelled', () => { stageState.value = {}; progressLine.value = ''; refresh() })
   // 制作失败同样清场：只 refresh 不清 stageState 的话，has_video=false + 残留阶段态
   // 会让视频页签永远转圈显示「制作管线运行中」且没有停止按钮（假运行中）。
-  // 本监听也接 EventSource 原生连接错误——顺势清场属自愈，无害。
-  es.addEventListener('error', () => { stageState.value = {}; progressLine.value = ''; refresh() })
+  // 业务 error 事件（管线终态）与 EventSource 原生连接错误分开：原生错误（后端断连，
+  // 浏览器每 ~3s 自动重连）只做节流刷新——不清制作中的阶段态（清了进度 UI 消失到
+  // 下个 stage 事件才回来），更不能按重连节奏每次全量刷出请求风暴。
+  es.addEventListener('error', ev => {
+    if ((ev as MessageEvent).data) {
+      stageState.value = {}
+      progressLine.value = ''
+      refresh()
+    } else {
+      throttledRefresh()
+    }
+  })
 }
 
 // 自愈兜底（覆盖 SSE 断连/丢事件/服务重启）：producing 一旦变 false 就清制作中的
@@ -195,6 +257,7 @@ watch(current, id => {
 onBeforeUnmount(() => {
   es?.close()
   if (busyTimer) clearTimeout(busyTimer)
+  window.removeEventListener('hashchange', applyHash)
 })
 
 // 初始：加载列表，按 URL hash 恢复页面
@@ -263,6 +326,7 @@ async function onDeleteProject(id: string) {
   }
   if (current.value === id) {
     current.value = '' // watch(current) 关 SSE；下方手动清展示数据
+    ++reqSeq // 在途响应作废：删掉的项目晚到数据不许写回清空后的页面
     view.value = null
     storyboard.value = null
     style.value = null
@@ -271,6 +335,7 @@ async function onDeleteProject(id: string) {
     msgs.value = []
     chatRefs.value = []
     stageState.value = {}
+    agentBusy.value = false
     manualTab.value = null
   }
   await loadProjects()

@@ -32,6 +32,8 @@ const requested = ref(false) // 已提交出样张、还没等来新样张——
 const reviewMode = computed(() => !!props.styleSamples?.samples?.length && !showPicker.value)
 watch(() => props.styleSamples, nv => {
   if (nv) { requested.value = false; showPicker.value = false } // 新样张到手，回 B 态
+  // 样张清空（切项目/换风格作废）同步复位等待态：不然「样张生成中」挂到 90s 超时
+  else requested.value = false
 })
 
 // ── 样张（皮肤色板 chips 非颜色槽位不进，字体单独展示）──

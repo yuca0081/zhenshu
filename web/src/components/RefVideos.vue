@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { kindLabel } from '../format'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useMessage, NButton, NTag } from 'naive-ui'
 import TemplateDetail from './TemplateDetail.vue'
@@ -65,13 +66,11 @@ async function saveDraft(refId: string, style: RefVideoStyle) {
     await refresh()
   } catch (e) {
     message.error(`保存失败：${(e as Error).message}`)
+    detailEl.value?.markFailed() // 失败也要复位按钮，否则永久卡 loading（编辑态保留可重试）
   }
 }
 
 // ── 解析结果长方块：一视频一块；折叠显名称/标签，展开看详情 ──
-const kindLabel: Record<string, string> = {
-  camera: '运镜', transition: '转场', motif: '母题', motion: '动效', material: '素材', palette: '配色',
-}
 interface Unit {
   name: string
   subject: string                   // 内容行：题材一句话，缺省退特色名

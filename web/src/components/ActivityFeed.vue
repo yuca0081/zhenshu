@@ -25,11 +25,12 @@ interface Row {
   minor?: boolean
 }
 
-// 正在跑的工位要每秒跳计时：producing 期间开一个 1s 心跳驱动 computed 重算
+// 正在跑的工位要跳计时：producing 期间用心跳驱动 computed 重算。5s 粒度——
+// 心跳每秒跳会让最多 500 行的 rows 全量重建+整列表 diff（只为秒针跳一下，不值）
 const now = ref(Date.now())
 let timer: number | null = null
 watch(() => props.producing, on => {
-  if (on && timer == null) timer = window.setInterval(() => { now.value = Date.now() }, 1000)
+  if (on && timer == null) timer = window.setInterval(() => { now.value = Date.now() }, 5000)
   if (!on && timer != null) { clearInterval(timer); timer = null }
 }, { immediate: true })
 onBeforeUnmount(() => { if (timer != null) clearInterval(timer) })

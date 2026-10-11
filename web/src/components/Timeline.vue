@@ -12,7 +12,6 @@ const props = defineProps<{
   storyboard: Storyboard | null
   audioMeta: AudioMeta | null
   currentTime: number
-  duration: number
   pickedIdx: number[]
   rework?: boolean // 成片就绪且无重做进行中：段块悬停出「重做」入口
 }>()

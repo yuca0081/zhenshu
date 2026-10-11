@@ -84,7 +84,9 @@ async function openRework(idx: number, key: string) {
   if (!s) return
   reworkSeg.value = s
   reworkInstr.value = ''
-  const r = await api.reworkLast(props.videoId, s.segId).catch(() => null)
+  const pid = props.videoId
+  const r = await api.reworkLast(pid, s.segId).catch(() => null)
+  if (pid !== props.videoId) return // 等待期切了项目：别对旧项目弹重做框
   reworkInstr.value = r?.instruction ?? ''
   reworkShow.value = true
 }
@@ -171,7 +173,7 @@ async function confirmRework() {
       </NModal>
       <Timeline
         v-if="storyboard"
-        :storyboard="storyboard" :audio-meta="audioMeta" :current-time="cur" :duration="dur"
+        :storyboard="storyboard" :audio-meta="audioMeta" :current-time="cur"
         :picked-idx="pickedIdx" :rework="!stageSummary" @seek="onSeek" @pick="pickSeg" @pick-time="pickTime"
         @rework="openRework"
       />
