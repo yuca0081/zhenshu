@@ -6,6 +6,7 @@ package pipeline
 // 声明的字体族，逐个补 src:local 声明。确定性操作，零 LLM 成本，幂等。
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,18 +42,30 @@ var (
 )
 
 // ensureFontFaces 补齐缺失的系统字体 @font-face 声明，返回原文或补齐后的文本。
-func ensureFontFaces(html string) string {
+// assets：目录字体（fontCatalog）的 family(小写) → data URL——设计可点名目录字体，
+// 场景 HTML 引用它时这里补真字体文件声明（下载/子集化由 ai/font_tool.py 已备好）。
+func ensureFontFaces(html string, assets map[string]string) string {
 	declared := map[string]bool{}
 	for _, m := range reFontFaceFamily.FindAllStringSubmatch(html, -1) {
 		declared[strings.ToLower(strings.TrimSpace(m[1]))] = true
 	}
 	used := map[string]bool{}
+	usedOrig := map[string]string{}
 	collect := func(values []string) {
 		for _, stack := range values {
 			for _, name := range strings.Split(stack, ",") {
-				name = strings.ToLower(strings.TrimSpace(strings.Trim(name, "'\"")))
-				if osFontWhitelist[name] {
-					used[name] = true
+				orig := strings.TrimSpace(strings.Trim(name, "'\""))
+				lower := strings.ToLower(orig)
+				if orig == "" {
+					continue
+				}
+				_, inAssets := assets[lower]
+				if !osFontWhitelist[lower] && !inAssets {
+					continue
+				}
+				used[lower] = true
+				if _, dup := usedOrig[lower]; !dup {
+					usedOrig[lower] = orig
 				}
 			}
 		}
@@ -75,6 +88,10 @@ func ensureFontFaces(html string) string {
 	sort.Strings(missing)
 	var decl strings.Builder
 	for _, name := range missing {
+		if dataURL, ok := assets[name]; ok {
+			fmt.Fprintf(&decl, "@font-face{font-family:'%s';src:url(\"%s\") format('woff2');}", usedOrig[name], dataURL)
+			continue
+		}
 		display := titleCaseFont(name)
 		fmt.Fprintf(&decl, "@font-face{font-family:'%s';src:local('%s');}", display, display)
 	}
@@ -85,6 +102,27 @@ func ensureFontFaces(html string) string {
 		}
 	}
 	return "<style>" + decl.String() + "</style>" + html
+}
+
+// loadFontAssets 读目录字体解析产物（ai/font_tool.py 写）：family(小写) → data URL。
+func loadFontAssets(p *Project) map[string]string {
+	b, err := os.ReadFile(p.Artifact("style/font_assets.json"))
+	if err != nil {
+		return nil
+	}
+	var parsed struct {
+		Resolved map[string]string `json:"resolved"`
+	}
+	if json.Unmarshal(b, &parsed) != nil {
+		return nil
+	}
+	out := map[string]string{}
+	for family, url := range parsed.Resolved {
+		if family != "" && url != "" {
+			out[strings.ToLower(family)] = url
+		}
+	}
+	return out
 }
 
 // titleCaseFont 白名单小写键 → 规范展示名（local('Microsoft YaHei') 的大小写要跟系统一致）。
@@ -115,7 +153,7 @@ func fixupFrameFonts(p *Project) {
 		if err != nil {
 			continue
 		}
-		fixed := ensureFontFaces(string(b))
+		fixed := ensureFontFaces(string(b), loadFontAssets(p))
 		if fixed != string(b) {
 			_ = writeFile(path, fixed)
 		}

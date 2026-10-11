@@ -13,7 +13,7 @@ const ffFixture = `<template><style>
 </style></template>`
 
 func TestEnsureFontFacesAddsMissing(t *testing.T) {
-	out := ensureFontFaces(ffFixture)
+	out := ensureFontFaces(ffFixture, nil)
 	for _, want := range []string{
 		"@font-face{font-family:'SimHei';src:local('SimHei');}",
 		"@font-face{font-family:'Arial Narrow';src:local('Arial Narrow');}",
@@ -37,16 +37,39 @@ func TestEnsureFontFacesAddsMissing(t *testing.T) {
 }
 
 func TestEnsureFontFacesIdempotent(t *testing.T) {
-	once := ensureFontFaces(ffFixture)
-	twice := ensureFontFaces(once)
+	once := ensureFontFaces(ffFixture, nil)
+	twice := ensureFontFaces(once, nil)
 	if once != twice {
 		t.Fatalf("幂等被破坏:\n--- once ---\n%s\n--- twice ---\n%s", once, twice)
 	}
 }
 
 func TestEnsureFontFacesNoStyle(t *testing.T) {
-	out := ensureFontFaces(`<div style="font-family:'SimHei'">x</div>`)
+	out := ensureFontFaces(`<div style="font-family:'SimHei'">x</div>`, nil)
 	if !strings.HasPrefix(out, "<style>") || !strings.Contains(out, "local('SimHei')") {
 		t.Fatalf("无 <style> 块时应前置一个:\n%s", out)
+	}
+}
+
+// 目录字体（fontCatalog）：解析产物里有 data URL 时，场景 HTML 引用该家族
+// （大小写/空格写法不限）就补真字体声明；没有产物则不补（font_tool 失败剥族兜底）。
+func TestEnsureFontFacesCatalogAsset(t *testing.T) {
+	html := `<template><style>#s{font-family:'zcool qingke huangyou','SimHei',sans-serif;}</style></template>`
+	assets := map[string]string{
+		"zcool qingke huangyou": "data:font/woff2;base64,AAECAw==",
+	}
+	out := ensureFontFaces(html, assets)
+	if !strings.Contains(out, `@font-face{font-family:'zcool qingke huangyou';src:url("data:font/woff2;base64,AAECAw==") format('woff2');}`) {
+		t.Fatalf("目录字体未补真字体声明:\n%s", out)
+	}
+	// 幂等：声明已存在不再追加
+	again := ensureFontFaces(out, assets)
+	if strings.Count(again, "data:font/woff2") != 1 {
+		t.Fatalf("目录字体声明应保持 1 处:\n%s", again)
+	}
+	// 无产物：不补声明（font_tool 失败时家族已被剥除，不会走到这）
+	bare := ensureFontFaces(html, nil)
+	if strings.Contains(bare, "zcool qingke huangyou';src:url") {
+		t.Fatalf("无产物时不应补目录字体声明:\n%s", bare)
 	}
 }

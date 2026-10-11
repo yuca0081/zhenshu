@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -77,6 +78,9 @@ func designBrief(p *Project, sb *contract.Storyboard) string {
 - body 正文/说明：可读优先；
 - data 数据/标签/代码：等宽优先，栈尾必须带 CJK 字体回退（数据标签也有中文）；
 - 每个角色的栈都必须含中文字体（渲染端是本机字体，豆腐块=废片）。
+- display 可以点名目录字体（平台自动下载+按本片用字子集化，写全名即可，中文名也认）：
+  %s——栈形如「'目录字体','Microsoft YaHei',sans-serif」；目录外的花名（PingFang/思源/方正等）
+  渲染端没有，一律不准写。
 
 ### 4. motion 动效语言（全片节奏一致性的来源，档次分水岭——生动还是像PPT，在这里定档）
 可补间只有 opacity/x/y/scale/rotation 系（数字滚动用 count）。动效必须设计成**一套编排**，不是一个档位：
@@ -100,7 +104,7 @@ func designBrief(p *Project, sb *contract.Storyboard) string {
 - 不用图片/网络资源，纯 CSS；多张样张构图版式必须明显不同，每张 desc 写明用了哪个版式；
 - 画布硬约束（违反必被裁切）：每张 html 是完整自包含文档，画布固定 960×540：
   html,body{width:960px;height:540px;overflow:hidden}；内容全部落在画布内，不依赖滚动；
-  禁 vw/vh；大字标题留边距；每张 html ≤2000 字符%s`, briefBlock(p), storyboardDigest(sb), notes)
+  禁 vw/vh；大字标题留边距；每张 html ≤2000 字符%s`, briefBlock(p), storyboardDigest(sb), FontCatalogList(), notes)
 }
 
 // briefBlock 强参考注入块（v3 §4.5）：简报存在时给设计阶段立「用户选定的硬要求」。
@@ -395,8 +399,15 @@ func DesignDocWithBrief(ss *contract.StyleSamples, segIdx int, brief *contract.S
 // 强参考特色落点表）+ skin.json（引擎件=主皮肤，assemble 字幕带配色消费）。
 // tokens 本体就是 style/style_samples.json——不另立 tokens.json，防双源漂移（宪法 #1）。
 func LockDesign(p *Project, ss *contract.StyleSamples) error {
-	if clampDesignFonts(ss) {
+	changed, matched := clampDesignFonts(ss)
+	if changed {
 		p.Manifest("design.fontclamp", "设计字体栈含渲染端不可用字体，已过滤为系统字体")
+	}
+	if len(matched) > 0 {
+		p.Manifest("design.fontcatalog", "设计点名目录字体："+strings.Join(mapKeys(matched), "、"))
+	}
+	if err := writeFontAssetRequest(p, matched); err != nil {
+		return fmt.Errorf("字体准备申请书落盘失败: %w", err)
 	}
 	skins := ss.EffectiveSkins()
 	if len(skins) == 0 {
@@ -424,14 +435,27 @@ var cssGenericFonts = map[string]bool{
 	"ui-monospace": true,
 }
 
-// clampFontStack 字体栈白名单钳制：设计发明会起花名（站酷/思源等渲染端既没装
+// cjkFontSet 系统白名单里的中文字体半区：过滤后栈里必须还剩中文可用的字源
+// （系统中文字体或目录字体），否则中文会豆腐块。
+var cjkFontSet = map[string]bool{
+	"microsoft yahei": true, "微软雅黑": true, "simhei": true, "黑体": true,
+	"simsun": true, "宋体": true, "nsimsun": true, "新宋体": true,
+	"kaiti": true, "楷体": true, "stkaiti": true, "stsong": true,
+	"stzhongsong": true, "fangsong": true, "仿宋": true,
+	"noto serif sc": true, "noto sans sc": true,
+}
+
+// clampFontStack 字体栈解析：设计发明会起花名（PingFang/站酷/思源等渲染端既没装
 // 也没打包的字体），场景提示有「引用即声明」纪律兜得住，字幕带（assemble 消费
 // skin slots.font）是机械装配没有这道关——未声明字体直接全灭字幕（2026-10-11
-// 夜跑实录：21 个字幕文件一票全否）。确认落盘前只留系统白名单 + 通用族，
-// 过滤后为空回退雅黑。幂等：已干净的栈原样返回（designVersion 不漂移）。
-func clampFontStack(stack string) string {
+// 夜跑实录：21 个字幕文件一票全否）。处理顺序：系统白名单与通用族保留 →
+// 目录字体（fontCatalog，平台下载+子集化+真声明）改写为规范名并登记 →
+// 其余花名剥除；剥完中文失去字源（只剩通用族/西文）时整体回退雅黑。
+// 幂等：已干净的栈原样返回（designVersion 不漂移）。
+func clampFontStack(stack string, matched map[string]*CatalogFont) string {
 	var keep []string
 	seen := map[string]bool{}
+	cjkSource := false
 	for _, tok := range strings.Split(stack, ",") {
 		name := strings.Trim(strings.TrimSpace(tok), "'\"")
 		lower := strings.ToLower(name)
@@ -439,31 +463,47 @@ func clampFontStack(stack string) string {
 			continue
 		}
 		generic := cssGenericFonts[lower]
+		catalog := (*CatalogFont)(nil)
 		if !generic && !osFontWhitelist[lower] {
-			continue
+			catalog = matchCatalogFont(name)
+			if catalog == nil {
+				continue
+			}
 		}
 		seen[lower] = true
-		if generic {
+		switch {
+		case generic:
 			keep = append(keep, lower)
-		} else {
+		case catalog != nil:
+			keep = append(keep, "'"+catalog.Family+"'")
+			cjkSource = true
+			if matched != nil {
+				matched[catalog.Family] = catalog
+			}
+		default:
 			keep = append(keep, "'"+titleCaseFont(lower)+"'")
+			if cjkFontSet[lower] {
+				cjkSource = true
+			}
 		}
 	}
-	if len(keep) == 0 {
+	if len(keep) == 0 || !cjkSource {
 		return "'Microsoft YaHei',sans-serif"
 	}
 	return strings.Join(keep, ",")
 }
 
-// clampDesignFonts 就地钳制设计系统里的全部字体栈（三角色 + 各皮肤槽位），
-// 返回是否有改动。样张 HTML 是预览件不钳（所见即所得只在确认前承诺）。
-func clampDesignFonts(ss *contract.StyleSamples) bool {
+// clampDesignFonts 就地解析设计系统里的全部字体栈（三角色 + 各皮肤槽位），
+// 返回是否有改动与点名的目录字体（LockDesign 据此写准备申请书）。
+// 样张 HTML 是预览件不解析（所见即所得只在确认前承诺）。
+func clampDesignFonts(ss *contract.StyleSamples) (bool, map[string]*CatalogFont) {
 	changed := false
+	matched := map[string]*CatalogFont{}
 	clamp := func(stack *string) {
 		if *stack == "" {
 			return
 		}
-		if c := clampFontStack(*stack); c != *stack {
+		if c := clampFontStack(*stack, matched); c != *stack {
 			*stack = c
 			changed = true
 		}
@@ -479,7 +519,17 @@ func clampDesignFonts(ss *contract.StyleSamples) bool {
 	if ss.Skin != nil {
 		clamp(&ss.Skin.Slots.Font)
 	}
-	return changed
+	return changed, matched
+}
+
+// mapKeys 目录字体的 manifest 摘要用（键即规范家族名）。
+func mapKeys(m map[string]*CatalogFont) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // designVersion 设计系统内容指纹：style_samples.json 任一字段改动都会换版本。

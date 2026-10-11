@@ -683,6 +683,13 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 func (r *Runner) compositions(ctx context.Context, p *pipeline.Project) error {
 	r.emit(p.ID, "stage", "compositions", "running")
 	r.Manifest(p, "stage.start", "compositions")
+	// 目录字体先行：下载缓存 + 按本文稿子集化（申请书由 LockDesign 落；vend 同款
+	// 铁律：模型只有申请权，执行在平台侧）。失败由 font_tool 自己剥族降级，不挡制作。
+	if err := r.python(ctx, "ai/font_tool.py", p.Dir, 4*time.Minute); err != nil {
+		r.Manifest(p, "fonts.prepare_error", err.Error())
+	} else {
+		r.Manifest(p, "fonts.prepared", "")
+	}
 	if err := r.sceneGen(ctx, p, "", "", ""); err != nil {
 		return err
 	}
@@ -701,9 +708,10 @@ func (r *Runner) compositions(ctx context.Context, p *pipeline.Project) error {
 // checkRepairRules 回喂修复轮的规则清单（与修复目标段一起拼进 feedback）。
 const checkRepairRules = `
 - 重叠/越界：整体重排拉开间距，避开底部字幕带（禁放区见布局规则），必要时减少元素。
-- 对比度 ✗：文字色与它实际压着的背景太接近。检查器的建议色不可信（实测往往不达标）——` +
-	"文字压在照片/深色底上一律改极浅色（#EFE9DA、#E3E3E3 级），浅色底上用深色（#2D2D2D 级）；" +
-	"中灰（#616161、#9E9E9E）做正文/标注色直接不达标，禁用。\n" +
+- 对比度 ✗：文字色与它实际压着的背景太接近。从本片设计系统的色板里重新配一对前景/背景：` +
+	"办法你定（加深/提亮、换色、给文字加底衬），方向是一步把差距拉开、别在达标线附近试探——" +
+	"灰色地带横跳正是历轮修不收敛的根因。检查器的建议色不可信（实测往往不达标），不要照抄；" +
+	"也不要为过关全片统一改成一个安全色，各段仍按各自设计走。\n" +
 	"- 字体 ✗（font_family_without_font_face）：报的字体渲染端不存在、也没有合法下载渠道（专有字体永远下不了）。" +
 	"修复＝把该字体从 font-family 栈里删掉、退到栈内或设计系统字体角色的后备字体——" +
 	"这算合规修复，不算违反设计系统（渲染端不存在的字体本来就守护不了设计）；" +

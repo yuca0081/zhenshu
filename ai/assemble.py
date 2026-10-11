@@ -82,6 +82,24 @@ def load_skin_slots(proj):
         return {}
 
 
+def fontasset_css(proj, *font_stacks):
+    """目录字体解析产物（style/font_assets.json——ai/font_tool.py 下载+按本文稿
+    子集好的真字体 woff2 data URL）：栈里引用到就补 url() 声明。质检要声明，
+    渲染要真字体，这里两个一起给；没有产物文件就静默空串（font_tool 失败时
+    家族已被剥除，不会走到这）。"""
+    try:
+        fa = json.loads((proj / 'style' / 'font_assets.json').read_text(encoding='utf-8'))
+    except Exception:
+        return ''
+    resolved = fa.get('resolved') or {}
+    low = str(' '.join(s for s in font_stacks if s) or '').lower()
+    out = []
+    for fam, url in resolved.items():
+        if url and fam and fam.lower() in low:
+            out.append("@font-face { font-family: '%s'; src: url('%s') format('woff2'); }" % (fam, url))
+    return '\n    '.join(out)
+
+
 def _hex_rgb(c):
     m = re.match(r'#([0-9a-fA-F]{6})$', str(c or '').strip())
     if not m:
@@ -126,6 +144,7 @@ def subtitle_blocks(scenes, meta_voices, slots, proj, w=1080, h=1920):
     per = {v['id']: v for v in meta_voices}
     txt = subtitle_text_color(slots)
     font = slots.get('font') or "'Segoe UI','Microsoft YaHei',sans-serif"
+    fa_css = fontasset_css(proj, font)
     capdir = proj / 'compositions' / 'caps'
     capdir.mkdir(parents=True, exist_ok=True)
     html_parts = []
@@ -161,6 +180,7 @@ def subtitle_blocks(scenes, meta_voices, slots, proj, w=1080, h=1920):
         cap_html = f"""<template>
   <style>
     {fontface_css(font)}
+    {fa_css}
     #{cap_id} {{ position: absolute; inset: 0; pointer-events: none; z-index: 55; }}
     #{cap_id} .cap-zone {{ position: absolute; left: 0; right: 0; bottom: 0; height: 17%; display: flex; align-items: center; justify-content: center; }}
     #{cap_id} .cap-ph {{ position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; opacity: 0; max-width: 90%; margin: 0 auto; }}
@@ -217,11 +237,13 @@ def main(proj_dir: str) -> int:
     # 跨段统一角标（P0-2）：配置在分镜层，注入每段页面（单段重渲各自带全）。
     ovl, chapters, style_id = load_overlay(proj)
     tokens = load_style_tokens(style_id)
-    # lint 合规：为 token/角标字体栈中的 OS 自带字体生成 @font-face local 声明
+    # lint 合规：为 token/角标字体栈中的 OS 自带字体生成 @font-face local 声明；
+    # 目录字体（font_assets.json 解析产物）补真字体 url 声明
     slots = load_skin_slots(proj)
     fontface = fontface_css(tokens.get('font') or '',
                             "Georgia, 'Times New Roman', 'SimSun', serif",
                             slots.get('font') or '')
+    fontface += '\n' + fontasset_css(proj, tokens.get('font') or '', slots.get('font') or '')
     # 章节刻度位置 = 章节切换段的全局起点（相邻同 chapter 合并）
     bounds = [0.0]
     for i, sid in enumerate(ids):

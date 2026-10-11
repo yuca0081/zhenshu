@@ -434,8 +434,10 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
    tl.to({},{duration:<段总时长秒>,ease:"none",onUpdate:function(){window["__draw_<id>"](tl.time(),ctx,W,H,rng);}},0);
    window.__timelines["<段id>"]=tl;
 8. 字体：只准用渲染端实际安装的这些——微软雅黑 Microsoft YaHei、黑体 SimHei、宋体 SimSun、楷体 KaiTi、仿宋 FangSong、Consolas、Segoe UI、Georgia、Arial、Times New Roman、Courier New、Impact（外加 serif/sans-serif/monospace 通用族收尾）；
-   引用即声明（@font-face{font-family:'X';src:local('X');}）；禁 PingFang SC、思源 Source Han/Noto、站酷等未安装字体——lint 对未声明字体会一票否决整段；
-   禁止在 CSS transform 里做居中（translateX(-50%%) 等）再让 GSAP 补间同一元素——GSAP 会整体覆盖 CSS transform，居中必须用 GSAP 的 xPercent/yPercent
+   例外：注入的设计系统展示字体（如 ZCOOL QingKe HuangYou 等目录字体）可以直接用，平台保证声明与字体文件；
+   引用即声明（@font-face{font-family:'X';src:local('X');}）；除此之外禁 PingFang SC、思源 Source Han/Noto 等未安装字体——lint 对未声明字体会一票否决整段；
+   禁止在 CSS transform 里做居中（translateX(-50%%) 等）再让 GSAP 补间同一元素——GSAP 会整体覆盖 CSS transform，居中必须用 GSAP 的 xPercent/yPercent；
+   元素的初始缩放/位移状态（如 scale(1.12)、scaleX(0)）一律写进 GSAP 的 fromTo from 值，CSS 里禁写 transform 声明——lint 对 CSS transform 与 GSAP 补间同元素一票否决
 9. 不写字幕——底部字幕带由平台注入；内容留在上 83%%，禁止出现 data-ph=/data-w= 标注
 10. 元素揭示随旁白节拍分布（对齐下方词序表，不前载不拖尾）；段总时长 %.3f 秒
 11. 需要新框架（如 three.js）：在 <template> 内写注释声明 `+"`<!-- vend: 包名@精确版本 -->`"+`，
