@@ -72,12 +72,12 @@ type SigAbsorption struct {
 
 // AbsorptionLands 落点枚举（designJSONShape / 落点校验共用）。
 const (
-	LandsDevice            = "device"
-	LandsMotion            = "motion"
-	LandsSkins             = "skins"
-	LandsCameraPlan        = "camera_plan"
-	LandsTransitionPolicy  = "transition_policy"
-	LandsMaterialPolicy    = "material_policy"
+	LandsDevice           = "device"
+	LandsMotion           = "motion"
+	LandsSkins            = "skins"
+	LandsCameraPlan       = "camera_plan"
+	LandsTransitionPolicy = "transition_policy"
+	LandsMaterialPolicy   = "material_policy"
 )
 
 var absorptionLands = map[string]bool{
@@ -107,9 +107,9 @@ type StyleBrief struct {
 	EntryID    string      `json:"entry_id"`
 	EntryName  string      `json:"entry_name"`
 	Tags       StyleTags   `json:"tags"`
-	TagBriefs  []TagBrief  `json:"tag_briefs"`  // 从词表取：main+aux 的 {id,name,brief}
-	Signatures []Signature `json:"signatures"`  // 开着（未关）的特色，含原文 mechanism
-	Evidence   []string    `json:"evidence"`    // 证据帧绝对路径（style_media 取，≤6 张）
+	TagBriefs  []TagBrief  `json:"tag_briefs"` // 从词表取：main+aux 的 {id,name,brief}
+	Signatures []Signature `json:"signatures"` // 开着（未关）的特色，含原文 mechanism
+	Evidence   []string    `json:"evidence"`   // 证据帧绝对路径（style_media 取，≤6 张）
 }
 
 // CheckAbsorption 落点覆盖校验（stageStyleSamples 在草稿校验通过后追加执行）：

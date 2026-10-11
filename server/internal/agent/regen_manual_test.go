@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -43,6 +44,6 @@ func TestManualStyleRegen(t *testing.T) {
 		OnEvent: func(projectID, event, detail string) { t.Logf("event %s: %s", event, detail) },
 	}
 	p := pipeline.NewProject(cfg.DataDir, projID)
-	got := a.regenerateStyle(p, os.Getenv("REGEN_INSTRUCTION"), p.Artifact("style/style_samples.json"))
+	got := a.regenerateStyle(context.Background(), p, os.Getenv("REGEN_INSTRUCTION"), p.Artifact("style/style_samples.json"))
 	t.Log(got)
 }

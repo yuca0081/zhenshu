@@ -313,7 +313,7 @@ func designDigest(p *pipeline.Project) (string, error) {
 // regenerateStyle 按用户修改要求重新出样张：旧样张备份防翻车，要求写 input/style_notes.txt，
 // 跑 style_samples 阶段（API 直调；未配 LLM 时降级为会话请求文件）。
 // 失败还原旧样张——项目任何时刻都不留「样张空洞」；成功则清库内指向与截图缓存。
-func (a *Agent) regenerateStyle(p *pipeline.Project, instruction, out string) string {
+func (a *Agent) regenerateStyle(ctx context.Context, p *pipeline.Project, instruction, out string) string {
 	var prev contract.StyleSamples
 	prevDir := ""
 	if json.Unmarshal(mustReadFile(out), &prev) == nil {
@@ -341,10 +341,10 @@ func (a *Agent) regenerateStyle(p *pipeline.Project, instruction, out string) st
 	for i := 0; i < 3; i++ { // 截图缓存一并清掉，防 produce 把旧图配新样张
 		_ = os.Remove(p.Artifact(fmt.Sprintf("style/sample-%d.png", i)))
 	}
-	_ = os.RemoveAll(p.Artifact("style/clips")) // 迷你真段随旧样张作废（片段/清单/mp4 一锅端）
-	_ = os.RemoveAll(p.Artifact(".hf-clip"))    // 小样单段工程壳同上
-	_ = os.Remove(p.Artifact("style/skin.json"))   // 旧皮肤随旧样张作废，确认新样张时重落
-	_ = os.Remove(p.Artifact("style/design.md"))   // 旧设计系统文档同样作废（确认新样张时机械重渲）
+	_ = os.RemoveAll(p.Artifact("style/clips"))         // 迷你真段随旧样张作废（片段/清单/mp4 一锅端）
+	_ = os.RemoveAll(p.Artifact(".hf-clip"))            // 小样单段工程壳同上
+	_ = os.Remove(p.Artifact("style/skin.json"))        // 旧皮肤随旧样张作废，确认新样张时重落
+	_ = os.Remove(p.Artifact("style/design.md"))        // 旧设计系统文档同样作废（确认新样张时机械重渲）
 	_ = os.Remove(p.Artifact("style/style_brief.json")) // 用户点名换方向：强参考简报一并作废
 	notes := "原风格方向：" + prevDir + "\n用户修改要求：" + instruction
 	if err := os.MkdirAll(filepath.Dir(p.Artifact("input/style_notes.txt")), 0o755); err != nil {
@@ -353,7 +353,7 @@ func (a *Agent) regenerateStyle(p *pipeline.Project, instruction, out string) st
 	if err := os.WriteFile(p.Artifact("input/style_notes.txt"), []byte(notes), 0o644); err != nil {
 		return restore(err)
 	}
-	if err := pipeline.Run(context.Background(), p, "style_samples"); err != nil {
+	if err := pipeline.Run(ctx, p, "style_samples"); err != nil {
 		return restore(err)
 	}
 	_ = os.Remove(bak)
@@ -440,7 +440,8 @@ func (a *Agent) resolveSegment(p *pipeline.Project, ref string) (id, label strin
 			n = s
 		}
 	} else {
-		s, e := strconv.Atoi(strings.TrimPrefix(strings.TrimPrefix(ref, "段"), "第"))
+		// 「第3段」「第3」「段3」「3」都收：剥前缀「第/段」再剥后缀「段」
+		s, e := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(ref, "段"), "第"), "段"))
 		if e == nil {
 			n = s
 		}
@@ -498,13 +499,23 @@ func (a *Agent) Run(projectID, userText string, refs []store.Ref) {
 		a.finish(projectID, "当前未配置 LLM API（LLM_API_KEY），我只能看不能想。配好 .env 再聊。", "error")
 		return
 	}
-	msgs := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: a.systemPrompt(projectID, a.State(projectID))}}
-	for _, h := range a.history(projectID, 10) {
-		msgs = append(msgs, h)
+	st := a.State(projectID) // 一轮只全量扫一次盘；system 提示与状态注入吃同一份
+	msgs := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: a.systemPrompt(projectID, st)}}
+	hist := a.history(projectID, 10)
+	// 刚落库的这条用户消息在历史里已有一份，下面的状态注入还会带一遍——
+	// 去掉历史里那份，同一句话不在上下文里出现两次
+	for i := len(hist) - 1; i >= 0; i-- {
+		if hist[i].Role == openai.ChatMessageRoleUser {
+			if hist[i].Content == userText {
+				hist = append(hist[:i], hist[i+1:]...)
+			}
+			break
+		}
 	}
+	msgs = append(msgs, hist...)
 	// 实时状态随最新 user 消息注入（模型对最新消息权重最高，防聊天历史锚定幻觉）
 	msgs = append(msgs, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf("［系统·实时项目状态，以此为准］\n%s\n%s\n用户消息：%s",
-		a.State(projectID).summary(), a.formatRefs(p, refs), userText)})
+		st.summary(), a.formatRefs(p, refs), userText)})
 
 	// 对话轮级时限：卡死的 LLM 调用（上游挂住时 10min×3 重试）会把 turnMu 下的
 	// 后续对话轮全部拖成沉默；超时给用户明确交代
@@ -544,7 +555,7 @@ func (a *Agent) reactTools(p *pipeline.Project) []react.Tool {
 		out = append(out, react.Tool{
 			Def:  t.def,
 			Gate: func() string { return t.gate(a.State(p.ID)) },
-			Run:  func(args string) string { return t.run(a, p, args) },
+			Run:  func(ctx context.Context, args string) string { return t.run(ctx, a, p, args) },
 		})
 	}
 	return out
@@ -692,7 +703,6 @@ func friendlyFailReason(detail string) string {
 	}
 }
 
-// capRunes 截断到 n 个 rune（多行保留，失败诊断往往跨行）。
 func (a *Agent) saveToolMsg(projectID, name, args, result string) {
 	_ = a.Store.SaveMsg(&store.Msg{
 		ProjectID: projectID, Role: "agent", Type: "tool_call",

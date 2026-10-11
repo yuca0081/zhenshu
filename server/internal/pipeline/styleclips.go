@@ -4,7 +4,7 @@
 // 改场景契约必须同步这里）→ ai/assemble_samples.py 套工程壳（字幕带/字体声明/
 // 资产，与 assemble.py 同源逻辑）→ hyperframes 渲 mp4。
 // --no-browser-gpu 强制软件光栅：三条小样走同一确定性档，互比与「所见」才成立
-//（同 7f3b61d 回放门禁的教训：渲染器 auto-detect 会掷硬币）。
+// （同 7f3b61d 回放门禁的教训：渲染器 auto-detect 会掷硬币）。
 // 铁律：任何一环失败只把该条降级为静态预览（ClipNote 记原因），绝不阻塞确认门。
 package pipeline
 
@@ -27,7 +27,7 @@ import (
 )
 
 // clipConcurrency 小样渲染并行度：SwiftShader 纯 CPU，2 并行是耗时/内存平衡点
-//（3s@1080×1920 单条约几十秒，2-3 条并行控制在分钟级）。
+// （3s@1080×1920 单条约几十秒，2-3 条并行控制在分钟级）。
 const clipConcurrency = 2
 
 // clipDuration 小样时长：3s 够走完一次完整揭示节拍，又把渲染压在几十秒。
@@ -51,7 +51,7 @@ type clipDrafts struct {
 
 // EnsureSampleClips 为样张补迷你真段：ss.Samples[i] ↔ clip-i 一一对应。
 // 幂等：已有 mp4 的条目跳过，中途断电重跑只补缺的。返回是否有字段更新
-//（调用方据此回写 style_samples.json）。
+// （调用方据此回写 style_samples.json）。
 func EnsureSampleClips(p *Project, ss *contract.StyleSamples, sb *contract.Storyboard) bool {
 	if len(ss.Samples) == 0 {
 		return false
@@ -105,11 +105,7 @@ func EnsureSampleClips(p *Project, ss *contract.StyleSamples, sb *contract.Story
 			continue
 		}
 		ss.Samples[idx].ClipHTML = "style/clips/" + id + ".html"
-		desc := ""
-		if idx < len(ss.Samples) {
-			desc = ss.Samples[idx].Desc
-		}
-		jobs = append(jobs, clipJob{idx: idx, id: id, narration: clipNarration(sb, idx, desc)})
+		jobs = append(jobs, clipJob{idx: idx, id: id, narration: clipNarration(sb, idx, ss.Samples[idx].Desc)})
 	}
 	if len(jobs) == 0 {
 		fail("没有一条小样通过机械校验")
@@ -190,7 +186,7 @@ var clipTplAttrRe = regexp.MustCompile(`\s+(?:data-composition-id|data-width|dat
 
 // normalizeClipHTML 落盘侧机械纠偏：模型偶发把 data-composition-id/尺寸写在
 // <template> 开标签上，而渲染器要求它们在 template 内部的第一个元素上
-//（正式段形状：裸 <template> + 内部根 div 带 id，见 pipeline.go stageCompositions）。
+// （正式段形状：裸 <template> + 内部根 div 带 id，见 pipeline.go stageCompositions）。
 // 这类形状错误不值得烧修复轮——落盘前直接搬正；形状本来对的原样返回。
 func normalizeClipHTML(html, id string) string {
 	t := strings.Index(strings.ToLower(html), "<template")
@@ -238,9 +234,22 @@ func isNameChar(c byte) bool {
 	return isASCIILetter(c) || (c >= '0' && c <= '9') || c == '-' || c == '_'
 }
 
+// clipAttrRe 属性提取正则按属性名缓存（sync.Map）：clipTplAttrVal 每小样每属性
+// 都调，包级 regexp.MustCompile 每次重编译是白付的。
+var clipAttrCache sync.Map // 属性名 → *regexp.Regexp
+
+func clipAttrRe(name string) *regexp.Regexp {
+	if re, ok := clipAttrCache.Load(name); ok {
+		return re.(*regexp.Regexp)
+	}
+	re := regexp.MustCompile(regexp.QuoteMeta(name) + `\s*=\s*("([^"]*)"|'([^']*)')`)
+	clipAttrCache.Store(name, re)
+	return re
+}
+
 // clipTplAttrVal 从开标签文本里取单个属性值（单双引号都接）。
 func clipTplAttrVal(tag, name string) string {
-	m := regexp.MustCompile(regexp.QuoteMeta(name) + `\s*=\s*("([^"]*)"|'([^']*)')`).FindStringSubmatch(tag)
+	m := clipAttrRe(name).FindStringSubmatch(tag)
 	if m == nil {
 		return ""
 	}
@@ -345,7 +354,7 @@ func clipSystemPrompt(ss *contract.StyleSamples) string {
 }
 
 // clipUserPrompt 场景契约块与 produce/scenegen.go sceneUserPrompt 的正式段规则同源
-//（画幅安全区、canvas 接线三行、字体声明、字幕带避让、确定性禁令）；差异只有三处：
+// （画幅安全区、canvas 接线三行、字体声明、字幕带避让、确定性禁令）；差异只有三处：
 // 时长固定 3s、旁白是截句种子（字幕文案）、构图按对应样张的版式指定。
 func clipUserPrompt(ss *contract.StyleSamples, sb *contract.Storyboard, need []int, cv contract.Canvas) string {
 	vert := cv.Aspect == "9:16"

@@ -19,6 +19,7 @@ import (
 
 	"webpage-video-agent/server/internal/pipeline"
 	"webpage-video-agent/server/internal/produce"
+	"webpage-video-agent/server/internal/store"
 )
 
 type manifestEvent struct {
@@ -297,6 +298,15 @@ func (s *Server) overview(c *gin.Context) {
 	if err != nil { // 库不可用不挡全景：jobs 给空，manifest 侧 last_run 仍在
 		jobs = nil
 	}
+	if jobs == nil {
+		// 空必须回 [] 不能回 null（与 activity/messages 同一纪律）：前端直接
+		// .length/.map，null 就是白屏
+		jobs = []store.RenderJobRow{}
+	}
+	artifacts := scanArtifacts(p)
+	if artifacts == nil {
+		artifacts = []artifactEntry{}
+	}
 	c.JSON(200, gin.H{
 		"id": id, "name": name, "status": status, "aspect": aspect, "topic": topic, "created_at": created,
 		"producing": producing,
@@ -304,7 +314,7 @@ func (s *Server) overview(c *gin.Context) {
 		"last_run":  run,
 		"durations": durations, // 最近一轮各环节耗时（秒）；进行中的环节给已耗时
 		"jobs":      jobs,
-		"artifacts": scanArtifacts(p),
+		"artifacts": artifacts,
 		"events":    events,
 	})
 }

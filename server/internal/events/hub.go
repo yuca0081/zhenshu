@@ -75,6 +75,14 @@ func (h *Hub) Emit(projectID, typ, stage, detail string) {
 	}
 }
 
+// Forget 项目删除时清掉它的重放窗：last map 只增不减会让删掉的项目在 SSE 侧
+// 留下永远重放的幽灵记录（subs 条目断连即清，last 之前没人清）。
+func (h *Hub) Forget(projectID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.last, projectID)
+}
+
 func (e Event) JSON() string {
 	b, _ := json.Marshal(e)
 	return string(b)

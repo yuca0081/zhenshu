@@ -155,11 +155,14 @@ func TestStyleFlowIngestApplyBrief(t *testing.T) {
 		t.Fatalf("简报未落盘: %v", err)
 	}
 	var brief struct {
-		EntryID   string `json:"entry_id"`
-		Tags      struct{ Main string; Aux []string } `json:"tags"`
-		TagBriefs []struct{ ID, Name string } `json:"tag_briefs"`
-		Signatures []struct{ ID string } `json:"signatures"`
-		Evidence  []string `json:"evidence"`
+		EntryID string `json:"entry_id"`
+		Tags    struct {
+			Main string
+			Aux  []string
+		} `json:"tags"`
+		TagBriefs  []struct{ ID, Name string } `json:"tag_briefs"`
+		Signatures []struct{ ID string }       `json:"signatures"`
+		Evidence   []string                    `json:"evidence"`
 	}
 	if err := json.Unmarshal(b, &brief); err != nil {
 		t.Fatal(err)

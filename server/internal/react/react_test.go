@@ -40,7 +40,7 @@ func echoTool(name string) Tool {
 	return Tool{
 		Def:  openai.Tool{Type: openai.ToolTypeFunction, Function: &openai.FunctionDefinition{Name: name}},
 		Gate: func() string { return "" },
-		Run:  func(args string) string { return "echo:" + args },
+		Run:  func(_ context.Context, args string) string { return "echo:" + args },
 	}
 }
 
@@ -149,12 +149,12 @@ func TestRunUnknownTool(t *testing.T) {
 // 重名工具：后注册者胜出，schema 不重复出现。
 func TestNewDedupesTools(t *testing.T) {
 	first, second := echoTool("t"), echoTool("t")
-	second.Run = func(string) string { return "second" }
+	second.Run = func(_ context.Context, _ string) string { return "second" }
 	c := New(&mockChat{}, []Tool{first, second}, 0, Hooks{})
 	if len(c.tools) != 1 || len(c.schemas()) != 1 {
 		t.Fatalf("重名应去重: %d", len(c.tools))
 	}
-	if got := c.tools[0].Run(""); got != "second" {
+	if got := c.tools[0].Run(context.Background(), ""); got != "second" {
 		t.Fatalf("后注册者应胜出: %q", got)
 	}
 }
@@ -163,10 +163,10 @@ func TestNewDedupesTools(t *testing.T) {
 func TestWithCallBudget(t *testing.T) {
 	calls := 0
 	base := echoTool("search")
-	base.Run = func(string) string { calls++; return "结果" }
+	base.Run = func(_ context.Context, _ string) string { calls++; return "结果" }
 	capped := WithCallBudget(base, 2, "搜索额度已用完")
 	for i := 0; i < 3; i++ {
-		got := capped.Run(`{}`)
+		got := capped.Run(context.Background(), `{}`)
 		if i < 2 && got != "结果" {
 			t.Fatalf("帽内应放行: %q", got)
 		}

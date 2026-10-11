@@ -146,7 +146,8 @@ func TestIssuesFeedbackMidFrame(t *testing.T) {
 
 // 手动实测：PRE_REVIEW_TEST=1 时对现有项目跑一次预审链路（真 snapshot + 真视觉模型，
 // 会重出问题段的场景文件——只在测试项目上跑）。
-//   cd server && PRE_REVIEW_TEST=1 PRE_REVIEW_PROJECT=<项目ID> go test ./internal/produce -run TestPreReviewManual -v
+//
+//	cd server && PRE_REVIEW_TEST=1 PRE_REVIEW_PROJECT=<项目ID> go test ./internal/produce -run TestPreReviewManual -v
 func TestPreReviewManual(t *testing.T) {
 	if os.Getenv("PRE_REVIEW_TEST") == "" {
 		t.Skip("手动测试：设 PRE_REVIEW_TEST=1 运行")

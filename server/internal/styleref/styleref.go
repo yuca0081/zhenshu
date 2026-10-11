@@ -61,19 +61,19 @@ type taggerOutput struct {
 
 // rawTag 一个标签的原始形态：词表 id 或新词申请（二选一），带人话指认与证据帧。
 type rawTag struct {
-	ID     string   `json:"id"`              // 词表 id（词表里有的必须给这个）
-	New    *newWord `json:"new,omitempty"`   // 词表没有 → 申请新词
-	Note   string   `json:"note"`            // 人话指认：「第2段：紫青撞色+网格地平线」
+	ID     string   `json:"id"`               // 词表 id（词表里有的必须给这个）
+	New    *newWord `json:"new,omitempty"`    // 词表没有 → 申请新词
+	Note   string   `json:"note"`             // 人话指认：「第2段：紫青撞色+网格地平线」
 	Frames []string `json:"frames,omitempty"` // 证据帧文件名（frame-*.png）
 }
 
 // newWord 申请新词（§4.2）：查重通过后写 vocab.json。
 type newWord struct {
-	ID      string   `json:"id"`              // 小写蛇形英文 id（如 claymation），可缺省
-	Name    string   `json:"name"`            // 正式名（如 粘土定格）
+	ID      string   `json:"id"`                // 小写蛇形英文 id（如 claymation），可缺省
+	Name    string   `json:"name"`              // 正式名（如 粘土定格）
 	Aliases []string `json:"aliases,omitempty"` // 中英+俗称
-	Brief   string   `json:"brief"`           // 一句机制描述：色域/质感/光/字体气质
-	Tells   string   `json:"tells,omitempty"` // 判别特征：帧里认什么
+	Brief   string   `json:"brief"`             // 一句机制描述：色域/质感/光/字体气质
+	Tells   string   `json:"tells,omitempty"`   // 判别特征：帧里认什么
 }
 
 // videoFeatures features.json（ai/extract_video_features.py 产物）。

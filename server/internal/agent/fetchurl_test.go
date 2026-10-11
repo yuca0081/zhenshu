@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -37,11 +38,11 @@ func TestFetchURLToolRegistered(t *testing.T) {
 
 func TestFetchURLToolRun(t *testing.T) {
 	tl := findTool("fetch_url")
-	if got := tl.run(nil, nil, `{"url":""}`); got != "缺少 url" {
+	if got := tl.run(context.Background(), nil, nil, `{"url":""}`); got != "缺少 url" {
 		t.Errorf("空 url 应提示缺少，得到 %q", got)
 	}
 	// 抓取失败路径也不打网络：非法地址直接被拒
-	if got := tl.run(nil, nil, `{"url":"http://"}`); !strings.Contains(got, "网页读取失败") {
+	if got := tl.run(context.Background(), nil, nil, `{"url":"http://"}`); !strings.Contains(got, "网页读取失败") {
 		t.Errorf("非法地址应报读取失败，得到 %q", got)
 	}
 }

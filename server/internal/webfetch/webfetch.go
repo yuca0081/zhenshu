@@ -5,6 +5,7 @@
 package webfetch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -89,7 +90,7 @@ func Fetch(ctx context.Context, rawURL string) (*Article, error) {
 	if err != nil {
 		return nil, fail(nil, "读取失败：%v", err)
 	}
-	art, err := readability.FromReader(strings.NewReader(string(body)), u)
+	art, err := readability.FromReader(bytes.NewReader(body), u) // bytes 零拷贝，8MB body 免多复制一遍
 	if err != nil {
 		return nil, fail(ErrUnreadable, "正文提取失败（该页面可能不是文章页）")
 	}

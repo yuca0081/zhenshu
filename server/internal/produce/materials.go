@@ -135,8 +135,11 @@ func (r *Runner) ensureMaterials(ctx context.Context, p *pipeline.Project, requi
 		if ctx.Err() != nil {
 			break
 		}
-		if perSeg[n.Seg] >= materialMaxPerSeg || len(st.Materials) >= materialMaxTotal {
-			break
+		if len(st.Materials) >= materialMaxTotal {
+			break // 总量到顶：整个采购收工
+		}
+		if perSeg[n.Seg] >= materialMaxPerSeg {
+			continue // 该段满了：跳过这条需求，后面段的需求照常采购
 		}
 		count := n.Count
 		if count < 1 {
@@ -186,7 +189,7 @@ func (r *Runner) planMaterials(ctx context.Context, p *pipeline.Project) (*mater
 	}
 	var b strings.Builder
 	for _, seg := range sb.Segments {
-		fmt.Fprintf(&b, "- %s｜%s｜画面提示：%s\n", seg.ID, seg.Key, runeTrunc(seg.VisualBrief, 60))
+		fmt.Fprintf(&b, "- %s｜%s｜画面提示：%s\n", seg.ID, seg.Key, pipeline.TruncRunes(seg.VisualBrief, 60))
 	}
 	var out materialNeeds
 	_, err = prov.GenerateJSONNoThink(ctx, "你是短视频的视觉素材策划，只输出 JSON。", fmt.Sprintf(`下面是分镜清单。判断哪些段值得贴**真图拼贴素材**（名画/雕像/陶器/遗址/历史实物照片，来自大都会博物馆开放藏品库，全部公版），哪些段程序化图形就够（抽象概念/图表/氛围/人物剪影）。
@@ -285,6 +288,9 @@ func materialImages(p *pipeline.Project) []string {
 	return urls
 }
 
+// assetsImgSrcRe 场景 HTML 的图片引用（包级预编译：sceneValidate 每段×每修复轮都跑）。
+var assetsImgSrcRe = regexp.MustCompile(`src="assets/img/([^"]+)"`)
+
 // materialWhitelistCheck 场景 HTML 里 assets/img/ 引用必须命中素材清单（清单外文件
 // 不存在，渲染必裂图）。无素材库的项目跳过。
 func materialWhitelistCheck(p *pipeline.Project, html string) []string {
@@ -294,9 +300,8 @@ func materialWhitelistCheck(p *pipeline.Project, html string) []string {
 	}
 	allow := materialFiles(st)
 	var errs []string
-	re := regexp.MustCompile(`src="assets/img/([^"]+)"`)
 	seen := map[string]bool{}
-	for _, m := range re.FindAllStringSubmatch(html, -1) {
+	for _, m := range assetsImgSrcRe.FindAllStringSubmatch(html, -1) {
 		rel := "assets/img/" + m[1]
 		if !allow[rel] && !seen[rel] {
 			seen[rel] = true
@@ -345,8 +350,12 @@ func (m *metClient) search(ctx context.Context, q string) ([]int, error) {
 func (m *metClient) object(ctx context.Context, id int) (*metObject, error) {
 	var o metObject
 	err := m.getJSON(ctx, fmt.Sprintf("%s/v1/objects/%d", m.base, id), &o)
-	if err != nil { // Met 有突发限流：隔半秒重试一次
-		time.Sleep(500 * time.Millisecond)
+	if err != nil { // Met 有突发限流：隔半秒重试一次（睡眠可被取消打断）
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 		err = m.getJSON(ctx, fmt.Sprintf("%s/v1/objects/%d", m.base, id), &o)
 	}
 	if err != nil {
@@ -419,6 +428,7 @@ func (m *metClient) download(ctx context.Context, p *pipeline.Project, seg, quer
 	if err != nil {
 		return Material{}, err
 	}
+	defer tmp.Close() // 提前 return 的错误路径也要关：Windows 上句柄开着 Remove 删不掉
 	defer os.Remove(tmp.Name())
 	n, err := io.Copy(tmp, io.LimitReader(resp.Body, materialDownloadMax))
 	if err != nil {

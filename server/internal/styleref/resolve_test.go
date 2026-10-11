@@ -61,9 +61,9 @@ func TestResolveDraftVocabFlow(t *testing.T) {
 	raw := &taggerOutput{
 		Subject: "等距视角的城市宣传动画",
 		Tags: []rawTag{
-			{ID: iso, Note: "轴测网格"},                                               // 词表 id 直用
+			{ID: iso, Note: "轴测网格"}, // 词表 id 直用
 			{New: &newWord{ID: "clay", Name: "粘土定格 Vaporwave", Aliases: []string{"clay"}, Brief: "逐帧手作", Tells: "指印"}}, // 全新词
-			{New: &newWord{Name: "霓虹发光风", Brief: "x"}},                                    // 语义撞车 → 挂别名
+			{New: &newWord{Name: "霓虹发光风", Brief: "x"}},                                                                 // 语义撞车 → 挂别名
 		},
 		Signatures: []contract.Signature{
 			{Kind: contract.SigKindTransition, Name: "递接转场", Mechanism: "上段主体推出画外+下段同位跟进", Frames: []string{"frame-0.8.png"}},

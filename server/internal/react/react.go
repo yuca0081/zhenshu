@@ -21,11 +21,12 @@ type ChatClient interface {
 
 // Tool 单个工具：定义 + 门禁 + 执行体。
 // Gate 返回空串 = 放行；否则为拒绝原因（回喂给模型）。
-// Run 收原始 JSON 参数串，返回人话观察结果（回喂给模型，也交 Hooks 记账）。
+// Run 收循环 ctx（宿主的轮级时限由此穿透进工具，卡死的工具不再拖穿轮超时）
+// 与原始 JSON 参数串，返回人话观察结果（回喂给模型，也交 Hooks 记账）。
 type Tool struct {
 	Def  openai.Tool
 	Gate func() string
-	Run  func(argsJSON string) string
+	Run  func(ctx context.Context, argsJSON string) string
 }
 
 // Hooks 工具执行过程的宿主钩子（播报/记账），全部可空。
@@ -79,7 +80,7 @@ func (c *Core) Run(ctx context.Context, msgs []openai.ChatCompletionMessage) (st
 		}
 		msgs = append(msgs, msg)
 		for _, call := range msg.ToolCalls {
-			obs := c.exec(call.Function.Name, call.Function.Arguments)
+			obs := c.exec(ctx, call.Function.Name, call.Function.Arguments)
 			msgs = append(msgs, openai.ChatCompletionMessage{
 				Role:       openai.ChatMessageRoleTool,
 				Content:    obs,
@@ -104,18 +105,18 @@ func (c *Core) schemas() []openai.Tool {
 func WithCallBudget(t Tool, budget int, exhausted string) Tool {
 	left := budget
 	base := t.Run
-	t.Run = func(args string) string {
+	t.Run = func(ctx context.Context, args string) string {
 		if left <= 0 {
 			return exhausted
 		}
 		left--
-		return base(args)
+		return base(ctx, args)
 	}
 	return t
 }
 
 // exec 门禁 + 执行。未知工具直接回喂不记钩子——模型乱点名不该污染宿主案卷。
-func (c *Core) exec(name, args string) string {
+func (c *Core) exec(ctx context.Context, name, args string) string {
 	i, ok := c.byName[name]
 	if !ok {
 		return "未知工具 " + name
@@ -131,7 +132,7 @@ func (c *Core) exec(name, args string) string {
 	if c.Hooks.OnCall != nil {
 		c.Hooks.OnCall(name, args)
 	}
-	obs := t.Run(args)
+	obs := t.Run(ctx, args)
 	if c.Hooks.OnFinish != nil {
 		c.Hooks.OnFinish(name, args, obs, false)
 	}

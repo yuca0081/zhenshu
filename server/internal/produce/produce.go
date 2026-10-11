@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"image/png"
 	"log"
 	"math"
@@ -156,6 +157,21 @@ func safeRun(f func() error) (err error) {
 	return f()
 }
 
+// notifyOnDone OnDone 的防 panic 包装：finishJob 给取消/失败路径包了 swallow，
+// 成功路径（run/runRework 返回 nil 后）也曾裸调——同样的 panic 面（NotifyResult
+// 碰到坏产物结构就够），一并包住。
+func (r *Runner) notifyOnDone(projectID, status, detail string) {
+	if r.OnDone == nil {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("[produce] OnDone(%s) panic（已吞，不影响已落盘终态）: %v\n", status, rec)
+		}
+	}()
+	r.OnDone(projectID, status, detail)
+}
+
 // 自动重跑：制作/重做的真失败（LLM 超时、质检随机性、渲染偶发抖动等）不需要用户
 // 做任何决策——产物按段落盘复用，重跑的代价与用户手打「继续」完全一样，那就该
 // 自己做掉。只有重跑烧完还失败才惊动用户。取消/停机是用户意图，绝不重跑。
@@ -179,7 +195,9 @@ func (r *Runner) runWithAutoRetry(ctx context.Context, p *pipeline.Project, proj
 		case <-ctx.Done():
 		}
 		if ctx.Err() != nil {
-			break
+			// 等待期被取消/停机：用户意图不是失败——返回 ctx 错误走取消分支，
+			// 别把上一轮的失败错误落成「制作失败（已自动重跑 N 次仍未过）」
+			return ctx.Err()
 		}
 		retried = n
 		err = safeRun(run)
@@ -303,7 +321,7 @@ func (r *Runner) finishJob(p *pipeline.Project, projectID string, err error, t j
 		r.emit(projectID, "stage", "pipeline", "cancelled")
 		r.emit(projectID, "cancelled", "", detail)
 		if r.OnDone != nil {
-			r.OnDone(projectID, "cancelled", detail)
+			r.notifyOnDone(projectID, "cancelled", detail)
 		}
 		return
 	}
@@ -313,7 +331,7 @@ func (r *Runner) finishJob(p *pipeline.Project, projectID string, err error, t j
 	r.emit(projectID, "stage", "pipeline", "error: "+err.Error())
 	r.emit(projectID, "error", "", err.Error())
 	if r.OnDone != nil {
-		r.OnDone(projectID, "failed", err.Error())
+		r.notifyOnDone(projectID, "failed", err.Error())
 	}
 }
 
@@ -446,7 +464,7 @@ func (r *Runner) runRework(ctx context.Context, p *pipeline.Project, segs []cont
 	r.Manifest(p, EventReworkDone, only)
 	r.jobTerminal(id, "done", "renders/main.mp4", "")
 	if r.OnDone != nil {
-		r.OnDone(id, "video", strings.Join(labels, "、")+" 画面重做完成")
+		r.notifyOnDone(id, "video", strings.Join(labels, "、")+" 画面重做完成")
 	}
 	return nil
 }
@@ -528,7 +546,7 @@ func (r *Runner) Reconcile() {
 			}
 		}
 		if r.OnDone != nil {
-			r.OnDone(id, "failed", detail)
+			r.notifyOnDone(id, "failed", detail)
 		}
 	}
 }
@@ -656,7 +674,7 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 	r.Manifest(p, EventProduceDone, "renders/main.mp4")
 	r.jobTerminal(id, "done", "renders/main.mp4", "")
 	if r.OnDone != nil {
-		r.OnDone(id, "video", "全片制作完成")
+		r.notifyOnDone(id, "video", "全片制作完成")
 	}
 	return nil
 }
@@ -680,6 +698,17 @@ func (r *Runner) compositions(ctx context.Context, p *pipeline.Project) error {
 // checkWithRepair check 失败 → 报错回喂 → 重生成 spec → 重渲染 → 重查（最多 3 轮，plan §4.5）。
 // instruction 原样传给 sceneGen 的用户要求位（rework 时不能丢）。
 // only 非空 = 修复范围限定该段（rework），空 = 全片（首次制作）。
+// checkRepairRules 回喂修复轮的规则清单（与修复目标段一起拼进 feedback）。
+const checkRepairRules = `
+- 重叠/越界：整体重排拉开间距，避开底部字幕带（禁放区见布局规则），必要时减少元素。
+- 对比度 ✗：文字色与它实际压着的背景太接近。检查器的建议色不可信（实测往往不达标）——` +
+	"文字压在照片/深色底上一律改极浅色（#EFE9DA、#E3E3E3 级），浅色底上用深色（#2D2D2D 级）；" +
+	"中灰（#616161、#9E9E9E）做正文/标注色直接不达标，禁用。\n" +
+	"- 字体 ✗（font_family_without_font_face）：报的字体渲染端不存在、也没有合法下载渠道（专有字体永远下不了）。" +
+	"修复＝把该字体从 font-family 栈里删掉、退到栈内或设计系统字体角色的后备字体——" +
+	"这算合规修复，不算违反设计系统（渲染端不存在的字体本来就守护不了设计）；" +
+	"除此之外画面一切照旧，不要顺手改构图/配色/动效。\n"
+
 func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instruction, only string) error {
 	for attempt := 1; attempt <= 3; attempt++ {
 		if ctx.Err() != nil {
@@ -710,11 +739,19 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 		if fixN > 0 {
 			r.emit(p.ID, "stage", "check", fmt.Sprintf("cheap-fix：机械回填 %d 处（对比度/opacity 冲突）", fixN))
 			r.Manifest(p, "check.contrast_fix", fmt.Sprintf("%d 处", fixN))
-			if err := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); err == nil {
-				if pipeline.Run(ctx, p, "check") == nil {
-					r.emit(p.ID, "stage", "check", "done")
-					r.Manifest(p, "stage.finish", "check")
-					return nil
+			if perr := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); perr == nil {
+				if cerr := pipeline.Run(ctx, p, "check"); cerr == nil {
+					// 捷径放行同样要过 scene 回放门禁：机械回填理论上不影响力
+					// 确定性，但门禁口径必须与主路径一致（不兜「理论」）
+					if rerr := r.sceneReplayCheck(ctx, p); rerr != nil {
+						err = rerr // 回填过了但回放没过：带着回放错误进下面的修复轮
+					} else {
+						r.emit(p.ID, "stage", "check", "done")
+						r.Manifest(p, "stage.finish", "check")
+						return nil
+					}
+				} else {
+					err = cerr
 				}
 			}
 			// 回填后仍不过 → 落到下面的 LLM 修复轮
@@ -734,16 +771,7 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 		}
 		repairOnly := strings.Join(targets, ",")
 		feedback := "上一版画面被自动检查拒绝，报错摘要（✗ 行逐项都要修）：\n" + pipeline.TailLines(blockingCheckErrors(err.Error()), 25) +
-			"\n修复规则：\n" +
-			"- 重叠/越界：整体重排拉开间距，避开底部字幕带（禁放区见布局规则），必要时减少元素。\n" +
-			"- 对比度 ✗：文字色与它实际压着的背景太接近。检查器的建议色不可信（实测往往不达标）——" +
-			"文字压在照片/深色底上一律改极浅色（#EFE9DA、#E3E3E3 级），浅色底上用深色（#2D2D2D 级）；" +
-			"中灰（#616161、#9E9E9E）做正文/标注色直接不达标，禁用。\n" +
-			"- 字体 ✗（font_family_without_font_face）：报的字体渲染端不存在、也没有合法下载渠道（专有字体永远下不了）。" +
-			"修复＝把该字体从 font-family 栈里删掉、退到栈内或设计系统字体角色的后备字体——" +
-			"这算合规修复，不算违反设计系统（渲染端不存在的字体本来就守护不了设计）；" +
-			"除此之外画面一切照旧，不要顺手改构图/配色/动效。\n" +
-			"逐项修完再输出。"
+			"\n修复规则：\n" + checkRepairRules + "逐项修完再输出。"
 		// 本轮 check 失败收口（计时），修复轮重生成的时间不计入 check
 		r.Manifest(p, "stage.finish", "check")
 		r.emit(p.ID, "stage", "check", fmt.Sprintf("repair：重生成画面（段：%s）", repairOnly))
@@ -809,7 +837,8 @@ func failingSegs(checkOut string) []string {
 		for _, id := range segIDRe.FindAllString(ln, -1) {
 			add(id)
 		}
-		if i+1 < len(lines) { // 对比度项的选择器在 ✗ 行，段文件在下一行 Try/source
+		if i+1 < len(lines) { // 调用方喂的是 blockingCheckErrors 过滤后的纯 ✗ 行：
+			// 段 id 可能只出现在相邻 ✗ 行（如对比度项只报选择器），顺带扫下一行
 			for _, id := range segIDRe.FindAllString(lines[i+1], -1) {
 				add(id)
 			}
@@ -864,21 +893,31 @@ func (r *Runner) sceneReplayCheck(ctx context.Context, p *pipeline.Project) erro
 	if err != nil {
 		return nil
 	}
-	// 全局时刻 → 段 的映射（scene 段各取 头0.5s/中点/尾-0.5s，
-	// 避开段首尾 0.25s 黑场转场的渐变区）
+	// 全局时刻 → 段 的映射（scene 段各取 头0.5s/中点/尾-0.5s，避开段首尾 0.25s
+	// 黑场转场的渐变区）。去重+下限钳位与 preReviewTimes 同口径：极短段三点合成
+	// 一点时不喂重复 --at，错误也不会因负时刻撞到相邻段头上。
 	t2seg := map[float64]string{}
+	seen := map[float64]bool{}
 	var ats []float64
 	acc := 0.0
 	for _, seg := range sb.Segments {
 		dur := voices[seg.ID].DurationS + contract.SegTail
 		if specHasScene(p, seg.ID) {
 			for _, t := range []float64{0.5, dur / 2, dur - 0.5} {
+				if t < 0.25 {
+					continue
+				}
 				at := acc + t
 				if at > acc+dur-0.05 {
 					at = acc + dur - 0.05
 				}
-				ats = append(ats, round2(at))
-				t2seg[round2(at)] = seg.ID
+				key := round2(at)
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				ats = append(ats, key)
+				t2seg[key] = seg.ID
 			}
 		}
 		acc += dur
@@ -919,23 +958,19 @@ func (r *Runner) sceneReplayCheck(ctx context.Context, p *pipeline.Project) erro
 	diffRounds := func(dir1, dir2 string, names []string) (badFrames, msgs []string, err error) {
 		seen := map[string]bool{}
 		for _, name := range names {
-			maxD, nD, tot, derr := pngDiffStats(
-				filepath.Join(p.Artifact(dir1), name),
-				filepath.Join(p.Artifact(dir2), name))
+			p1, p2 := filepath.Join(p.Artifact(dir1), name), filepath.Join(p.Artifact(dir2), name)
+			ia, ib, derr := decodePngPair(p1, p2)
 			if derr != nil {
 				return nil, nil, derr
 			}
+			maxD, nD, tot := diffStatsImgs(ia, ib)
 			if maxD <= replayMaxChannelDiff && (tot == 0 || float64(nD) <= replayDiffRatioMax*float64(tot)) {
 				continue
 			}
 			// 逐像素超差 → 感知二级判据：纹理相位抖动（噪点/混合层/缩放画布的
-			// LSB 级绘制路径差）整块放行，位置/配色/元素有无级真差异仍拦
-			bm, bp, perr := pngDiffPerceptual(
-				filepath.Join(p.Artifact(dir1), name),
-				filepath.Join(p.Artifact(dir2), name))
-			if perr != nil {
-				return nil, nil, perr
-			}
+			// LSB 级绘制路径差）整块放行，位置/配色/元素有无级真差异仍拦。
+			// 复用上面已解码的帧，不再重开重解码
+			bm, bp := diffPerceptualImgs(ia, ib)
 			if bm <= perceptualMeanMax && bp <= perceptualPixMax {
 				textureFrames++
 				continue
@@ -1042,37 +1077,84 @@ const (
 	perceptualPixMax  = 32.0 // 块内单像素差上限（实测合规最坏 16，2 倍裕量）
 )
 
-// pngDiffPerceptual 感知比对：两帧各做 8×8 盒滤波降采样后逐块比较，
-// 返回（最坏块均差, 最坏块内单像素差, err），0-255 口径。
-func pngDiffPerceptual(pathA, pathB string) (blockMean, blockMax float64, err error) {
+// decodePngPair 读两 PNG 并解码。调用方拿到原始 image.Image：逐像素比对走
+// NRGBA 快路径，感知二级判据复用同一对已解码帧（超差帧重开+重解码曾是回放
+// 门禁里最贵的一步）。
+func decodePngPair(pathA, pathB string) (ia, ib image.Image, err error) {
 	fa, err := os.Open(pathA)
 	if err != nil {
-		return 0, 0, err
+		return nil, nil, err
 	}
 	defer fa.Close()
-	ia, err := png.Decode(fa)
+	ia, err = png.Decode(fa)
 	if err != nil {
-		return 0, 0, err
+		return nil, nil, err
 	}
 	fb, err := os.Open(pathB)
 	if err != nil {
-		return 0, 0, err
+		return nil, nil, err
 	}
 	defer fb.Close()
-	ib, err := png.Decode(fb)
+	ib, err = png.Decode(fb)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ia, ib, nil
+}
+
+// nrgbaAt8 与 image.NRGBA.RGBA()>>8 同口径取预乘 8bit 通道。快路径免掉每像素
+// 两次 color.Color 接口调用与转换（1080×1920 单帧 200 万像素，回放门禁几十帧
+// 全走这里）；a=255（截图常态）直读原始字节。
+func nrgbaAt8(px *image.NRGBA, x, y int) (r, g, b uint8) {
+	i := px.PixOffset(x, y)
+	a := px.Pix[i+3]
+	if a == 0xff {
+		return px.Pix[i], px.Pix[i+1], px.Pix[i+2]
+	}
+	if a == 0 {
+		return 0, 0, 0
+	}
+	prem := func(c uint8) uint8 {
+		return uint8((uint32(c) * 0x101 * uint32(a) / 0xff) >> 8)
+	}
+	return prem(px.Pix[i]), prem(px.Pix[i+1]), prem(px.Pix[i+2])
+}
+
+// pngDiffPerceptual 感知比对：两帧各做 8×8 盒滤波降采样后逐块比较，
+// 返回（最坏块均差, 最坏块内单像素差, err），0-255 口径。
+func pngDiffPerceptual(pathA, pathB string) (blockMean, blockMax float64, err error) {
+	ia, ib, err := decodePngPair(pathA, pathB)
 	if err != nil {
 		return 0, 0, err
 	}
+	bm, bp := diffPerceptualImgs(ia, ib)
+	return bm, bp, nil
+}
+
+// diffPerceptualImgs 同 pngDiffPerceptual，吃已解码对象（与 diffStatsImgs 同源
+// 像素口径：At().RGBA()>>8 的 0-255 预乘值）。尺寸不一致按最严重处理（与
+// pngDiffStats 同口径：报不崩也放行不了）。
+func diffPerceptualImgs(ia, ib image.Image) (blockMean, blockMax float64) {
 	if ia.Bounds() != ib.Bounds() {
-		return 1e9, 1e9, nil // 与 pngDiffStats 同口径：尺寸不一致按最严重处理
+		return 1e9, 1e9
 	}
-	b := ia.Bounds()
+	atOf := func(m image.Image) func(x, y int) (uint8, uint8, uint8) {
+		if n, ok := m.(*image.NRGBA); ok {
+			return func(x, y int) (uint8, uint8, uint8) { return nrgbaAt8(n, x, y) }
+		}
+		return func(x, y int) (uint8, uint8, uint8) {
+			r, g, b, _ := m.At(x, y).RGBA()
+			return uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)
+		}
+	}
+	atA, atB := atOf(ia), atOf(ib)
 	abs := func(a, c uint8) float64 {
 		if a > c {
 			return float64(a - c)
 		}
 		return float64(c - a)
 	}
+	b := ia.Bounds()
 	for by := b.Min.Y; by < b.Max.Y; by += perceptualBlock {
 		for bx := b.Min.X; bx < b.Max.X; bx += perceptualBlock {
 			var sum float64
@@ -1080,9 +1162,9 @@ func pngDiffPerceptual(pathA, pathB string) (blockMean, blockMax float64, err er
 			blockPeak := 0.0
 			for y := by; y < by+perceptualBlock && y < b.Max.Y; y += perceptualStep {
 				for x := bx; x < bx+perceptualBlock && x < b.Max.X; x += perceptualStep {
-					ar, ag, ab, _ := ia.At(x, y).RGBA()
-					br, bg, bb, _ := ib.At(x, y).RGBA()
-					d := (abs(uint8(ar>>8), uint8(br>>8)) + abs(uint8(ag>>8), uint8(bg>>8)) + abs(uint8(ab>>8), uint8(bb>>8))) / 3
+					ar, ag, ab := atA(x, y)
+					br, bg, bb := atB(x, y)
+					d := (abs(ar, br) + abs(ag, bg) + abs(ab, bb)) / 3
 					sum += d
 					if d > blockPeak {
 						blockPeak = d
@@ -1101,33 +1183,51 @@ func pngDiffPerceptual(pathA, pathB string) (blockMean, blockMax float64, err er
 			}
 		}
 	}
-	return blockMean, blockMax, nil
+	return blockMean, blockMax
 }
 
 // pngDiffStats 解码两 PNG 逐像素比较 → (最大通道差, 差异像素数, 总像素)。
 func pngDiffStats(pathA, pathB string) (maxDiff, nDiff, total int, err error) {
-	fa, err := os.Open(pathA)
+	ia, ib, err := decodePngPair(pathA, pathB)
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	defer fa.Close()
-	ia, err := png.Decode(fa)
-	if err != nil {
-		return 0, 0, 0, err
-	}
-	fb, err := os.Open(pathB)
-	if err != nil {
-		return 0, 0, 0, err
-	}
-	defer fb.Close()
-	ib, err := png.Decode(fb)
-	if err != nil {
-		return 0, 0, 0, err
-	}
+	m, n, t := diffStatsImgs(ia, ib)
+	return m, n, t, nil
+}
+
+// diffStatsImgs 同 pngDiffStats，吃已解码对象。NRGBA（hyperframes snapshot 的
+// 实际格式）直接扫 Pix 数组；其余格式退回 At() 接口路径，口径不变。
+func diffStatsImgs(ia, ib image.Image) (maxDiff, nDiff, total int) {
 	if ia.Bounds() != ib.Bounds() {
-		return 1 << 30, 1 << 30, 0, nil // 尺寸不一致按最严重处理
+		return 1 << 30, 1 << 30, 0 // 尺寸不一致按最严重处理
 	}
+	na, aok := ia.(*image.NRGBA)
+	nb, bok := ib.(*image.NRGBA)
 	b := ia.Bounds()
+	if aok && bok {
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			for x := b.Min.X; x < b.Max.X; x++ {
+				ra, ga, ba := nrgbaAt8(na, x, y)
+				rb, gb, bb := nrgbaAt8(nb, x, y)
+				total++
+				d := absInt(int(ra) - int(rb))
+				if d2 := absInt(int(ga) - int(gb)); d2 > d {
+					d = d2
+				}
+				if d3 := absInt(int(ba) - int(bb)); d3 > d {
+					d = d3
+				}
+				if d > 0 {
+					nDiff++
+				}
+				if d > maxDiff {
+					maxDiff = d
+				}
+			}
+		}
+		return maxDiff, nDiff, total
+	}
 	for y := b.Min.Y; y < b.Max.Y; y++ {
 		for x := b.Min.X; x < b.Max.X; x++ {
 			ra, ga, ba, _ := ia.At(x, y).RGBA()
@@ -1148,7 +1248,7 @@ func pngDiffStats(pathA, pathB string) (maxDiff, nDiff, total int, err error) {
 			}
 		}
 	}
-	return maxDiff, nDiff, total, nil
+	return maxDiff, nDiff, total
 }
 
 func absInt(v int) int {

@@ -106,11 +106,11 @@ func TestVideoFileWhitelist(t *testing.T) {
 		t.Fatal("合法剪辑被拒")
 	}
 	for _, bad := range [][2]string{
-		{refID, "video.mp4"},                // 原片不放行
-		{refID, "features.json"},            // 非剪辑不放行
-		{refID, "../llm_video_secret.key"},  // 穿越
-		{"../other", "clip-full.mp4"},       // 换目录
-		{"../../etc", "clip-full.mp4"},      // 多级穿越
+		{refID, "video.mp4"},               // 原片不放行
+		{refID, "features.json"},           // 非剪辑不放行
+		{refID, "../llm_video_secret.key"}, // 穿越
+		{"../other", "clip-full.mp4"},      // 换目录
+		{"../../etc", "clip-full.mp4"},     // 多级穿越
 	} {
 		if _, ok := s.VideoFile(bad[0], bad[1]); ok {
 			t.Fatalf("应拒绝 %v", bad)

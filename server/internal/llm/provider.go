@@ -69,7 +69,6 @@ const (
 	EffortDefault  Effort = ""         // 不传思考字段，跟随端点默认（GLM-5.x 开思考时默认 max）
 	EffortLow      Effort = "low"      // 轻思考：机械作业（翻译/改写）够用，几乎零 reasoning token
 	EffortHigh     Effort = "high"     // 深思考：判断类作业的质量/成本平衡点
-	EffortMax      Effort = "max"      // 最深思考：与端点默认等价，显式声明时用
 	EffortDisabled Effort = "disabled" // thinking.type=disabled 彻底关闭，结构化作业专用
 )
 
@@ -97,7 +96,7 @@ func (p *Provider) GenerateJSONVisionNoThink(ctx context.Context, system, user s
 	return p.generate(ctx, system, user, imageURLs, "", out, temperature, EffortDisabled)
 }
 
-// GenerateJSONVisionEffort 同 GenerateJSONVision，思考档位由调用方定。
+// GenerateJSONVisionEffort 同 GenerateJSONVisionNoThink，思考档位由调用方定。
 func (p *Provider) GenerateJSONVisionEffort(ctx context.Context, system, user string, imageURLs []string, temperature float32, out any, effort Effort) (openai.Usage, error) {
 	return p.generate(ctx, system, user, imageURLs, "", out, temperature, effort)
 }
@@ -189,13 +188,13 @@ type glmThinking struct {
 // glmChatRequest 统一组包壳。消息数组由组包方预序列化成 RawMessage——字符串内容
 // （Chat/工具对话）与多模态块（含 video_url）两条路共用一个壳，postChat 零分叉。
 type glmChatRequest struct {
-	Model           string          `json:"model"`
-	Messages        json.RawMessage `json:"messages"`
+	Model           string                               `json:"model"`
+	Messages        json.RawMessage                      `json:"messages"`
 	ResponseFormat  *openai.ChatCompletionResponseFormat `json:"response_format,omitempty"`
-	Temperature     float32         `json:"temperature,omitempty"`
-	Tools           []openai.Tool   `json:"tools,omitempty"`
-	Thinking        *glmThinking    `json:"thinking,omitempty"`
-	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
+	Temperature     float32                              `json:"temperature,omitempty"`
+	Tools           []openai.Tool                        `json:"tools,omitempty"`
+	Thinking        *glmThinking                         `json:"thinking,omitempty"`
+	ReasoningEffort string                               `json:"reasoning_effort,omitempty"`
 }
 
 func (p *Provider) chatOnce(ctx context.Context, system string, userParts []glmMediaPart, temperature float32, effort Effort) (openai.ChatCompletionResponse, error) {

@@ -115,7 +115,9 @@ func stripContentWrapper(s string) string {
 // ── 主管与撰稿工位共用的联网工具执行体（与项目无关）──────────────────
 
 // runWebSearch web_search 执行体：解析参数 → MCP 搜索 → 人话结果回喂。
-func runWebSearch(args string) string {
+// 超时从调用方 ctx 派生：对话轮级时限（agent.Run 的 20min）因此能穿透到工具内，
+// 轮超时不再被卡死的搜索拖住。
+func runWebSearch(ctx context.Context, args string) string {
 	var in struct {
 		Query    string `json:"query"`
 		Recency  string `json:"recency"`
@@ -126,7 +128,7 @@ func runWebSearch(args string) string {
 	if q == "" {
 		return "缺少 query"
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	rs, err := llm.WebSearch(ctx, q, strings.TrimSpace(in.Recency), strings.TrimSpace(in.Location))
 	if err != nil {
@@ -154,7 +156,7 @@ func runWebSearch(args string) string {
 }
 
 // runFetchURL fetch_url 执行体：抓网页正文，超长截断防撑爆上下文。
-func runFetchURL(args string) string {
+func runFetchURL(ctx context.Context, args string) string {
 	var in struct {
 		URL string `json:"url"`
 	}
@@ -163,7 +165,7 @@ func runFetchURL(args string) string {
 	if u == "" {
 		return "缺少 url"
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	art, err := webfetch.Fetch(ctx, u)
 	if err != nil {

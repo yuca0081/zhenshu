@@ -412,7 +412,7 @@ func preReviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta, sam
 	b.WriteString(`
 }
 pass 标准：无 high 问题即 true；medium/low 记录但不算失败` +
-			map[bool]string{true: "；特色判据任一 missing/drifted 也算失败", false: ""}[len(crits) > 0] + "。")
+		map[bool]string{true: "；特色判据任一 missing/drifted 也算失败", false: ""}[len(crits) > 0] + "。")
 	return b.String()
 }
 

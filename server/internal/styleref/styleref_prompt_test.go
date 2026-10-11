@@ -25,11 +25,11 @@ func TestSynthesizePromptDiscipline(t *testing.T) {
 		Frames: []featureFrame{{Path: `C:\x\frame-0.8.png`, T: 0.8}},
 	}, "帧0: 主体居中", false, "")
 	for _, want := range []string{
-		"只收有公认视觉定义的风格名词", // 收录标准（§4.2）
-		"拒收「高级感",          // 空话拒收
-		"mechanism 写机制不写物件", // 特色纪律
-		"换一个题材照做仍然成立",     // 机制化写作的判据
-		"题材只进 subject",      // 题材隔离章节
+		"只收有公认视觉定义的风格名词",       // 收录标准（§4.2）
+		"拒收「高级感",               // 空话拒收
+		"mechanism 写机制不写物件",    // 特色纪律
+		"换一个题材照做仍然成立",          // 机制化写作的判据
+		"题材只进 subject",         // 题材隔离章节
 		"除 subject 外任何字段禁写题材词", // 硬边界
 		"风格词表",                 // 工具「查风格词表」注入
 		"申请新词",                 // 工具「申请新词」
@@ -51,8 +51,8 @@ func TestSynthesizePromptVideoDirectRead(t *testing.T) {
 		DurationS: 30, SpanS: [2]float64{0, 30}, NShots: 4,
 	}, "帧0: 主体居中", true, "")
 	for _, want := range []string{
-		"原视频直读",            // 视频附随声明
-		"**以视频实测为准**",      // 运镜/转场证据源切换
+		"原视频直读",           // 视频附随声明
+		"**以视频实测为准**",     // 运镜/转场证据源切换
 		"颜色仍以测得色板 hex 为准", // 颜色不随视频偏色漂移
 	} {
 		if !strings.Contains(p, want) {

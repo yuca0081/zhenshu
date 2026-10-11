@@ -30,15 +30,15 @@ import (
 // device/anti_patterns/keyframes/samples/skin——公认风格交给模型固有知识（标签），
 // 独有手法交给特色，设计系统由各片设计阶段现发明（强参考走 style_brief.json）。
 type Style struct {
-	ID            string                `json:"id"` // vid-<refID>[-sNN] | sp<ts>
-	Name          string                `json:"name"`
-	Tags          contract.StyleTags    `json:"tags"`
-	TagEvidence   []contract.TagEvidence `json:"tag_evidence,omitempty"` // 每个 tag 至少一条
-	Signatures    []contract.Signature  `json:"signatures,omitempty"`    // 0–6 条
-	Subject       string                `json:"subject,omitempty"`       // 原片题材一句话，只供检索，永不进生成提示词
-	OriginProject string                `json:"origin_project,omitempty"` // "video:<refID>" 或项目 id
-	Published     bool                  `json:"published"`
-	CreatedAt     time.Time             `json:"created_at"`
+	ID            string                 `json:"id"` // vid-<refID>[-sNN] | sp<ts>
+	Name          string                 `json:"name"`
+	Tags          contract.StyleTags     `json:"tags"`
+	TagEvidence   []contract.TagEvidence `json:"tag_evidence,omitempty"`   // 每个 tag 至少一条
+	Signatures    []contract.Signature   `json:"signatures,omitempty"`     // 0–6 条
+	Subject       string                 `json:"subject,omitempty"`        // 原片题材一句话，只供检索，永不进生成提示词
+	OriginProject string                 `json:"origin_project,omitempty"` // "video:<refID>" 或项目 id
+	Published     bool                   `json:"published"`
+	CreatedAt     time.Time              `json:"created_at"`
 }
 
 // ErrNoEntry 条目不存在（Publish/Delete 命中时返回；api 层据此回 404）。

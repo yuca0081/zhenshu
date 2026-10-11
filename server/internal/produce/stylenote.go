@@ -59,7 +59,11 @@ func styleKeyframeImages(ctx context.Context, p *pipeline.Project) []string {
 		return nil
 	}
 	var urls []string
-	for _, src := range brief.Evidence {
+	const maxKeyframes = 6 // 与素材真图上限同口径：真迹是对照物不是正文，多塞白烧 token
+	for i, src := range brief.Evidence {
+		if i >= maxKeyframes {
+			break
+		}
 		dst := p.Artifact("style/key-" + brief.EntryID + "-" + filepath.Base(src) + ".jpg")
 		if _, err := os.Stat(dst); err != nil {
 			var buf bytes.Buffer

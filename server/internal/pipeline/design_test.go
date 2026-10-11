@@ -34,7 +34,7 @@ func designFixture() *contract.StyleSamples {
 }
 
 func TestDesignDocFull(t *testing.T) {
-	doc := DesignDoc(designFixture(), 2)
+	doc := DesignDocWithBrief(designFixture(), 2, nil)
 	for _, want := range []string{
 		"黑金史诗·交界地挽歌",
 		"低饱和黑金",               // concept
@@ -59,10 +59,10 @@ func TestDesignDocFull(t *testing.T) {
 
 func TestDesignDocSegRotation(t *testing.T) {
 	ss := designFixture()
-	if !strings.Contains(DesignDoc(ss, 1), "本段指定版式：hero-title") {
+	if !strings.Contains(DesignDocWithBrief(ss, 1, nil), "本段指定版式：hero-title") {
 		t.Fatalf("segIdx=1 应指派第 1 个版式")
 	}
-	if !strings.Contains(DesignDoc(ss, 3), "本段指定版式：hero-title") {
+	if !strings.Contains(DesignDocWithBrief(ss, 3, nil), "本段指定版式：hero-title") {
 		t.Fatalf("segIdx=3 应轮换回第 1 个版式")
 	}
 }
@@ -73,7 +73,7 @@ func TestDesignDocSegRotation(t *testing.T) {
 func TestDesignDocLibrarySkipsPerSeg(t *testing.T) {
 	ss := designFixture()
 	ss.StyleID = "vid-iso-city"
-	doc := DesignDoc(ss, 2)
+	doc := DesignDocWithBrief(ss, 2, nil)
 	if strings.Contains(doc, "seg01 亮相") {
 		t.Fatalf("库条目 per_seg 不应注入（原视频段号与本片错位）：%s", doc)
 	}
@@ -94,7 +94,7 @@ func TestDesignDocLegacy(t *testing.T) {
 			Slots: contract.SkinSlots{BG: "#111111", TXT: "#EEEEEE", Accent: "#FF0000", Font: "'SimHei',sans-serif"},
 		},
 	}
-	doc := DesignDoc(ss, 0)
+	doc := DesignDocWithBrief(ss, 0, nil)
 	if !strings.Contains(doc, "旧方向") || !strings.Contains(doc, "旧皮肤") {
 		t.Fatalf("legacy 渲染缺方向/皮肤：%s", doc)
 	}

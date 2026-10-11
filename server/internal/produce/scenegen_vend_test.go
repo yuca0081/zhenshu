@@ -1,6 +1,7 @@
 package produce
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -39,7 +40,7 @@ func TestSceneLintWithVendRegistered(t *testing.T) {
   </div></div>
   <script>(function(){var tl=gsap.timeline({paused:true});window.__timelines["seg99"]=tl;})();</script>
 </template>`
-	errs := r.sceneLintWithVend(html)
+	errs := r.sceneLintWithVend(context.Background(), html)
 	for _, e := range errs {
 		if strings.Contains(e, "缺库") || strings.Contains(e, "A3") {
 			t.Fatalf("已登记库不应再报缺库: %v", errs)

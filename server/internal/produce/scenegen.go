@@ -111,6 +111,8 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		}
 		return prov.GenerateJSONNoThink(ctx, sceneSystemFor(p), user, out)
 	}
+	// 附图说明三段每段同一套：循环外拼一次（materialsNote 每段重读盘是白付的）
+	styleSuffix := keyframeNote(len(keyImgs)) + materialNote(len(matImgs)) + materialsNote(p)
 	if feedback != "" && only == "" { // 全片重生成：先清旧产物
 		for _, seg := range sb.Segments {
 			_ = os.Remove(p.Artifact("llm/comp-" + seg.ID + ".json"))
@@ -152,7 +154,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		v := voices[seg.ID]
 		sceneM, compM := methodsFor(r.RootDir, seg)
 		// 附图顺序 = 样张 → 真迹关键帧 → 素材真图；三段说明各自对号入座
-		style := designNoteFor(p, seg.Idx) + keyframeNote(len(keyImgs)) + materialNote(len(matImgs)) + materialsNote(p)
+		style := designNoteFor(p, seg.Idx) + styleSuffix
 		user := sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM)
 		var payload struct {
 			HTML     string                  `json:"html"`
@@ -163,20 +165,20 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			fail(fmt.Errorf("%s 场景生成失败: %w", seg.ID, gerr))
 			return
 		}
-		errs := sceneValidate(r, p, payload.HTML, seg.ID)
+		errs := sceneValidate(r, ctx, p, payload.HTML, seg.ID)
 		for repair := 0; repair < 2 && len(errs) > 0; repair++ { // 外科修复：违规逐条回喂
 			fb := instruction + feedback + "\n上一版场景文件被契约检查拒绝，必须逐条修正：\n- " + strings.Join(errs, "\n- ")
 			var fixed struct {
 				HTML     string                  `json:"html"`
 				Elements []contract.NamedElement `json:"elements"`
 			}
-			u2, err2 := gen(sceneUserPrompt(seg, v, "", fb, cv, designNoteFor(p, seg.Idx)+keyframeNote(len(keyImgs))+materialNote(len(matImgs))+materialsNote(p), golden, sceneM, compM), &fixed)
+			u2, err2 := gen(sceneUserPrompt(seg, v, "", fb, cv, designNoteFor(p, seg.Idx)+styleSuffix, golden, sceneM, compM), &fixed)
 			if err2 != nil {
 				fail(fmt.Errorf("%s 场景修复失败: %w", seg.ID, err2))
 				return
 			}
 			u1, payload = u2, fixed
-			errs = sceneValidate(r, p, payload.HTML, seg.ID)
+			errs = sceneValidate(r, ctx, p, payload.HTML, seg.ID)
 		}
 		if len(errs) > 0 {
 			if only == "" && instruction == "" && feedback == "" && r.fallbackOldScene(p, seg.ID, "重生成契约检查三轮未过") {
@@ -261,7 +263,7 @@ func goldenExample(rootDir string) string {
 
 // sceneValidate 契约校验：Go 结构检查 + ai/scene_lint.py 静态门禁（Tier 0）+
 // 素材引用白名单（assets/img/ 引用必须命中素材清单，清单外文件渲染必裂图）。
-func sceneValidate(r *Runner, p *pipeline.Project, html, segID string) []string {
+func sceneValidate(r *Runner, ctx context.Context, p *pipeline.Project, html, segID string) []string {
 	var errs []string
 	if strings.TrimSpace(html) == "" {
 		return []string{"html 为空"}
@@ -283,12 +285,13 @@ func sceneValidate(r *Runner, p *pipeline.Project, html, segID string) []string 
 		errs = append(errs, "禁止字幕标注（data-ph/data-w）——字幕带由平台按 TTS 时间戳机械装配，内容留在上 83%")
 	}
 	errs = append(errs, materialWhitelistCheck(p, html)...)
-	errs = append(errs, r.sceneLintWithVend(html)...)
+	errs = append(errs, r.sceneLintWithVend(ctx, html)...)
 	return errs
 }
 
-// sceneLintRun 跑 ai/scene_lint.py（临时文件进、✗ 行出）。
-func (r *Runner) sceneLintRun(html string) []string {
+// sceneLintRun 跑 ai/scene_lint.py（临时文件进、✗ 行出）。lint 跟任务 ctx 走：
+// 用户取消后不再让子进程跑满全程。
+func (r *Runner) sceneLintRun(ctx context.Context, html string) []string {
 	tmp, err := os.CreateTemp("", "scene-lint-*.html")
 	if err != nil {
 		return []string{"lint 无法建临时文件: " + err.Error()}
@@ -300,7 +303,7 @@ func (r *Runner) sceneLintRun(html string) []string {
 		return []string{"lint 临时文件写失败: " + err.Error()}
 	}
 	tmp.Close()
-	cmd := exec.Command(pipeline.PythonExe(), filepath.Join(r.RootDir, "ai", "scene_lint.py"), name)
+	cmd := exec.CommandContext(ctx, pipeline.PythonExe(), filepath.Join(r.RootDir, "ai", "scene_lint.py"), name)
 	cmd.Dir = r.RootDir
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -345,10 +348,11 @@ func missingLibSpecs(errs []string) []string {
 }
 
 // vendorEnsure 跑 ai/vendor_tool.py ensure（确定性代码执行；成员文件由 npm 元数据自动定位）。
-func (r *Runner) vendorEnsure(spec string, timeout time.Duration) error {
+// 超时从任务 ctx 派生：npm 采购最长 3 分钟，用户取消后不该继续占着。
+func (r *Runner) vendorEnsure(ctx context.Context, spec string, timeout time.Duration) error {
 	vendMu.Lock()
 	defer vendMu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, pipeline.PythonExe(), filepath.Join(r.RootDir, "ai", "vendor_tool.py"),
 		"ensure", spec, "--allow-pending-replay")
@@ -362,8 +366,8 @@ func (r *Runner) vendorEnsure(spec string, timeout time.Duration) error {
 
 // sceneLintWithVend = lint + 缺库自动采购：申请单全数采到 → 复检放行（以复检为准）；
 // 有采购失败 → 非缺库违规 + 采购失败一起返回（转人工，不静默）。
-func (r *Runner) sceneLintWithVend(html string) []string {
-	errs := r.sceneLintRun(html)
+func (r *Runner) sceneLintWithVend(ctx context.Context, html string) []string {
+	errs := r.sceneLintRun(ctx, html)
 	specs := missingLibSpecs(errs)
 	if len(specs) == 0 {
 		return errs
@@ -376,14 +380,14 @@ func (r *Runner) sceneLintWithVend(html string) []string {
 	}
 	var buyErrs []string
 	for _, spec := range specs {
-		if err := r.vendorEnsure(spec, 3*time.Minute); err != nil {
+		if err := r.vendorEnsure(ctx, spec, 3*time.Minute); err != nil {
 			buyErrs = append(buyErrs, "vend 采购失败 "+spec+": "+err.Error())
 		}
 	}
 	if len(buyErrs) > 0 {
 		return append(nonLib, buyErrs...)
 	}
-	return r.sceneLintRun(html)
+	return r.sceneLintRun(ctx, html)
 }
 
 // sceneUserPrompt 场景生成作业正文：契约摘要 + 段信息 + 风格/方法注入 + 词序表。

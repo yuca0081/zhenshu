@@ -25,7 +25,7 @@ import (
 type tool struct {
 	def  openai.Tool
 	gate func(s State) string // 返回空串 = 放行；否则拒绝原因（回喂）
-	run  func(a *Agent, p *pipeline.Project, args string) string
+	run  func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string
 }
 
 func noGate(State) string { return "" }
@@ -65,8 +65,8 @@ var tools = []tool{
 			}
 			return ""
 		},
-		run: func(a *Agent, p *pipeline.Project, _ string) string {
-			if err := pipeline.Run(context.Background(), p, "storyboard"); err != nil {
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
+			if err := pipeline.Run(ctx, p, "storyboard"); err != nil {
 				return "分镜生成失败：" + err.Error()
 			}
 			sb, _ := p.LoadStoryboard()
@@ -93,7 +93,7 @@ var tools = []tool{
 			}
 			return ""
 		},
-		run: func(a *Agent, p *pipeline.Project, args string) string {
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
 			var in struct {
 				Instruction string `json:"instruction"`
 			}
@@ -104,7 +104,7 @@ var tools = []tool{
 			_ = os.WriteFile(p.Artifact("input/storyboard_notes.txt"), []byte(in.Instruction), 0o644)
 			_ = os.Remove(p.Artifact("storyboards/storyboard.json"))
 			_ = os.Remove(p.LLMOutput("storyboard"))
-			if err := pipeline.Run(context.Background(), p, "storyboard"); err != nil {
+			if err := pipeline.Run(ctx, p, "storyboard"); err != nil {
 				return "分镜重生成失败：" + err.Error()
 			}
 			sb, _ := p.LoadStoryboard()
@@ -129,7 +129,7 @@ var tools = []tool{
 			}
 			return ""
 		},
-		run: func(a *Agent, p *pipeline.Project, args string) string {
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
 			var in struct {
 				Content string `json:"content"`
 			}
@@ -166,7 +166,7 @@ var tools = []tool{
 			}
 			return ""
 		},
-		run: func(a *Agent, p *pipeline.Project, args string) string {
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
 			var in struct {
 				Instruction string `json:"instruction"`
 			}
@@ -175,7 +175,7 @@ var tools = []tool{
 			if strings.TrimSpace(in.Instruction) != "" {
 				// 带要求（首次或重生成一律走这条）：用户明确的方向优先于任何选定风格，
 				// 直接按要求现写——样张与风格文件（skin）同产（§12.2）
-				return a.regenerateStyle(p, in.Instruction, out)
+				return a.regenerateStyle(ctx, p, in.Instruction, out)
 			}
 			if _, err := os.Stat(out); err == nil {
 				return "风格样张已出，等用户在舞台点击「确认风格」；用户想改风格就带着要求调 instruction 重新生成"
@@ -195,12 +195,12 @@ var tools = []tool{
 						return err.Error()
 					}
 				}
-				if err := pipeline.Run(context.Background(), p, "style_samples"); err != nil {
+				if err := pipeline.Run(ctx, p, "style_samples"); err != nil {
 					return "样张生成失败：" + err.Error()
 				}
 				return a.styleDraftReport(p, out, "强参考「"+st.Name+"」：标签气质+特色逐条吸收")
 			}
-			if err := pipeline.Run(context.Background(), p, "style_samples"); err != nil {
+			if err := pipeline.Run(ctx, p, "style_samples"); err != nil {
 				return "样张生成失败：" + err.Error()
 			}
 			return a.styleDraftReport(p, out, "自由发挥")
@@ -209,7 +209,7 @@ var tools = []tool{
 	{
 		def:  toolDef("run_selfcheck", "自检三前置硬门（文稿/分镜/风格确认）", nil),
 		gate: noGate,
-		run: func(a *Agent, p *pipeline.Project, _ string) string {
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
 			s := a.State(p.ID)
 			var r []string
 			r = append(r, fmt.Sprintf("文稿：%v", s.HasManuscript))
@@ -269,7 +269,7 @@ var tools = []tool{
 			}
 			return ""
 		},
-		run: func(a *Agent, p *pipeline.Project, _ string) string {
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
 			if a.Producer == nil {
 				return "制作运行器未接线（Producer 为空）"
 			}
@@ -303,7 +303,7 @@ var tools = []tool{
 			}
 			return ""
 		},
-		run: func(a *Agent, p *pipeline.Project, args string) string {
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
 			var in struct {
 				Segment     string   `json:"segment"`
 				Segments    []string `json:"segments"`
@@ -359,7 +359,7 @@ var tools = []tool{
 			}
 			return ""
 		},
-		run: func(a *Agent, p *pipeline.Project, _ string) string {
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
 			// 幂等先行：本就出自库内风格 / 已起草过 → 直接交代（不起 LLM）
 			if st := a.draftedStyle(p); st != nil {
 				if st.Published {
@@ -375,7 +375,7 @@ var tools = []tool{
 			if derr != nil {
 				return "提炼失败：" + derr.Error()
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 			defer cancel()
 			d, terr := styleref.DraftFromDesign(ctx, prov, a.Lib, a.State(p.ID).Name, digest)
 			if terr != nil {
@@ -398,7 +398,9 @@ var tools = []tool{
 	{
 		def:  toolDef("read_project", "查看项目当前状态与产物", nil),
 		gate: noGate,
-		run:  func(a *Agent, p *pipeline.Project, _ string) string { return a.State(p.ID).summary() },
+		run: func(_ context.Context, a *Agent, p *pipeline.Project, _ string) string {
+			return a.State(p.ID).summary()
+		},
 	},
 	{
 		def: toolDef("search_styles", "检索风格库（v3：标签+特色清单的可复用风格）。新建项目选风格、用户问「有什么风格」、或用户描述的气质可能命中库内条目时先查这里；命中后引导用户在风格门/风格库里选它（报 id）", map[string]any{
@@ -409,7 +411,11 @@ var tools = []tool{
 			"required": []string{"query"},
 		}),
 		gate: noGate,
-		run: func(a *Agent, p *pipeline.Project, args string) string {
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
+			var in struct {
+				Query string `json:"query"`
+			}
+			_ = json.Unmarshal([]byte(args), &in)
 			styles, err := a.Lib.List()
 			if err != nil {
 				return "风格库读取失败：" + err.Error()
@@ -423,7 +429,7 @@ var tools = []tool{
 				}
 				return id
 			}
-			q := strings.ToLower(strings.TrimSpace(args))
+			q := strings.ToLower(strings.TrimSpace(in.Query))
 			var lines []string
 			for _, ss := range styles {
 				keys := []string{ss.ID, ss.Name, ss.Subject, ss.Tags.Main}
@@ -452,12 +458,8 @@ var tools = []tool{
 				lines = append(lines, line)
 			}
 			if len(lines) == 0 {
-				if q != "" {
-					full, _ := a.Lib.List()
-					if len(full) == 0 {
-						return "风格库为空：出片后我会自动起草风格，或在风格库页上传参考视频解析入库"
-					}
-					return "没有命中「" + q + "」的风格。库里现有 " + fmt.Sprintf("%d", len(full)) + " 条，重调一次可放宽或换关键词"
+				if q != "" && len(styles) > 0 {
+					return "没有命中「" + q + "」的风格。库里现有 " + fmt.Sprintf("%d", len(styles)) + " 条，重调一次可放宽或换关键词"
 				}
 				return "风格库为空：出片后我会自动起草风格，或在风格库页上传参考视频解析入库"
 			}
@@ -476,7 +478,9 @@ var tools = []tool{
 			"required": []string{"query"},
 		}),
 		gate: noGate,
-		run:  func(_ *Agent, _ *pipeline.Project, args string) string { return runWebSearch(args) },
+		run: func(ctx context.Context, _ *Agent, _ *pipeline.Project, args string) string {
+			return runWebSearch(ctx, args)
+		},
 	},
 	{
 		def: toolDef("fetch_url", "读取一个网页的正文（纯文本，免费不占搜索额度）。用户贴了链接想让你看内容、或 web_search 结果里有要细看的条目时用它。只抓静态页面（文章/文档/博客/wiki），不执行 JS，重前端页面会读不到正文", map[string]any{
@@ -487,7 +491,9 @@ var tools = []tool{
 			"required": []string{"url"},
 		}),
 		gate: noGate,
-		run:  func(_ *Agent, _ *pipeline.Project, args string) string { return runFetchURL(args) },
+		run: func(ctx context.Context, _ *Agent, _ *pipeline.Project, args string) string {
+			return runFetchURL(ctx, args)
+		},
 	},
 	{
 		def: toolDef("set_bgm", "背景音乐：不带参数=列出曲库；track=曲名 设置/更换；track=\"off\" 关闭。成片已就绪时立即重新混音（几秒钟，不重渲画面）", map[string]any{
@@ -502,7 +508,7 @@ var tools = []tool{
 			}
 			return ""
 		},
-		run: func(a *Agent, p *pipeline.Project, args string) string {
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
 			var in struct {
 				Track string `json:"track"`
 			}
@@ -548,7 +554,7 @@ var tools = []tool{
 			}
 			return ""
 		},
-		run: func(a *Agent, p *pipeline.Project, args string) string {
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
 			var in struct {
 				State string `json:"state"`
 			}
@@ -586,7 +592,7 @@ var tools = []tool{
 			}
 			return ""
 		},
-		run: func(a *Agent, p *pipeline.Project, _ string) string {
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
 			sb, err := p.LoadStoryboard()
 			if err != nil {
 				return "分镜读取失败：" + err.Error()
@@ -624,7 +630,7 @@ var tools = []tool{
 			}
 			return ""
 		},
-		run: func(a *Agent, p *pipeline.Project, args string) string {
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
 			var in struct {
 				Voice string `json:"voice"`
 			}
@@ -676,7 +682,7 @@ var tools = []tool{
 			}
 			return ""
 		},
-		run: func(a *Agent, p *pipeline.Project, args string) string {
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
 			var in struct {
 				Subtitle string `json:"subtitle"`
 			}
@@ -735,7 +741,7 @@ var tools = []tool{
 			}
 			return ""
 		},
-		run: func(a *Agent, p *pipeline.Project, _ string) string {
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
 			st := a.State(p.ID)
 			addr := "成片下载地址：/api/projects/" + p.ID + "/video/main.mp4（1080p，含旁白与逐词字幕）"
 			// 地址照给，版本事实必须说：旧版/失败前旧片不许包装成最新成果递出去

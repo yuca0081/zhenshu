@@ -37,6 +37,9 @@ func (l *Library) BuildBrief(id string, disabled map[string]bool) (*contract.Sty
 	}
 	seen := map[string]bool{}
 	add := func(names []string) {
+		if len(b.Evidence) >= maxBriefEvidence { // 上限检查必须在入口：写在循环尾只挡得住本组
+			return
+		}
 		for _, n := range names {
 			if n == "" || seen[n] {
 				continue

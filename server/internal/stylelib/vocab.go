@@ -27,11 +27,11 @@ type Vocab struct {
 
 // VocabEntry 一个风格词条。
 type VocabEntry struct {
-	ID        string    `json:"id"`              // 小写蛇形，如 claymation
-	Name      string    `json:"name"`            // 正式名，如 粘土定格
+	ID        string    `json:"id"`                // 小写蛇形，如 claymation
+	Name      string    `json:"name"`              // 正式名，如 粘土定格
 	Aliases   []string  `json:"aliases,omitempty"` // 中英+俗称，查重用
-	Brief     string    `json:"brief"`           // 一句机制描述：色域/质感/光/字体气质
-	Tells     string    `json:"tells,omitempty"` // 判别特征：帧里认什么
+	Brief     string    `json:"brief"`             // 一句机制描述：色域/质感/光/字体气质
+	Tells     string    `json:"tells,omitempty"`   // 判别特征：帧里认什么
 	CreatedAt time.Time `json:"created_at"`
 }
 

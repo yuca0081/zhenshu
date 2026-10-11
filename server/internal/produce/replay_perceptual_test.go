@@ -119,6 +119,7 @@ func TestPerceptualSizeMismatchIsWorst(t *testing.T) {
 }
 
 // 手动校准（打真实项目帧对，平时跳过）：Go 实现与调研期 Python 原型的块统计须一致。
+//
 //	REPLAY_PROJ=p20261009-164621 go test ./internal/produce -run TestManualPerceptualRealFrames -v
 func TestManualPerceptualRealFrames(t *testing.T) {
 	proj := os.Getenv("REPLAY_PROJ")

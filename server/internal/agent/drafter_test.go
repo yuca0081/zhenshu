@@ -30,7 +30,7 @@ func stubSearchTool(result string) react.Tool {
 	return react.Tool{
 		Def:  toolDef("web_search", "stub", nil),
 		Gate: func() string { return "" },
-		Run:  func(string) string { return result },
+		Run:  func(_ context.Context, _ string) string { return result },
 	}
 }
 

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -42,7 +43,7 @@ func TestSaveManuscriptTool(t *testing.T) {
 		t.Fatal("制作中应被门禁拒绝")
 	}
 
-	out := tl.run(a, p, `{"content":"这是测试文稿。"}`)
+	out := tl.run(context.Background(), a, p, `{"content":"这是测试文稿。"}`)
 	if !strings.Contains(out, "旧稿") {
 		t.Fatalf("已有分镜时应提示过期: %q", out)
 	}
@@ -60,7 +61,7 @@ func TestSaveManuscriptTool(t *testing.T) {
 	if err := os.Remove(p.Artifact("storyboards/storyboard.json")); err != nil {
 		t.Fatal(err)
 	}
-	if out := tl.run(a, p, `{"content":"第二版。"}`); strings.Contains(out, "旧稿") {
+	if out := tl.run(context.Background(), a, p, `{"content":"第二版。"}`); strings.Contains(out, "旧稿") {
 		t.Fatalf("无分镜时不应提示过期: %q", out)
 	}
 }

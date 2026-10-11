@@ -28,7 +28,7 @@ func TestDesignBriefInjection(t *testing.T) {
 	// 落简报
 	brief := &contract.StyleBrief{
 		EntryID: "vid-x", EntryName: "故障风数据片",
-		Tags:      contract.StyleTags{Main: "glitch", Aux: []string{"iso"}},
+		Tags: contract.StyleTags{Main: "glitch", Aux: []string{"iso"}},
 		TagBriefs: []contract.TagBrief{
 			{ID: "glitch", Name: "故障风", Brief: "数字撕裂与 RGB 错位"},
 			{ID: "iso", Name: "等距", Brief: "轴测视角"},
@@ -51,7 +51,7 @@ func TestDesignBriefInjection(t *testing.T) {
 	for _, want := range []string{
 		"本片风格参考（用户选定，硬要求）",
 		"气质基调：故障风——数字撕裂与 RGB 错位", // main 词条 name + brief
-		"；辅：等距——轴测视角",                  // aux 词条
+		"；辅：等距——轴测视角",            // aux 词条
 		"必答特色（每条都必须被设计系统吸收，并在 signature_absorption 中登记落点）",
 		"[transition] 道具递接转场——机制：前一画面主体推出画外，后一画面同位置跟进（适用：段间切换）（证据帧已附）",
 		"[palette] 紫青撞色——机制：双色对撞铺底（证据帧已附）",
@@ -82,7 +82,7 @@ func TestDesignBriefInjection(t *testing.T) {
 		}
 	}
 	// 无简报（老项目）：DesignDoc 不出现该章节
-	if doc2 := DesignDoc(ss, 1); strings.Contains(doc2, "强参考特色") {
+	if doc2 := DesignDocWithBrief(ss, 1, nil); strings.Contains(doc2, "强参考特色") {
 		t.Fatal("无简报不该渲染落点表")
 	}
 }

@@ -47,6 +47,11 @@ type Server struct {
 	APIToken string
 
 	turnMu sync.Map // projectID → *sync.Mutex：同项目对话轮串行（见 chat）
+
+	// ensured projectID → struct{}{}：listProjects 的 DB 行自愈记账，每进程每项目
+	// 至多 EnsureProject 一次——列表是高频轮询接口，逐项目逐次 COUNT 是 N+1 查询。
+	// 内存 store 重启清行由本进程下一次列表自愈补回，语义不变。
+	ensured sync.Map
 }
 
 func (s *Server) Router() *gin.Engine {
@@ -217,15 +222,21 @@ func (s *Server) createProject(c *gin.Context) {
 			in.Name = string(r[:24])
 		}
 	}
-	// id 秒级时间戳：并发/连点创建会同秒撞号——目录已存在则追加序号
+	// id 秒级时间戳：并发/连点创建会同秒撞号——os.Mkdir 原子占号（先 Stat 后建
+	// 有 TOCTOU 缝：双方都探到不存在再都 MkdirAll，同目录互踩 project.json）。
+	// 与 styleref.Save 同一写法。
 	id := "p" + time.Now().Format("20060102-150405")
+	p := pipeline.NewProject(s.DataDir, id)
 	for n := 2; ; n++ {
-		if _, err := os.Stat(pipeline.NewProject(s.DataDir, id).Dir); os.IsNotExist(err) {
+		if err := os.Mkdir(p.Dir, 0o755); err == nil {
 			break
+		} else if !os.IsExist(err) {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
 		}
 		id = fmt.Sprintf("p%s-%d", time.Now().Format("20060102-150405"), n)
+		p = pipeline.NewProject(s.DataDir, id)
 	}
-	p := pipeline.NewProject(s.DataDir, id)
 	for _, d := range []string{
 		"input", "llm", "manuscripts", "storyboards", "style",
 		"audio", "compositions/frames", "compositions/registry", "renders",
@@ -281,11 +292,14 @@ func (s *Server) listProjects(c *gin.Context) {
 		if json.Unmarshal(b, &meta) != nil || meta.Name == "" {
 			continue
 		}
-		_ = s.Store.EnsureProject(e.Name(), meta.Name)
-		_, hasVideo := os.Stat(filepath.Join(s.DataDir, "projects", e.Name(), "renders", "main.mp4"))
+		if _, seen := s.ensured.Load(e.Name()); !seen {
+			_ = s.Store.EnsureProject(e.Name(), meta.Name)
+			s.ensured.Store(e.Name(), struct{}{})
+		}
+		_, videoErr := os.Stat(filepath.Join(s.DataDir, "projects", e.Name(), "renders", "main.mp4"))
 		if s.Producer.IsRunning(e.Name()) {
 			meta.Status = "producing"
-		} else if hasVideo == nil {
+		} else if videoErr == nil {
 			meta.Status = "video"
 		}
 		// last_produce：最近一轮制作终态（与 agent 状态摘要同一读法 produce.LastTerminal）。
@@ -295,7 +309,7 @@ func (s *Server) listProjects(c *gin.Context) {
 		if ev, _, ts := produce.LastTerminal(pipeline.NewProject(s.DataDir, e.Name())); ev != "" {
 			lastProduce = gin.H{"event": ev, "ts": ts}
 		}
-		out = append(out, row{e.Name(), meta.Name, meta.Status, meta.CreatedAt, hasVideo == nil, lastProduce})
+		out = append(out, row{e.Name(), meta.Name, meta.Status, meta.CreatedAt, videoErr == nil, lastProduce})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
 	c.JSON(200, out)
@@ -360,6 +374,9 @@ func (s *Server) deleteProject(c *gin.Context) {
 		return
 	}
 	_ = s.Store.DeleteProject(id)
+	s.Hub.Forget(id)     // 重放窗跟着项目走：不删的话删了的项目在 SSE 侧阴魂不散
+	s.turnMu.Delete(id)  // 对话轮互斥锁同理（sync.Map 只增不减的慢泄漏）
+	s.ensured.Delete(id) // 列表自愈记账同步清掉，同名重建能再补行
 	c.JSON(200, gin.H{"ok": true})
 }
 
@@ -407,12 +424,12 @@ func (s *Server) saveManuscript(c *gin.Context) {
 		return
 	}
 	_ = os.Remove(p.Artifact("manuscripts/manuscript.json"))
-	_, hasSb := os.Stat(p.Artifact("storyboards/storyboard.json"))
+	_, sbErr := os.Stat(p.Artifact("storyboards/storyboard.json"))
 	s.updateStatus(id, "manuscript")
 	words := len([]rune(content))
 	p.Manifest("manuscript.saved", fmt.Sprintf("%d 字", words))
 	s.Hub.Emit(id, "msg", "", fmt.Sprintf("文稿已更新（%d 字）", words))
-	c.JSON(200, gin.H{"ok": true, "word_count": words, "storyboard_stale": hasSb == nil})
+	c.JSON(200, gin.H{"ok": true, "word_count": words, "storyboard_stale": sbErr == nil})
 }
 
 // applyStyle 风格弹窗选定库内条目（v3 §4.5）：写 style/style_brief.json（含特色
@@ -1230,9 +1247,9 @@ func videoTitle(filename, fallback string) string {
 }
 
 var (
-	leadNumRe = regexp.MustCompile(`^\d+\s*[_-]\s*`)
+	leadNumRe  = regexp.MustCompile(`^\d+\s*[_-]\s*`)
 	bvSuffixRe = regexp.MustCompile(`[_\s]*BV[0-9A-Za-z]{6,14}\s*$`)
-	partNumRe = regexp.MustCompile(`(?i)^\s*P0?(\d+)`)
+	partNumRe  = regexp.MustCompile(`(?i)^\s*P0?(\d+)`)
 )
 
 // makeCover 代表帧拷成 cover.png，返回其时间点；无帧返回 -1。

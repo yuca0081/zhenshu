@@ -657,9 +657,11 @@ func segStale(p *Project, segID, out string) bool {
 }
 
 // segSrcSum 段渲染输入的内容指纹：帧html + 音频 + 单段工程逐个 sha256 拼接。
+// 指纹只吃内容与文件基名（+槽位序号）——绝对路径掺进去的话项目目录一挪/
+// 换机器，全部段片判 stale 触发全片重渲。
 func segSrcSum(p *Project, segID string) (string, error) {
 	h := sha256.New()
-	for _, src := range []string{
+	for i, src := range []string{
 		p.Artifact("compositions/frames/" + segID + ".html"),
 		p.Artifact("audio/" + segID + ".wav"),
 		p.Artifact(".hf-seg/" + segID + ".html"),
@@ -668,7 +670,7 @@ func segSrcSum(p *Project, segID string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(h, "%s\x00%d\x00", src, len(b))
+		fmt.Fprintf(h, "%d\x00%s\x00%d\x00", i, filepath.Base(src), len(b))
 		h.Write(b)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
@@ -753,23 +755,6 @@ func transitionFor(p *Project) string {
 		}
 	}
 	return "fade"
-}
-
-// ProjectStyleID 项目的风格库锚点：style_samples.style_id 优先（选库/冷启动落盘），
-// storyboard.style_id 兜底（老项目分镜 LLM 填写）。
-func ProjectStyleID(p *Project) string {
-	if b, err := os.ReadFile(p.Artifact("style/style_samples.json")); err == nil {
-		var ss struct {
-			StyleID string `json:"style_id"`
-		}
-		if json.Unmarshal(b, &ss) == nil && strings.TrimSpace(ss.StyleID) != "" {
-			return strings.TrimSpace(ss.StyleID)
-		}
-	}
-	if sb, err := p.LoadStoryboard(); err == nil {
-		return strings.TrimSpace(sb.StyleID)
-	}
-	return ""
 }
 
 // timelineRow xfade 成片的实际段边界（sfx 布点/前端时间轴对齐的权威口径）。

@@ -243,16 +243,11 @@ func designRequest(p *Project, sb *contract.Storyboard, out string) string {
 `, designBrief(p, sb), out, designJSONShape(), designAbsorptionNote(p))
 }
 
-// DesignDoc 设计系统 → 注入文档（scene_gen 每段注入源 + 确认后 design.md 落盘内容）。
-// 机械渲染，与 tokens（style_samples.json）零漂移；设计块缺失时只渲染已有部分
-// （旧项目降级为方向+皮肤，不炸）。segIdx ≥ 1 时附加本段版式指派（按段轮换）。
-func DesignDoc(ss *contract.StyleSamples, segIdx int) string {
-	return DesignDocWithBrief(ss, segIdx, nil)
-}
-
-// DesignDocWithBrief 带风格简报的渲染（v3 §4.5：落点表写进 design.md，强参考的
-// 特色与落点对 scene_gen 可见——段的转场/动效实现按落点执行）。brief 为 nil 退化为
-// 旧渲染（老项目/未选风格）。
+// DesignDocWithBrief 设计系统 → 注入文档（scene_gen 每段注入源 + 确认后 design.md
+// 落盘内容）。机械渲染，与 tokens（style_samples.json）零漂移；设计块缺失时只渲染
+// 已有部分（旧项目降级为方向+皮肤，不炸）。segIdx ≥ 1 时附加本段版式指派（按段
+// 轮换）。带风格简报渲染（v3 §4.5：落点表写进 design.md，强参考的特色与落点对
+// scene_gen 可见）；brief 为 nil 退化为旧渲染（老项目/未选风格）。
 func DesignDocWithBrief(ss *contract.StyleSamples, segIdx int, brief *contract.StyleBrief) string {
 	var b strings.Builder
 	w := func(f string, a ...any) { fmt.Fprintf(&b, f, a...) }

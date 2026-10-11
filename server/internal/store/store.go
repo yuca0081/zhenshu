@@ -148,7 +148,12 @@ func (s *pgStore) findUUID(diskID string) (string, error) {
 		UUID string `gorm:"column:id"`
 	}
 	err := s.db.Table("projects").Select("id").Where("disk_id = ?", diskID).Scan(&row).Error
-	if err != nil || row.UUID == "" {
+	if err != nil {
+		// 库报错与「无行」是两回事：抖动时把真错误吞成「无 DB 行」会把排查
+		// 带进沟里（SaveMsg/ListMsgs 的报错全变误导）
+		return "", fmt.Errorf("项目 %s 查 DB 失败: %w", diskID, err)
+	}
+	if row.UUID == "" {
 		return "", fmt.Errorf("项目 %s 无 DB 行", diskID)
 	}
 	return row.UUID, nil
@@ -206,6 +211,9 @@ func (s *pgStore) FinishRenderJob(projectID, status, outputPath, errMsg string) 
 		status, outputPath, errMsg, uuid).Error
 }
 
+// listJobsCap 渲染任务列表上限（PG LIMIT 与内存实现同源）。
+const listJobsCap = 50
+
 func (s *pgStore) ListRenderJobs(projectID string) ([]RenderJobRow, error) {
 	uuid, err := s.findUUID(projectID)
 	if err != nil {
@@ -214,7 +222,7 @@ func (s *pgStore) ListRenderJobs(projectID string) ([]RenderJobRow, error) {
 	var rows []RenderJobRow
 	err = s.db.Table("render_jobs").
 		Select("id, payload->>'kind' AS kind, status, output_path, error, started_at, finished_at").
-		Where("project_id = ?", uuid).Order("id DESC").Limit(50).Scan(&rows).Error
+		Where("project_id = ?", uuid).Order("id DESC").Limit(listJobsCap).Scan(&rows).Error
 	return rows, err
 }
 
@@ -235,7 +243,9 @@ func (s *pgStore) ListMsgs(projectID string, afterID int64, limit int) ([]Msg, e
 	}
 	var rows []Msg
 	err = s.db.Table("chat_messages").
-		Select("id, role, type, content, refs, tool_name, created_at").
+		// tool_args/tool_result 与内存实现同列：双实现形状漂移会让 /messages
+		// 在 PG/内存两种存储下返回不同 JSON
+		Select("id, role, type, content, refs, tool_name, tool_args, tool_result, created_at").
 		Where("project_id = ? AND id > ? AND type IN ('text','tool_call','error')", uuid, afterID).
 		Order("id ASC").Limit(limit).Scan(&rows).Error
 	for i := range rows {
@@ -358,6 +368,9 @@ func (s *memStore) ListRenderJobs(projectID string) ([]RenderJobRow, error) {
 	for i := len(s.jobs) - 1; i >= 0; i-- { // 新在前，与 PG 的 id DESC 同序
 		if s.jobs[i].ProjectID == projectID {
 			out = append(out, s.jobs[i])
+			if len(out) >= listJobsCap { // 与 PG 的 LIMIT 50 同限：双实现不漂移
+				break
+			}
 		}
 	}
 	return out, nil

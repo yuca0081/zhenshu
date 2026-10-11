@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +13,7 @@ import (
 )
 
 // 门禁同权矩阵：start_production 在「成片过期/上次失败·中断」时必须放行整片重做
-//（与舞台「按最新内容重做」按钮同权）；成片新鲜健康才挡回 rework。
+// （与舞台「按最新内容重做」按钮同权）；成片新鲜健康才挡回 rework。
 func TestStartProductionGateRedoSymmetry(t *testing.T) {
 	gate := findTool("start_production").gate
 	ready := State{HasManuscript: true, HasStoryboard: true, HasStyle: true, StyleConfirmed: true}
@@ -67,7 +68,7 @@ func TestExportWarnsOnOldVideo(t *testing.T) {
 	}
 	p.Manifest(produce.EventProduceError, "boom")
 	a := &Agent{DataDir: dir}
-	got := findTool("export").run(a, p, "")
+	got := findTool("export").run(context.Background(), a, p, "")
 	if !strings.Contains(got, "失败前的旧片") || !strings.Contains(got, "下载地址") {
 		t.Fatalf("export 应带旧片警告且保留地址：%s", got)
 	}

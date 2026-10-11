@@ -89,10 +89,12 @@ func (r *Runner) frameQA(ctx context.Context, p *pipeline.Project, instruction, 
 				return err
 			}
 			r.clearFrames(p, segID)
-			if err := pipeline.Run(ctx, p, "compositions"); err != nil {
-				return fmt.Errorf("合成物落盘失败: %w", err)
-			}
 			_ = os.Remove(p.Artifact("renders/segs/" + segID + ".mp4"))
+		}
+		// 全部段改完统一落盘一次（与 prereview 修复轮同构）：compositions 是
+		// 全量重扫，逐段跑一遍 N 段就白付 N-1 遍
+		if err := pipeline.Run(ctx, p, "compositions"); err != nil {
+			return fmt.Errorf("合成物落盘失败: %w", err)
 		}
 		if err := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); err != nil {
 			return fmt.Errorf("组装失败: %w", err)
@@ -170,6 +172,9 @@ func (r *Runner) reviewSegments(ctx context.Context, p *pipeline.Project, only s
 	// 真迹关键帧（风格来源视频原片帧）：考卷对照物升级——漂移判断有原始目标可依；
 	// 每段同一套真迹，循环外算一次。无媒体/压图失败为空（考卷退回只对照样张）。
 	keyImgs := styleKeyframeImages(ctx, p)
+	// 样张同上（每段同一套）：prereview 同位置已外提，这里跟上——每段重读盘
+	// +base64 是白付的成本
+	samples := styleSampleImages(p)
 	// v3 特色判据清单（简报特色 × 落点表）：每段同一套，循环外算一次；
 	// 含动态特色（transition/camera）才追加边界帧——没勾动态特色零额外抽帧（§4.6 成本策略）。
 	crits := signatureCriteria(pipeline.LoadStyleBrief(p), designOf(p))
@@ -199,7 +204,7 @@ func (r *Runner) reviewSegments(ctx context.Context, p *pipeline.Project, only s
 		// 样张/真迹附在四帧之后（图5+）：风格一致性同场评审——笼子二的回路（plan-v2 §4 Tier1 报告项）。
 		// 段边界前后帧序列（transition 判据的考核证据）附在最后。
 		imgs := []string{dataURL(sf.first), dataURL(sf.open), dataURL(sf.last), dataURL(sf.final)}
-		if samples := styleSampleImages(p); len(samples) > 0 {
+		if len(samples) > 0 {
 			imgs = append(imgs, samples...)
 		}
 		imgs = append(imgs, keyImgs...)
@@ -210,7 +215,7 @@ func (r *Runner) reviewSegments(ctx context.Context, p *pipeline.Project, only s
 		}
 		_, rerr := prov.GenerateJSONVisionEffort(ctx,
 			"你是视频的画面质检员，只输出 JSON。",
-			reviewPrompt(p, seg, voices[seg.ID], keyImgs, crits, len(boundary)),
+			reviewPrompt(p, seg, voices[seg.ID], keyImgs, len(samples), crits, len(boundary)),
 			imgs, 0.2, &vd, llm.EffortHigh)
 		if rerr != nil {
 			r.Manifest(p, "frameqa.review_error", seg.ID+": "+rerr.Error())
@@ -319,14 +324,6 @@ func extractFrames(ctx context.Context, p *pipeline.Project, segID string) (*seg
 	return sf, nil
 }
 
-func runeTrunc(s string, n int) string {
-	r := []rune(s)
-	if len(r) > n {
-		return string(r[:n]) + "…"
-	}
-	return s
-}
-
 func dataURL(file string) string {
 	b, err := os.ReadFile(file)
 	if err != nil {
@@ -358,16 +355,15 @@ func specHasScene(p *pipeline.Project, segID string) bool {
 // 出现，落定帧查布局全项，尾帧查退场残留。图片按 图1=首帧、图2=开场帧、
 // 图3=落定帧、图4=尾帧 顺序附在消息里；样张/原片真迹跟在图5+（笼子二回路）；
 // 段边界前后帧序列（transition 判据的考核证据）附在最末。crits 是特色判据清单（§4.6）。
-func reviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta, keys []string, crits []sigCriterion, boundaryN int) string {
-	samples := styleSampleImages(p)
-	styleBlock := styleCheckBlock(designOf(p), len(samples), len(keys), 4)
+func reviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta, keys []string, samplesN int, crits []sigCriterion, boundaryN int) string {
+	styleBlock := styleCheckBlock(designOf(p), samplesN, len(keys), 4)
 	var b strings.Builder
 	header := "这是同一段视频的四帧渲染画面（底部字幕带是画面一部分，字幕文字不算元素）。"
 	switch {
-	case len(samples) > 0 && len(keys) > 0:
-		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张已确认的风格样张 + %d 张本风格来源视频的原片真迹（底部字幕带是画面一部分，字幕文字不算元素）。", len(samples), len(keys))
-	case len(samples) > 0:
-		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张已确认的风格样张（底部字幕带是画面一部分，字幕文字不算元素）。", len(samples))
+	case samplesN > 0 && len(keys) > 0:
+		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张已确认的风格样张 + %d 张本风格来源视频的原片真迹（底部字幕带是画面一部分，字幕文字不算元素）。", samplesN, len(keys))
+	case samplesN > 0:
+		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张已确认的风格样张（底部字幕带是画面一部分，字幕文字不算元素）。", samplesN)
 	case len(keys) > 0:
 		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张本风格来源视频的原片真迹（底部字幕带是画面一部分，字幕文字不算元素）。", len(keys))
 	}

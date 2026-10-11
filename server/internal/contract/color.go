@@ -1,5 +1,5 @@
 // Package contract 颜色工具：WCAG 相对亮度/对比度公式
-// （skin 槽位对比度门禁：txt 落 bg 上 ≥4.5:1 才放行）。
+// （skin 槽位对比度门禁：txt 落 bg 上 ≥3:1 放行——大字标准，见 CheckSkin）。
 package contract
 
 import (

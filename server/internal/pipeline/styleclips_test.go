@@ -127,7 +127,7 @@ func TestEnsureSampleClipsNoLLM(t *testing.T) {
 	old := rootDir
 	SetRootDir("../../..")
 	defer SetRootDir(old)
-	t.Setenv("LLM_API_KEY", "")     // FromEnv 无 key 即不可用（双名都掐，防环境真 key 漏进来打真调用）
+	t.Setenv("LLM_API_KEY", "") // FromEnv 无 key 即不可用（双名都掐，防环境真 key 漏进来打真调用）
 	t.Setenv("DEEPSEEK_API_KEY", "")
 	dir := t.TempDir()
 	p := &Project{ID: "t", Dir: dir}
