@@ -84,28 +84,8 @@ def synth_riser(dur=1.2):
     return L, R
 
 
-def normalize(L, R, peak=0.5):
-    m = max(np.abs(L).max(), np.abs(R).max()) or 1.0
-    return L / m * peak, R / m * peak
-
-
-def write_wav(path, L, R):
-    pcm = (np.clip(np.stack([L, R], axis=1), -1, 1) * 32767).astype('<i2')
-    with wave.open(str(path), 'wb') as w:
-        w.setnchannels(2)
-        w.setsampwidth(2)
-        w.setframerate(SR)
-        w.writeframes(pcm.tobytes())
-
-
-def ffmpeg_encode(wav_path, mp3_path):
-    ff = shutil.which('ffmpeg')
-    if not ff:
-        return False
-    r = subprocess.run([ff, '-y', '-v', 'error', '-i', str(wav_path),
-                        '-codec:a', 'libmp3lame', '-b:a', '192k', str(mp3_path)],
-                       capture_output=True, text=True)
-    return r.returncode == 0
+# normalize / write_wav / ffmpeg_encode 收拢进 av_common（与 make_bgm 同源）
+from av_common import ffmpeg_encode, normalize, write_wav  # noqa: E402
 
 
 CLIPS = [
@@ -126,11 +106,11 @@ def main() -> int:
             print(f"{c['name']}: 已存在，跳过（--force 重生成）")
         else:
             print(f"{c['name']}: 合成中…")
-            L, R = normalize(*c['synth'](c['duration']))
+            L, R = normalize(*c['synth'](c['duration']), peak=0.5)
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as fh:
                 wav_path = pathlib.Path(fh.name)
-            write_wav(wav_path, L, R)
-            if not ffmpeg_encode(wav_path, mp3):
+            write_wav(wav_path, L, R, SR)
+            if not ffmpeg_encode(wav_path, mp3, bitrate='192k'):
                 shutil.move(str(wav_path), mp3.with_suffix('.wav'))  # 无 ffmpeg 留 wav
                 print(f"{c['name']}: ffmpeg 缺失，留 wav ✓")
                 manifest.append({'name': c['name'], 'file': mp3.with_suffix('.wav').name,

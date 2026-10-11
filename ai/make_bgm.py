@@ -14,7 +14,6 @@ import json
 import math
 import pathlib
 import shutil
-import struct
 import subprocess
 import sys
 import tempfile
@@ -43,14 +42,24 @@ def freq(note):
 def chord_env(n, slot, cf):
     """第 k 个和弦的包络（样本域）：在区间两端 cf 样本的互补升余弦，
     相邻和弦包络和恒为 1 → 无缝循环。返回 (N, slots) 矩阵。"""
-    t = np.arange(n)
-    env = np.zeros((len(slot), n))
+    t = np.arange(n, dtype=float)
+    env = np.zeros((len(slot) - 1, n))
     for k in range(len(slot) - 1):
         s, e = slot[k], slot[k + 1]
+        # 升窗在边界「之前」起坡、降窗在边界「之前」收坡：交界处前 1 降+后 1 升
+        # 互补（线性部分和恒为 1）。旧写法降窗在边界之后收坡，交界处双双满幅，
+        # 每个和弦切换点包络和冲到 2（+6dB 音量隆起）。
         rise = np.clip((t - (s - cf)) / cf, 0, 1)
-        fall = np.clip(((e + cf) - t) / cf, 0, 1)
-        env[k] = np.minimum(1.0, np.minimum(rise, fall))
-    # 平滑 + 循环回卷：首和弦的起音窗包住末和弦的收音窗（时间回卷取模）
+        fall = np.clip((e - t) / cf, 0, 1)
+        if k == 0 and s - cf < 0:
+            # 起音窗跨界回卷：末尾 cf 样本即循环意义上的 [-cf,0)，首和弦在此起坡
+            # （真正包住末和弦的收音窗，接缝处交叉淡化，无爆点也无静音缺口）。
+            # 回卷区不套 fall——首和弦自己的收音窗在循环时轴的 [e-cf, e]，不在这
+            tail = slice(n - cf, n)
+            rise[tail] = np.clip((t[tail] - n - (s - cf)) / cf, 0, 1)
+            fall[tail] = 1.0
+        env[k] = np.minimum(rise, fall)
+    # 升余弦平滑：f(x)+f(1-x)=1，互补关系经平滑后依然成立
     env = 0.5 - 0.5 * np.cos(np.pi * env)
     return env
 
@@ -106,29 +115,8 @@ def add_pluck(L, R, chord_notes, slot_s, bpm, amp=0.14):
         t += step
 
 
-def normalize(L, R, peak=0.55):
-    m = max(np.abs(L).max(), np.abs(R).max()) or 1.0
-    return L / m * peak, R / m * peak
-
-
-def write_wav(path, L, R):
-    data = np.stack([L, R], axis=1)
-    pcm = (np.clip(data, -1, 1) * 32767).astype('<i2')
-    with wave.open(str(path), 'wb') as w:
-        w.setnchannels(2)
-        w.setsampwidth(2)
-        w.setframerate(SR)
-        w.writeframes(pcm.tobytes())
-
-
-def ffmpeg_encode(wav_path, mp3_path):
-    ff = shutil.which('ffmpeg')
-    if not ff:
-        return False
-    r = subprocess.run([ff, '-y', '-v', 'error', '-i', str(wav_path),
-                        '-codec:a', 'libmp3lame', '-b:a', '160k', str(mp3_path)],
-                       capture_output=True, text=True)
-    return r.returncode == 0
+# normalize / write_wav / ffmpeg_encode 收拢进 av_common（与 make_sfx 同源）
+from av_common import ffmpeg_encode, normalize, write_wav  # noqa: E402
 
 
 # ── 曲目定义 ─────────────────────────────────────────────────
@@ -216,11 +204,11 @@ def main() -> int:
             L, R = synth_pad(tr['chords'], slots, cf_s=3.0, bright=tr['bright'])
             if tr['pluck']:
                 add_pluck(L, R, tr['chords'], slots, tr['pluck'])
-            L, R = normalize(L, R)
+            L, R = normalize(L, R, peak=0.55)
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as fh:
                 wav_path = pathlib.Path(fh.name)
-            write_wav(wav_path, L, R)
-            ok = ffmpeg_encode(wav_path, mp3)
+            write_wav(wav_path, L, R, SR)
+            ok = ffmpeg_encode(wav_path, mp3, bitrate='160k')
             if not ok:  # 无 ffmpeg：改留 wav（Chromium 照播）
                 wav_asset = mp3.with_suffix('.wav')
                 shutil.move(str(wav_path), wav_asset)

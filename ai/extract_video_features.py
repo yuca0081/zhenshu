@@ -112,8 +112,9 @@ def _kmeans(data, k, n_init=4, iters=30, seed=42):
                 m = lab == j
                 if m.any():
                     new[j] = data[m].mean(0)
-                else:  # 空簇：吸收离自己质心最远的点
-                    new[j] = data[_nearest(cent, data).argmax()]
+                else:  # 空簇：吸收离自己质心最远的点（拉走最刺眼的离群簇）
+                    dmin = ((data - cent[j]) ** 2).sum(-1)
+                    new[j] = data[dmin.argmax()]
             done = np.allclose(new, cent, atol=0.01)
             cent = new
             if done:

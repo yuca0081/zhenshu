@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""组装 hyperframes 工程：index.html + assets/gsap.min.js + package.json + meta.json。
+"""组装 hyperframes 工程：index.html + assets/gsap.min.js + package.json + meta.json；
+段帧 compositions/frames/*.html 与字幕子组合 compositions/caps/*.html。
 用法：python ai/assemble.py <项目目录>
 """
 import hashlib
@@ -7,7 +8,6 @@ import json
 import pathlib
 import re
 import shutil
-import subprocess
 import sys
 
 # gsap 资产固定来源：ai/assets（随仓库分发）。
@@ -149,7 +149,8 @@ def subtitle_blocks(scenes, meta_voices, slots, proj, w=1080, h=1920):
         js = [f"gsap.set('#{cap_id} .cap-ph',{{opacity:0}});"]
         for pi, rng in enumerate(phrases):
             i0, i1 = int(rng[0]), int(rng[1])
-            a, b = words[i0]['start'], words[min(i1 + 1, len(words) - 1)]['start'] if i1 + 1 < len(words) else words[i1]['end']
+            a = words[i0]['start']
+            b = words[i1 + 1]['start'] if i1 + 1 < len(words) else words[i1]['end']
             js.append(f"tl.set('#{cap_id} [data-sph=\"{pi}\"]',{{opacity:1}},{a:.3f});")
             if b > a + 0.05:
                 js.append(f"tl.set('#{cap_id} [data-sph=\"{pi}\"]',{{opacity:0}},{b:.3f});")
@@ -248,8 +249,9 @@ def main(proj_dir: str) -> int:
         cnt_html, cnt_js = '', ''
         if cc := ovl.get('chapter_counter'):
             dec = cc.get('decimals', 2) or 0
-            v0 = cc['from'] + (cc['to'] - cc['from']) * (t0 / total if total else 0)
-            v1 = cc['from'] + (cc['to'] - cc['from']) * (min(t0 + dur, total) / total if total else 0)
+            lo, hi = cc.get('from', 0), cc.get('to', 0)  # 配置缺键兜 0，别 KeyError 炸组装
+            v0 = lo + (hi - lo) * (t0 / total if total else 0)
+            v1 = lo + (hi - lo) * (min(t0 + dur, total) / total if total else 0)
             cnt_html = (f'<div class="ovl-cnt" id="ovl-cnt">{cc.get("prefix","")}'
                         f'{v0:.{dec}f}{cc.get("unit","")}</div>')
             cnt_js = (
@@ -336,7 +338,7 @@ def main(proj_dir: str) -> int:
     <script>
       window.__timelines = window.__timelines || {{}};
       window.__timelines["main"] = gsap.timeline({{ paused: true }});
-      // v1 段间硬切（转场为独立验证项）
+      // 段间转场：黑场叠化（xf_body）+ Go 侧 xfade 交叉叠化（timeline.json）
       (function () {{ var tl = window.__timelines["main"];
         tl.to({{}}, {{ duration: {total_dur} }}, 0);
         {ovl_js}

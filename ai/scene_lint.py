@@ -24,10 +24,16 @@ VENDOR_MANIFEST = pathlib.Path(__file__).resolve().parent.parent / 'data' / 'lib
 VEND_RE = re.compile(r'<!--\s*vend:\s*([A-Za-z0-9_.-]+)@([^\s>]+?)\s*-->')
 
 
+_manifest_cache = None  # (mtime_ns, parsed)：一次 lint 会话内几十条 vend 声明共读一次盘
+
+
 def vendor_has(lib: str, ver: str) -> bool:
+    global _manifest_cache
     try:
-        m = json.loads(VENDOR_MANIFEST.read_text(encoding='utf-8'))
-        return bool(m.get('libs', {}).get(lib, {}).get(ver))
+        mt = VENDOR_MANIFEST.stat().st_mtime_ns
+        if _manifest_cache is None or _manifest_cache[0] != mt:
+            _manifest_cache = (mt, json.loads(VENDOR_MANIFEST.read_text(encoding='utf-8')))
+        return bool(_manifest_cache[1].get('libs', {}).get(lib, {}).get(ver))
     except Exception:
         return False
 
@@ -139,19 +145,23 @@ def lint_text(html: str, seg_hint: str = '') -> list:
             errs.append(('A3', f'缺库:{lib}@{ver} 未入 vendor manifest——'
                          f'运行 python ai/vendor_tool.py ensure {lib}@{ver} --file <tarball内路径> 采购'))
 
-    # J1：内联脚本 JS 语法校验（node --check；无 node 时跳过——渲染环境必有）
+    # J1：内联脚本 JS 语法校验（node --check；无 node 时跳过——渲染环境必有）。
+    # 每块单独 check：浏览器里多个 <script> 各自是独立作用域，两个块各声明同名
+    # const 完全合法，拼一个文件检查就假语法错——零误报设计不容这种误杀。
     scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, flags=re.S)
     if scripts and shutil.which('node'):
-        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
-            tf.write((';' + chr(10)).join(scripts))
-            tmpjs = tf.name
-        try:
-            r = subprocess.run(['node', '--check', tmpjs], capture_output=True, text=True)
-            if r.returncode != 0:
-                msg = (r.stderr or '').strip().splitlines()
-                errs.append(('J1', '内联脚本 JS 语法错误：' + (msg[-1] if msg else '未知')[:160]))
-        finally:
-            pathlib.Path(tmpjs).unlink(missing_ok=True)
+        for si, sc in enumerate(scripts):
+            with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
+                tf.write(sc)
+                tmpjs = tf.name
+            try:
+                r = subprocess.run(['node', '--check', tmpjs], capture_output=True, text=True)
+                if r.returncode != 0:
+                    msg = (r.stderr or '').strip().splitlines()
+                    tag = f'（第 {si + 1} 个 <script> 块）' if len(scripts) > 1 else ''
+                    errs.append(('J1', '内联脚本 JS 语法错误' + tag + '：' + (msg[-1] if msg else '未知')[:160]))
+            finally:
+                pathlib.Path(tmpjs).unlink(missing_ok=True)
 
     # 禁用 API 全量扫描
     for pat, rule, msg in BANNED_PATTERNS:

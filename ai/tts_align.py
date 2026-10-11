@@ -37,7 +37,6 @@ import re
 import shutil
 import subprocess
 import sys
-import urllib.request
 
 PUNCT = set('，。！？；、：,.!?;:…—·')
 # 百炼档（2026-10-10 用户定档 qwen-audio-3.0-tts-plus：free-style 指令控情绪/语速，
@@ -91,9 +90,16 @@ def _ffmpeg_mp3_to_wav(mp3, out_wav):
         print('  ffmpeg 缺失，mp3 无法转 wav')
         mp3.unlink(missing_ok=True)
         return False
-    r = subprocess.run(
-        [ff, '-y', '-v', 'error', '-i', str(mp3), '-ar', '32000', '-ac', '1', str(out_wav)],
-        capture_output=True, text=True, timeout=120)
+    try:
+        r = subprocess.run(
+            [ff, '-y', '-v', 'error', '-i', str(mp3), '-ar', '32000', '-ac', '1', str(out_wav)],
+            capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        # 超时按失败处理：不接住会绕过「百炼失败落 Edge」的级联回落直接崩给 Go
+        print('  mp3→wav FAIL: ffmpeg 转码超时（120s）')
+        mp3.unlink(missing_ok=True)
+        out_wav.unlink(missing_ok=True)
+        return False
     mp3.unlink(missing_ok=True)
     if r.returncode != 0:
         out_wav.unlink(missing_ok=True)
@@ -129,10 +135,15 @@ def tts_edge(text_file, out_wav, voice=None):
     voice = voice or os.environ.get('EDGE_TTS_VOICE', 'zh-CN-XiaoxiaoNeural')
     rate = os.environ.get('EDGE_TTS_RATE', '+0%')
     mp3 = out_wav.with_suffix('.mp3')
-    r = subprocess.run(
-        [sys.executable, '-m', 'edge_tts', '--file', str(text_file),
-         '--voice', voice, '--rate', rate, '--write-media', str(mp3)],
-        capture_output=True, text=True, timeout=300)
+    try:
+        r = subprocess.run(
+            [sys.executable, '-m', 'edge_tts', '--file', str(text_file),
+             '--voice', voice, '--rate', rate, '--write-media', str(mp3)],
+            capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        print('  edge-tts FAIL: 合成超时（300s）')
+        mp3.unlink(missing_ok=True)
+        return False
     if not (mp3.exists() and mp3.stat().st_size > 2000):
         print(f'  edge-tts FAIL: {(r.stderr or r.stdout)[-150:]}')
         return False
@@ -289,7 +300,9 @@ def main(proj_dir: str) -> int:
     elif pv and not bl and not ('-' in pv and 'Neural' in pv):
         print(f'警告: voice {pv!r} 非百炼/Edge 音色（CosyVoice 档已退役）→ 回落 Edge 晓晓')
         pv = ''
-    engine = 'bailian' if DASHSCOPE_KEY else 'edge'
+    # 项目指定 Edge 音色（pv 有值且非百炼系）→ 锁 Edge：之前只看 key，配了 key
+    # 就走百炼默认龙安灵心，audio_meta 却记着 Edge 音色——静默错配
+    engine = 'bailian' if (DASHSCOPE_KEY and not (pv and not bl)) else 'edge'
     bl_use = bl or (BL_VOICE if DASHSCOPE_KEY else '')
     edge_voice = pv or os.environ.get('EDGE_TTS_VOICE', 'zh-CN-XiaoxiaoNeural')
 
@@ -345,9 +358,7 @@ def main(proj_dir: str) -> int:
         best = None
         if anchors is not None:
             words, phrases, ratio = seg_words_and_phrases(seg['narration'], anchors)
-            best = (words, phrases, ratio, 'funasr')
-            if ratio >= 0.5:
-                pass  # funasr 锚点够用
+            best = (words, phrases, ratio, 'funasr')  # 先记 funasr 结果，匹配率不足再被 whisper 竞争
         if best is None or best[2] < 0.5:
             print(f'  {sid}: funasr 锚点匹配率低（{best[2]:.0%}）' if best else f'  {sid}: funasr 不可用',
                   '→ faster-whisper 重算')

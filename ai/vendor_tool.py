@@ -90,8 +90,8 @@ def auto_member(tgz: pathlib.Path, meta: dict) -> str:
 
 
 def npm_fetch(lib: str, version: str, member: str, workdir: pathlib.Path):
-    """从 npm registry 拉钉版 tarball,抽取 member(package/ 前缀),返回 (文件, 元数据)。
-    member 为空 → 自动解析。"""
+    """从 npm registry 拉钉版 tarball,抽取 member(package/ 前缀),返回 (文件, 元数据, 成员路径)。
+    member 为空 → 自动解析。tarball 用完即删,vendor 卷不堆杂物。"""
     tgz = workdir / f'{lib}-{version}.tgz'
     url = f'https://registry.npmjs.org/{lib}/-/{lib}-{version}.tgz'
     print(f'  下载 {url}')
@@ -106,6 +106,7 @@ def npm_fetch(lib: str, version: str, member: str, workdir: pathlib.Path):
         if not f:
             raise SystemExit(f'✗ 采购失败:tarball 内无 package/{member}')
         data = f.read()
+    tgz.unlink(missing_ok=True)  # 抽完成员即删：tgz 留在 VENDOR/lib/version/ 里只添乱
     out = workdir / pathlib.Path(member).name
     out.write_bytes(data)
     return out, meta, member
