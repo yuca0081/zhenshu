@@ -562,6 +562,16 @@ func (s *Server) style(c *gin.Context) {
 // 渲染 design.md 并记版本指纹——设计一改，按旧版画的段自动过期。
 func (s *Server) confirmStyle(c *gin.Context) {
 	id := c.Param("id")
+	// 对话轮进行中拒绝确认：draft_style_samples 收尾时还会重写 style_samples.json，
+	// 半道确认会被最后一笔打回 confirmed=false（2026-10-11 夜跑竞态实录：
+	// 确认返回 200，两分钟后制作管线读到 false 硬门炸停）。等轮次说完再确认。
+	if mu, ok := s.turnMu.Load(id); ok {
+		if !mu.(*sync.Mutex).TryLock() {
+			c.JSON(409, gin.H{"error": "对话轮还在进行（可能正在出样张），等它说完再确认"})
+			return
+		}
+		mu.(*sync.Mutex).Unlock()
+	}
 	p := pipeline.NewProject(s.DataDir, id)
 	path := p.Artifact("style/style_samples.json")
 	b, err := os.ReadFile(path)

@@ -179,10 +179,16 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			errs = sceneValidate(r, p, payload.HTML, seg.ID)
 		}
 		if len(errs) > 0 {
+			if only == "" && instruction == "" && feedback == "" && r.fallbackOldScene(p, seg.ID, "重生成契约检查三轮未过") {
+				return
+			}
 			fail(fmt.Errorf("%s 契约检查三轮未过：\n- %s", seg.ID, strings.Join(errs, "\n- ")))
 			return
 		}
 		if len(payload.Elements) < 3 {
+			if only == "" && instruction == "" && feedback == "" && r.fallbackOldScene(p, seg.ID, "重生成的元素注册表不足 3 条") {
+				return
+			}
 			fail(fmt.Errorf("%s 元素注册表不足 3 条（元素级指认依赖它）", seg.ID))
 			return
 		}
@@ -211,6 +217,22 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	}
 	wg.Wait()
 	return firstErr
+}
+
+// fallbackOldScene 整片制作里段级重生成反复过不了契约时，只要上一版产物还在就
+// 沿用旧画面继续出片——宁要旧设计的合格段，不要没有成片（2026-10-11 夜跑教训：
+// 设计一换全片段重画，一段连挂三轮把整片拖死，且每次重掷都是新骰子）。
+// 指纹故意不刷新：下轮制作还会再试重生成，过了自然换新。只用于整片制作——
+// rework（instruction/feedback/only 任一非空）不适用：用户点名要改这一段，
+// 静默沿用旧画面等于没改。
+func (r *Runner) fallbackOldScene(p *pipeline.Project, segID, why string) bool {
+	old := p.Artifact("llm/comp-" + segID + ".json")
+	if info, err := os.Stat(old); err != nil || info.IsDir() || info.Size() == 0 {
+		return false
+	}
+	p.Manifest("scene.fallback", fmt.Sprintf("%s %s，沿用旧画面", segID, why))
+	r.emit(p.ID, "progress", "compositions", fmt.Sprintf("%s 重生成未过契约，沿用旧画面继续", segID))
+	return true
 }
 
 // sceneSystemFor 系统提示跟随项目已确认的设计系统（笼子二：方向 + 贯穿装置一句话，
@@ -407,7 +429,8 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
    var tl=gsap.timeline({paused:true});
    tl.to({},{duration:<段总时长秒>,ease:"none",onUpdate:function(){window["__draw_<id>"](tl.time(),ctx,W,H,rng);}},0);
    window.__timelines["<段id>"]=tl;
-8. 字体：本地字体栈 + @font-face{src:local()} 声明（引用即声明）；
+8. 字体：只准用渲染端实际安装的这些——微软雅黑 Microsoft YaHei、黑体 SimHei、宋体 SimSun、楷体 KaiTi、仿宋 FangSong、Consolas、Segoe UI、Georgia、Arial、Times New Roman、Courier New、Impact（外加 serif/sans-serif/monospace 通用族收尾）；
+   引用即声明（@font-face{font-family:'X';src:local('X');}）；禁 PingFang SC、思源 Source Han/Noto、站酷等未安装字体——lint 对未声明字体会一票否决整段；
    禁止在 CSS transform 里做居中（translateX(-50%%) 等）再让 GSAP 补间同一元素——GSAP 会整体覆盖 CSS transform，居中必须用 GSAP 的 xPercent/yPercent
 9. 不写字幕——底部字幕带由平台注入；内容留在上 83%%，禁止出现 data-ph=/data-w= 标注
 10. 元素揭示随旁白节拍分布（对齐下方词序表，不前载不拖尾）；段总时长 %.3f 秒

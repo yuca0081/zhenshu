@@ -400,6 +400,9 @@ func DesignDocWithBrief(ss *contract.StyleSamples, segIdx int, brief *contract.S
 // 强参考特色落点表）+ skin.json（引擎件=主皮肤，assemble 字幕带配色消费）。
 // tokens 本体就是 style/style_samples.json——不另立 tokens.json，防双源漂移（宪法 #1）。
 func LockDesign(p *Project, ss *contract.StyleSamples) error {
+	if clampDesignFonts(ss) {
+		p.Manifest("design.fontclamp", "设计字体栈含渲染端不可用字体，已过滤为系统字体")
+	}
 	skins := ss.EffectiveSkins()
 	if len(skins) == 0 {
 		return fmt.Errorf("设计系统缺皮肤（skins/skin）")
@@ -417,6 +420,71 @@ func LockDesign(p *Project, ss *contract.StyleSamples) error {
 	p.Manifest("design.version", designVersion(ss))
 	p.Manifest("design.skins", strconv.Itoa(len(skins)))
 	return nil
+}
+
+// cssGenericFonts CSS 通用字体族关键字：任何渲染端都能解析，不需要声明。
+var cssGenericFonts = map[string]bool{
+	"serif": true, "sans-serif": true, "monospace": true, "cursive": true,
+	"fantasy": true, "system-ui": true, "ui-serif": true, "ui-sans-serif": true,
+	"ui-monospace": true,
+}
+
+// clampFontStack 字体栈白名单钳制：设计发明会起花名（站酷/思源等渲染端既没装
+// 也没打包的字体），场景提示有「引用即声明」纪律兜得住，字幕带（assemble 消费
+// skin slots.font）是机械装配没有这道关——未声明字体直接全灭字幕（2026-10-11
+// 夜跑实录：21 个字幕文件一票全否）。确认落盘前只留系统白名单 + 通用族，
+// 过滤后为空回退雅黑。幂等：已干净的栈原样返回（designVersion 不漂移）。
+func clampFontStack(stack string) string {
+	var keep []string
+	seen := map[string]bool{}
+	for _, tok := range strings.Split(stack, ",") {
+		name := strings.Trim(strings.TrimSpace(tok), "'\"")
+		lower := strings.ToLower(name)
+		if name == "" || seen[lower] {
+			continue
+		}
+		generic := cssGenericFonts[lower]
+		if !generic && !osFontWhitelist[lower] {
+			continue
+		}
+		seen[lower] = true
+		if generic {
+			keep = append(keep, lower)
+		} else {
+			keep = append(keep, "'"+titleCaseFont(lower)+"'")
+		}
+	}
+	if len(keep) == 0 {
+		return "'Microsoft YaHei',sans-serif"
+	}
+	return strings.Join(keep, ",")
+}
+
+// clampDesignFonts 就地钳制设计系统里的全部字体栈（三角色 + 各皮肤槽位），
+// 返回是否有改动。样张 HTML 是预览件不钳（所见即所得只在确认前承诺）。
+func clampDesignFonts(ss *contract.StyleSamples) bool {
+	changed := false
+	clamp := func(stack *string) {
+		if *stack == "" {
+			return
+		}
+		if c := clampFontStack(*stack); c != *stack {
+			*stack = c
+			changed = true
+		}
+	}
+	if ss.Fonts != nil {
+		clamp(&ss.Fonts.Display.Stack)
+		clamp(&ss.Fonts.Body.Stack)
+		clamp(&ss.Fonts.Data.Stack)
+	}
+	for i := range ss.Skins {
+		clamp(&ss.Skins[i].Slots.Font)
+	}
+	if ss.Skin != nil {
+		clamp(&ss.Skin.Slots.Font)
+	}
+	return changed
 }
 
 // designVersion 设计系统内容指纹：style_samples.json 任一字段改动都会换版本。
