@@ -705,9 +705,11 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 		}
 		// 廉价修复先行：checker 对对比度项给了建议色就直接回填 HTML 再检，
 		// 不烧 LLM 修复轮——LLM 回喂修对比度从未收敛过（同色反复重生成）。
-		if n := applyContrastFixes(p, err.Error()); n > 0 {
-			r.emit(p.ID, "stage", "check", fmt.Sprintf("contrast-fix：按建议色回填 %d 处", n))
-			r.Manifest(p, "check.contrast_fix", fmt.Sprintf("%d 处", n))
+		fixN := applyContrastFixes(p, err.Error())
+		fixN += applyGsapOpacityFixes(p, err.Error())
+		if fixN > 0 {
+			r.emit(p.ID, "stage", "check", fmt.Sprintf("cheap-fix：机械回填 %d 处（对比度/opacity 冲突）", fixN))
+			r.Manifest(p, "check.contrast_fix", fmt.Sprintf("%d 处", fixN))
 			if err := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); err == nil {
 				if pipeline.Run(ctx, p, "check") == nil {
 					r.emit(p.ID, "stage", "check", "done")
@@ -1470,6 +1472,59 @@ func (r *Runner) clearFrames(p *pipeline.Project, only string) {
 // contrastSuggRe 抓 checker 对比度诊断对：✗ 选择器 比值:1 (need …) \n Try rgb(..); source frames/segNN.html
 var contrastSuggRe = regexp.MustCompile(
 	`✗[ ]*([^\r\n]+?)\s+[0-9]+(?:\.[0-9]+)?:1\s*\(need[^)]*\)\s*\n\s*Try\s+(rgb\([^)]*\))\s*;\s*source\s+(\S+)`)
+
+// gsapOpacityNoopRe 抓 gsap_from_opacity_noop 诊断对：✗ "#元素" 有 CSS opacity:0
+// 与 gsap.from(opacity:0) 冲突 \n …frames\segNN.html #元素 t=…
+var gsapOpacityNoopRe = regexp.MustCompile(
+	`gsap_from_opacity_noop:\s*"#([\w-]+)"[^\r\n]*\n\s*\S*frames[\\/]([\w-]+\.html)`)
+
+// applyGsapOpacityFixes gsap_from_opacity_noop 的机械修复：CSS 里藏着的 opacity:0
+// 与 gsap.from({opacity:0}) 打架（from 的 immediateRender 本就负责初始隐藏，CSS
+// 那份是画蛇添足），直接从该元素的内联 style / CSS 规则里剥掉声明再重检。
+// LLM 修这个是掷骰子（同一元素反复重画还可能换姿势再犯），机械删除零成本收敛。
+// 剥除必须带上分隔符（;/}/"）——裸 `opacity:0` 会误伤 opacity:0.5。
+func applyGsapOpacityFixes(p *pipeline.Project, checkOut string) int {
+	type fix struct{ file, elem string }
+	seen := map[fix]bool{}
+	var fixes []fix
+	for _, m := range gsapOpacityNoopRe.FindAllStringSubmatch(checkOut, -1) {
+		f := fix{m[2], m[1]}
+		if !seen[f] {
+			seen[f] = true
+			fixes = append(fixes, f)
+		}
+	}
+	if len(fixes) == 0 {
+		return 0
+	}
+	perFile := map[string][]string{}
+	for _, f := range fixes {
+		perFile[f.file] = append(perFile[f.file], f.elem)
+	}
+	n := 0
+	for file, elems := range perFile {
+		path := p.Artifact("compositions/frames/" + file)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		html := string(b)
+		orig := html
+		for _, elem := range elems {
+			reInline := regexp.MustCompile(`(id="` + elem + `"[^>]*?style="[^"]*?)opacity:\s*0\s*(;|")`)
+			html = reInline.ReplaceAllString(html, "$1$2")
+			reRule := regexp.MustCompile(`(#` + elem + `\s*\{[^}]*?)opacity:\s*0\s*(;|\})`)
+			html = reRule.ReplaceAllString(html, "$1$2")
+		}
+		if html == orig {
+			continue
+		}
+		if err := os.WriteFile(path, []byte(html), 0o644); err == nil {
+			n += len(elems)
+		}
+	}
+	return n
+}
 
 // applyContrastFixes 把 checker 给的对比度建议色直接回填到段帧 HTML（追加
 // data-contrast-fix 样式块，!important 压过内联样式），返回本次新回填的处数。
