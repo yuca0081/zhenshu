@@ -22,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"webpage-video-agent/server/internal/agent"
+	"webpage-video-agent/server/internal/auth"
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/events"
 	"webpage-video-agent/server/internal/llm"
@@ -43,11 +44,24 @@ type Server struct {
 	Lib      *stylelib.Library
 	Refs     *styleref.Store
 
-	// APIToken 非空时全部 /api 路由要求 X-API-Token 头（SSE 另收 ?token=）。
-	// 部署侧公网暴露（Dockerfile ADDR=:8080）必须配置；本机默认回环可留空。
+	// APIToken 非空时保留为机器通道（脚本/m0 类调用方）：X-API-Token 头（SSE 另收
+	// ?token=），等同 admin 身份。人用的浏览器一律走登录会话 cookie。
 	APIToken string
 
+	// SessionSecret 会话 cookie 签名密钥；AuthActive=false = 本机开放模式
+	//（SESSION_SECRET 与 API_TOKEN 都未配置）：全部接口不设防（与旧无鉴权行为一致），
+	// 登录/归属守卫全部旁路。部署公网必须二选一配置。
+	SessionSecret []byte
+	AuthActive    bool
+
+	// loginFails 登录失败窗口："ip|username" → *failWindow（见 login）。
+	loginFails sync.Map
+
 	turnMu sync.Map // projectID → *sync.Mutex：同项目对话轮串行（见 chat）
+
+	// turnCancels projectID → context.CancelFunc：正在执行的对话轮取消函数（见 chat）。
+	// 拿到 turnMu 后才注册、轮终了即删——cancelChat 只打得到在跑的那一轮。
+	turnCancels sync.Map
 
 	// chatSlots 对话轮排队信号量（容量 chatQueueMax）：每条 POST /chat 起一个
 	// goroutine 排队等 turnMu，无上限时连点消息会堆出一串不可取消的排队轮。
@@ -66,7 +80,16 @@ func (s *Server) Router() *gin.Engine {
 	r := gin.Default()
 	r.MaxMultipartMemory = 8 << 20
 
-	api := r.Group("/api", s.requireToken(), s.bodyGuard(), secureParams())
+	// 登录会话：不进鉴权组（login/status 是准入入口本体）。用户管理挂在鉴权 + 管理员双守卫后。
+	authG := r.Group("/api/auth", s.bodyGuard())
+	authG.GET("/status", s.authStatus)
+	authG.POST("/login", s.login)
+	authG.POST("/logout", s.logout)
+	authAdm := authG.Group("", s.requireUser(), s.requireAdmin())
+	authAdm.GET("/users", s.listUsers)
+	authAdm.POST("/users", s.createAccount)
+
+	api := r.Group("/api", s.requireUser(), s.bodyGuard(), secureParams(), s.projectGuard())
 	api.POST("/projects", s.createProject)
 	api.GET("/projects", s.listProjects)
 	api.GET("/projects/:id", s.projectView)
@@ -80,6 +103,7 @@ func (s *Server) Router() *gin.Engine {
 	api.POST("/projects/:id/style/apply", s.applyStyle)
 	api.POST("/projects/:id/style/confirm", s.confirmStyle)
 	api.POST("/projects/:id/chat", s.chat)
+	api.POST("/projects/:id/chat/cancel", s.cancelChat)
 	api.POST("/draft/manuscript", s.draftManuscript)
 	api.POST("/extract_link", s.extractLink)
 	api.GET("/projects/:id/messages", s.messages)
@@ -126,26 +150,305 @@ func (s *Server) Router() *gin.Engine {
 	return r
 }
 
-// requireToken API_TOKEN 鉴权：常量时间比较，防时序侧信道。留空 = 本机回环模式不设防。
-// SSE（EventSource 无法自定义头）额外接受 ?token= 查询参数。
-func (s *Server) requireToken() gin.HandlerFunc {
+// ── 鉴权：登录会话 + 项目归属 ─────────────────────────────────
+
+// 会话身份在 gin context 里的键（currentUser 读取）。
+const (
+	ctxUID  = "auth_uid"
+	ctxRole = "auth_role"
+	ctxName = "auth_username"
+)
+
+// requireUser 准入守卫：开放模式旁路（同旧无鉴权行为）；否则认会话 cookie，
+// 机器 token（X-API-Token / ?token=，常量时间比较）视作 admin。SSE（EventSource）
+// 同源自动带 cookie，无需再走查询参数；?token= 仅服务机器调用方。
+func (s *Server) requireUser() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if s.APIToken == "" {
+		if !s.AuthActive {
 			c.Next()
 			return
 		}
-		tok := c.GetHeader("X-API-Token")
-		if tok == "" {
-			tok = c.Query("token")
-		}
-		if tok != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(s.APIToken)) == 1 {
+		if cl, err := s.sessionClaims(c); err == nil {
+			c.Set(ctxUID, cl.UID)
+			c.Set(ctxRole, cl.Role)
+			c.Set(ctxName, cl.Username)
 			c.Next()
 			return
 		}
-		c.Header("WWW-Authenticate", `Bearer realm="zhenshu"`)
-		c.JSON(401, gin.H{"error": "未授权：缺少或错误的 API token"})
+		if s.machineToken(c) {
+			c.Set(ctxUID, "") // 机器身份：无 uid，创建的项目归系统（仅管理员可见）
+			c.Set(ctxRole, "admin")
+			c.Set(ctxName, "machine")
+			c.Next()
+			return
+		}
+		c.JSON(401, gin.H{"error": "未登录或会话已过期"})
 		c.Abort()
 	}
+}
+
+// requireAdmin 管理员守卫（用户管理端点）。开放模式旁路——开放模式本就全部不设防。
+func (s *Server) requireAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !s.AuthActive {
+			c.Next()
+			return
+		}
+		if _, role := s.currentUser(c); role == "admin" {
+			c.Next()
+			return
+		}
+		c.JSON(403, gin.H{"error": "需要管理员权限"})
+		c.Abort()
+	}
+}
+
+// projectGuard 项目归属守卫：统一拦 /api/projects/:id… 全部读写（含 messages/video/
+// produce 等绕过 s.project() 的 handler，一处收口）。归属记在 project.json 的
+// user_id（磁盘事实源），DB 行同步落列；旧项目无 user_id = 系统项目，仅管理员可见。
+// 归属不符与不存在同回 404——不向探测者暴露项目存在性。
+func (s *Server) projectGuard() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !s.AuthActive {
+			c.Next()
+			return
+		}
+		if !strings.HasPrefix(c.Request.URL.Path, "/api/projects/") {
+			c.Next()
+			return
+		}
+		id := c.Param("id")
+		if id == "" {
+			c.Next()
+			return
+		}
+		owner, err := projectOwner(filepath.Join(s.DataDir, "projects", id, "project.json"))
+		if err == nil && s.canAccess(c, owner) {
+			c.Next()
+			return
+		}
+		c.JSON(404, gin.H{"error": "项目不存在"})
+		c.Abort()
+	}
+}
+
+// projectOwner 读 project.json 的 user_id；文件缺失/损坏 = 项目不存在（err）。
+func projectOwner(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var meta struct {
+		UserID string `json:"user_id"`
+	}
+	if json.Unmarshal(b, &meta) != nil {
+		return "", fmt.Errorf("project.json 损坏")
+	}
+	return meta.UserID, nil
+}
+
+// canAccess 管理员全通；普通用户仅限自己的项目（无主项目不可见）。
+func (s *Server) canAccess(c *gin.Context, owner string) bool {
+	uid, role := s.currentUser(c)
+	return role == "admin" || (owner != "" && owner == uid)
+}
+
+func (s *Server) currentUser(c *gin.Context) (uid, role string) {
+	if v, ok := c.Get(ctxUID); ok {
+		uid, _ = v.(string)
+	}
+	if v, ok := c.Get(ctxRole); ok {
+		role, _ = v.(string)
+	}
+	return uid, role
+}
+
+// sessionClaims 从 cookie 取并验会话。
+func (s *Server) sessionClaims(c *gin.Context) (auth.Claims, error) {
+	v, err := c.Cookie(sessionCookie)
+	if err != nil || v == "" {
+		return auth.Claims{}, auth.ErrBadSession
+	}
+	return auth.VerifySession(s.SessionSecret, v, time.Now())
+}
+
+// machineToken 机器通道：X-API-Token 头（SSE 另收 ?token=），常量时间比较。
+func (s *Server) machineToken(c *gin.Context) bool {
+	if s.APIToken == "" {
+		return false
+	}
+	tok := c.GetHeader("X-API-Token")
+	if tok == "" {
+		tok = c.Query("token")
+	}
+	return tok != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(s.APIToken)) == 1
+}
+
+// ── 登录会话端点 ─────────────────────────────────────────────
+
+const (
+	sessionCookie = "zs_session"
+	sessionTTL    = 30 * 24 * time.Hour
+)
+
+// authStatus 启动首查：是否需要登录 + 当前用户（一并回答，前端一次往返定去留）。
+func (s *Server) authStatus(c *gin.Context) {
+	out := gin.H{"auth_required": s.AuthActive, "user": nil}
+	if !s.AuthActive {
+		out["user"] = gin.H{"id": "", "username": "local", "role": "admin"} // 开放模式 = 本机全权
+	} else if cl, err := s.sessionClaims(c); err == nil {
+		out["user"] = gin.H{"id": cl.UID, "username": cl.Username, "role": cl.Role}
+	}
+	c.JSON(200, out)
+}
+
+// login 用户名口令 → HttpOnly 签名会话 cookie。失败口径统一（用户名/密码不分家，
+// 不暴露账号存在性），并按 ip+用户名 限失败窗口。
+func (s *Server) login(c *gin.Context) {
+	var in struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || in.Username == "" || in.Password == "" {
+		c.JSON(400, gin.H{"error": "用户名和密码不能为空"})
+		return
+	}
+	if !s.allowLoginAttempt(c.ClientIP(), in.Username) {
+		c.JSON(429, gin.H{"error": "失败次数过多，15 分钟后再试"})
+		return
+	}
+	u, err := s.Store.UserByName(in.Username)
+	if err != nil || !auth.CheckPassword(u.PasswordHash, in.Password) {
+		s.recordLoginFail(c.ClientIP(), in.Username)
+		c.JSON(401, gin.H{"error": "用户名或密码错误"})
+		return
+	}
+	s.clearLoginFails(c.ClientIP(), in.Username)
+	s.setSession(c, auth.Claims{
+		UID: u.ID, Username: u.Username, Role: u.Role,
+		Exp: time.Now().Add(sessionTTL).Unix(),
+	})
+	c.JSON(200, gin.H{"id": u.ID, "username": u.Username, "role": u.Role})
+}
+
+// logout 清会话 cookie（MaxAge=-1 即删）。无状态签名无需服务端注销记账。
+func (s *Server) logout(c *gin.Context) {
+	s.setSession(c, auth.Claims{}) // 空 Exp → 过期 cookie，浏览器即删
+	c.JSON(200, gin.H{"ok": true})
+}
+
+// setSession 写会话 cookie。cl.Exp 为零值时写立即过期的删除型 cookie（logout 用）。
+func (s *Server) setSession(c *gin.Context, cl auth.Claims) {
+	val := ""
+	exp := time.Unix(cl.Exp, 0)
+	if cl.Exp > 0 {
+		val = auth.SignSession(s.SessionSecret, cl)
+	}
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name: sessionCookie, Value: val, Path: "/",
+		Expires:  exp,
+		MaxAge:   int(time.Until(exp).Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   c.Request.TLS != nil,
+	})
+}
+
+// createAccount 管理员建账号（固定账号模型，无自助注册）。
+func (s *Server) createAccount(c *gin.Context) {
+	var in struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Role     string `json:"role"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	in.Username = strings.TrimSpace(in.Username)
+	if !auth.ValidUsername(in.Username) {
+		c.JSON(400, gin.H{"error": "用户名须为 2-32 位字母/数字/_/-"})
+		return
+	}
+	if len(in.Password) < 6 {
+		c.JSON(400, gin.H{"error": "密码至少 6 位"})
+		return
+	}
+	if in.Role == "" {
+		in.Role = "user"
+	}
+	if in.Role != "admin" && in.Role != "user" {
+		c.JSON(400, gin.H{"error": "role 只能是 admin 或 user"})
+		return
+	}
+	hash, err := auth.HashPassword(in.Password)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	u := &store.User{Username: in.Username, Role: in.Role, PasswordHash: hash}
+	if err := s.Store.CreateUser(u); err != nil {
+		if errors.Is(err, store.ErrDuplicateUser) {
+			c.JSON(409, gin.H{"error": "用户名已存在"})
+			return
+		}
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, u)
+}
+
+func (s *Server) listUsers(c *gin.Context) {
+	users, err := s.Store.ListUsers()
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if users == nil {
+		users = []store.User{}
+	}
+	c.JSON(200, users)
+}
+
+// ── 登录限速 ─────────────────────────────────────────────────
+
+// failWindow 失败计数窗口：达到上限且未到期 = 拒绝。到期后首笔失败重开窗口。
+type failWindow struct {
+	n     int
+	until time.Time
+}
+
+const (
+	loginMaxFails = 5
+	loginWindow   = 15 * time.Minute
+)
+
+// allowLoginAttempt 窗口内失败未达上限（或已到期）才放行。
+func (s *Server) allowLoginAttempt(ip, username string) bool {
+	v, ok := s.loginFails.Load(ip + "|" + username)
+	if !ok {
+		return true
+	}
+	f := v.(*failWindow)
+	return time.Now().After(f.until) || f.n < loginMaxFails
+}
+
+func (s *Server) recordLoginFail(ip, username string) {
+	k := ip + "|" + username
+	now := time.Now()
+	if v, ok := s.loginFails.Load(k); ok {
+		f := v.(*failWindow)
+		if now.After(f.until) {
+			f.n, f.until = 0, now.Add(loginWindow)
+		}
+		f.n++
+		return
+	}
+	s.loginFails.LoadOrStore(k, &failWindow{n: 1, until: now.Add(loginWindow)})
+}
+
+func (s *Server) clearLoginFails(ip, username string) {
+	s.loginFails.Delete(ip + "|" + username)
 }
 
 // bodyGuard 请求体上限：JSON 路由 2MB，参考视频上传 210MB（单文件 200MB 上限 + multipart 开销）。
@@ -265,18 +568,23 @@ func (s *Server) createProject(c *gin.Context) {
 	meta, _ := json.MarshalIndent(map[string]any{
 		"id": id, "name": in.Name, "status": "created", "aspect": in.Aspect,
 		"topic": in.Topic, "style_id": styleID,
+		"user_id":    func() string { uid, _ := s.currentUser(c); return uid }(), // 归属（磁盘事实源；projectGuard/listProjects 都读它）
 		"created_at": time.Now().Format(time.RFC3339),
 	}, "", "  ")
 	_ = os.WriteFile(p.Artifact("project.json"), meta, 0o644)
 	p.Manifest("project.created", fmt.Sprintf("%s（%s）", in.Name, in.Aspect))
-	_ = s.Store.CreateProject(id, in.Name)
+	uid, _ := s.currentUser(c)
+	_ = s.Store.CreateProject(id, in.Name, uid)
 	s.Hub.Emit(id, "msg", "", "项目已创建："+in.Name)
 	c.JSON(200, gin.H{"id": id, "name": in.Name, "aspect": in.Aspect})
 }
 
 func (s *Server) listProjects(c *gin.Context) {
-	// 扫磁盘（事实源），确保 DB 有行；合并状态
+	// 扫磁盘（事实源），确保 DB 有行；合并状态。归属过滤读 project.json 的 user_id
+	//（createProject 落盘），不在本接口引入 DB 查询。
 	entries, _ := os.ReadDir(filepath.Join(s.DataDir, "projects"))
+	uid, role := s.currentUser(c)
+	filterByOwner := s.AuthActive && role != "admin"
 	type row struct {
 		ID          string `json:"id"`
 		Name        string `json:"name"`
@@ -301,9 +609,13 @@ func (s *Server) listProjects(c *gin.Context) {
 			Name      string `json:"name"`
 			Status    string `json:"status"`
 			CreatedAt string `json:"created_at"`
+			UserID    string `json:"user_id"`
 		}
 		if json.Unmarshal(b, &meta) != nil || meta.Name == "" {
 			continue
+		}
+		if filterByOwner && meta.UserID != uid {
+			continue // 无主（旧）项目 user_id 为空 ≠ 任何普通用户的 uid，天然被滤掉
 		}
 		if _, seen := s.ensured.Load(e.Name()); !seen {
 			_ = s.Store.EnsureProject(e.Name(), meta.Name)
@@ -387,7 +699,11 @@ func (s *Server) deleteProject(c *gin.Context) {
 		return
 	}
 	_ = s.Store.DeleteProject(id)
-	s.Hub.Forget(id)     // 重放窗跟着项目走：不删的话删了的项目在 SSE 侧阴魂不散
+	s.Hub.Forget(id) // 重放窗跟着项目走：不删的话删了的项目在 SSE 侧阴魂不散
+	// 在跑的对话轮先取消再清账：项目目录已删，轮还握着旧句柄继续跑只会写出幽灵产物
+	if v, loaded := s.turnCancels.LoadAndDelete(id); loaded {
+		v.(context.CancelFunc)()
+	}
 	s.turnMu.Delete(id)  // 对话轮互斥锁同理（sync.Map 只增不减的慢泄漏）
 	s.ensured.Delete(id) // 列表自愈记账同步清掉，同名重建能再补行
 	c.JSON(200, gin.H{"ok": true})
@@ -694,8 +1010,11 @@ func (s *Server) draftManuscript(c *gin.Context) {
 		c.JSON(503, gin.H{"error": "LLM 未配置（LLM_API_KEY），请直接粘贴文稿"})
 		return
 	}
-	// 180s：撰稿工位是自主循环，时事题材会先联网核实（预算帽 2 次搜索）再成稿
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 180*time.Second)
+	// 360s：撰稿工位是自主循环，时事题材会先联网核实（预算帽 2 次搜索，每次至多
+	// 90s）再成稿，收尾写稿一轮 high 思考就要 1-3 分钟——180s 总预算几乎必然砍死
+	// 最长的成稿轮（实测报 context deadline exceeded）。客户端断开（前端取消按钮）
+	// 时 c.Request.Context() 先死，请求随之中止。
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 360*time.Second)
 	defer cancel()
 	content, err := agent.DraftManuscript(ctx, p, in.Topic, in.Words)
 	if err != nil {
@@ -735,9 +1054,28 @@ func (s *Server) chat(c *gin.Context) {
 		mu.Lock()
 		defer mu.Unlock()
 		defer s.releaseChatSlot() // 轮结束才释放槽位（排队+执行全程占槽）
-		s.Agent.Run(id, in.Content, in.Refs)
+		// 对话轮级时限：卡死的 LLM 调用（上游挂住时 10min×3 重试）会把 turnMu 下的
+		// 后续对话轮全部拖成沉默；超时给用户明确交代。拿锁后才起表：注册表里永远
+		// 是"正在执行"那轮的取消函数，取消按钮打不到还在排队的幽灵轮。
+		turnCtx, cancelTurn := context.WithTimeout(context.Background(), 20*time.Minute)
+		defer cancelTurn()
+		s.turnCancels.Store(id, cancelTurn)
+		defer s.turnCancels.Delete(id)
+		s.Agent.Run(turnCtx, id, in.Content, in.Refs)
 	}()
 	c.JSON(202, gin.H{"ok": true})
+}
+
+// cancelChat 中断当前项目正在执行的对话轮（取消其 turnCtx，Agent 侧收尾播报
+// 「已中断」）。没有在跑的轮时 ok=false——前端把它当"顺手清锁"处理。
+func (s *Server) cancelChat(c *gin.Context) {
+	id := c.Param("id")
+	ok := false
+	if v, loaded := s.turnCancels.LoadAndDelete(id); loaded {
+		v.(context.CancelFunc)()
+		ok = true
+	}
+	c.JSON(200, gin.H{"ok": ok})
 }
 
 // chatQueueMax 对话轮排队上限（不含正在执行的一轮）：够吸收连点，又不至于

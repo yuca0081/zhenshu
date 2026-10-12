@@ -9,10 +9,60 @@ import ChatPanel from './components/ChatPanel.vue'
 import NewProjectModal from './components/NewProjectModal.vue'
 import LibraryCenter from './components/LibraryCenter.vue'
 import HomeView from './components/HomeView.vue'
-import { api, sseURL } from './api'
-import type { ActivityEvent, AudioMeta, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, Storyboard, Style, StyleSamples, TabID } from './types'
+import LoginView from './components/LoginView.vue'
+import AccountMenu from './components/AccountMenu.vue'
+import UserAdminModal from './components/UserAdminModal.vue'
+import { api, setOnUnauthorized, sseURL } from './api'
+import type { ActivityEvent, AudioMeta, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, Storyboard, Style, StyleSamples, TabID, UserInfo } from './types'
 import { errMsg } from './format'
 import { segAt, segTable } from './segtime'
+
+// ── 登录会话：boot 先问 /api/auth/status，再决定进应用还是停在登录页 ──
+// auth_required=false = 服务端开放模式（本机回环免登录），user=null 时也可直接进。
+const user = ref<UserInfo | null>(null)
+const authRequired = ref(true)
+const authReady = ref(false)
+const showUserAdmin = ref(false)
+
+// 任意接口 401（会话过期/被登出）→ 统一切回登录页；登录页自身的 401（密码错）
+// 也走这里，但 user 本就为 null，等于无操作。
+setOnUnauthorized(() => {
+  if (!authReady.value || !authRequired.value || !user.value) return
+  user.value = null
+  topMsg.warning('登录已过期，请重新登录')
+})
+
+async function boot() {
+  try {
+    const st = await api.authStatus()
+    authRequired.value = st.auth_required
+    user.value = st.user
+  } catch {
+    // 服务不可达：按需登录态处理，登录页/应用内各自的重试反馈兜底
+  }
+  authReady.value = true
+  if (!authRequired.value || user.value) {
+    loadProjects()
+    loadLibrary()
+    applyHash()
+  }
+}
+
+async function onLoggedIn(u: UserInfo) {
+  user.value = u
+  loadProjects()
+  loadLibrary()
+  applyHash()
+}
+
+async function onLogout() {
+  try { await api.logout() } catch { /* cookie 清不掉也照样回登录页 */ }
+  user.value = null
+  current.value = ''
+  ++reqSeq
+  es?.close()
+  page.value = 'home'
+}
 
 const projects = ref<ProjectRow[]>([])
 const current = ref<string>('')
@@ -33,6 +83,10 @@ const audioMeta = ref<AudioMeta | null>(null) // 时间轴字幕/配音轨数据
 // 制作管线各段状态：'' | running | done | error
 const stageState = ref<Record<string, string>>({})
 const agentBusy = ref(false)
+// 对话轮整轮锁定态（文稿编辑区据此上锁）：agentBusy 有 90s 自愈衰减，盖不住
+// 长思考轮（写稿一轮就要 1-4 分钟）；turnActive 由 markBusy 置位、agent_msg
+// 终局清除，20min（=后端单轮上限）兜底自愈，断连丢事件也不会永久锁死。
+const turnActive = ref(false)
 const library = ref<Style[]>([])
 const videoRev = ref(0) // 成片代次：done 后递增 → video 换 URL 强制重载（重做完立刻看到新画面）
 const progressLine = ref('') // 制作/重做细粒度进度（SSE progress，瞬时态不入聊天史）
@@ -57,6 +111,7 @@ const { message: topMsg } = createDiscreteApi(['message'], {
 
 let es: EventSource | null = null
 let busyTimer: number | null = null
+let turnTimer: number | null = null
 let activityTimer: number | null = null
 let reqSeq = 0 // 会话内自增：切项目即作废在途响应——A 项目的数据晚到不许覆盖 B 的页
 // 同 key 在途去重：key → 发起时的 reqSeq。只有"发起时与当前同代次"的在途请求才挡新请求；
@@ -159,6 +214,7 @@ function selectProject(id: string) {
   stageState.value = {}
   activity.value = []
   agentBusy.value = false // 上一项目的「Agent 工作中」不带给新项目（不然转圈挂到 90s 超时）
+  endTurn() // 上一项目的对话轮锁同理不带给新项目
   manualTab.value = null // 换项目回到自动落页
   // 先清上一项目的全部展示数据：loadProject 是异步的，不清会在新项目页闪现旧内容
   view.value = null
@@ -226,6 +282,23 @@ function markBusy() {
   agentBusy.value = true
   if (busyTimer) clearTimeout(busyTimer)
   busyTimer = window.setTimeout(() => { agentBusy.value = false }, 90_000)
+  turnActive.value = true
+  if (turnTimer) clearTimeout(turnTimer)
+  turnTimer = window.setTimeout(() => { turnActive.value = false }, 20 * 60_000)
+}
+
+function endTurn() {
+  turnActive.value = false
+  if (turnTimer) { clearTimeout(turnTimer); turnTimer = null }
+}
+
+// 中断对话栏 Agent 轮（文稿横幅「中断 AI」）：服务端取消正在跑的轮，收尾消息
+// 走 agent_msg 事件回来；没有在跑的轮（ok=false，锁是残留态）也照常就地解锁
+async function cancelAgentTurn() {
+  if (!current.value) return
+  try { await api.cancelChat(current.value) } catch { /* 服务不可达时先解锁，别把用户锁死在界面上 */ }
+  endTurn()
+  loadMsgs()
 }
 
 function openSSE(id: string) {
@@ -234,6 +307,7 @@ function openSSE(id: string) {
   es.addEventListener('msg', () => loadMsgs())
   es.addEventListener('agent_msg', ev => {
     agentBusy.value = false
+    endTurn() // 轮终局（正常回复/出错/中断收尾都走 agent_msg）：解锁文稿编辑区
     loadMsgs()
     loadLibrary() // Agent 可能刚起草了风格包
   })
@@ -311,12 +385,13 @@ watch(current, id => {
 onBeforeUnmount(() => {
   es?.close()
   if (busyTimer) clearTimeout(busyTimer)
+  if (turnTimer) clearTimeout(turnTimer)
   window.removeEventListener('hashchange', applyHash)
 })
 
-// 初始：加载列表，按 URL hash 恢复页面
-loadProjects()
-loadLibrary()
+// 初始：先问登录态（boot 内部再拉列表/恢复页面；applyHash 走 async 续程，
+// 此时本 setup 已全部声明完毕，无 TDZ 问题）
+boot()
 
 // ── 页面状态 ↔ URL hash：刷新/前进后退/分享链接不再弹回首页 ──────────
 // #/home（缺省）/ #/materials / #/workspace/<项目id>
@@ -390,6 +465,7 @@ async function onDeleteProject(id: string) {
     chatRefs.value = []
     stageState.value = {}
     agentBusy.value = false
+    endTurn()
     manualTab.value = null
   }
   await loadProjects()
@@ -413,14 +489,15 @@ async function confirmStyle() {
   refresh()
 }
 
-// 首启按 URL hash 恢复页面（必须在全部状态声明之后，见上方注释）
-applyHash()
+// 首启的 applyHash 已移入 boot()（登录态确定后才恢复页面）
 </script>
 
 <template>
   <n-config-provider :theme="darkTheme" :theme-overrides="themeOverrides">
     <n-message-provider>
-      <div class="app">
+      <!-- 登录页（鉴权启用且未登录时独占全屏）；服务不可达的 boot 失败同样停在登录页可重试 -->
+      <LoginView v-if="authReady && authRequired && !user" @logged-in="onLoggedIn" />
+      <div v-else-if="authReady" class="app">
         <nav class="navbar">
           <div class="nb-brand">
             <span class="nb-logo">帧</span>
@@ -432,6 +509,7 @@ applyHash()
             >{{ t.label }}</button>
           </div>
           <button class="nb-new" @click="showNew = true">＋ 新建</button>
+          <AccountMenu v-if="user" :user="user" @logout="onLogout" @manage="showUserAdmin = true" />
         </nav>
 
         <!-- 首页：落地 + 快速开始 -->
@@ -461,14 +539,14 @@ applyHash()
               :tab="activeTab" :view="view" :storyboard="storyboard" :style-samples="style" :manuscript="manuscript"
               :stage-summary="stageSummary" :video-id="current" :audio-meta="audioMeta"
               :picked-idx="chatRefs.map(r => r.idx)" :video-rev="videoRev" :progress-line="progressLine"
-              :activity="activity"
+              :activity="activity" :agent-busy="turnActive"
               @tab="setTab" @go-tab="setTab"
               @saved="refresh" @chat-sent="markBusy"
               @confirm-style="confirmStyle"
               @seg="addRef"
               @pick-time="addTimeRef"
-              @rework-started="refresh"
               @cancel="async () => { if (current) { await api.cancel(current).catch(() => {}); refresh() } }"
+              @cancel-agent="cancelAgentTurn"
             />
             <div v-else class="empty-ws">
               从左侧选择一个项目，或
@@ -483,6 +561,7 @@ applyHash()
       </div>
       </n-message-provider>
       <NewProjectModal v-model:show="showNew" @created="onCreated" />
+      <UserAdminModal v-model:show="showUserAdmin" />
     </n-config-provider>
   </template>
 

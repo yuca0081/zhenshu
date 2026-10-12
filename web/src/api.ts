@@ -1,40 +1,18 @@
-import type { ActivityEvent, AudioMeta, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, VocabEntry } from './types'
+import type { ActivityEvent, AudioMeta, AuthStatus, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, UserInfo, UserRow, VocabEntry } from './types'
 
-// ── API token（服务端 .env 配了 API_TOKEN 时启用）──────────────
-// 401 时提示输入一次，存 localStorage；之后所有请求带头，媒体 URL 带 ?token=
-const TOKEN_KEY = 'api_token'
-const apiToken = () => localStorage.getItem(TOKEN_KEY) || ''
+// ── 会话认证（cookie 会话，HttpOnly，浏览器自动携带）──────────
+// 凭据不进 JS：localStorage 存 token / ?token= 进 URL 的旧方案已废。
+// 401 统一回调 onUnauthorized（App 启动时注入）→ 切登录页。
+let onUnauthorized: (() => void) | null = null
+export function setOnUnauthorized(fn: () => void) { onUnauthorized = fn }
 
-let prompting = false
-// 已知权衡：401 弹 prompt 期间（prompting=true），其他并发请求的 401 不再排队等新
-// token，直接按失败返回（用户重试即可）——原生 prompt 是同步弹窗，不为它们做请求队列
 async function authFetch(input: RequestInfo, init?: RequestInit): Promise<Response> {
-  const h = new Headers(init?.headers)
-  const t = apiToken()
-  if (t) h.set('X-API-Token', t)
-  let res = await fetch(input, { ...init, headers: h })
-  if (res.status === 401 && !prompting) {
-    prompting = true
-    try {
-      const t2 = (window.prompt('此服务已启用访问鉴权，请输入 API Token：') || '').trim()
-      if (t2) {
-        localStorage.setItem(TOKEN_KEY, t2)
-        h.set('X-API-Token', t2)
-        res = await fetch(input, { ...init, headers: h })
-      }
-    } finally {
-      prompting = false
-    }
-  }
+  const res = await fetch(input, init)
+  if (res.status === 401) onUnauthorized?.()
   return res
 }
 
-// <video>/<img>/EventSource 走不了请求头：token 以查询参数补（服务端两处都认）
-const withToken = (u: string) => {
-  const t = apiToken()
-  return t ? u + (u.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(t) : u
-}
-export const sseURL = (id: string) => withToken(`/api/projects/${id}/events`)
+export const sseURL = (id: string) => `/api/projects/${id}/events`
 
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -49,13 +27,23 @@ async function j<T>(res: Response): Promise<T> {
 async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   return j<T>(await authFetch(input, init))
 }
-function post<T>(input: RequestInfo, body?: unknown): Promise<T> {
+function post<T>(input: RequestInfo, body?: unknown, signal?: AbortSignal): Promise<T> {
   return req<T>(input, body === undefined
-    ? { method: 'POST' }
-    : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    ? { method: 'POST', signal }
+    : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })
 }
 
 export const api = {
+  // ── 用户会话 ──
+  authStatus: () => req<AuthStatus>('/api/auth/status'),
+  login: (username: string, password: string) =>
+    post<UserInfo>('/api/auth/login', { username, password }),
+  logout: () => post<{ ok: boolean }>('/api/auth/logout'),
+  // 用户管理（管理员）：固定账号模型，无自助注册
+  listUsers: () => req<UserRow[]>('/api/auth/users'),
+  createUser: (username: string, password: string, role: 'admin' | 'user') =>
+    post<UserRow>('/api/auth/users', { username, password, role }),
+
   listProjects: () => req<ProjectRow[]>('/api/projects'),
 
   createProject: (name: string, topic: string, aspect = '9:16') =>
@@ -103,22 +91,19 @@ export const api = {
   chat: (id: string, content: string, refs: ChatRef[] = []) =>
     post<{ ok: boolean }>(`/api/projects/${id}/chat`, { content, refs }),
 
-  // AI 起草文稿：按目标字数直驱（分钟换算在 UI 侧）
-  draftManuscript: (topic: string, words = 500) =>
-    post<{ content: string }>('/api/draft/manuscript', { topic, words }),
+  // 中断当前项目正在执行的对话轮（服务端取消其上下文；ok=false=没有在跑的轮）
+  cancelChat: (id: string) => post<{ ok: boolean }>(`/api/projects/${id}/chat/cancel`),
+
+  // AI 起草文稿：按目标字数直驱（分钟换算在 UI 侧）。signal 供取消按钮掐断请求，
+  // 服务端随连接断开中止生成
+  draftManuscript: (topic: string, words = 500, signal?: AbortSignal) =>
+    post<{ content: string }>('/api/draft/manuscript', { topic, words }, signal),
 
   // 链接导入（readability 正文提取，文稿弹窗用）
   extractLink: (url: string) =>
     post<{ title: string; content: string; words: number }>('/api/extract_link', { url }),
 
   messages: (id: string, after = 0) => req<Msg[]>(`/api/projects/${id}/messages?after=${after}`),
-
-  // 一键段级重做（时间轴段块按钮直连；instruction 空 = 服务端复用该段上次指令）
-  reworkStart: (id: string, segments: string[], instruction = '') =>
-    post<{ ok: boolean; labels: string[]; instruction: string }>(`/api/projects/${id}/rework`, { segments, instruction }),
-
-  reworkLast: (id: string, seg: string) =>
-    req<{ instruction: string }>(`/api/projects/${id}/rework/last?seg=${encodeURIComponent(seg)}`),
 
   cancel: (id: string) => post<{ ok: boolean }>(`/api/projects/${id}/cancel`),
 
@@ -161,10 +146,10 @@ export const api = {
 }
 
 // rev = 成片代次（重做完成后递增）：同 URL 会被 <video> 惰性复用，重做完必须换 URL 才能看到新画面
-export const videoURL = (id: string, rev = 0) => withToken(`/api/projects/${id}/video/main.mp4${rev ? `?v=${rev}` : ''}`)
+export const videoURL = (id: string, rev = 0) => `/api/projects/${id}/video/main.mp4${rev ? `?v=${rev}` : ''}`
 // 参考引用媒体（抽帧 frame-*.png / 原视频 video.mp4；详情抽屉用）
-export const referenceMediaURL = (id: string, file: string) => withToken(`/api/references/${id}/media/${file}`)
+export const referenceMediaURL = (id: string, file: string) => `/api/references/${id}/media/${file}`
 // 风格库媒体（入库快照；详情抽屉用）
-export const libraryMediaURL = (id: string, file: string) => withToken(`/api/library/${id}/media/${file}`)
+export const libraryMediaURL = (id: string, file: string) => `/api/library/${id}/media/${file}`
 // 迷你真段 mp4（样张动态小样；后端白名单 clip-<N>.mp4）
-export const styleClipURL = (id: string, file: string) => withToken(`/api/projects/${id}/style/clips/${file}`)
+export const styleClipURL = (id: string, file: string) => `/api/projects/${id}/style/clips/${file}`

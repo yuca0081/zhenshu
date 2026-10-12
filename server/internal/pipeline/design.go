@@ -97,6 +97,7 @@ func designBrief(p *Project, sb *contract.Storyboard) string {
 
 ### 6. layouts 版式（3–5 个）与 anti_patterns 负面清单（≤8 条）
 - 每个版式构图明显不同（大字海报 / 主视觉分栏 / 数据焦点 / 满幅底图+侧栏各取其一），不要每张都排成「标题+元素网格」；段轮换用；
+- 叠字可以是有意手法，但必须声明：若某版式的层次感依赖文字叠压（大字衬底词/标徽压引言/水印字），在该版式 layered 字段写明叠压关系与可读依据（衬底层低对比度、前景层带实底衬/描边）。没有叠层构图的版式禁止写 layered——实色字压实色字的「叠」不是手法是事故，不配声明；
 - 负面清单 = 本片禁用的俗手，按本片内容挑真实风险（右半空版式/假密度/文字压图不可读……）。
 
 ## 样张 = 用主皮肤渲出的静态小画面（所见即所得，1–3 张）
@@ -196,7 +197,8 @@ func designJSONShape() string {
     "notes": "性格一句话：什么怎么动、禁什么动" },
   "device": { "name": "装置名（如：访客卡片）", "desc": "装置是什么、观众为什么会记住它",
               "per_seg": "seg01 首次亮相…seg02 变奏…seg03 起每章复现…" },
-  "layouts": [ { "id": "hero-title", "name": "大字海报", "desc": "构图描述：主体位置/元素铺排/留白方向" } ],
+  "layouts": [ { "id": "hero-title", "name": "大字海报", "desc": "构图描述：主体位置/元素铺排/留白方向",
+                 "layered": "仅叠层版式写：哪层压哪层、为何可读（衬底低对比/前景有实底）；无叠层留空不写" } ],
   "anti_patterns": ["大面积辉光", "金句+引号+装饰线+作者+边框五件套", "右半空版式"],
   "signature_absorption": [ { "sig_id": "sig1", "lands_in": "device|motion|skins|camera_plan|transition_policy|material_policy", "how": "一句话写清这条特色怎么落在该组件" } ],
   "samples": [
@@ -355,9 +357,15 @@ func DesignDocWithBrief(ss *contract.StyleSamples, segIdx int, brief *contract.S
 		if segIdx >= 1 {
 			asg := ss.Layouts[(segIdx-1)%len(ss.Layouts)]
 			w("- **本段指定版式：%s（%s）——%s**（画面提示与指定版式明显冲突时可改选其他版式）\n", asg.ID, asg.Name, asg.Desc)
+			if strings.TrimSpace(asg.Layered) != "" {
+				w("- 本段指定版式声明叠层：%s——允许叠压的元素，在上层块加 data-layout-allow-overlap；声明之外的叠压仍会被 layout 检查拒绝\n", asg.Layered)
+			}
 		}
 		for _, l := range ss.Layouts {
 			w("- %s（%s）：%s\n", l.ID, l.Name, l.Desc)
+			if strings.TrimSpace(l.Layered) != "" {
+				w("  - 声明叠层：%s\n", l.Layered)
+			}
 		}
 	}
 	if len(ss.AntiPatterns) > 0 {

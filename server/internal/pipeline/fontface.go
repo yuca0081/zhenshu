@@ -139,24 +139,29 @@ func titleCaseFont(lower string) string {
 
 // fixupFrameFonts 对已落盘的合成物 HTML 补字体声明（幂等，内容没变不重写）。
 // 场景文件被上游缓存复用时 write 位不会执行，全量扫一遍兜住存量。
+// caps/ 与 frames/ 同待遇：字幕由 assemble.py 在 compositions 之后确定性重写，
+// 目录字体没解析成功（font_assets.json 缺）时字幕照样带着未声明的字体族进 check
+// ——而修复轮只会重出场景，永远修不到字幕，纯结构性死锁。
 func fixupFrameFonts(p *Project) {
-	entries, err := os.ReadDir(p.Artifact("compositions/frames"))
-	if err != nil {
-		return
-	}
 	assets := loadFontAssets(p) // 循环外读一次：N 帧 N 次读盘+JSON 解析是白付的
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".html") {
-			continue
-		}
-		path := filepath.Join(p.Artifact("compositions/frames"), e.Name())
-		b, err := os.ReadFile(path)
+	for _, dir := range []string{"compositions/frames", "compositions/caps"} {
+		entries, err := os.ReadDir(p.Artifact(dir))
 		if err != nil {
 			continue
 		}
-		fixed := ensureFontFaces(string(b), assets)
-		if fixed != string(b) {
-			_ = writeFile(path, fixed)
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".html") {
+				continue
+			}
+			path := filepath.Join(p.Artifact(dir), e.Name())
+			b, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			fixed := ensureFontFaces(string(b), assets)
+			if fixed != string(b) {
+				_ = writeFile(path, fixed)
+			}
 		}
 	}
 }

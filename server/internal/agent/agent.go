@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -489,7 +490,9 @@ func (a *Agent) systemPrompt(id string, s State) string {
 }
 
 // Run 一轮对话：userText 与 refs 已入库。Agent 循环产出最终回复入库并广播。
-func (a *Agent) Run(projectID, userText string, refs []store.Ref) {
+// ctx 由调用方派生（api 层持 20min 轮级时限并注册取消函数）——取消/超时在此
+// 按人话收尾，不再伪装成「模型调用失败」。
+func (a *Agent) Run(ctx context.Context, projectID, userText string, refs []store.Ref) {
 	// 兜底：任何 panic 也必须给对话框一个交代，不能静默死掉
 	defer func() {
 		if r := recover(); r != nil {
@@ -520,10 +523,8 @@ func (a *Agent) Run(projectID, userText string, refs []store.Ref) {
 	msgs = append(msgs, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf("［系统·实时项目状态，以此为准］\n%s\n%s\n用户消息：%s",
 		st.summary(), a.formatRefs(p, refs), userText)})
 
-	// 对话轮级时限：卡死的 LLM 调用（上游挂住时 10min×3 重试）会把 turnMu 下的
-	// 后续对话轮全部拖成沉默；超时给用户明确交代
-	turnCtx, cancelTurn := context.WithTimeout(context.Background(), 20*time.Minute)
-	defer cancelTurn()
+	// 轮级时限由调用方的 ctx 携带（见 chat handler）：卡死的 LLM 调用不再把
+	// turnMu 下的后续对话轮拖成沉默，用户也能从中途打断。
 
 	core := react.New(prov, a.reactTools(p), maxSteps, react.Hooks{
 		OnCall: func(name, args string) {
@@ -538,9 +539,16 @@ func (a *Agent) Run(projectID, userText string, refs []store.Ref) {
 			}
 		},
 	})
-	final, err := core.Run(turnCtx, msgs)
+	final, err := core.Run(ctx, msgs)
 	if err != nil {
-		a.finish(projectID, "模型调用失败："+err.Error(), "error")
+		switch {
+		case errors.Is(ctx.Err(), context.Canceled):
+			a.finish(projectID, "这轮已按你的要求中断，说了半截的话就到这里。", "text")
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			a.finish(projectID, "这一轮超时了（单轮上限 20 分钟），先停在这里——可以再发一条继续。", "error")
+		default:
+			a.finish(projectID, "模型调用失败："+err.Error(), "error")
+		}
 		return
 	}
 	if final == "" {

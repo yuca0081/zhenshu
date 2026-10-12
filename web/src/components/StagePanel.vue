@@ -25,6 +25,7 @@ const props = defineProps<{
   videoRev: number
   progressLine: string
   activity: ActivityEvent[]
+  agentBusy: boolean // 对话栏 Agent 轮进行中（文稿页签据此锁编辑区）
 }>()
 const emit = defineEmits<{
   tab: [t: TabID]
@@ -36,6 +37,7 @@ const emit = defineEmits<{
   saved: []
   'chat-sent': []
   'go-tab': [t: TabID]
+  'cancel-agent': []
 }>()
 
 // 页签状态灯（title 悬停说明）：绿=这关过了；黄=还没弄好（没存文稿/没生成分镜/
@@ -214,8 +216,8 @@ async function redoFull() {
           <ManuscriptPane
             v-if="tab === 'manuscript'"
             :project-id="videoId" :topic="view.topic" :manuscript="manuscript"
-            :video-stale="view.video_stale.manuscript"
-            @saved="emit('saved')"
+            :video-stale="view.video_stale.manuscript" :agent-busy="agentBusy"
+            @saved="emit('saved')" @cancel-agent="emit('cancel-agent')"
           />
           <div v-else-if="tab === 'storyboard' && storyboard" class="sb-wrap">
             <div class="sb-head">

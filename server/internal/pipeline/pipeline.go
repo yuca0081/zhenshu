@@ -596,6 +596,9 @@ func stageCompositions(p *Project) error {
 	}
 	// 场景 HTML 忘写系统字体 @font-face 是 lint 硬错误且 LLM 修复轮不收敛——落盘侧机械补齐
 	fixupFrameFonts(p)
+	// 叠层声明机械钳：设计没声明叠层版式时剥掉 data-layout-allow-overlap（防修复轮
+	// 被报了就贴属性骗检）；声明过的片卡单帧上限。首发与修复轮都过这里。
+	clampOverlapDecls(p)
 	return nil
 }
 

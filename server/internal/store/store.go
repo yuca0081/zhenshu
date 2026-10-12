@@ -7,12 +7,14 @@ package store
 import (
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -74,10 +76,27 @@ type ProjectRow struct {
 	UUID      string    `gorm:"primaryKey;column:id" json:"-"`
 	Name      string    `json:"name"`
 	Status    string    `json:"status"`
+	UserID    string    `gorm:"column:user_id" json:"-"` // 归属用户（空 = 系统项目，仅管理员可见）
 	CreatedAt time.Time `gorm:"column:created_at" json:"created_at"`
 }
 
 func (ProjectRow) TableName() string { return "projects" }
+
+// User 用户账号（固定账号模型：管理员预建，无自助注册）。PasswordHash 不出 JSON。
+type User struct {
+	ID           string    `gorm:"column:id"            json:"id"`
+	Username     string    `gorm:"column:username"      json:"username"`
+	PasswordHash string    `gorm:"column:password_hash" json:"-"`
+	Role         string    `gorm:"column:role"          json:"role"` // admin | user
+	CreatedAt    time.Time `gorm:"column:created_at"    json:"created_at"`
+}
+
+func (User) TableName() string { return "users" }
+
+var (
+	ErrNoUser        = errors.New("用户不存在")
+	ErrDuplicateUser = errors.New("用户名已存在")
+)
 
 // RenderJobRow render_jobs 行：一次制作/重做一行（kind: produce|rework），
 // status: running|done|failed|cancelled。quality 恒 draft（管线暂只此一档），
@@ -96,7 +115,7 @@ type RenderJobRow struct {
 // Store 聊天案卷 + 项目元数据。chat_messages.project_id 在 DDL 里是 UUID 外键，
 // PG 实现按 disk_id 换写；内存实现直接存。
 type Store interface {
-	CreateProject(diskID, name string) error
+	CreateProject(diskID, name, userID string) error
 	EnsureProject(diskID, name string) error // 已存在则跳过
 	UpdateStatus(diskID, status string) error
 	DeleteProject(diskID string) error // 行+聊天+任务镜像全删（磁盘目录由调用方删）
@@ -110,6 +129,10 @@ type Store interface {
 	StartRenderJob(projectID, kind string) error
 	FinishRenderJob(projectID, status, outputPath, errMsg string) error
 	ListRenderJobs(projectID string) ([]RenderJobRow, error)
+	// 用户账号。UserByID 不需要：会话载荷自带角色（签名 cookie 无状态校验，零 DB 查询）。
+	CreateUser(u *User) error                  // ID 为空自动生成；用户名冲突回 ErrDuplicateUser
+	UserByName(username string) (*User, error) // 无此用户回 ErrNoUser
+	ListUsers() ([]User, error)
 	Kind() string
 }
 
@@ -138,6 +161,16 @@ func Open(dsn string) (Store, error) {
 		sqlDB.SetMaxOpenConns(4)
 		sqlDB.SetConnMaxLifetime(time.Hour)
 	}
+	// users 表幂等自建（与 0003 assets 同款自管口径；migrations/0004_users.sql 留作运维对账）
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS users (
+		id            UUID PRIMARY KEY,
+		username      TEXT NOT NULL UNIQUE,
+		password_hash TEXT NOT NULL,
+		role          TEXT NOT NULL DEFAULT 'user',
+		created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+	)`).Error; err != nil {
+		return nil, fmt.Errorf("建 users 表失败: %w", err)
+	}
 	log.Println("[store] PG 已连接")
 	return &pgStore{db: db}, nil
 }
@@ -162,8 +195,10 @@ func (s *pgStore) findUUID(diskID string) (string, error) {
 	return row.UUID, nil
 }
 
-func (s *pgStore) CreateProject(diskID, name string) error {
-	return s.db.Exec(`INSERT INTO projects (name, status, disk_id) VALUES (?, 'created', ?)`, name, diskID).Error
+func (s *pgStore) CreateProject(diskID, name, userID string) error {
+	// user_id 空 = 系统项目（机器 token 创建），存 NULL 而不是空串（UUID 列）
+	return s.db.Exec(`INSERT INTO projects (name, status, disk_id, user_id) VALUES (?, 'created', ?, NULLIF(?, '')::uuid)`,
+		name, diskID, userID).Error
 }
 
 func (s *pgStore) EnsureProject(diskID, name string) error {
@@ -172,7 +207,7 @@ func (s *pgStore) EnsureProject(diskID, name string) error {
 	if n > 0 {
 		return nil
 	}
-	return s.CreateProject(diskID, name)
+	return s.CreateProject(diskID, name, "")
 }
 
 func (s *pgStore) UpdateStatus(diskID, status string) error {
@@ -278,6 +313,42 @@ func (s *pgStore) ListMsgsTail(projectID string, limit int) ([]Msg, error) {
 	return rows, err
 }
 
+// ── 用户账号（PG 实现）────────────────────────────────────────
+
+func (s *pgStore) CreateUser(u *User) error {
+	if u.ID == "" {
+		u.ID = uuid.NewString()
+	}
+	// 先查后插：唯一约束兜底并发，但固定账号场景预查给出可读错误足够
+	switch _, err := s.UserByName(u.Username); {
+	case errors.Is(err, ErrNoUser): // 可建
+	case err != nil:
+		return err
+	default:
+		return ErrDuplicateUser
+	}
+	return s.db.Exec(`INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, now())`,
+		u.ID, u.Username, u.PasswordHash, u.Role).Error
+}
+
+func (s *pgStore) UserByName(username string) (*User, error) {
+	var u User
+	err := s.db.Where("username = ?", username).Take(&u).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNoUser
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (s *pgStore) ListUsers() ([]User, error) {
+	var users []User
+	err := s.db.Order("created_at ASC").Find(&users).Error
+	return users, err
+}
+
 // ── 内存实现（PG 不可达时的降级）────────────────────────────
 
 type memStore struct {
@@ -285,6 +356,7 @@ type memStore struct {
 	projects []ProjectRow
 	msgs     []Msg
 	jobs     []RenderJobRow
+	users    []User
 	jobSeq   int64
 	seq      int64
 }
@@ -293,23 +365,23 @@ func newMem() *memStore { return &memStore{} }
 
 func (s *memStore) Kind() string { return "mem" }
 
-func (s *memStore) upsert(diskID, name string) {
+func (s *memStore) upsert(diskID, name, userID string) {
 	for i := range s.projects {
 		if s.projects[i].ID == diskID {
 			return
 		}
 	}
-	s.projects = append([]ProjectRow{{ID: diskID, Name: name, Status: "created", CreatedAt: time.Now()}}, s.projects...)
+	s.projects = append([]ProjectRow{{ID: diskID, Name: name, Status: "created", UserID: userID, CreatedAt: time.Now()}}, s.projects...)
 }
 
-func (s *memStore) CreateProject(diskID, name string) error {
+func (s *memStore) CreateProject(diskID, name, userID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.upsert(diskID, name)
+	s.upsert(diskID, name, userID)
 	return nil
 }
 
-func (s *memStore) EnsureProject(diskID, name string) error { return s.CreateProject(diskID, name) }
+func (s *memStore) EnsureProject(diskID, name string) error { return s.CreateProject(diskID, name, "") }
 
 func (s *memStore) UpdateStatus(diskID, status string) error {
 	s.mu.Lock()
@@ -430,5 +502,45 @@ func (s *memStore) ListMsgsTail(projectID string, limit int) ([]Msg, error) {
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 { // 反转回时间正序
 		out[i], out[j] = out[j], out[i]
 	}
+	return out, nil
+}
+
+// ── 用户账号（内存实现）────────────────────────────────────
+
+func (s *memStore) CreateUser(u *User) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.users {
+		if s.users[i].Username == u.Username {
+			return ErrDuplicateUser
+		}
+	}
+	if u.ID == "" {
+		u.ID = uuid.NewString()
+	}
+	if u.CreatedAt.IsZero() {
+		u.CreatedAt = time.Now()
+	}
+	s.users = append(s.users, *u)
+	return nil
+}
+
+func (s *memStore) UserByName(username string) (*User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.users {
+		if s.users[i].Username == username {
+			u := s.users[i]
+			return &u, nil
+		}
+	}
+	return nil, ErrNoUser
+}
+
+func (s *memStore) ListUsers() ([]User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]User, len(s.users))
+	copy(out, s.users)
 	return out, nil
 }

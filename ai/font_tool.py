@@ -129,7 +129,7 @@ def _subset_woff2(ttf_path: pathlib.Path, text: str) -> bytes:
 
 def _strip_family_from_stacks(proj: pathlib.Path, family: str):
     """把失败家族从设计三件套的字体栈里剥除(与 Go 侧 clampFontStack 同语义)。"""
-    pat = re.compile(r"'%s'\s*,\s*|,\s*'%s'|'%s'" % (re.escape(family),) * 3, re.IGNORECASE)
+    pat = re.compile(r"'%s'\s*,\s*|,\s*'%s'|'%s'" % ((re.escape(family),) * 3), re.IGNORECASE)
     for rel in ('style/skin.json', 'style/style_samples.json', 'style/design.md'):
         p = proj / rel
         if not p.exists():

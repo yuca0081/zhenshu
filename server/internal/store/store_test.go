@@ -54,7 +54,7 @@ func TestMemRenderJobs(t *testing.T) {
 // 取最旧 100 条会让超量后的最新对话永远进不了 LLM 上下文。
 func TestMemListMsgsTail(t *testing.T) {
 	s := newMem()
-	_ = s.CreateProject("p1", "t")
+	_ = s.CreateProject("p1", "t", "")
 	for i := 1; i <= 7; i++ {
 		_ = s.SaveMsg(&Msg{ProjectID: "p1", Role: "user", Type: "text", Content: fmt.Sprintf("m%d", i)})
 	}

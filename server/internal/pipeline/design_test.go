@@ -114,3 +114,24 @@ func TestDesignVersionStableAndSensitive(t *testing.T) {
 		t.Fatalf("设计变更后版本指纹必须变化（段级过期的根基）")
 	}
 }
+
+// 叠层声明（DesignLayout.Layered）注入：声明了的版式要渲染免检属性的使用规则
+// （指定版式行 + 版式清单行）；没声明的不得出现声明行——防止其他段被教坏乱贴。
+func TestDesignDocLayeredLayout(t *testing.T) {
+	ss := designFixture()
+	if strings.Contains(DesignDocWithBrief(ss, 1, nil), "声明叠层") {
+		t.Fatalf("未声明叠层的版式不应出现声明行")
+	}
+	ss.Layouts[0].Layered = "大字衬底词压正文卡：衬底 20% 透明度、正文卡带实底，两层对比拉开"
+	doc := DesignDocWithBrief(ss, 1, nil)
+	for _, want := range []string{
+		"本段指定版式：hero-title",
+		"本段指定版式声明叠层：大字衬底词压正文卡",
+		"data-layout-allow-overlap", // 免检属性规范随声明行下发
+		"- hero-title（大字海报）：主体居中偏左\n  - 声明叠层：大字衬底词",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Fatalf("DesignDoc 缺 %q\n---\n%s", want, doc)
+		}
+	}
+}

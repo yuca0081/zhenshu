@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -71,5 +73,43 @@ func TestEnsureFontFacesCatalogAsset(t *testing.T) {
 	bare := ensureFontFaces(html, nil)
 	if strings.Contains(bare, "zcool qingke huangyou';src:url") {
 		t.Fatalf("无产物时不应补目录字体声明:\n%s", bare)
+	}
+}
+
+// fixupFrameFonts 必须连 caps/ 一起扫：字幕由 assemble.py 在 compositions 之后
+// 确定性重写，目录字体没解析成功时字幕带着未声明字体族进 check，而修复轮只会
+// 重出场景、永远修不到字幕（结构性死锁）。
+func TestFixupFrameFontsCoversCaps(t *testing.T) {
+	dir := t.TempDir()
+	p := &Project{ID: "t", Dir: dir}
+	files := map[string]string{
+		"compositions/frames/seg01.html":   `<template><style>#s{font-family:'SimHei',sans-serif;}</style></template>`,
+		"compositions/caps/cap-seg01.html": `<template><style>#c{font-family:'ZCOOL QingKe HuangYou','Microsoft YaHei',sans-serif;}</style></template>`,
+	}
+	for rel, html := range files {
+		if err := os.MkdirAll(filepath.Dir(p.Artifact(rel)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p.Artifact(rel), []byte(html), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixupFrameFonts(p)
+	b, err := os.ReadFile(p.Artifact("compositions/caps/cap-seg01.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "local('Microsoft YaHei')") {
+		t.Fatalf("caps 内白名单字体未补声明:\n%s", b)
+	}
+	if strings.Contains(string(b), "zcool qingke huangyou';src:") {
+		t.Fatalf("caps 内目录字体无解析产物时不应补声明:\n%s", b)
+	}
+	fb, err := os.ReadFile(p.Artifact("compositions/frames/seg01.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(fb), "local('SimHei')") {
+		t.Fatalf("frames 补声明被回归破坏:\n%s", fb)
 	}
 }

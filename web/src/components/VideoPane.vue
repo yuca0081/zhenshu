@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useMessage, NButton, NInput, NModal, NSpin } from 'naive-ui'
+import { NButton, NSpin } from 'naive-ui'
 import type { AudioMeta, ProjectView, Storyboard } from '../types'
-import { fmtClock, segTable, type SegCol } from '../segtime'
+import { fmtClock } from '../segtime'
 import { lastProduceFailed, stageLabel } from '../format'
 import { api, videoURL } from '../api'
 import Timeline from './Timeline.vue'
@@ -25,11 +25,8 @@ const emit = defineEmits<{
   seg: [idx: number, key: string]
   'pick-time': [t: number]
   cancel: []
-  'rework-started': []
   'go-tab': [tab: 'manuscript']
 }>()
-
-const message = useMessage()
 
 // ── 视频播放 ↔ 时间轴播放头同步 ──
 const videoEl = ref<HTMLVideoElement | null>(null)
@@ -42,7 +39,6 @@ function onSeek(t: number) {
 function pickSeg(idx: number, key: string) { emit('seg', idx, key) }
 function pickTime(t: number) { emit('pick-time', t) }
 
-const segsT = computed(() => segTable(props.storyboard, props.audioMeta))
 // tts 显示「配音不动」：重做/复用链路跳过配音，后续阶段已有动静时 tts 恒 pending
 const ttsIdle = computed(() => !!props.stageSummary?.some(x => x.state !== 'pending'))
 
@@ -68,39 +64,6 @@ watch(() => props.videoRev, () => {
     el.addEventListener('loadedmetadata', restore, { once: true })
   }
 })
-
-// ── 一键重做此段（时间轴段块按钮）：预填该段上次指令，确认直连 REST ──
-const reworkShow = ref(false)
-const reworkInstr = ref('')
-const reworkBusy = ref(false)
-const reworkSeg = ref<SegCol | null>(null)
-async function openRework(idx: number, key: string) {
-  const s = segsT.value.find(x => x.idx === idx && x.key === key)
-  if (!s) return
-  reworkSeg.value = s
-  reworkInstr.value = ''
-  const pid = props.videoId
-  const r = await api.reworkLast(pid, s.segId).catch(() => null)
-  if (pid !== props.videoId) return // 等待期切了项目：别对旧项目弹重做框
-  reworkInstr.value = r?.instruction ?? ''
-  reworkShow.value = true
-}
-async function confirmRework() {
-  const s = reworkSeg.value
-  if (!s || reworkBusy.value) return
-  reworkBusy.value = true
-  try {
-    await api.reworkStart(props.videoId, [s.segId], reworkInstr.value.trim())
-    reworkShow.value = false
-    emit('rework-started')
-  } catch (e) {
-    // 返回 false 阻止 naive-ui 自动关弹窗：失败时用户填的修改要求还在输入框里，可直接重试
-    message.error((e as Error).message)
-    return false
-  } finally {
-    reworkBusy.value = false
-  }
-}
 </script>
 
 <template>
@@ -164,15 +127,10 @@ async function confirmRework() {
           引用此刻 {{ fmtClock(cur) }}
         </button>
       </div>
-      <NModal v-model:show="reworkShow" preset="dialog" title="重做此段画面" positive-text="开始重做" negative-text="取消" :loading="reworkBusy" @positive-click="confirmRework">
-        <p class="rework-modal-hint">只重生成这一段的画面（配音/时长/其余段不动），改完整片自动重缝。留空 = 用上次的要求再试一次。</p>
-        <NInput v-model:value="reworkInstr" type="textarea" :rows="3" placeholder="画面修改要求，例：标题缩小放左上，配图换成战场全景" />
-      </NModal>
       <Timeline
         v-if="storyboard"
         :storyboard="storyboard" :audio-meta="audioMeta" :current-time="cur"
-        :picked-idx="pickedIdx" :rework="!stageSummary" @seek="onSeek" @pick="pickSeg" @pick-time="pickTime"
-        @rework="openRework"
+        :picked-idx="pickedIdx" @seek="onSeek" @pick="pickSeg" @pick-time="pickTime"
       />
     </template>
   </div>
@@ -206,7 +164,6 @@ async function confirmRework() {
   background: rgba(66, 46, 16, .3); border: 1px solid #5a4522; border-radius: 8px; padding: 7px 14px;
 }
 .pstage[data-skip="true"] { opacity: .45; border-style: dashed; }
-.rework-modal-hint { font-size: 13px; color: #8a8a96; line-height: 1.8; margin: 0 0 10px; }
 
 /* 制作中（pstage = 进度胶囊） */
 .prod-title { color: #c3c3cd; font-size: 15px; }

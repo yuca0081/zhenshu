@@ -15,3 +15,8 @@ faster-whisper>=1.0
 # extract_video_features.py（参考视频解析，styleref 生产路径）
 numpy>=1.24
 pillow>=10.0
+
+# font_tool.py（目录字体下载+子集化，设计点名目录字体时 produce 必经；
+# 缺 fontTools 时剥族降级路径也走不完——字体带病进 check，修复轮死循环）
+fontTools>=4.0
+brotli>=1.0

@@ -235,6 +235,11 @@ type DesignLayout struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Desc string `json:"desc"` // 构图描述：主体位置/元素铺排/留白方向
+	// Layered 非空 = 本版式声明叠层（有意叠字手法）：写明哪层压哪层、为何可读
+	// （衬底层低对比/前景层有实底）。场景 HTML 据此给上层块加 data-layout-allow-overlap；
+	// 空 = 无叠层构图，该版式下任何叠压都按事故拦。渲染端钳子（clampOverlapDecls）
+	// 只认设计里声明过叠层的片，声明外贴属性一律剥掉。
+	Layered string `json:"layered,omitempty"`
 }
 
 // Skin 风格文件（§12.2 风格自由化）：必填槽位（插座）+ 自由 CSS。

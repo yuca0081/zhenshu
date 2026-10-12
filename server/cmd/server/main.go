@@ -19,6 +19,7 @@ import (
 
 	"webpage-video-agent/server/internal/agent"
 	"webpage-video-agent/server/internal/api"
+	"webpage-video-agent/server/internal/auth"
 	"webpage-video-agent/server/internal/config"
 	"webpage-video-agent/server/internal/events"
 	"webpage-video-agent/server/internal/pipeline"
@@ -63,9 +64,18 @@ func main() {
 	// 启动对账：上次进程死在制作中途的项目补写终态+聊天通知（必须先于任何新任务）
 	producer.Reconcile()
 	refs := styleref.NewStore(cfg.DataDir, root)
+	// 会话密钥与初始管理员：SESSION_SECRET > API_TOKEN 派生 > 随机（开放模式）。
+	// 仅鉴权启用时引导建管理员——开放模式没有登录，建了也是死数据。
+	sessionSecret, authActive := auth.DeriveSecret(os.Getenv("SESSION_SECRET"), os.Getenv("API_TOKEN"))
+	if authActive {
+		if _, err := auth.EnsureBootstrapAdmin(st, os.Getenv("INITIAL_ADMIN_USER"), os.Getenv("INITIAL_ADMIN_PASSWORD")); err != nil {
+			log.Fatal(err)
+		}
+	}
 	srv := &api.Server{
 		DataDir: cfg.DataDir, RootDir: root, Store: st, Hub: hub, Agent: ag, Producer: producer, Lib: lib, Refs: refs,
-		APIToken: os.Getenv("API_TOKEN"),
+		APIToken:      os.Getenv("API_TOKEN"),
+		SessionSecret: sessionSecret, AuthActive: authActive,
 	}
 
 	gin.SetMode(gin.ReleaseMode)
@@ -74,12 +84,13 @@ func main() {
 		// 默认只绑本机回环：鉴权未上前公网不可达；部署侧 Dockerfile 已显式 ADDR=:8080
 		addr = "127.0.0.1:8080"
 	}
-	// 公网/非回环绑定但没配 API_TOKEN：把"鉴权留给商业化"的前提缺口喊出来（不拒启，留给部署者决策）
-	if srv.APIToken == "" {
+	// 公网/非回环绑定但没配任何鉴权（开放模式）：把"鉴权留给商业化"的前提缺口喊出来
+	//（不拒启，留给部署者决策）
+	if !srv.AuthActive {
 		host, _, splitErr := net.SplitHostPort(addr)
 		if splitErr == nil {
 			if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-				log.Printf("⚠  ADDR=%s 非回环且未设 API_TOKEN——所有接口（含 LLM 烧钱/文件上传）对可达者完全开放，强烈建议 .env 配置 API_TOKEN", addr)
+				log.Printf("⚠  ADDR=%s 非回环且未设 SESSION_SECRET/API_TOKEN——本机开放模式：所有接口（含 LLM 烧钱/文件上传）对可达者完全开放，强烈建议 .env 配置", addr)
 			}
 		}
 	}

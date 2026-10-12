@@ -387,11 +387,40 @@ def main(proj_dir: str) -> int:
             return 1
         src.write_text(fp, encoding='utf-8')
 
-    # 3+4. 对齐：ASR 锚点 + 旁白原文回写；匹配率过低换锚点源重算
+    # 3+4. 对齐：ASR 锚点 + 旁白原文回写；匹配率过低换锚点源重算。
+    # 快路径：audio_meta.json 已有该段结果且 wav 内容未变（md5 指纹）→ 整段复用不重跑
+    # ASR——模型加载+逐段推理占「配音」工位时长大头，produce 修复/自动重跑轮里音频
+    # 根本没变，全量重算纯属白付（8 段白付约 1 分半，事件流上看着像重复配音）。
+    # 指纹不匹配（重配过的段、旧格式产物无指纹）→ 该段照常重算并补指纹；
+    # 音色切换已在上面作废全部 wav 且 meta_voice 变了，这里 prev 只在音色一致时装载。
+    prev_voices = {}
+    if meta_path.exists() and prev_meta_voice == meta_voice:
+        try:
+            for v in json.loads(meta_path.read_text(encoding='utf-8')).get('voices') or []:
+                if isinstance(v, dict) and v.get('id'):
+                    prev_voices[str(v['id'])] = v
+        except Exception:
+            prev_voices = {}
+
+    def wav_md5(p):
+        h = hashlib.md5()
+        with open(p, 'rb') as f:
+            for chunk in iter(lambda: f.read(1 << 20), b''):
+                h.update(chunk)
+        return h.hexdigest()
+
     voices = []
+    reused = 0
     for seg in sb['segments']:
         sid = seg['id']
         wav = proj / 'audio' / f"{sid}.wav"
+        fp_wav = wav_md5(wav)
+        prev = prev_voices.get(sid)
+        if prev and prev.get('wav_md5') == fp_wav and prev.get('words') and prev.get('phrases'):
+            voices.append(prev)
+            reused += 1
+            print(f'{sid}: 对齐复用')
+            continue
         anchors = anchor_funasr(wav)
         best = None
         if anchors is not None:
@@ -410,8 +439,10 @@ def main(proj_dir: str) -> int:
             return 1
         words, phrases, ratio, src = best
         voices.append({'id': sid, 'duration_s': wav_duration(wav),
-                       'words': words, 'phrases': phrases})
+                       'words': words, 'phrases': phrases, 'wav_md5': fp_wav})
         print(f'{sid}: {len(words)} 词 / {len(phrases)} 短语 ✓（锚点 {src}，匹配率 {ratio:.0%}）')
+    if reused:
+        print(f'对齐：{reused} 段复用 / {len(voices) - reused} 段重算')
 
     # 原子替换：Go 侧（loadAudioMeta）与翻译回写并发读此文件，裸写会读到半截 JSON
     tmp = proj / 'audio_meta.json.tmp'

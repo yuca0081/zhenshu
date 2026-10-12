@@ -1,3 +1,21 @@
+// 用户账号（固定账号模型：管理员预建，无自助注册）。与后端 store.User JSON 对齐。
+export interface UserInfo {
+  id: string
+  username: string
+  role: 'admin' | 'user'
+}
+
+// 用户管理列表行（含创建时间）
+export interface UserRow extends UserInfo {
+  created_at: string
+}
+
+// 启动首查（GET /api/auth/status）：auth_required=false = 服务端开放模式（本机免登录）
+export interface AuthStatus {
+  auth_required: boolean
+  user: UserInfo | null
+}
+
 export interface ProjectRow {
   id: string
   name: string
