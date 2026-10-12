@@ -12,6 +12,14 @@ const emit = defineEmits<{ sent: []; 'remove-ref': [ref: ChatRef]; 'clear-refs':
 const message = useMessage()
 const listRef = ref<InstanceType<typeof NScrollbar> | null>(null)
 
+// IME 组合期（拼音候选未上屏）的 Enter 是选词不是发送：isComposing/229 拦截。
+// .prevent 不能挂在模板上——它会把选词的 Enter 一起吞掉，只在真发送时手动阻止换行
+function onEnter(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return
+  e.preventDefault()
+  send()
+}
+
 async function send() {
   const text = (draft.value ?? '').trim()
   if (!text || !props.projectId) return
@@ -96,7 +104,7 @@ const refKey = (r: ChatRef) => r.elementId ?? (r.t != null ? `s${r.idx}t${r.t}` 
       <NInput
         v-model:value="draft" type="textarea" :rows="3" :maxlength="4000"
         placeholder="对话或下指令（Enter 发送）｜Ctrl+点时间轴加引用"
-        @keydown.enter.exact.prevent="send"
+        @keydown.enter.exact="onEnter"
       />
       <NButton type="primary" :disabled="!draft?.trim() || !projectId" @click="send">发送</NButton>
     </div>
@@ -123,7 +131,6 @@ const refKey = (r: ChatRef) => r.elementId ?? (r.t != null ? `s${r.idx}t${r.t}` 
 .chip.ok { color: #7ee2a8; border-color: #2c5c40; background: #14211a; }
 .chip.ok:hover { border-color: #3d7a56; }
 .chip.wait { color: #f0c674; border-color: #5c4d24; background: #211d12; }
-.chip.run { color: #8fc7ff; border-color: #2b4a66; background: #121b24; }
 .list { flex: 1; padding: 14px 12px; }
 .none { color: #55555f; font-size: 13px; line-height: 1.9; text-align: center; padding: 40px 20px; }
 .row { margin-bottom: 12px; }

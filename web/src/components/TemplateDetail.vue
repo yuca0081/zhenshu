@@ -40,9 +40,12 @@ watch(
     if (d.editable) startEdit() // 草稿态默认进编辑视角
     if (libId) {
       const r = await api.libraryFrames(libId).catch(() => null)
+      // await 期间快速切换了条目：旧条目的抽帧不许写进新弹窗（数据串号）
+      if (props.detail?.libMediaId !== libId || props.detail?.refId !== refId) return
       if (r) { frames.value = r.frames; hasVideo.value = r.has_video }
     } else if (refId) {
       const r = await api.referenceFrames(refId).catch(() => null)
+      if (props.detail?.refId !== refId) return // 同上
       if (r) { frames.value = r.frames; hasVideo.value = r.has_video }
     }
   },

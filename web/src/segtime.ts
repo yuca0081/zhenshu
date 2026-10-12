@@ -44,7 +44,10 @@ export function segAt(table: SegCol[], t: number): SegCol | null {
 // 秒 → 0:45.2
 export function fmtClock(t?: number): string {
   if (t == null || t < 0) return ''
-  const m = Math.floor(t / 60)
-  const s = (t % 60).toFixed(1).padStart(4, '0')
+  // 先把总秒数四舍五入到 0.1 再拆分/秒：否则 59.96 会拆成 0:60.0（分位不进位）。
+  // 显示层自洽优先——m 进位后 s 必 <60，与拼接侧的取整口径无耦合。
+  const r = Math.round(t * 10) / 10
+  const m = Math.floor(r / 60)
+  const s = (r - m * 60).toFixed(1).padStart(4, '0') // 整数位补零到两位 + 小数点 + 一位小数 = 4 字符
   return `${m}:${s}`
 }

@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useMessage, NButton, NInput, NModal, NSpin } from 'naive-ui'
 import type { AudioMeta, ProjectView, Storyboard } from '../types'
 import { fmtClock, segTable, type SegCol } from '../segtime'
-import { lastProduceFailed } from '../format'
+import { lastProduceFailed, stageLabel } from '../format'
 import { api, videoURL } from '../api'
 import Timeline from './Timeline.vue'
 
@@ -31,14 +31,9 @@ const emit = defineEmits<{
 
 const message = useMessage()
 
-const stageName: Record<string, string> = {
-  tts: '配音', compositions: '画面', assemble: '组装', check: '检查', render: '渲染', frameqa: '画面审查',
-}
-
 // ── 视频播放 ↔ 时间轴播放头同步 ──
 const videoEl = ref<HTMLVideoElement | null>(null)
 const cur = ref(0)
-const dur = ref(0)
 const playing = ref(false) // 播放中隐藏「引用此刻」悬浮钮
 function onSeek(t: number) {
   cur.value = t
@@ -99,7 +94,9 @@ async function confirmRework() {
     reworkShow.value = false
     emit('rework-started')
   } catch (e) {
+    // 返回 false 阻止 naive-ui 自动关弹窗：失败时用户填的修改要求还在输入框里，可直接重试
     message.error((e as Error).message)
+    return false
   } finally {
     reworkBusy.value = false
   }
@@ -133,7 +130,7 @@ async function confirmRework() {
       <div class="prod-title">制作管线运行中</div>
       <div v-if="stageSummary" class="stages">
         <div v-for="st in stageSummary" :key="st.key" class="pstage" :data-state="st.state">
-          <span class="dot" />{{ stageName[st.key] ?? st.key }}
+          <span class="dot" />{{ stageLabel(st.key) }}
         </div>
       </div>
       <button v-if="view.producing" class="stop-btn" @click="emit('cancel')">■ 停止制作</button>
@@ -151,7 +148,7 @@ async function confirmRework() {
           v-for="st in stageSummary" :key="st.key" class="pstage"
           :data-state="st.state" :data-skip="st.key === 'tts' && st.state === 'pending' && ttsIdle"
         >
-          <span class="dot" />{{ st.key === 'tts' && st.state === 'pending' && ttsIdle ? '配音不动' : stageName[st.key] ?? st.key }}
+          <span class="dot" />{{ st.key === 'tts' && st.state === 'pending' && ttsIdle ? '配音不动' : stageLabel(st.key) }}
         </div>
         <span class="rework-hint">段级重做中</span>
         <button v-if="view.producing" class="stop-btn" @click="emit('cancel')">■ 停止</button>
@@ -160,7 +157,7 @@ async function confirmRework() {
       <div class="player">
         <video
           ref="videoEl" :src="videoURL(videoId, videoRev)" controls preload="metadata"
-          @timeupdate="cur = videoEl!.currentTime" @loadedmetadata="dur = videoEl!.duration || 0"
+          @timeupdate="cur = videoEl!.currentTime"
           @play="playing = true" @pause="playing = false" @ended="playing = false"
         />
         <button v-show="!playing" class="now-btn" @click="pickTime(cur)">

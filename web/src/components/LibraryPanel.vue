@@ -29,8 +29,8 @@ const filteredPacks = computed(() => {
   return props.packs.filter(p => {
     if (tagFilter.value && p.tags.main !== tagFilter.value && !(p.tags.aux ?? []).includes(tagFilter.value)) return false
     if (q) {
-      const tagNames = [p.tags.main, ...(p.tags.aux ?? [])].map(id => vEntry(id)?.name ?? id)
-      const hay = [p.name, p.subject ?? '', ...tagNames].join(' ').toLowerCase()
+      const names = [p.tags.main, ...(p.tags.aux ?? [])].map(id => vEntry(id)?.name ?? id)
+      const hay = [p.name, p.subject ?? '', ...names].join(' ').toLowerCase()
       if (!hay.includes(q)) return false
     }
     return true

@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue'
 import { NButton, NInput, NModal, NRadioButton, NRadioGroup } from 'naive-ui'
 import { api } from '../api'
+import { errMsg } from '../format'
 
 // 新建三件事：名称 + 主题 + 画幅。文稿/分镜/风格是三前置硬门，
 // 进工作区后点对话栏上方的同名标签补齐（文稿弹窗可 AI 起草，风格弹窗可选库内或描述方向）。
@@ -19,6 +20,14 @@ watch(show, v => {
   }
 })
 
+// IME 组合期（候选未上屏）的 Enter 是选词不是提交；.prevent 会连选词的 Enter 一起吞，
+// 只在真提交时手动阻止默认行为
+function onEnter(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return
+  e.preventDefault()
+  create()
+}
+
 async function create() {
   if (!topic.value.trim()) { error.value = '主题必填——一句话说清要讲什么'; return }
   creating.value = true
@@ -26,8 +35,8 @@ async function create() {
   try {
     const r = await api.createProject(name.value.trim(), topic.value.trim(), aspect.value)
     emit('created', r.id)
-  } catch (e: any) {
-    error.value = e.message ?? String(e)
+  } catch (e) {
+    error.value = errMsg(e)
   } finally {
     creating.value = false
   }
@@ -42,7 +51,7 @@ async function create() {
         <NInput
           v-model:value="topic" maxlength="120"
           placeholder="例：蚊子为什么嗡嗡叫"
-          @keydown.enter.prevent="create"
+          @keydown.enter="onEnter"
         />
       </div>
       <div class="field">

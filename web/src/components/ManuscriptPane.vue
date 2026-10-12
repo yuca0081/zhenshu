@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { NButton, NInput, NInputNumber } from 'naive-ui'
 import { api } from '../api'
 import type { Manuscript } from '../types'
+import { errMsg } from '../format'
 
 // 文稿页签：整页编辑器（原 GatesModal 文稿弹窗迁入，弹窗退役）。
 // article.txt 是唯一真源；manuscript.json 是管线产物（保存即删防旧稿重放）。
@@ -38,8 +39,8 @@ async function save() {
     savedMsg.value = `已保存（${r.word_count} 字）`
     dirty.value = false
     emit('saved')
-  } catch (e: any) {
-    saveErr.value = e.message ?? String(e)
+  } catch (e) {
+    saveErr.value = errMsg(e)
   } finally {
     saving.value = false
   }
@@ -58,8 +59,8 @@ async function draft() {
     if (content.value.trim() && !window.confirm('文本框已有内容，用 AI 草稿覆盖？')) return
     content.value = r.content
     dirty.value = true
-  } catch (e: any) {
-    saveErr.value = e.message ?? String(e)
+  } catch (e) {
+    saveErr.value = errMsg(e)
   } finally {
     drafting.value = false
   }
@@ -78,8 +79,8 @@ async function extract() {
     if (content.value.trim() && !window.confirm('文本框已有内容，用提取的正文覆盖？')) return
     content.value = r.title ? `${r.title}\n\n${r.content}` : r.content
     dirty.value = true
-  } catch (e: any) {
-    saveErr.value = e.message ?? String(e)
+  } catch (e) {
+    saveErr.value = errMsg(e)
   } finally {
     extracting.value = false
   }

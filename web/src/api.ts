@@ -6,6 +6,8 @@ const TOKEN_KEY = 'api_token'
 const apiToken = () => localStorage.getItem(TOKEN_KEY) || ''
 
 let prompting = false
+// 已知权衡：401 弹 prompt 期间（prompting=true），其他并发请求的 401 不再排队等新
+// token，直接按失败返回（用户重试即可）——原生 prompt 是同步弹窗，不为它们做请求队列
 async function authFetch(input: RequestInfo, init?: RequestInit): Promise<Response> {
   const h = new Headers(init?.headers)
   const t = apiToken()
@@ -35,7 +37,11 @@ const withToken = (u: string) => {
 export const sseURL = (id: string) => withToken(`/api/projects/${id}/events`)
 
 async function j<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new Error((await res.json().catch(() => ({} as any))).error ?? res.statusText)
+  if (!res.ok) {
+    // 错误体形如 { error }，非 JSON/缺字段退 statusText（body 按 unknown 收窄，不再 `{} as any`）
+    const body = (await res.json().catch(() => null)) as { error?: string } | null
+    throw new Error(body?.error ?? res.statusText)
+  }
   return res.json()
 }
 

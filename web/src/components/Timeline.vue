@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { AudioMeta, Storyboard } from '../types'
+import type { AlignWord, AudioMeta, Storyboard } from '../types'
 import { segTable, type SegCol } from '../segtime'
 
 // 多轨时间轴：标尺（可点/拖擦洗）+ 分镜/字幕/配音三轨 + 播放头。
@@ -49,6 +49,17 @@ const phrases = computed<Phrase[]>(() => {
 })
 
 const pct = (t: number) => `${(t / total.value) * 100}%`
+
+// 波形近似（配音轨细条 = 逐字时刻）：逐字 DOM 无上限（10 分钟片约 2000 节点），
+// 按固定步长采样封顶 ~500/段。绝对定位用采样词自身的 start——稀疏化只降低密度，
+// 不改布局（不按采样序号重排，避免条形位置漂移）
+const WAVE_MAX_NODES = 500
+const waveWords = computed<AlignWord[][]>(() =>
+  segs.value.map((_, i) => {
+    const words = props.audioMeta?.voices[i]?.words ?? []
+    const stride = Math.max(1, Math.ceil(words.length / WAVE_MAX_NODES))
+    return stride === 1 ? words : words.filter((_, k) => k % stride === 0)
+  }))
 
 // ── 横向滚动：内容层定宽 ─────────────────────────────
 const viewportEl = ref<HTMLElement | null>(null)
@@ -190,10 +201,10 @@ function onLaneDblClick(e: MouseEvent, start: number, dur: number) {
         </div>
       </div>
 
-      <!-- 字幕轨（有对齐数据才出） -->
+      <!-- 字幕轨（有对齐数据才出）：key 用短语起始时间（index 会随断句变化错位复用） -->
       <div v-if="phrases.length" class="lane sub">
         <div
-          v-for="(p, i) in phrases" :key="i" class="ph"
+          v-for="p in phrases" :key="p.start" class="ph"
           :style="{ left: pct(p.start), width: pct(p.dur) }"
           :title="`${p.text}（Ctrl+点击引用）`"
           @click="pickPhrase(p, $event)"
@@ -201,7 +212,7 @@ function onLaneDblClick(e: MouseEvent, start: number, dur: number) {
         >{{ p.text }}</div>
       </div>
 
-      <!-- 配音轨：块内细条 = 逐字时刻（近似波形） -->
+      <!-- 配音轨：块内细条 = 逐字时刻（近似波形，采样封顶见 waveWords） -->
       <div v-if="audioMeta" class="lane aud">
         <div
           v-for="(s, i) in segs" :key="s.idx" class="wav"
@@ -212,11 +223,11 @@ function onLaneDblClick(e: MouseEvent, start: number, dur: number) {
           @dblclick.stop="onLaneDblClick($event, s.start, s.dur)"
         >
           <i
-            v-for="(w, j) in (audioMeta.voices[i]?.words ?? [])" :key="j"
+            v-for="w in waveWords[i] ?? []" :key="w.start"
             :style="{
               left: `${(w.start / s.dur) * 100}%`,
               width: `${Math.max(((w.end - w.start) / s.dur) * 100, 1.2)}%`,
-              height: `${38 + ((j * 37) % 55)}%`,
+              height: `${38 + ((w.start * 37) % 55)}%`,
             }"
           />
         </div>

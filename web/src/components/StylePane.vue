@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useMessage, NButton, NInput, NScrollbar, NSelect, NSwitch, NTag } from 'naive-ui'
 import { api, libraryMediaURL, styleClipURL } from '../api'
 import type { ProjectView, Style, StyleSamples, VocabEntry } from '../types'
+import { errMsg } from '../format'
 import SampleFrame from './SampleFrame.vue'
 
 // 风格页签（原 GatesModal 风格段 + StagePanel 样张段合并，弹窗退役）。
@@ -30,7 +31,13 @@ const step = computed(() => {
 const showPicker = ref(false) // B 态里点「换风格」→ 回 A 态（旧样张仍在，重确认即作废）
 const requested = ref(false) // 已提交出样张、还没等来新样张——步骤条旁的等待提示
 const reviewMode = computed(() => !!props.styleSamples?.samples?.length && !showPicker.value)
+// 上次触发复位的样张 JSON 签名：后台刷新会用新引用带同一份样张（loadProject 全量回写），
+// 只看引用变化就把正在换风格的用户弹回样张页——内容没变就不复位
+let lastSamplesSig: string | null = null
 watch(() => props.styleSamples, nv => {
+  const sig = nv == null ? '' : JSON.stringify(nv)
+  if (sig === lastSamplesSig) return
+  lastSamplesSig = sig
   if (nv) { requested.value = false; showPicker.value = false } // 新样张到手，回 B 态
   // 样张清空（切项目/换风格作废）同步复位等待态：不然「样张生成中」挂到 90s 超时
   else requested.value = false
@@ -122,8 +129,8 @@ async function apply() {
     picked.value = ''
     sigOff.value = {}
     emit('chat-sent')
-  } catch (e: any) {
-    applyErr.value = e.message ?? String(e)
+  } catch (e) {
+    applyErr.value = errMsg(e)
   } finally {
     applying.value = false
   }
@@ -141,8 +148,8 @@ async function draftStyle() {
     direction.value = ''
     requested.value = true
     emit('chat-sent')
-  } catch (e: any) {
-    message.error(e.message ?? String(e))
+  } catch (e) {
+    message.error(errMsg(e))
   } finally {
     asking.value = false
   }

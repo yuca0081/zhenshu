@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { ActivityEvent } from '../types'
+import { stageLabel } from '../format'
 
 // 制作事件流：manifest 原始事件 → 人话行，最新的在最上。
 // - 每步用时：stage.start/finish 配对算毫秒差（check 可能多轮，带轮次号）
@@ -10,10 +11,9 @@ const props = defineProps<{ events: ActivityEvent[]; producing: boolean }>()
 
 const evMs = (e: ActivityEvent) => e.ms ?? Date.parse(e.ts)
 
-const stageNames: Record<string, string> = {
-  tts: '配音', materials: '素材', compositions: '画面', assemble: '组装',
-  check: '质量检查', render: '渲染',
-}
+// stage key 是否收录（VideoPane 同款映射收敛到 format.stageLabel）；未收录的
+// 技术性工位（llm/api 等）不上屏、不计帐
+const knownStage = (s: string) => stageLabel(s) !== s
 
 interface Row {
   key: number
@@ -69,7 +69,7 @@ const rows = computed<Row[]>(() => {
       const st = open[stage]
       const n = rounds[stage] ?? 1
       add({
-        state, title: stageNames[stage] + (n > 1 ? `（第${n}轮）` : ''),
+        state, title: stageLabel(stage) + (n > 1 ? `（第${n}轮）` : ''),
         timeText: fmtClock(st.ms), durText: fmtDur(Math.max(0, atMs - st.ms)),
       })
     }
@@ -148,19 +148,19 @@ const rows = computed<Row[]>(() => {
         })
         break
       case 'stage.start':
-        if (!stageNames[ev.detail]) break
+        if (!knownStage(ev.detail)) break
         open[ev.detail] = { ms }
         rounds[ev.detail] = (rounds[ev.detail] ?? 0) + 1
         if (ev.detail === 'check') lastCheck = null
         break
       case 'stage.finish': {
         const st = open[ev.detail]
-        if (!stageNames[ev.detail] || !st) break
+        if (!knownStage(ev.detail) || !st) break
         delete open[ev.detail]
         const n = rounds[ev.detail]
         const row = add({
           state: 'ok',
-          title: stageNames[ev.detail] + (n > 1 ? `（第${n}轮）` : ''),
+          title: stageLabel(ev.detail) + (n > 1 ? `（第${n}轮）` : ''),
           timeText: t, durText: fmtDur(Math.max(0, ms - st.ms)),
         })
         if (ev.detail === 'check') lastCheck = row
@@ -223,7 +223,7 @@ const rows = computed<Row[]>(() => {
     const n = rounds[stage] ?? 1
     add({
       state: 'run',
-      title: stageNames[stage] + (n > 1 ? `（第${n}轮）` : '') + '…',
+      title: stageLabel(stage) + (n > 1 ? `（第${n}轮）` : '') + '…',
       timeText: fmtClock(st.ms),
       durText: fmtDur(Math.max(0, now.value - st.ms)),
     })

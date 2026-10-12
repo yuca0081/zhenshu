@@ -99,6 +99,8 @@ async function replanStoryboard() {
     await api.chat(props.videoId,
       `请按目标总时长约 ${targetMin.value} 分钟重新规划分镜：重排各段的时长与画面要点（旁白可微调篇幅），总时长贴合目标，改完告诉我。`)
     emit('chat-sent')
+  } catch (e) {
+    message.error((e as Error).message)
   } finally {
     replanning.value = false
   }

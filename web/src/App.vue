@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
-  NConfigProvider, NMessageProvider, darkTheme,
+  NConfigProvider, NMessageProvider, createDiscreteApi, darkTheme,
 } from 'naive-ui'
 import HistoryRail from './components/HistoryRail.vue'
 import StagePanel from './components/StagePanel.vue'
@@ -11,6 +11,7 @@ import LibraryCenter from './components/LibraryCenter.vue'
 import HomeView from './components/HomeView.vue'
 import { api, sseURL } from './api'
 import type { ActivityEvent, AudioMeta, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, Storyboard, Style, StyleSamples, TabID } from './types'
+import { errMsg } from './format'
 import { segAt, segTable } from './segtime'
 
 const projects = ref<ProjectRow[]>([])
@@ -37,16 +38,42 @@ const videoRev = ref(0) // 成片代次：done 后递增 → video 换 URL 强�
 const progressLine = ref('') // 制作/重做细粒度进度（SSE progress，瞬时态不入聊天史）
 const activity = ref<ActivityEvent[]>([]) // 制作事件流（manifest 原样事件，右上角面板数据源）
 
+// naive-ui 全局主色对齐页面金色（创建按钮/单选/焦点等不再出现默认绿）
+const themeOverrides = {
+  common: {
+    primaryColor: '#f0c674',
+    primaryColorHover: '#ffdd9a',
+    primaryColorPressed: '#d9ae5b',
+    primaryColorSuppl: '#f0c674',
+    borderRadius: '8px',
+  },
+}
+
+// App 自身在 n-message-provider 之外（provider 包的是模板内容），useMessage 拿不到
+// 上下文——顶层加载/确认失败的反馈走离散 API，避免静默吞错 + unhandled rejection
+const { message: topMsg } = createDiscreteApi(['message'], {
+  configProviderProps: { theme: darkTheme, themeOverrides },
+})
+
 let es: EventSource | null = null
 let busyTimer: number | null = null
 let activityTimer: number | null = null
 let reqSeq = 0 // 会话内自增：切项目即作废在途响应——A 项目的数据晚到不许覆盖 B 的页
-const inflight = new Set<string>() // 同项目同名加载进行中就跳过：SSE 密集期不重复打同一接口
+// 同 key 在途去重：key → 发起时的 reqSeq。只有"发起时与当前同代次"的在途请求才挡新请求；
+// 记录的 seq 已过期（中途切过项目，旧响应注定被作废）时直接被新请求覆盖，否则快速
+// A→B→A 时第二次 loadProject(A) 被旧请求挡掉、旧响应又被 seq 丢弃，页面空白到下个事件。
+// finally 里同样校验代次再删：先完成的旧代请求不许误删新代请求的在途标记。
+const inflight = new Map<string, number>()
 
 const stageOrder = ['tts', 'compositions', 'assemble', 'check', 'render', 'frameqa']
 
 async function loadProjects() {
-  projects.value = await api.listProjects()
+  try {
+    projects.value = await api.listProjects()
+  } catch (e) {
+    // 首屏/刷新失败要有反馈：否则空列表无解释，还是 unhandled rejection
+    topMsg.error(`加载项目列表失败：${errMsg(e)}`)
+  }
 }
 
 async function loadLibrary() {
@@ -54,15 +81,15 @@ async function loadLibrary() {
 }
 
 async function publishPack(id: string) {
-  await api.publishPack(id).catch(() => {})
+  await api.publishPack(id).catch(e => topMsg.error(`入库失败：${errMsg(e)}`))
   await loadLibrary()
 }
 
 async function loadProject(id: string) {
   const key = `project:${id}`
-  if (inflight.has(key)) return
   const seq = reqSeq
-  inflight.add(key)
+  if (inflight.get(key) === seq) return // 同代次的同 key 在途请求才去重（语义见 inflight 声明处）
+  inflight.set(key, seq)
   try {
     const v = await api.project(id)
     if (seq !== reqSeq) return
@@ -80,7 +107,7 @@ async function loadProject(id: string) {
     manuscript.value = ms
     audioMeta.value = am
   } finally {
-    inflight.delete(key)
+    if (inflight.get(key) === seq) inflight.delete(key)
   }
 }
 
@@ -88,9 +115,9 @@ async function loadMsgs() {
   const id = current.value
   if (!id) return
   const key = `msgs:${id}`
-  if (inflight.has(key)) return
   const seq = reqSeq
-  inflight.add(key)
+  if (inflight.get(key) === seq) return
+  inflight.set(key, seq)
   try {
     const after = msgs.value.length ? Math.max(...msgs.value.map(m => m.id)) : 0
     // ?? [] 兜底：服务端把空历史序列化成 null（老接口），null.filter 会崩掉对话栏
@@ -100,7 +127,7 @@ async function loadMsgs() {
     const fresh = inc.filter(m => !seen.has(m.id))
     if (fresh.length) msgs.value.push(...fresh)
   } finally {
-    inflight.delete(key)
+    if (inflight.get(key) === seq) inflight.delete(key)
   }
 }
 
@@ -108,19 +135,22 @@ async function loadActivity() {
   const id = current.value
   if (!id) return
   const key = `activity:${id}`
-  if (inflight.has(key)) return
   const seq = reqSeq
-  inflight.add(key)
+  if (inflight.get(key) === seq) return
+  inflight.set(key, seq)
   try {
     const rows = await api.activity(id).catch(() => null)
     if (rows === null || seq !== reqSeq || id !== current.value) return
     activity.value = rows
   } finally {
-    inflight.delete(key)
+    if (inflight.get(key) === seq) inflight.delete(key)
   }
 }
 
 function selectProject(id: string) {
+  // 同项目重复点选只切页不重载：下面是无条件清场，而 current 同值赋值不触发
+  // watch → refresh 不会执行，清掉的数据永不回来（页面空白）
+  if (id === current.value) { page.value = 'workspace'; return }
   current.value = id
   page.value = 'workspace'
   ++reqSeq // 在途响应全部作废：先于清场，晚到的旧数据在 resolve 处直接丢弃
@@ -172,6 +202,26 @@ function throttledRefresh() {
   refresh()
 }
 
+// SSE 触发的全量加载节流：tool_result 每条都 loadProject（1+4 个请求），制作密集期
+// 就是请求风暴。3s 最小间隔 + 尾随补一次——窗口内最后一条事件之后必再刷一轮，最终一致。
+// 只节流 SSE 这条路：用户动作（保存/确认风格/done）仍直连 refresh 立即生效。
+let lastSSEProjLoad = 0
+let projLoadTimer: number | null = null
+function throttledLoadProject() {
+  const now = Date.now()
+  if (now - lastSSEProjLoad < 3_000) {
+    if (projLoadTimer == null) {
+      projLoadTimer = window.setTimeout(() => {
+        projLoadTimer = null
+        if (current.value) loadProject(current.value).catch(() => {})
+      }, 3_000 - (now - lastSSEProjLoad))
+    }
+    return
+  }
+  lastSSEProjLoad = now
+  if (current.value) loadProject(current.value).catch(() => {})
+}
+
 function markBusy() {
   agentBusy.value = true
   if (busyTimer) clearTimeout(busyTimer)
@@ -188,20 +238,25 @@ function openSSE(id: string) {
     loadLibrary() // Agent 可能刚起草了风格包
   })
   es.addEventListener('tool_call', () => { markBusy(); loadMsgs() })
-  es.addEventListener('tool_result', () => { loadMsgs(); loadProject(id).catch(() => {}) })
+  es.addEventListener('tool_result', () => { loadMsgs(); throttledLoadProject() })
   es.addEventListener('stage', ev => {
-    const d = JSON.parse((ev as MessageEvent).data)
-    if (d.stage === 'pipeline') return
-    const st = d.detail.startsWith('running') ? 'running'
-      : d.detail.startsWith('done') ? 'done'
-      : d.detail.startsWith('error') || d.detail.startsWith('repair') ? 'error' : 'running'
-    stageState.value = { ...stageState.value, [d.stage]: st }
-    loadMsgs()
-    loadActivity() // 阶段推进即拉事件流（用时/打回记帐在 manifest 里）
+    // 服务端事件体不可全信：非 JSON / 缺字段时忽略该条（原生监听器抛异常只会刷爆 console）
+    try {
+      const d = JSON.parse((ev as MessageEvent).data)
+      if (!d?.stage || typeof d.detail !== 'string' || d.stage === 'pipeline') return
+      const st = d.detail.startsWith('running') ? 'running'
+        : d.detail.startsWith('done') ? 'done'
+        : d.detail.startsWith('error') || d.detail.startsWith('repair') ? 'error' : 'running'
+      stageState.value = { ...stageState.value, [d.stage]: st }
+      loadMsgs()
+      loadActivity() // 阶段推进即拉事件流（用时/打回记帐在 manifest 里）
+    } catch { /* 坏事件静默丢弃 */ }
   })
   es.addEventListener('progress', ev => {
-    const d = JSON.parse((ev as MessageEvent).data)
-    progressLine.value = typeof d === 'string' ? d : d.detail ?? ''
+    try {
+      const d = JSON.parse((ev as MessageEvent).data)
+      progressLine.value = typeof d === 'string' ? d : d?.detail ?? ''
+    } catch { return } // 非 JSON 进度行不覆盖当前值
     loadActivity()
   })
   es.addEventListener('style_confirmed', () => loadProject(id).catch(() => {}))
@@ -229,24 +284,23 @@ function openSSE(id: string) {
   })
 }
 
-// 自愈兜底（覆盖 SSE 断连/丢事件/服务重启）：producing 一旦变 false 就清制作中的
-// 瞬时态并换代成片——磁盘事实（producing=false）永远压过前端内存态。
+// 两个联动同源（view.producing）合成一个 watch：
+// ① 自愈兜底（覆盖 SSE 断连/丢事件/服务重启）：一旦变 false 就清制作中的瞬时态并换代
+//    成片——磁盘事实（producing=false）永远压过前端内存态；
+// ② 制作中每 5s 轮询事件流：render.seg / 预审轮次这类 manifest 细粒度事件没有对应
+//    SSE，SSE stage/progress 只兜住粗粒度推进，细账靠轮询补。
 watch(() => view.value?.producing, (now, was) => {
   if (was && now === false) {
     stageState.value = {}
     progressLine.value = ''
     videoRev.value++
   }
-})
-
-// 制作中每 5s 轮询事件流：render.seg / 预审轮次这类 manifest 细粒度事件没有对应
-// SSE，SSE stage/progress 只兜住粗粒度推进，细账靠轮询补。
-watch(() => view.value?.producing, p => {
-  if (p && activityTimer == null) activityTimer = window.setInterval(loadActivity, 5000)
-  if (!p && activityTimer != null) { clearInterval(activityTimer); activityTimer = null }
+  if (now && activityTimer == null) activityTimer = window.setInterval(loadActivity, 5000)
+  if (!now && activityTimer != null) { clearInterval(activityTimer); activityTimer = null }
 })
 onBeforeUnmount(() => {
   if (activityTimer != null) clearInterval(activityTimer)
+  if (projLoadTimer != null) clearTimeout(projLoadTimer)
 })
 
 watch(current, id => {
@@ -347,15 +401,16 @@ const stageSummary = computed(() => {
   return stageOrder.map((s, i) => ({ key: s, state: states[i] }))
 })
 
-// naive-ui 全局主色对齐页面金色（创建按钮/单选/焦点等不再出现默认绿）
-const themeOverrides = {
-  common: {
-    primaryColor: '#f0c674',
-    primaryColorHover: '#ffdd9a',
-    primaryColorPressed: '#d9ae5b',
-    primaryColorSuppl: '#f0c674',
-    borderRadius: '8px',
-  },
+// 确认风格（唯一必须用户拍板的门）：失败弹错但仍然刷新——把服务端的真实状态拉回来，
+// 不能让前端停在「已确认」的假象里
+async function confirmStyle() {
+  if (!current.value) return
+  try {
+    await api.confirmStyle(current.value)
+  } catch (e) {
+    topMsg.error(`风格确认失败：${errMsg(e)}`)
+  }
+  refresh()
 }
 
 // 首启按 URL hash 恢复页面（必须在全部状态声明之后，见上方注释）
@@ -395,15 +450,21 @@ applyHash()
         <div v-else class="shell">
           <HistoryRail :projects="projects" :current="current" @select="selectProject" @delete="onDeleteProject" />
           <main class="center">
+            <!-- :key=current：切项目强制重挂载。StagePanel/ChatPanel 内部持有 per-project
+                 的编辑态脏标记（分镜 sbDirty、文稿 dirty、风格 picked/sigOff/direction），
+                 其 watch 都是"dirty 时不回灌服务器数据"——组件实例跨项目复用的话，A 项目
+                 未保存的编辑会原样保存进 B 项目（切项目清的是 App 级 props，清不到这些
+                 内部脏标记，详见 StagePanel sbDirty watch / ManuscriptPane dirty watch）。
+                 全局态（主题等）在 App 层，不受重挂载影响。 -->
             <StagePanel
-              v-if="current"
+              v-if="current" :key="current"
               :tab="activeTab" :view="view" :storyboard="storyboard" :style-samples="style" :manuscript="manuscript"
               :stage-summary="stageSummary" :video-id="current" :audio-meta="audioMeta"
               :picked-idx="chatRefs.map(r => r.idx)" :video-rev="videoRev" :progress-line="progressLine"
               :activity="activity"
               @tab="setTab" @go-tab="setTab"
               @saved="refresh" @chat-sent="markBusy"
-              @confirm-style="async () => { if (current) { await api.confirmStyle(current); refresh() } }"
+              @confirm-style="confirmStyle"
               @seg="addRef"
               @pick-time="addTimeRef"
               @rework-started="refresh"
@@ -415,7 +476,7 @@ applyHash()
             </div>
           </main>
           <ChatPanel
-            :project-id="current" :msgs="msgs" :busy="agentBusy" v-model:draft="chatDraft" :refs="chatRefs" :view="view"
+            :key="current" :project-id="current" :msgs="msgs" :busy="agentBusy" v-model:draft="chatDraft" :refs="chatRefs" :view="view"
             @sent="markBusy" @remove-ref="removeRef" @clear-refs="chatRefs = []" @open-gate="setTab"
           />
         </div>
