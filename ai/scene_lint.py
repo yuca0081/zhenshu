@@ -78,8 +78,9 @@ def lint_text(html: str, seg_hint: str = '') -> list:
     stripped = html.strip()
     if not stripped.startswith('<template'):
         errs.append(('F1', '文件必须是 <template> 片段开头（无 DOCTYPE/html/head/body）'))
+    # 文档头标签用 [\s>] 边界断言而非子串匹配：'<head' 子串会误伤 <header> 开头的正当片段
     for tag in ('<!doctype', '<html', '<head', '<body'):
-        if tag in stripped[:400].lower():
+        if re.search(re.escape(tag) + r'(?=[\s>])', stripped[:400], re.I):
             errs.append(('F1', f'片段内出现 {tag}（场景文件不是完整文档）'))
             break
 
@@ -155,7 +156,10 @@ def lint_text(html: str, seg_hint: str = '') -> list:
                 tf.write(sc)
                 tmpjs = tf.name
             try:
-                r = subprocess.run(['node', '--check', tmpjs], capture_output=True, text=True)
+                # 显式 utf-8 解码：中文 Windows 默认 cp936 严格解码，node 报语法错时
+                # 回显 UTF-8 中文源码行会抛 UnicodeDecodeError，lint 自身反被炸崩
+                r = subprocess.run(['node', '--check', tmpjs], capture_output=True,
+                                   text=True, encoding='utf-8', errors='replace')
                 if r.returncode != 0:
                     msg = (r.stderr or '').strip().splitlines()
                     tag = f'（第 {si + 1} 个 <script> 块）' if len(scripts) > 1 else ''
@@ -219,6 +223,11 @@ def selftest() -> int:
 
 
 if __name__ == '__main__':
+    # Go 侧管道捕获不设 PYTHONUTF8，中文 Windows 默认 cp936 严格解码——✓/✗ 不在 GBK 中，
+    # 成功路径的 print 反而炸成 rc=1。errors='replace' 保输出永远可写。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(errors='replace')
     args = sys.argv[1:]
     if not args:
         print(__doc__)

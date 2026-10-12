@@ -29,7 +29,9 @@ def ffmpeg_encode(wav_path, mp3_path, bitrate):
     ff = shutil.which('ffmpeg')
     if not ff:
         return False
+    # 显式 utf-8 解码：中文 Windows 默认 cp936 严格解码，ffmpeg 报错回显 UTF-8
+    # 内容时会抛 UnicodeDecodeError，把可降级的失败炸成崩溃
     r = subprocess.run([ff, '-y', '-v', 'error', '-i', str(wav_path),
                         '-codec:a', 'libmp3lame', '-b:a', bitrate, str(mp3_path)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding='utf-8', errors='replace')
     return r.returncode == 0

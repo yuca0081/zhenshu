@@ -15,6 +15,7 @@
      的字体栈里剥除并记入 "stripped"——降级回系统字体,绝不带病进渲染
 """
 import base64
+import hashlib
 import io
 import json
 import pathlib
@@ -39,12 +40,23 @@ BASE_CHARS = (
 
 
 def _http_get(url: str, headers: dict = None) -> bytes:
+    """流式下载并卡 DOWNLOAD_CAP：先按 Content-Length 拒超限，再分块读、累计超限
+    即中止——旧版 r.read() 先全量进内存再查上限，遇到超大文件上限形同虚设。"""
     req = urllib.request.Request(url, headers=headers or {'User-Agent': 'zhenshu-font-tool'})
+    chunks, total = [], 0
     with urllib.request.urlopen(req, timeout=120) as r:
-        data = r.read()
-    if len(data) > DOWNLOAD_CAP:
-        raise ValueError('文件 %d 字节超下载上限' % len(data))
-    return data
+        length = r.headers.get('Content-Length')
+        if length and length.isdigit() and int(length) > DOWNLOAD_CAP:
+            raise ValueError('文件 %s 字节(Content-Length)超下载上限' % length)
+        while True:
+            chunk = r.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > DOWNLOAD_CAP:
+                raise ValueError('下载累计 %d 字节超上限，中途中止' % total)
+            chunks.append(chunk)
+    return b''.join(chunks)
 
 
 def _load_manifest() -> dict:
@@ -67,7 +79,12 @@ def _cached_ttf(entry: dict) -> pathlib.Path:
         'User-Agent': 'zhenshu-font-tool'})
     if not raw.startswith(b'\x00\x01\x00\x00') and not raw.startswith(b'OTTO'):
         raise ValueError('下载产物不是字体文件(magic 不符)')
-    import hashlib
+    # 先落字体文件（tmp+rename 原子替换）、台账登记放最后：旧顺序（manifest 先落、
+    # 字体后写）半途失败会留下「已登记 + 文件残缺」的组合，缓存判 exist+key 双条件
+    # 恰好双双命中，坏字体从此洗不掉
+    tmp = path.with_name(path.name + '.tmp')
+    tmp.write_bytes(raw)
+    tmp.replace(path)
     manifest['fonts'][key] = {
         'sha256': hashlib.sha256(raw).hexdigest(),
         'size': len(raw),
@@ -76,7 +93,6 @@ def _cached_ttf(entry: dict) -> pathlib.Path:
         'downloaded_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
     }
     MANIFEST.write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding='utf-8')
-    path.write_bytes(raw)
     return path
 
 
@@ -128,6 +144,7 @@ def _strip_family_from_stacks(proj: pathlib.Path, family: str):
 
 
 def ensure(proj_dir: str) -> int:
+    """返回失败家族数：0=无申请/全部就绪，>0=有家族被剥除降级（退出码据此非 0）。"""
     proj = pathlib.Path(proj_dir)
     req_path = proj / 'style' / 'font_assets.request.json'
     if not req_path.exists():
@@ -148,14 +165,21 @@ def ensure(proj_dir: str) -> int:
     out = proj / 'style' / 'font_assets.json'
     out.write_text(json.dumps({'resolved': resolved, 'stripped': stripped},
                               ensure_ascii=False), encoding='utf-8')
-    return len(resolved)
+    return len(stripped)
 
 
 if __name__ == '__main__':
+    # Go 侧管道捕获不设 PYTHONUTF8，中文 Windows 默认 cp936 严格解码——✓/✗ 不在 GBK 中，
+    # 成功路径的 print 反而炸成 rc=1。errors='replace' 保输出永远可写。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(errors='replace')
     # 两种调用都认：font_tool.py ensure <dir>（显式）与 font_tool.py <dir>
     # （produce 的 r.python 约定是「脚本 项目目录」无子命令）
     args = [a for a in sys.argv[1:] if a != 'ensure']
     if len(args) < 1:
         print(__doc__)
         sys.exit(2)
-    sys.exit(0 if ensure(args[0]) >= 0 else 1)
+    # 有家族失败（被剥除降级）即退出非 0：旧写法 `ensure(...) >= 0` 恒真，全军覆没
+    # 也报 0。produce 侧只记事件不挡制作（剥族降级是设计内行为），rc 只进台账
+    sys.exit(1 if ensure(args[0]) else 0)

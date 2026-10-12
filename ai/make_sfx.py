@@ -14,12 +14,14 @@ import json
 import math
 import pathlib
 import shutil
-import subprocess
 import sys
 import tempfile
-import wave
 
 import numpy as np
+
+# normalize / write_wav / ffmpeg_encode 收拢进 av_common（与 make_bgm 同源，
+# subprocess/wave 也随迁，这里不再直接用）
+from av_common import ffmpeg_encode, normalize, write_wav
 
 SR = 44100
 OUT_DIR = pathlib.Path(__file__).resolve().parent.parent / 'data' / 'library' / 'media' / 'audio' / 'sfx'
@@ -84,10 +86,6 @@ def synth_riser(dur=1.2):
     return L, R
 
 
-# normalize / write_wav / ffmpeg_encode 收拢进 av_common（与 make_bgm 同源）
-from av_common import ffmpeg_encode, normalize, write_wav  # noqa: E402
-
-
 CLIPS = [
     {'name': 'whoosh', 'duration': 0.6, 'synth': synth_whoosh,
      'desc': '段边界气流声（fade 转场缝合）'},
@@ -97,6 +95,11 @@ CLIPS = [
 
 
 def main() -> int:
+    # Go 侧管道捕获不设 PYTHONUTF8，中文 Windows 默认 cp936 严格解码——✓/✗ 不在 GBK 中，
+    # 成功路径的 print 反而炸成 rc=1。errors='replace' 保输出永远可写。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(errors='replace')
     force = '--force' in sys.argv
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     manifest = []
@@ -109,14 +112,18 @@ def main() -> int:
             L, R = normalize(*c['synth'](c['duration']), peak=0.5)
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as fh:
                 wav_path = pathlib.Path(fh.name)
-            write_wav(wav_path, L, R, SR)
-            if not ffmpeg_encode(wav_path, mp3, bitrate='192k'):
-                shutil.move(str(wav_path), mp3.with_suffix('.wav'))  # 无 ffmpeg 留 wav
-                print(f"{c['name']}: ffmpeg 缺失，留 wav ✓")
-                manifest.append({'name': c['name'], 'file': mp3.with_suffix('.wav').name,
-                                 'duration': c['duration'], 'desc': c['desc']})
-                continue
-            wav_path.unlink(missing_ok=True)
+            try:
+                write_wav(wav_path, L, R, SR)
+                if not ffmpeg_encode(wav_path, mp3, bitrate='192k'):
+                    shutil.move(str(wav_path), mp3.with_suffix('.wav'))  # 无 ffmpeg 留 wav
+                    print(f"{c['name']}: ffmpeg 缺失，留 wav ✓")
+                    manifest.append({'name': c['name'], 'file': mp3.with_suffix('.wav').name,
+                                     'duration': c['duration'], 'desc': c['desc']})
+                    continue
+            finally:
+                wav_path.unlink(missing_ok=True)  # 异常中断也不留临时 wav 尸体
+            # 历史 fallback 残留清理：早先无 ffmpeg 时期留过同名 .wav，mp3 成功后删掉
+            mp3.with_suffix('.wav').unlink(missing_ok=True)
             print(f"{c['name']}: {mp3.stat().st_size // 1024}KB ✓")
         manifest.append({'name': c['name'], 'file': mp3.name,
                          'duration': c['duration'], 'desc': c['desc']})

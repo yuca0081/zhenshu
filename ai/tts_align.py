@@ -72,7 +72,7 @@ def project_voice(proj):
     if not pj.exists():
         return ''
     try:
-        raw = str(json.load(open(pj, encoding='utf-8')).get('voice') or '').strip()
+        raw = str(json.loads(pj.read_text(encoding='utf-8')).get('voice') or '').strip()
     except Exception:
         return ''
     return VOICE_ALIASES.get(raw, raw) if raw else ''
@@ -91,9 +91,11 @@ def _ffmpeg_mp3_to_wav(mp3, out_wav):
         mp3.unlink(missing_ok=True)
         return False
     try:
+        # 显式 utf-8 解码：中文 Windows 默认 cp936 严格解码，ffmpeg 报错回显 UTF-8
+        # 内容时会抛 UnicodeDecodeError，把可降级的失败炸成崩溃
         r = subprocess.run(
             [ff, '-y', '-v', 'error', '-i', str(mp3), '-ar', '32000', '-ac', '1', str(out_wav)],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120)
     except subprocess.TimeoutExpired:
         # 超时按失败处理：不接住会绕过「百炼失败落 Edge」的级联回落直接崩给 Go
         print('  mp3→wav FAIL: ffmpeg 转码超时（120s）')
@@ -139,9 +141,15 @@ def tts_edge(text_file, out_wav, voice=None):
         r = subprocess.run(
             [sys.executable, '-m', 'edge_tts', '--file', str(text_file),
              '--voice', voice, '--rate', rate, '--write-media', str(mp3)],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
     except subprocess.TimeoutExpired:
         print('  edge-tts FAIL: 合成超时（300s）')
+        mp3.unlink(missing_ok=True)
+        return False
+    # Voice does not exist 这类错误 exit code 非 0 但 mp3 可能残留半截文件——
+    # 只靠大小兜底会把失败产物当成功，先看 rc
+    if r.returncode != 0:
+        print(f'  edge-tts FAIL: rc={r.returncode} {(r.stderr or r.stdout)[-150:]}')
         mp3.unlink(missing_ok=True)
         return False
     if not (mp3.exists() and mp3.stat().st_size > 2000):
@@ -174,26 +182,31 @@ def anchor_funasr(wav_path):
 
 
 def anchor_whisper_chars(wav_path, narration):
-    """faster-whisper 降级：词级时间戳按字数均分成字级。"""
+    """faster-whisper 降级：词级时间戳按字数均分成字级。失败返回 None——与 funasr
+    路径同一口径的干净降级（模型下载失败/OOM 在这兜住，不炸 main）。"""
     global _WHISPER
     try:
         from faster_whisper import WhisperModel
     except ImportError:
         return None
-    if _WHISPER is None:
-        _WHISPER = WhisperModel('medium', device='cpu', compute_type='int8')
-    segments, _ = _WHISPER.transcribe(str(wav_path), language='zh',
-                                      initial_prompt=narration[:60], word_timestamps=True)
-    raw = []
-    for seg in segments:
-        for w in (seg.words or []):
-            t = re.sub(r'\s', '', w.word)
-            if not t:
-                continue
-            dur = (w.end - w.start) / len(t)
-            for k, ch in enumerate(t):
-                raw.append((ch, w.start + k * dur, w.start + (k + 1) * dur))
-    return raw or None
+    try:
+        if _WHISPER is None:
+            _WHISPER = WhisperModel('medium', device='cpu', compute_type='int8')
+        segments, _ = _WHISPER.transcribe(str(wav_path), language='zh',
+                                          initial_prompt=narration[:60], word_timestamps=True)
+        raw = []
+        for seg in segments:
+            for w in (seg.words or []):
+                t = re.sub(r'\s', '', w.word)
+                if not t:
+                    continue
+                dur = (w.end - w.start) / len(t)
+                for k, ch in enumerate(t):
+                    raw.append((ch, w.start + k * dur, w.start + (k + 1) * dur))
+        return raw or None
+    except Exception as e:
+        print(f'  whisper 异常: {str(e)[:200]}')
+        return None
 
 
 # ── 第 4 步：锚点 → 旁白字符时刻 → jieba 词 + 标点短语 ───────
@@ -234,7 +247,9 @@ def seg_words_and_phrases(narration, anchors):
         while j < len(chars) and char_t[j] is None:
             j += 1
         nxt_t = char_t[j] if j < len(chars) else (last_end + 0.08, last_end + 0.16)
-        span = (nxt_t[0] - prev_t[1]) / max(j - i, 1)
+        # ASR 噪声可让下一锚点早于上一锚点结束（时间戳倒挂），负 span 会把插值词
+        # 时刻排到前词之前、倒挂写进 audio_meta.json——钳 0 退化为原地均铺
+        span = max(nxt_t[0] - prev_t[1], 0.0) / max(j - i, 1)
         for k in range(i, j):
             char_t[k] = (prev_t[1] + (k - i) * span, prev_t[1] + (k - i + 1) * span)
         prev_t = nxt_t
@@ -280,10 +295,22 @@ def wav_duration(path):
 
 
 def main(proj_dir: str) -> int:
+    # Go 侧管道捕获不设 PYTHONUTF8，中文 Windows 默认 cp936 严格解码——✓/✗ 不在 GBK 中，
+    # 成功路径的 print 反而炸成 rc=1。errors='replace' 保输出永远可写。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(errors='replace')
     proj = pathlib.Path(proj_dir)
     DASHSCOPE_KEY = os.environ.get('DASHSCOPE_API_KEY', '')
-    sb = json.load(open(proj / 'storyboards' / 'storyboard.json', encoding='utf-8'))
+    sb = json.loads((proj / 'storyboards' / 'storyboard.json').read_text(encoding='utf-8'))
     (proj / 'audio').mkdir(exist_ok=True)
+
+    # 空旁白段两个引擎都合不出声（百炼返回空 / edge-tts 直接报错），拖进循环才失败
+    # 会白烧前面已配好的段——先快速失败，把段 id 列全
+    empties = [seg['id'] for seg in sb['segments'] if not str(seg.get('narration') or '').strip()]
+    if empties:
+        print(f'错误: 旁白为空的段: {", ".join(empties)}——先补分镜稿再配音')
+        return 1
 
     # 1+2. 文本落盘 + TTS（先写全 txt 再出 wav，避免路径被当文本朗读的坑）
     for seg in sb['segments']:
@@ -304,17 +331,28 @@ def main(proj_dir: str) -> int:
     # 就走百炼默认龙安灵心，audio_meta 却记着 Edge 音色——静默错配
     engine = 'bailian' if (DASHSCOPE_KEY and not (pv and not bl)) else 'edge'
     bl_use = bl or (BL_VOICE if DASHSCOPE_KEY else '')
-    edge_voice = pv or os.environ.get('EDGE_TTS_VOICE', 'zh-CN-XiaoxiaoNeural')
+    # edge_voice 只认 Edge 风格音色（含 '-' 且含 'Neural'，与上面判别同口径）：
+    # 百炼失败级联回落 Edge 时，百炼音色 id（longanlingxin 等）传给 edge-tts 必报
+    # Voice does not exist → 该段直接 return 1——此时落环境变量/默认晓晓，兜底才兜得住
+    edge_voice = (pv if '-' in pv and 'Neural' in pv else '') \
+        or os.environ.get('EDGE_TTS_VOICE', 'zh-CN-XiaoxiaoNeural')
 
     # 项目音色切换 → 旧 wav 全部作废重配（audio_meta.json 的 voice 字段对不上即触发）
     meta_path = proj / 'audio_meta.json'
     prev_meta_voice = ''
     if meta_path.exists():
         try:
-            prev_meta_voice = str(json.load(open(meta_path, encoding='utf-8')).get('voice') or '')
+            prev_meta_voice = str(json.loads(meta_path.read_text(encoding='utf-8')).get('voice') or '')
         except Exception:
             prev_meta_voice = ''
-    meta_voice = pv or 'default'
+    # 音色指纹编码「引擎:生效音色:模型」：环境变量换音色/模型（EDGE_TTS_VOICE、
+    # BAILIAN_TTS_*）也触发旧 wav 作废重配——旧格式只记 pv，env 变更指纹不变，
+    # 旧配音静默残留。旧格式值（'default'/'longanlingxin'）照常参与比较，
+    # 首次跑到这里不等即一次性重配，无需迁移。
+    if engine == 'bailian':
+        meta_voice = f'bailian:{bl_use or BL_VOICE}:{BL_MODEL}'
+    else:
+        meta_voice = f'edge:{edge_voice}'
     if prev_meta_voice and prev_meta_voice != meta_voice:
         removed = 0
         for w in (proj / 'audio').glob('*.wav'):
@@ -385,4 +423,7 @@ def main(proj_dir: str) -> int:
 
 
 if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print('用法: python ai/tts_align.py <项目目录>', file=sys.stderr)
+        sys.exit(2)
     sys.exit(main(sys.argv[1]))

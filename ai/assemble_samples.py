@@ -20,7 +20,7 @@ from assemble import GSAP_SRC, _esc_html, fontface_css, load_style_tokens, subti
 def load_slots(proj):
     """皮肤槽位：确认前 skin.json 还没落，直接读 style_samples.json 的主皮肤。"""
     try:
-        ss = json.load(open(proj / 'style' / 'style_samples.json', encoding='utf-8'))
+        ss = json.loads((proj / 'style' / 'style_samples.json').read_text(encoding='utf-8'))
     except Exception:
         return {}
     skins = ss.get('skins') or []
@@ -33,7 +33,7 @@ def transition_mode(proj):
     """转场模式：styles.json tokens.transition（与 assemble.py 同源；缺省 fade）。"""
     style_id = ''
     try:
-        sb = json.load(open(proj / 'storyboards' / 'storyboard.json', encoding='utf-8'))
+        sb = json.loads((proj / 'storyboards' / 'storyboard.json').read_text(encoding='utf-8'))
         style_id = sb.get('style_id') or ''
     except Exception:
         pass
@@ -107,12 +107,17 @@ def mini_html(w, h, dur, clip_id, frag_src, cap_body, cap_js, xfade, fontface):
 
 
 def main(proj_dir: str) -> int:
+    # Go 侧管道捕获不设 PYTHONUTF8，中文 Windows 默认 cp936 严格解码——✓/✗ 不在 GBK 中，
+    # 成功路径的 print 反而炸成 rc=1。errors='replace' 保输出永远可写。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(errors='replace')
     proj = pathlib.Path(proj_dir)
-    pj = json.load(open(proj / 'project.json', encoding='utf-8'))
+    pj = json.loads((proj / 'project.json').read_text(encoding='utf-8'))
     W, H = (1080, 1920) if pj.get('aspect') == '9:16' else (1920, 1080)
     slots = load_slots(proj)
     xfade = transition_mode(proj) == 'fade'
-    entries = json.load(open(proj / 'style' / 'clips' / 'clips.json', encoding='utf-8'))
+    entries = json.loads((proj / 'style' / 'clips' / 'clips.json').read_text(encoding='utf-8'))
 
     fontface = fontface_css(slots.get('font') or '')
     segdir = proj / '.hf-clip'
@@ -157,4 +162,7 @@ def main(proj_dir: str) -> int:
 
 
 if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print('用法: python ai/assemble_samples.py <项目目录>', file=sys.stderr)
+        sys.exit(2)
     sys.exit(main(sys.argv[1]))

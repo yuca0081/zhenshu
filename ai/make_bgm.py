@@ -14,12 +14,14 @@ import json
 import math
 import pathlib
 import shutil
-import subprocess
 import sys
 import tempfile
-import wave
 
 import numpy as np
+
+# normalize / write_wav / ffmpeg_encode 收拢进 av_common（与 make_sfx 同源，
+# subprocess/wave 也随迁，这里不再直接用）
+from av_common import ffmpeg_encode, normalize, write_wav
 
 SR = 44100
 OUT_DIR = pathlib.Path(__file__).resolve().parent.parent / 'data' / 'library' / 'media' / 'audio'
@@ -73,20 +75,21 @@ def synth_pad(notes, slot_s, cf_s, bright=1.0, sub_amp=0.5, detune=0.004):
     env = chord_env(n, slot, int(cf_s * SR))
     L = np.zeros(n)
     R = np.zeros(n)
-    for k, chord in enumerate(notes):
+    t_axis = np.arange(n) / SR  # 时间轴提到循环外：最内层每曲要跑上百次，重复分配
+    for k, chord in enumerate(notes):  # arange(n)（约 200 万元素/次）纯属烧 CPU
         seg = env[k]
         for ni, note in enumerate(chord):
             f0 = freq(note)
             amp = 0.9 / len(chord) * (1.0 if ni else 1.15)  # 根音略抬
             for mult, ha in ((1.0, 1.0), (2.0, 0.22 * bright), (3.0, 0.07 * bright)):
                 ph = 2 * math.pi * ni * 0.13  # 固定相位差防完全同相叠加
-                L += amp * ha * seg * np.sin(2 * np.pi * f0 * mult * (1 - detune) * np.arange(n) / SR + ph)
-                R += amp * ha * seg * np.sin(2 * np.pi * f0 * mult * (1 + detune) * np.arange(n) / SR + ph)
+                L += amp * ha * seg * np.sin(2 * np.pi * f0 * mult * (1 - detune) * t_axis + ph)
+                R += amp * ha * seg * np.sin(2 * np.pi * f0 * mult * (1 + detune) * t_axis + ph)
             # 低八度 sub（只根音）
             if ni == 0:
                 fs = f0 / 2
-                L += sub_amp * seg * np.sin(2 * np.pi * fs * np.arange(n) / SR)
-                R += sub_amp * seg * np.sin(2 * np.pi * fs * np.arange(n) / SR + 0.5)
+                L += sub_amp * seg * np.sin(2 * np.pi * fs * t_axis)
+                R += sub_amp * seg * np.sin(2 * np.pi * fs * t_axis + 0.5)
     return L, R
 
 
@@ -113,10 +116,6 @@ def add_pluck(L, R, chord_notes, slot_s, bpm, amp=0.14):
         np.add.at(R, idx, amp * pan * 2 * tone)
         k += 1
         t += step
-
-
-# normalize / write_wav / ffmpeg_encode 收拢进 av_common（与 make_sfx 同源）
-from av_common import ffmpeg_encode, normalize, write_wav  # noqa: E402
 
 
 # ── 曲目定义 ─────────────────────────────────────────────────
@@ -191,6 +190,11 @@ TRACKS = [
 
 
 def main() -> int:
+    # Go 侧管道捕获不设 PYTHONUTF8，中文 Windows 默认 cp936 严格解码——✓/✗ 不在 GBK 中，
+    # 成功路径的 print 反而炸成 rc=1。errors='replace' 保输出永远可写。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(errors='replace')
     force = '--force' in sys.argv
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     manifest = []
@@ -207,16 +211,21 @@ def main() -> int:
             L, R = normalize(L, R, peak=0.55)
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as fh:
                 wav_path = pathlib.Path(fh.name)
-            write_wav(wav_path, L, R, SR)
-            ok = ffmpeg_encode(wav_path, mp3, bitrate='160k')
-            if not ok:  # 无 ffmpeg：改留 wav（Chromium 照播）
-                wav_asset = mp3.with_suffix('.wav')
-                shutil.move(str(wav_path), wav_asset)
-                manifest.append({'name': tr['name'], 'file': wav_asset.name,
-                                 'duration': tr['slot'] * len(tr['chords']), 'mood': tr['mood']})
-                print(f"{tr['name']}: ffmpeg 缺失，留 wav ✓")
-                continue
-            wav_path.unlink(missing_ok=True)
+            try:
+                write_wav(wav_path, L, R, SR)
+                ok = ffmpeg_encode(wav_path, mp3, bitrate='160k')
+                if not ok:  # 无 ffmpeg：改留 wav（Chromium 照播）
+                    wav_asset = mp3.with_suffix('.wav')
+                    shutil.move(str(wav_path), wav_asset)  # 移走后 finally 的清理自然扑空
+                    manifest.append({'name': tr['name'], 'file': wav_asset.name,
+                                     'duration': tr['slot'] * len(tr['chords']), 'mood': tr['mood']})
+                    print(f"{tr['name']}: ffmpeg 缺失，留 wav ✓")
+                    continue
+            finally:
+                wav_path.unlink(missing_ok=True)  # 异常中断也不留临时 wav 尸体
+            # 历史 fallback 残留清理：早先无 ffmpeg 时期留过同名 .wav，mp3 成功后
+            # 删掉——清单只记 mp3，旧 wav 不清会双份同曲共存成死资产
+            mp3.with_suffix('.wav').unlink(missing_ok=True)
             print(f"{tr['name']}: {mp3.stat().st_size // 1024}KB ✓")
         manifest.append({'name': tr['name'], 'file': mp3.name,
                          'duration': tr['slot'] * len(tr['chords']), 'mood': tr['mood']})

@@ -24,12 +24,17 @@ MAX_SAMPLES = 3  # 与 genSpecs 的 styleSampleImages 上限一致
 
 
 def main(proj_dir: str) -> int:
+    # Go 侧管道捕获不设 PYTHONUTF8，中文 Windows 默认 cp936 严格解码——✓/✗ 不在 GBK 中，
+    # 成功路径的 print 反而炸成 rc=1。errors='replace' 保输出永远可写。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(errors='replace')
     proj = pathlib.Path(proj_dir)
     ss_path = proj / 'style' / 'style_samples.json'
     if not ss_path.exists():
         return 0
     try:
-        samples = json.load(open(ss_path, encoding='utf-8')).get('samples') or []
+        samples = json.loads(ss_path.read_text(encoding='utf-8')).get('samples') or []
     except Exception as e:
         print(f'style_samples.json 不可读，跳过截图: {e}')
         return 0
@@ -64,8 +69,15 @@ def main(proj_dir: str) -> int:
         finally:
             tmp.unlink(missing_ok=True)
         print(f'样张 {i} 截图 → {out.name}')
+    # samples 数量缩减后，旧的更高编号 PNG 已不在 outs 里、不会再被 spec 引用，
+    # 留着会被旧缓存/旧产物混淆——清掉
+    for i in range(len(outs), MAX_SAMPLES):
+        (proj / 'style' / f'sample-{i}.png').unlink(missing_ok=True)
     return 0
 
 
 if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print('用法: python ai/snap_samples.py <项目目录>', file=sys.stderr)
+        sys.exit(2)
     sys.exit(main(sys.argv[1]))

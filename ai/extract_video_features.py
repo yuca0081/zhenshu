@@ -3,7 +3,8 @@
 
 用法：python ai/extract_video_features.py <video_path> <outdir> [--start S] [--end E]
 产物 <outdir>/features.json：
-  { video, duration_s, span_s, n_shots, frames: [{path, t}], palette: [{hex, share, lum}] }
+  { video, duration_s, span_s, n_shots(镜头数=硬切点+1), n_cuts, cuts,
+    frames: [{path, t}], palette: [{hex, share, lum}] }
 另产 <outdir>/sheet-00.png：全部关键帧拼网格（每格带 #序号 与时间戳角标），
 供解析智能体的结构判断阶段一张图看懂全片。
 
@@ -46,8 +47,15 @@ def _ff(name: str) -> str:
 def probe_duration(video: pathlib.Path) -> float:
     out = subprocess.run([_ff('ffprobe'), '-v', 'error', '-show_entries',
                           'format=duration', '-of', 'csv=p=0', str(video)],
-                         capture_output=True, text=True, check=True)
-    return float(out.stdout.strip())
+                         capture_output=True, text=True, encoding='utf-8', errors='replace',
+                         check=True)
+    try:
+        return float(out.stdout.strip())
+    except ValueError:
+        # 损坏/非媒体文件 ffprobe 可能空串输出——裸 float() 只会甩 ValueError
+        # traceback，给一行能定位的原因
+        raise SystemExit(f'✗ ffprobe 读不到时长({video}): '
+                         f'{(out.stderr or out.stdout).strip()[:200] or "无输出"}')
 
 
 def max_frames(duration: float) -> int:
@@ -62,12 +70,21 @@ def scene_times(video: pathlib.Path, duration: float, start: float, end: float, 
     try:
         # 旧版用 -vsync vfr，ffmpeg 7+ 已移除该选项（Unrecognized option →
         # 场景检测静默退化均匀采样）；select 过滤后默认 passthrough 已是
-        # 所需行为，直接不传，全版本兼容
-        out = subprocess.run([_ff('ffmpeg'), '-i', str(video),
+        # 所需行为，直接不传，全版本兼容。
+        # -ss/-t 限定解码窗口：段模式下本函数被调 K 次，不限窗=K 次全片解码；
+        # 输入 seeking 会把时间轴归零（实测 pts_time 变为相对 seek 点），解析出的
+        # 切点统一加回 start 折算成绝对时刻（全片模式 start=0 不受影响）
+        out = subprocess.run([_ff('ffmpeg'), '-ss', f'{start:.3f}', '-i', str(video),
+                              '-t', f'{max(end - start, 0):.3f}',
                               '-vf', "select='gt(scene,0.25)',showinfo",
-                              '-f', 'null', '-'], capture_output=True, text=True, timeout=600)
-        cuts = sorted({float(m.group(1)) for m in re.finditer(r'pts_time:([0-9.]+)', out.stderr)})
-    except Exception:
+                              '-f', 'null', '-'],
+                             capture_output=True, text=True,
+                             encoding='utf-8', errors='replace', timeout=600)
+        cuts = sorted({start + float(m.group(1))
+                       for m in re.finditer(r'pts_time:([0-9.]+)', out.stderr)})
+    except Exception as e:
+        # 降级前留告警：裸吞会让「全片无硬切」与「检测炸了」在下游不可分辨
+        print(f'警告: 场景检测失败，回退均匀采样: {str(e)[:160]}')
         cuts = []
     cuts = [t for t in cuts if start + 0.3 < t < end - 0.3][:400]
     ts = list(cuts)
@@ -167,6 +184,11 @@ def make_sheets(frames: list[dict], outdir: pathlib.Path) -> list[str]:
 
 
 def main() -> int:
+    # Go 侧管道捕获不设 PYTHONUTF8，中文 Windows 默认 cp936 严格解码——✓/✗ 不在 GBK 中，
+    # 成功路径的 print 反而炸成 rc=1。errors='replace' 保输出永远可写。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(errors='replace')
     ap = argparse.ArgumentParser()
     ap.add_argument('video')
     ap.add_argument('outdir')
@@ -187,7 +209,14 @@ def main() -> int:
     frames = []
     for i, t in enumerate(times):
         png = outdir / f'frame-{i:02d}.png'
-        grab_frame(video, t, png)
+        try:
+            grab_frame(video, t, png)
+        except Exception as e:
+            # 半途失败：把已抽的帧一并清掉，不留残缺帧集给下游拼网格/取色误用
+            for f in frames:
+                pathlib.Path(f['path']).unlink(missing_ok=True)
+            png.unlink(missing_ok=True)
+            raise SystemExit(f'✗ 抽帧失败 t={t:.2f}s（{video}）: {e}')
         frames.append({'path': str(png.resolve()), 't': round(t, 2), 'idx': i})
 
     sheets = make_sheets(frames, outdir)
@@ -196,7 +225,12 @@ def main() -> int:
         'video': str(video.resolve()),
         'duration_s': round(duration, 1),
         'span_s': [round(a.start, 2), round(end, 2)],
-        'n_shots': len(times),
+        # n_shots = 段内镜头数（硬切点+1）：Go 侧 styleref 把它当「N 个镜头」注入
+        # 提示词，旧值 len(times) 是抽帧点数（受 cap 采样上限约束），不是镜头数。
+        # 场景检测失败的降级路径 cuts=[] → 记 1（=未检出硬切）
+        'n_shots': len(cuts) + 1,
+        # 原始硬切信号单列一份，与抽帧点/镜头数解耦（消费方按需取）
+        'n_cuts': len(cuts),
         'cuts': [round(t, 2) for t in cuts],
         'sheets': sheets,
         'frames': frames,

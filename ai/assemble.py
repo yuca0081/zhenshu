@@ -17,10 +17,15 @@ GSAP_SRC = AI_DIR / 'assets' / 'gsap.min.js'
 
 def load_overlay(proj):
     """读分镜 overlay 配置：返回 (ovl|None, chapters, style_id)。
-    style_id 无论 overlay 是否启用都返回（风格 token 查询：overlay 配色/转场模式）。"""
+    style_id 无论 overlay 是否启用都返回（风格 token 查询：overlay 配色/转场模式）。
+    文件缺失是常态（老项目/样张阶段），静默给默认；读到了但损坏（JSON 半截等）
+    说明产出侧有 bug，告警后同样降级——两种情况不区分会把排障引向歧途。"""
     try:
-        sb = json.load(open(proj / 'storyboards' / 'storyboard.json', encoding='utf-8'))
-    except Exception:
+        sb = json.loads((proj / 'storyboards' / 'storyboard.json').read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return None, {}, ''
+    except Exception as e:
+        print(f'警告: storyboard.json 读取失败（疑似损坏），按无 overlay 处理: {e}')
         return None, {}, ''
     chapters = {s.get('id'): (s.get('chapter') or '') for s in sb.get('segments', [])}
     ovl = sb.get('overlay')
@@ -35,11 +40,15 @@ def load_style_tokens(style_id):
         return {}
     path = AI_DIR.parent / 'data' / 'library' / 'styles.json'
     try:
-        for e in json.load(open(path, encoding='utf-8')):
-            if str(e.get('id', '')).lower() == str(style_id).lower():
-                return e.get('tokens') or {}
-    except Exception:
-        pass
+        entries = json.loads(path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        print(f'警告: styles.json 读取失败（疑似损坏），风格 token 走中性默认: {e}')
+        return {}
+    for e in entries:
+        if str(e.get('id', '')).lower() == str(style_id).lower():
+            return e.get('tokens') or {}
     return {}
 
 
@@ -76,10 +85,33 @@ def fontface_css(*font_stacks):
 def load_skin_slots(proj):
     """读项目皮肤槽位（style/skin.json；字幕带配色/字体用它，与画面同源）。"""
     try:
-        sk = json.load(open(proj / 'style' / 'skin.json', encoding='utf-8'))
+        sk = json.loads((proj / 'style' / 'skin.json').read_text(encoding='utf-8'))
         return sk.get('slots') or {}
-    except Exception:
+    except FileNotFoundError:
         return {}
+    except Exception as e:
+        print(f'警告: skin.json 读取失败（疑似损坏），字幕带配色走默认: {e}')
+        return {}
+
+
+# font_assets.json 内含数 MB 的 base64 data URL，而 fontasset_css 每次装配要被
+# 调 3 次（index + 每段字幕带）——按（路径+mtime）缓存解析结果，文件没变不重复
+# json.loads；mtime 变了（font_tool 重跑）自然失效
+_FONTASSET_CACHE = {}  # (path_str, mtime_ns) → 解析后的 dict（读不到时存 {}）
+
+
+def _load_font_assets(proj):
+    key_path = proj / 'style' / 'font_assets.json'
+    try:
+        key = (str(key_path), key_path.stat().st_mtime_ns)
+    except OSError:
+        return {}
+    if key not in _FONTASSET_CACHE:
+        try:
+            _FONTASSET_CACHE[key] = json.loads(key_path.read_text(encoding='utf-8'))
+        except Exception:
+            _FONTASSET_CACHE[key] = {}
+    return _FONTASSET_CACHE[key]
 
 
 def fontasset_css(proj, *font_stacks):
@@ -87,11 +119,7 @@ def fontasset_css(proj, *font_stacks):
     子集好的真字体 woff2 data URL）：栈里引用到就补 url() 声明。质检要声明，
     渲染要真字体，这里两个一起给；没有产物文件就静默空串（font_tool 失败时
     家族已被剥除，不会走到这）。"""
-    try:
-        fa = json.loads((proj / 'style' / 'font_assets.json').read_text(encoding='utf-8'))
-    except Exception:
-        return ''
-    resolved = fa.get('resolved') or {}
+    resolved = _load_font_assets(proj).get('resolved') or {}
     low = str(' '.join(s for s in font_stacks if s) or '').lower()
     out = []
     for fam, url in resolved.items():
@@ -148,7 +176,7 @@ def subtitle_blocks(scenes, meta_voices, slots, proj, w=1080, h=1920):
     capdir = proj / 'compositions' / 'caps'
     capdir.mkdir(parents=True, exist_ok=True)
     html_parts = []
-    for sid, start, dur, adur in scenes:
+    for sid, start, dur, _adur in scenes:
         v = per.get(sid)
         if not v or not v.get('phrases'):
             continue
@@ -218,14 +246,21 @@ def _esc_html(s):
 
 
 def main(proj_dir: str) -> int:
+    # Go 侧管道捕获不设 PYTHONUTF8，中文 Windows 默认 cp936 严格解码——✓/✗ 不在 GBK 中，
+    # 成功路径的 print 反而炸成 rc=1。errors='replace' 保输出永远可写。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(errors='replace')
     proj = pathlib.Path(proj_dir)
-    meta = json.load(open(proj / 'audio_meta.json', encoding='utf-8'))
-    pj = json.load(open(proj / 'project.json', encoding='utf-8'))
+    meta = json.loads((proj / 'audio_meta.json').read_text(encoding='utf-8'))
+    pj = json.loads((proj / 'project.json').read_text(encoding='utf-8'))
     name = pj.get('name', proj.name)
     # 画幅随项目（缺省 16:9 与既有项目一致）
     W, H = (1080, 1920) if pj.get('aspect') == '9:16' else (1920, 1080)
 
     durs = {v['id']: v['duration_s'] for v in meta['voices']}
+    # 段长 = 旁白时长 + SegTail 尾垫（0.35s，与 Go 侧 contract.SegTail / web segtime
+    # 三端同口径；段间转场的黑场微叠化吃这段余量）
     scene = {k: round(v + 0.35, 3) for k, v in durs.items()}
     ids = sorted(scene.keys())
     total = round(sum(scene.values()), 3)
@@ -378,11 +413,12 @@ def main(proj_dir: str) -> int:
     # （xfadeConcat），页内不能再叠黑场（双重变暗），故页内层只在 fade 时注入。
     trans = str(tokens.get('transition') or 'fade').strip().lower()
     xfade = trans == 'fade'
-    cap_body, cap_js = subtitle_blocks(
-        [(sid, starts[sid], scene[sid], durs[sid]) for sid in ids], meta['voices'], slots, proj, W, H)
+    # index 与字幕带共用同一段表，只构造一次
+    seg_scenes = [(sid, starts[sid], scene[sid], durs[sid]) for sid in ids]
+    cap_body, cap_js = subtitle_blocks(seg_scenes, meta['voices'], slots, proj, W, H)
     (proj / 'index.html').write_text(
         project_html(W, H, total,
-                     scenes_html([(sid, starts[sid], scene[sid], durs[sid]) for sid in ids]),
+                     scenes_html(seg_scenes),
                      *overlay_block(first_chapter, total, 0.0), cap_body, cap_js, xfade=xfade),
         encoding='utf-8')
 
@@ -437,4 +473,7 @@ def main(proj_dir: str) -> int:
 
 
 if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print('用法: python ai/assemble.py <项目目录>', file=sys.stderr)
+        sys.exit(2)
     sys.exit(main(sys.argv[1]))

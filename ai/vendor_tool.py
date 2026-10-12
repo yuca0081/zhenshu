@@ -117,7 +117,9 @@ PENDING_REPLAY = 'pending(自动闭环采购;首次使用段的 sceneReplayCheck
 
 def exam_entry(entry: dict, replay_evidence: str = '') -> list:
     """离线验收:哈希/体积/许可证;回放证据分层——真实证据(GATE/双渲染 md5)为佳,
-    pending 视为附条件通过(运行期由管线 sceneReplayCheck 硬闸兜底,台账可见)。"""
+    pending 视为附条件通过(运行期由管线 sceneReplayCheck 硬闸兜底,台账可见)。
+    只读不改 entry:回放证据由调用方在验收通过后自行登记——旧版在这就写
+    entry['replay_exam'],失败版本的证据会随成功版本的 save_manifest 一并落盘。"""
     errs = []
     p = VENDOR / entry['lib'] / entry['version'] / entry['file']
     if not p.exists():
@@ -129,9 +131,7 @@ def exam_entry(entry: dict, replay_evidence: str = '') -> list:
     lic = entry.get('license', '')
     if lic and lic not in LICENSE_ALLOW:
         errs.append(f'许可证 {lic} 不在白名单 {sorted(LICENSE_ALLOW)}')
-    if replay_evidence:
-        entry['replay_exam'] = replay_evidence
-    if not entry.get('replay_exam'):
+    if not (replay_evidence or entry.get('replay_exam')):
         errs.append('缺确定性回放证据(两轮渲染抽帧 md5 对比;exam --replay 补录)')
     return errs
 
@@ -150,6 +150,16 @@ def ensure(spec: str, member: str = '', replay_evidence: str = '', allow_pending
         if not errs:
             print(f'✓ {lib}@{version} 已登记且复核通过({ent["file"]}, sha256 前12={ent["sha256"][:12]})')
             return 0
+        if any(e.startswith('哈希不符') for e in errs):
+            # 台账声明「哈希不符=安全事件,拒收不重试」就得说到做到:盘上文件与登记
+            # 哈希对不上=已被替换/损坏,自动重新采购=静默换血,把安全事件洗成"一切
+            # 正常"。标记需人工留痕并拒收,复购必须人来核源后拍板
+            ent['needs_manual'] = f'{time.strftime("%Y-%m-%d %H:%M")} 复核哈希不符,需人工核源'
+            save_manifest(m)
+            print(f'✗ {lib}@{version} 已登记库复核哈希不符——安全事件,标记需人工并拒收(不自动重购):')
+            for e in errs:
+                print(f'  - {e}')
+            return 1
         print(f'✗ {lib}@{version} 已登记但复核不过,重新采购:')
         for e in errs:
             print(f'  - {e}')
@@ -190,6 +200,9 @@ def exam_cmd(spec: str, replay_evidence: str) -> int:
                 print(f'  - {e}')
         else:
             if replay_evidence:
+                # 验收通过才登记证据并落盘：exam_entry 只读不改，失败版本的
+                # replay_exam 不会再随成功版本的 save_manifest 一并落盘
+                ent['replay_exam'] = replay_evidence
                 save_manifest(m)
             print(f'✓ {lib}@{v} 验收通过(replay 证据:{ent.get("replay_exam", "-")[:60]})')
     return bad
@@ -204,12 +217,18 @@ def list_cmd() -> int:
         for v, e in sorted(versions.items()):
             rp = e.get('replay_exam', '')
             rp_disp = 'pending' if rp.startswith('pending') else ('有' if rp else '缺')
+            nm = f'  [需人工:{e["needs_manual"]}]' if e.get('needs_manual') else ''
             print(f'{lib}@{v}  {e["file"]}  {e["bytes"]//1024}KB  license={e.get("license","-")}  '
-                  f'sha256前12={e["sha256"][:12]}  replay={rp_disp}')
+                  f'sha256前12={e["sha256"][:12]}  replay={rp_disp}{nm}')
     return 0
 
 
 if __name__ == '__main__':
+    # Go 侧管道捕获不设 PYTHONUTF8，中文 Windows 默认 cp936 严格解码——✓/✗ 不在 GBK 中，
+    # 成功路径的 print 反而炸成 rc=1。errors='replace' 保输出永远可写。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(errors='replace')
     a = sys.argv[1:]
     if not a or a[0] in ('-h', '--help', 'help'):
         print(__doc__)
