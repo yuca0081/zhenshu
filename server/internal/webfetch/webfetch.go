@@ -50,6 +50,11 @@ func fail(class error, format string, a ...any) *Error {
 // httptest 监听 127.0.0.1，天然落在封锁名单里，不解锁就没法离线测抓取。
 var ssrfGuard = badHost
 
+// lookupIP DNS 解析（包级变量供测试注入：伪造「域名解析到内网 IP」的重绑定场景）。
+var lookupIP = func(ctx context.Context, host string) ([]net.IP, error) {
+	return net.LookupIP(host)
+}
+
 // Article 抓取 rawURL 并抽取正文。
 func Fetch(ctx context.Context, rawURL string) (*Article, error) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
@@ -61,6 +66,16 @@ func Fetch(ctx context.Context, rawURL string) (*Article, error) {
 	}
 	client := &http.Client{
 		Timeout: 20 * time.Second,
+		// 拨号层复验（防 DNS 重绑定，见 guardedDial）；Proxy/HTTP2 与默认 Transport 同口径
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           guardedDial,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
 		// 逐跳校验重定向目标：默认客户端会跟满 10 跳且不复查，公网 302 → 127.0.0.1 即绕过
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
@@ -101,23 +116,62 @@ func Fetch(ctx context.Context, rawURL string) (*Article, error) {
 	return &Article{Title: strings.TrimSpace(art.Title), Content: content, Words: len([]rune(content))}, nil
 }
 
-// badHost SSRF 防线：字面量检查 + DNS 解析复核。只查字面量拦不住自建域名 A 记录指向
-// 内网（云 metadata 169.254.169.254 / host 网络下的宿主回环服务）——必须解析后再验。
+// badHost SSRF 防线（第一层，请求前）：字面量检查 + DNS 解析复核。只查字面量拦不住
+// 自建域名 A 记录指向内网（云 metadata 169.254.169.254 / host 网络下的宿主回环服务）
+// ——必须解析后再验。第二层在拨号时（guardedDial）：两次解析之间 A 记录可被换成
+// 内网 IP（DNS 重绑定），拨号层以「真拿来建连的 IP」为准再过一遍黑名单。
 func badHost(host string) bool {
 	if host == "" || strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
 		return true
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
+		return ipBanned(ip)
 	}
-	ips, err := net.LookupIP(host)
+	ips, err := lookupIP(context.Background(), host)
 	if err != nil {
 		return true // 解析失败一律拒绝（防靠 NXDOMAIN 行为差异绕过）
 	}
 	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+		if ipBanned(ip) {
 			return true
 		}
 	}
 	return false
+}
+
+// ipBanned 单个 IP 是否落在封锁名单：回环/内网/链路本地/未指定/组播。
+func ipBanned(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
+}
+
+// guardedDial Transport 拨号钩子（SSRF 第二层，防 DNS 重绑定）：addr 是主机名时先
+// 解析出 IP、逐个过黑名单，任一命中即拒绝；通过后只对验证过的 IP 建连——拨号与
+// 建连用的是同一次解析结果，重绑定窗口被关死。字面量 IP 不经这里再解析（badHost
+// 已把内网字面量拦在请求前）。TLS 的 SNI/证书校验不受影响：Transport 按 URL host
+// 设 ServerName，与底层连到哪个 IP 无关。
+func guardedDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	if net.ParseIP(host) == nil {
+		ips, err := lookupIP(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("拨号解析 %s 失败: %w", host, err)
+		}
+		chosen := ""
+		for _, ip := range ips {
+			if !ipBanned(ip) {
+				chosen = ip.String()
+				break
+			}
+		}
+		if chosen == "" {
+			return nil, fmt.Errorf("%s 解析到不允许的地址，拒绝建连", host)
+		}
+		addr = net.JoinHostPort(chosen, port)
+	}
+	var d net.Dialer
+	return d.DialContext(ctx, network, addr)
 }

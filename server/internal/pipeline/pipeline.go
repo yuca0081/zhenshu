@@ -147,6 +147,12 @@ func tmpSuffixName(out, prefix, ext string) (string, error) {
 	return name, nil
 }
 
+// CommandContext 是 ctxCommand 的跨包出口：produce/styleref 等包的所有外部进程
+// 都必须走这里，否则取消时孙进程残留（详见 ctxCommand 注释）。
+func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
+	return ctxCommand(ctx, name, args...)
+}
+
 // ctxCommand 可取消的外部进程：ctx 结束时整棵进程树击杀。exec.CommandContext
 // 默认只杀直接子进程——npx→node→hyperframes→chromium/ffmpeg 的孙进程会存活，
 // 继续烧 CPU、写 renders/（win32 是主力开发平台，TerminateProcess 杀不动 cmd 包装的树）。
@@ -154,17 +160,36 @@ func ctxCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
 	setSysProcAttr(cmd)
 	cmd.Cancel = func() error {
+		// killProcessTree 连 pid 本身一起杀（unix 对进程组 Kill，win 是 taskkill /T），
+		// 无需再 Process.Kill——进程已死时它只会往 Cancel 错误链里混 os.ErrProcessDone。
 		if cmd.Process != nil {
 			killProcessTree(cmd.Process.Pid)
-		}
-		if cmd.Process != nil {
-			return cmd.Process.Kill()
 		}
 		return nil
 	}
 	cmd.WaitDelay = 10 * time.Second // 树杀后给孙进程管道收尾的宽限，超时强收
 	return cmd
 }
+
+// ProjectMu 返回该项目 project.json 的读-改-写互斥锁。api 直改（如 applyStyle）
+// 与 agent 轮内的 SetProjectField 并发时，双方各基于旧快照整文件回写，后写覆盖
+// 先写（style_id 被 bgm 写入抹掉那类丢更新）——单笔原子写防撕裂不防丢更新，
+// 必须串行化。凡手工读-改-写 project.json 的代码都必须持有它。
+func ProjectMu(p *Project) *sync.Mutex {
+	projMuLock.Lock()
+	defer projMuLock.Unlock()
+	mu := projMus[p.Dir]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		projMus[p.Dir] = mu
+	}
+	return mu
+}
+
+var (
+	projMuLock sync.Mutex
+	projMus    = map[string]*sync.Mutex{} // 按项目目录取锁
+)
 
 func pctx(p *Project) context.Context {
 	if p.Ctx != nil {
@@ -400,7 +425,8 @@ func stageStyleSamples(p *Project) error {
 		// 迷你真段补渲（幂等，只补缺）：确认门还没拍板才有意义——已确认的老项目
 		// 不为预览烧渲染。中途断电重跑在这里续上。
 		if !ss.Confirmed && EnsureSampleClips(p, &ss, nil) {
-			_ = writeFile(final, mustJSON(ss))
+			// api/agent 会在管线跑动期间并发读样张文件，裸写有撕裂窗口，一律原子写
+			_ = WriteFileAtomic(final, mustJSONBytes(ss), 0o644)
 		}
 		return LockDesign(p, &ss)
 	}
@@ -420,7 +446,7 @@ func stageStyleSamples(p *Project) error {
 		if err := LoadStyleBrief(p).CheckDynamicLanding(&ss); err != nil {
 			return fmt.Errorf("人工样张产物不合格: %w", err)
 		}
-		if err := writeFile(final, mustJSON(ss)); err != nil {
+		if err := WriteFileAtomic(final, mustJSONBytes(ss), 0o644); err != nil {
 			return err
 		}
 		p.Manifest("style.confirmed", ss.Direction)
@@ -455,7 +481,8 @@ func stageStyleSamples(p *Project) error {
 			}
 			if verr == nil {
 				ss.Confirmed = false
-				if err := writeFile(final, mustJSON(ss)); err != nil {
+				// api/agent 会在管线跑动期间并发读样张文件，裸写有撕裂窗口，一律原子写
+				if err := WriteFileAtomic(final, mustJSONBytes(ss), 0o644); err != nil {
 					return err
 				}
 				p.Manifest("llm.usage", fmt.Sprintf("style_samples prompt=%d completion=%d tokens",
@@ -465,7 +492,7 @@ func stageStyleSamples(p *Project) error {
 				// 迷你真段：草稿落定后立刻出动态小样（任何失败只降级静态，见 styleclips.go），
 				// 完成后把 Video/ClipNote 回写进样张文件
 				if EnsureSampleClips(p, &ss, sb) {
-					_ = writeFile(final, mustJSON(ss))
+					_ = WriteFileAtomic(final, mustJSONBytes(ss), 0o644)
 				}
 				return nil
 			}
@@ -573,7 +600,16 @@ func stageCompositions(p *Project) error {
 }
 
 // stageCheck 质量门禁：调 hyperframes check（lint+runtime+layout+motion+contrast）。
+// 输入集自上次通过后没有任何变化时直接复用结果：Run 的语义是顺序执行 until 之前的
+// 所有阶段，produce 的 happy path 里 checkWithRepair → Run("render") → Run("stitch")
+// 会对同一输入连跑 3 次门禁，rework/frameQA 修复轮同样三跑——check 是分钟级的
+// 浏览器作业，段片渲染有 segStale 缓存而它没有，重复跑纯属白付。
 func stageCheck(p *Project) error {
+	if !checkStale(p) {
+		fmt.Printf("  · check 输入未变，复用上次结果\n")
+		p.Manifest("check.skipped_fresh", "")
+		return nil
+	}
 	out, err := runCLI(p, "npx", "--yes", "hyperframes@0.8.55", "check", "--no-browser-gpu")
 	if err != nil {
 		// 完整输出：上游修复轮要从 ✗ 行提取报错段（截断会丢 Layout 段的重叠错误）；
@@ -581,8 +617,53 @@ func stageCheck(p *Project) error {
 		return fmt.Errorf("check 未过（诊断如下，修复后重跑）:\n%s", out)
 	}
 	_ = writeFile(p.Artifact(".hyperframes-ok"), "check passed "+time.Now().Format(time.RFC3339)+"\n")
+	WriteCheckStamp(p)
 	p.Manifest("check.passed", "")
 	return nil
+}
+
+// checkStampPath check 复用戳：内容随意，起的是「上次通过时刻」mtime 基准的作用。
+func checkStampPath(p *Project) string { return p.Artifact(".check.stamp") }
+
+// WriteCheckStamp check 通过后落戳。调用时机 = 门禁真跑且通过；checkWithRepair 的
+// 放行点（回放门禁也过掉）会再补一次，把「check+回放整轮通过」的语义钉在戳上。
+func WriteCheckStamp(p *Project) {
+	_ = writeFile(checkStampPath(p), "check passed "+time.Now().Format(time.RFC3339)+"\n")
+}
+
+// checkStale check 门禁是否需要真跑：无戳（首次/上次失败/中途被杀），或输入集任一
+// 文件 mtime 新于戳。修复轮重出场景文件、机械回填动帧都会刷新输入 mtime，戳天然
+// 失效——这正是「修复轮后必须真检」要的语义。输入集 = stageCheck 实际消费的合成物
+// （主组合 + 段帧 + 字幕子组合），外加分镜与旁白时间戳兜底（agent 侧改稿后即使还没
+// 重组装也触发重检）。刻意不含 style/design.md、skin.json：LockDesign 每次 Run 都
+// 无条件重写它们，计入会把缓存打穿成每阶段重跑；设计变更的真实传导路径是段帧重生成，
+// 段帧 mtime 已覆盖。
+func checkStale(p *Project) bool {
+	stamp, err := os.Stat(checkStampPath(p))
+	if err != nil {
+		return true
+	}
+	cutoff := stamp.ModTime()
+	for _, rel := range []string{"index.html", "storyboards/storyboard.json", "audio_meta.json"} {
+		if fi, err := os.Stat(p.Artifact(rel)); err == nil && fi.ModTime().After(cutoff) {
+			return true
+		}
+	}
+	for _, dir := range []string{"compositions/frames", "compositions/caps"} {
+		entries, err := os.ReadDir(p.Artifact(dir))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".html") {
+				continue
+			}
+			if fi, err := e.Info(); err == nil && fi.ModTime().After(cutoff) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // stageRender 按段渲染（增量）+ 无损拼接。
@@ -1061,14 +1142,25 @@ func runFFmpeg(p *Project, dir, what string, args ...string) (string, error) {
 	return buf.String(), nil
 }
 
+// renameOver 临时产物转正：Windows 的 os.Rename 底层 MoveFileEx 自带覆盖语义，
+// 直接 rename 即可；先 Remove 再 rename 会制造「旧产物已删、新产物未就位」的缺失
+// 窗口（并发读者撞空），中途被杀则产物彻底丢失。个别文件系统不支持覆盖时退回
+// Remove+重试一次——此时先删后建已是该平台能做到的最好语义。
+func renameOver(tmp, out string) error {
+	if err := os.Rename(tmp, out); err == nil {
+		return nil
+	}
+	_ = os.Remove(out)
+	return os.Rename(tmp, out)
+}
+
 // runFFmpegRename 跑 ffmpeg，成功后临时文件原子转正（混音/终装共用）。
 func runFFmpegRename(p *Project, args []string, tmp, out, what string) error {
 	if _, err := runFFmpeg(p, p.Dir, what, args...); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
-	_ = os.Remove(out)
-	return os.Rename(tmp, out)
+	return renameOver(tmp, out)
 }
 
 // ── 转场 sfx（M-C：段边界气流声 / 章节上扬）──────────────────────
@@ -1274,8 +1366,8 @@ func sfxStem(p *Project) string {
 		_ = os.Remove(tmp)
 		return ""
 	}
-	_ = os.Remove(out)
-	if err := os.Rename(tmp, out); err != nil {
+	if err := renameOver(tmp, out); err != nil {
+		_ = os.Remove(tmp) // 转正失败别把 tmp 留在 renders/ 里当垃圾
 		return ""
 	}
 	return out
@@ -1441,8 +1533,37 @@ func stitchComboFc(vc string, fade string, mixIn string, nIn int) string {
 	return fmt.Sprintf("[0:v]%s[vout];", vc) + bgmFcTail(fade, mixIn, nIn)
 }
 
-// probeDuration ffprobe 取媒体时长（秒；失败返回 0，调用方跳过淡出）。
+// probeDuration ffprobe 取媒体时长（秒；失败返回 0，调用方跳过淡出）。带缓存：
+// 一次 stitch 里 bgmFade/sfxStem/writeActualTimeline 会对同一文件反复探测，ffprobe
+// 每次都是一次进程拉起。key 带文件 mtime+size——文件被重渲/重混后自动失效。
+var (
+	probeMu    sync.Mutex
+	probeCache = map[string]float64{}
+)
+
 func probeDuration(path string) float64 {
+	st, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	key := fmt.Sprintf("%s|%d|%d", path, st.ModTime().UnixNano(), st.Size())
+	probeMu.Lock()
+	d, ok := probeCache[key]
+	probeMu.Unlock()
+	if ok {
+		return d
+	}
+	d = probeDurationUncached(path)
+	probeMu.Lock()
+	if len(probeCache) > 256 { // 防多项目长跑积累陈旧键：超限整体重置，下次重探
+		probeCache = map[string]float64{}
+	}
+	probeCache[key] = d
+	probeMu.Unlock()
+	return d
+}
+
+func probeDurationUncached(path string) float64 {
 	if p, err := exec.LookPath("ffprobe"); err == nil {
 		out, err := exec.Command(p, "-v", "error", "-show_entries", "format=duration",
 			"-of", "csv=p=0", path).Output()
@@ -1452,7 +1573,7 @@ func probeDuration(path string) float64 {
 			}
 		}
 	}
-	if rootDir != "" && extraPATH != "" { // 回退 winget bin 目录
+	if extraPATH != "" { // 回退 EnsureFFmpeg 注入的 bin 目录（winget 安装场景）；rootDir 与 ffprobe 定位无关
 		for _, cand := range []string{"ffprobe.exe", "ffprobe"} {
 			out, err := exec.Command(filepath.Join(extraPATH, cand), "-v", "error",
 				"-show_entries", "format=duration", "-of", "csv=p=0", path).Output()
@@ -1490,8 +1611,7 @@ func copyFile(src, dst string) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	_ = os.Remove(dst)
-	return os.Rename(tmp, dst)
+	return renameOver(tmp, dst)
 }
 
 // ListBGM 曲库可读清单（agent 工具用）："calm——温暖平静…"。
@@ -1686,7 +1806,11 @@ func MustJSONBytes(v any) []byte { return mustJSONBytes(v) }
 
 // SetProjectField 写 project.json 单字段（val=nil 删除该键），读-改-原子写。
 // BGM/音色/字幕/sfx 开关与状态回写共用——此前同一样板在三个包手抄了七份。
+// 持 per-project 锁串行化：api 侧手工读-改-写（applyStyle 等）也必须持同一把锁。
 func SetProjectField(p *Project, key string, val any) error {
+	mu := ProjectMu(p)
+	mu.Lock()
+	defer mu.Unlock()
 	b, err := os.ReadFile(p.Artifact("project.json"))
 	if err != nil {
 		return err

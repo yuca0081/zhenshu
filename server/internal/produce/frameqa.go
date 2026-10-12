@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -282,7 +281,7 @@ func extractFrames(ctx context.Context, p *pipeline.Project, segID string) (*seg
 	}
 	const vf = "scale=1280:-2"
 	run := func(args ...string) error {
-		cmd := exec.CommandContext(ctx, ff, args...)
+		cmd := pipeline.CommandContext(ctx, ff, args...)
 		var buf bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &buf, &buf
 		if err := cmd.Run(); err != nil {

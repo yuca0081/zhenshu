@@ -13,8 +13,9 @@ package produce
 //   - snapshot 时刻最早 0.5s（段首 0.25s 黑场渐变内截帧无意义），frameQA 的 t=0
 //     首帧穿帮硬闸覆盖略弱——0.5s 帧仍能抓「晚出元素提前出现」；尾帧退场检查
 //     （-0.08s）预审做不了，交渲后复查兜底。
-//   - 修复轮不重跑 hyperframes check（与 frameQA 修复轮同口径），layout 回归由
-//     渲后复查兜住（动过的段必在复查名单里）。
+//   - 修复轮自身不显式重跑 hyperframes check，但重出的段帧 mtime 已变，随后
+//     run() 里 Run("render") 隐式跑的 stageCheck 会因 check 戳失效而真检（回渲
+//     前的最后一道闸），layout 回归由它与渲后复查兜住（动过的段必在复查名单里）。
 //   - 转场/运镜类特色判据的证据是渲后段片边界帧序列，预审截不出 → 过滤出预审
 //     考卷，这些判据交渲后 frameQA（ReviewAll）。
 //
@@ -27,7 +28,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -337,7 +337,7 @@ func shrinkFrame(ctx context.Context, src string) (string, error) {
 		return "", err
 	}
 	dst := strings.TrimSuffix(src, ".png") + ".jpg"
-	cmd := exec.CommandContext(ctx, ff, "-y", "-v", "error", "-i", src,
+	cmd := pipeline.CommandContext(ctx, ff, "-y", "-v", "error", "-i", src,
 		"-frames:v", "1", "-vf", "scale=1280:-2", "-q:v", "4", dst)
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf

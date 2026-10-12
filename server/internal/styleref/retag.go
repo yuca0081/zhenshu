@@ -74,9 +74,19 @@ func DraftFromDesign(ctx context.Context, prov *llm.Provider, lib *stylelib.Libr
 	return nil, lastErr
 }
 
-// resolveDesignDraft 视频版 resolveDraft 的无帧变体：同样的词表落表纪律，
-// 但不做帧存在性校验（草稿允许空帧）。
+// resolveDesignDraft 视频版 resolveDraft 的无帧变体：与 resolveDraft 共用
+// resolveTaggerDraft 的词表落表纪律，只是不做帧证据处理与存在性校验
+// （成片没有原片帧，草稿允许空帧，人工在库页补录）。
 func resolveDesignDraft(ctx context.Context, prov *llm.Provider, lib *stylelib.Library, raw *taggerOutput) (*StyleDraft, error) {
+	return resolveTaggerDraft(ctx, prov, lib, raw, false)
+}
+
+// resolveTaggerDraft 打标原始输出 → 落表草稿的共用执行体（resolveDraft 视频解析 /
+// resolveDesignDraft 成片反哺两路唯一实现）：词表 id 直用；新词申请走查重（归一化
+// 精确匹配 → LLM 语义查重）后建词条/挂别名。这是「申请新词」工具的 Go 侧执行体。
+// withFrames=false 时不带证据帧。
+func resolveTaggerDraft(ctx context.Context, prov *llm.Provider, lib *stylelib.Library,
+	raw *taggerOutput, withFrames bool) (*StyleDraft, error) {
 	if len(raw.Tags) < 1 || len(raw.Tags) > 3 {
 		return nil, fmt.Errorf("tags 数量 %d 不合法（主 1 + 辅 ≤2）", len(raw.Tags))
 	}
@@ -84,9 +94,10 @@ func resolveDesignDraft(ctx context.Context, prov *llm.Provider, lib *stylelib.L
 	if err != nil {
 		return nil, fmt.Errorf("词表读取失败: %w", err)
 	}
+	// 先集中归一化精确查重 + 收集语义查重候选
 	var pend []*newWord
 	ids := make([]string, 0, len(raw.Tags))
-	names := make([]string, 0, len(raw.Tags))
+	names := make([]string, 0, len(raw.Tags)) // 各标签正式名（草稿名缺省回退用）
 	for i, t := range raw.Tags {
 		switch {
 		case t.ID != "" && vocab.Has(t.ID):
@@ -94,10 +105,10 @@ func resolveDesignDraft(ctx context.Context, prov *llm.Provider, lib *stylelib.L
 			names = append(names, vocab.Entries[t.ID].Name)
 		case t.New != nil && strings.TrimSpace(t.New.Name) != "":
 			if hit, ok := vocab.Find(t.New.Name); ok {
-				ids = append(ids, hit.ID)
+				ids = append(ids, hit.ID) // 精确撞车：复用词条
 				names = append(names, hit.Name)
 			} else {
-				ids = append(ids, "")
+				ids = append(ids, "") // 占位：语义查重后落表
 				names = append(names, strings.TrimSpace(t.New.Name))
 				pend = append(pend, t.New)
 			}
@@ -105,6 +116,8 @@ func resolveDesignDraft(ctx context.Context, prov *llm.Provider, lib *stylelib.L
 			return nil, fmt.Errorf("第 %d 个标签既不在词表也没申请新词", i+1)
 		}
 	}
+	// 语义查重（一次 LLM 调用批处理全部候选；命中挂别名复用，未命中建词条）。
+	// blanks 预先记下占位下标——循环里逐个回填后空白位会变，边数边填会错位。
 	if len(pend) > 0 {
 		blanks := make([]int, 0, len(pend))
 		for i, id := range ids {
@@ -143,10 +156,14 @@ func resolveDesignDraft(ctx context.Context, prov *llm.Provider, lib *stylelib.L
 		Tags:    contract.StyleTags{Main: ids[0], Aux: ids[1:]},
 	}
 	if d.Name == "" {
-		d.Name = names[0]
+		d.Name = names[0] // 缺省用主标签正式名
 	}
 	for i, t := range raw.Tags {
-		d.TagEvidence = append(d.TagEvidence, contract.TagEvidence{Tag: ids[i], Note: strings.TrimSpace(t.Note)})
+		ev := contract.TagEvidence{Tag: ids[i], Note: strings.TrimSpace(t.Note)}
+		if withFrames {
+			ev.Frames = t.Frames
+		}
+		d.TagEvidence = append(d.TagEvidence, ev)
 	}
 	d.Signatures = append(d.Signatures, raw.Signatures...)
 	return d, stylelib.ValidateSignatures(d.Signatures)

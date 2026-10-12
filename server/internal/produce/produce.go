@@ -20,7 +20,6 @@ import (
 	"log"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -82,25 +81,27 @@ func terminalEvent(ev string) bool {
 
 // LastTerminal 读 manifest 最近一条制作/重做终态（done/error/cancelled/interrupted）。
 // 磁盘审计口径的唯一读取点：agent 状态摘要、api last_produce 共用，不再各写一套扫描。
+// 尾部窗口读取（ReadJSONLTail）：manifest 无限增长，agent 每步门禁都调这里，
+// 全量读是线性放大的 I/O。
 func LastTerminal(p *pipeline.Project) (event, detail, ts string) {
-	b, err := os.ReadFile(p.Artifact("manifest.jsonl"))
+	lines, err := ReadJSONLTail(p.Artifact("manifest.jsonl"), 512)
 	if err != nil {
 		return "", "", ""
 	}
-	for _, line := range strings.Split(string(b), "\n") {
+	for i := len(lines) - 1; i >= 0; i-- {
 		var e struct {
 			Event  string `json:"event"`
 			Detail string `json:"detail"`
 			TS     string `json:"ts"`
 		}
-		if json.Unmarshal([]byte(line), &e) != nil {
+		if json.Unmarshal(lines[i], &e) != nil {
 			continue
 		}
 		if terminalEvent(e.Event) {
-			event, detail, ts = e.Event, e.Detail, e.TS
+			return e.Event, e.Detail, e.TS
 		}
 	}
-	return event, detail, ts
+	return "", "", ""
 }
 
 var (
@@ -732,6 +733,9 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 			if rerr := r.sceneReplayCheck(ctx, p); rerr != nil {
 				err = rerr
 			} else {
+				// check + 回放都过了：补一次戳（stageCheck 已写），下游 Run(render)/
+				// Run(stitch) 里的 stageCheck 据此跳过——门禁对同一输入不该跑三遍
+				pipeline.WriteCheckStamp(p)
 				r.emit(p.ID, "stage", "check", "done")
 				r.Manifest(p, "stage.finish", "check")
 				return nil
@@ -754,6 +758,7 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 					if rerr := r.sceneReplayCheck(ctx, p); rerr != nil {
 						err = rerr // 回填过了但回放没过：带着回放错误进下面的修复轮
 					} else {
+						pipeline.WriteCheckStamp(p)
 						r.emit(p.ID, "stage", "check", "done")
 						r.Manifest(p, "stage.finish", "check")
 						return nil
@@ -795,7 +800,9 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 			return fmt.Errorf("组装失败: %w", err)
 		}
 	}
-	return errors.New("unreachable")
+	// 编译器站岗行：循环体内（成功放行 / ctx 取消 / 第 3 轮烧尽）必 return，正常到不了
+	// 这里；真走到了说明轮次边界被人改坏，文案按用户视角给，不泄漏内部字样
+	return errors.New("check 修复轮耗尽仍未通过")
 }
 
 // segIDRe 段 id（seg01、seg02…）。
@@ -965,6 +972,7 @@ func (r *Runner) sceneReplayCheck(ctx context.Context, p *pipeline.Project) erro
 	textureFrames := 0
 	diffRounds := func(dir1, dir2 string, names []string) (badFrames, msgs []string, err error) {
 		seen := map[string]bool{}
+		unmapped := 0
 		for _, name := range names {
 			p1, p2 := filepath.Join(p.Artifact(dir1), name), filepath.Join(p.Artifact(dir2), name)
 			ia, ib, derr := decodePngPair(p1, p2)
@@ -989,12 +997,21 @@ func (r *Runner) sceneReplayCheck(ctx context.Context, p *pipeline.Project) erro
 					segID = t2seg[round2(t)]
 				}
 			}
-			if segID == "" || seen[segID] {
+			if segID == "" {
+				// 映射不到段的差异帧不能静默丢：非确定性失败可能恰好藏在解析不出
+				// 时刻的帧里（文件名异常/时刻不在考卷表），聚合计数按失败处理
+				unmapped++
+				continue
+			}
+			if seen[segID] {
 				continue
 			}
 			seen[segID] = true
 			badFrames = append(badFrames, name)
 			msgs = append(msgs, fmt.Sprintf("✗ %s: scene 确定性回放未过（%s 两轮差异超感知容差：块均差 %.1f、块内峰值 %.1f——code 藏了非确定性：只用注入的 rng，运动必须写成 t 的函数，禁任何自管时间/真随机路径）", segID, name, bm, bp))
+		}
+		if unmapped > 0 {
+			msgs = append(msgs, fmt.Sprintf("✗ %d 帧两轮差异超容差但无法映射到段（文件名时刻解析失败），按门禁失败处理", unmapped))
 		}
 		if len(badFrames) == 0 && textureFrames > 0 {
 			r.Manifest(p, "check.replay_texture", fmt.Sprintf("%d 帧逐像素超差但感知比对通过（纹理相位抖动，非代码非确定）", textureFrames))
@@ -1316,6 +1333,14 @@ func (r *Runner) translateSubtitles(ctx context.Context, p *pipeline.Project) er
 					i1 = int(f)
 				}
 			}
+			// 区间钳位与 voices 的防御同思路：audio_meta.json 被手改/损坏时
+			// i0 可能为负、i1 可能越界，words[i0] 裸索引会 panic 崩掉整个服务
+			if i0 < 0 {
+				i0 = 0
+			}
+			if i1 >= len(words) {
+				i1 = len(words) - 1
+			}
 			var b strings.Builder
 			for k := i0; k <= i1 && k < len(words); k++ {
 				wm, _ := words[k].(map[string]any)
@@ -1394,9 +1419,40 @@ type methodEntry struct {
 	Keywords []string `json:"keywords"`
 }
 
-func loadMethods(rootDir string) []methodEntry {
-	b, err := os.ReadFile(filepath.Join(rootDir, "data", "library", "methods", "methods.json"))
+// methodsCache 方法库文件缓存（key = 路径 + mtime + size）：methodsFor 在 sceneGen
+// 并发区每段每轮都调，清单与方法正文此前每次重读盘是白付的 I/O（库是仓库只读内容，
+// 运行期基本不变）。mtime 入键：库文件真被改了自动失效；锁保并发安全；缓存只增
+// 不清会随文件改动积累陈旧键，超限整体重置。
+var (
+	methodsCacheMu sync.Mutex
+	methodsCache   = map[string][]byte{}
+)
+
+func readCachedFile(path string) ([]byte, bool) {
+	st, err := os.Stat(path)
 	if err != nil {
+		return nil, false
+	}
+	key := fmt.Sprintf("%s|%d|%d", path, st.ModTime().UnixNano(), st.Size())
+	methodsCacheMu.Lock()
+	defer methodsCacheMu.Unlock()
+	if b, ok := methodsCache[key]; ok {
+		return b, true
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	if len(methodsCache) > 128 {
+		methodsCache = map[string][]byte{}
+	}
+	methodsCache[key] = b
+	return b, true
+}
+
+func loadMethods(rootDir string) []methodEntry {
+	b, ok := readCachedFile(filepath.Join(rootDir, "data", "library", "methods", "methods.json"))
+	if !ok {
 		return nil
 	}
 	var ms []methodEntry
@@ -1423,8 +1479,8 @@ func methodsFor(rootDir string, seg contract.Segment) (sceneBlock, compBlock str
 		if s <= 0 {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(rootDir, "data", "library", "methods", filepath.FromSlash(m.File)))
-		if err != nil {
+		b, ok := readCachedFile(filepath.Join(rootDir, "data", "library", "methods", filepath.FromSlash(m.File)))
+		if !ok {
 			continue
 		}
 		sc := scored{m: m, body: string(b), s: s}
@@ -1538,12 +1594,14 @@ func feedbackBlock(f string) string {
 
 // ── 子进程与工具 ─────────────────────────────────────────────
 
-// python 跑仓库 ai/ 脚本（cwd = 仓库根）。任务取消时连带杀掉子进程。
+// python 跑仓库 ai/ 脚本（cwd = 仓库根）。任务取消时连带杀掉子进程；走
+// pipeline.CommandContext——整棵进程树击杀，python 拉起的孙进程不残留。
+// 成功时子进程 stdout 只回显尾部（tts_align 每段一行动辄上百行，全量回显淹没日志）。
 func (r *Runner) python(ctx context.Context, script string, projDir string, timeout time.Duration) error {
 	py := pipeline.PythonExe()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, py, filepath.Join(r.RootDir, script), projDir)
+	cmd := pipeline.CommandContext(ctx, py, filepath.Join(r.RootDir, script), projDir)
 	cmd.Dir = r.RootDir
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
@@ -1553,7 +1611,12 @@ func (r *Runner) python(ctx context.Context, script string, projDir string, time
 		}
 		return fmt.Errorf("%s 退出: %w\n%s", script, err, pipeline.TailLines(buf.String(), 15))
 	}
-	fmt.Println(buf.String())
+	const tailN = 80
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) > tailN {
+		lines = append([]string{"…（前略，仅保留尾部 " + fmt.Sprintf("%d", tailN) + " 行）"}, lines[len(lines)-tailN:]...)
+	}
+	fmt.Println(strings.Join(lines, "\n"))
 	return nil
 }
 
@@ -1585,6 +1648,14 @@ var contrastSuggRe = regexp.MustCompile(
 // 与 gsap.from(opacity:0) 冲突 \n …frames\segNN.html #元素 t=…
 var gsapOpacityNoopRe = regexp.MustCompile(
 	`gsap_from_opacity_noop:\s*"#([\w-]+)"[^\r\n]*\n\s*\S*frames[\\/]([\w-]+\.html)`)
+
+// gsapInlineOpacityRe / gsapRuleOpacityRe 抓任意元素的 opacity:0 声明（内联 style /
+// CSS 规则两种形态），元素 id 捕获后在替换回调里比对：修复目标逐个变，包级预编译
+// 免掉循环内 regexp.MustCompile 反复重编（对齐 contrastSuggRe 的既有风格）。
+var (
+	gsapInlineOpacityRe = regexp.MustCompile(`(id="([\w-]+)"[^>]*?style="[^"]*?)opacity:\s*0\s*(;|")`)
+	gsapRuleOpacityRe   = regexp.MustCompile(`(#([\w-]+)\s*\{[^}]*?)opacity:\s*0\s*(;|\})`)
+)
 
 // applyGsapOpacityFixes gsap_from_opacity_noop 的机械修复：CSS 里藏着的 opacity:0
 // 与 gsap.from({opacity:0}) 打架（from 的 immediateRender 本就负责初始隐藏，CSS
@@ -1619,10 +1690,22 @@ func applyGsapOpacityFixes(p *pipeline.Project, checkOut string) int {
 		html := string(b)
 		orig := html
 		for _, elem := range elems {
-			reInline := regexp.MustCompile(`(id="` + elem + `"[^>]*?style="[^"]*?)opacity:\s*0\s*(;|")`)
-			html = reInline.ReplaceAllString(html, "$1$2")
-			reRule := regexp.MustCompile(`(#` + elem + `\s*\{[^}]*?)opacity:\s*0\s*(;|\})`)
-			html = reRule.ReplaceAllString(html, "$1$2")
+			// 剥除必须带上分隔符（;/}/"）——裸 `opacity:0` 会误伤 opacity:0.5；
+			// 捕获的 id 不是本轮修复目标时原样保留（等价于旧的按元素拼正则）
+			html = gsapInlineOpacityRe.ReplaceAllStringFunc(html, func(m string) string {
+				g := gsapInlineOpacityRe.FindStringSubmatch(m)
+				if g[2] != elem {
+					return m
+				}
+				return g[1] + g[3]
+			})
+			html = gsapRuleOpacityRe.ReplaceAllStringFunc(html, func(m string) string {
+				g := gsapRuleOpacityRe.FindStringSubmatch(m)
+				if g[2] != elem {
+					return m
+				}
+				return g[1] + g[3]
+			})
 		}
 		if html == orig {
 			continue

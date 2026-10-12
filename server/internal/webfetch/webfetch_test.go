@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -93,5 +94,43 @@ func TestArticleTargetError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "404") {
 		t.Errorf("错误信息应带状态码，得到 %q", err.Error())
+	}
+}
+
+// stubDNS 伪造 DNS 解析（测防重绑定不需要真网）。
+func stubDNS(t *testing.T, ips []net.IP) {
+	t.Helper()
+	old := lookupIP
+	lookupIP = func(context.Context, string) ([]net.IP, error) { return ips, nil }
+	t.Cleanup(func() { lookupIP = old })
+}
+
+// badHost 层：域名解析出内网 IP 必须拒绝（自建域名 A 记录指向内网的 SSRF）。
+func TestBadHostResolvesInternal(t *testing.T) {
+	stubDNS(t, []net.IP{net.ParseIP("1.2.3.4"), net.ParseIP("10.0.0.9")})
+	if !badHost("rebind.example.com") {
+		t.Fatal("解析结果含内网 IP 应判 bad")
+	}
+	stubDNS(t, []net.IP{net.ParseIP("1.2.3.4")})
+	if badHost("rebind.example.com") {
+		t.Fatal("全公网解析应放行（拦截交给拨号层）")
+	}
+	stubDNS(t, nil)
+	lookupIP = func(context.Context, string) ([]net.IP, error) { return nil, errors.New("nx") }
+	if !badHost("rebind.example.com") {
+		t.Fatal("解析失败应一律拒绝")
+	}
+}
+
+// guardedDial 层（SSRF 第二层，防 DNS 重绑定）：预检后 A 记录被换成内网 IP 时，
+// 拨号时复验必须拒绝建连。
+func TestGuardedDialBlocksRebind(t *testing.T) {
+	stubDNS(t, []net.IP{net.ParseIP("10.0.0.9")})
+	if _, err := guardedDial(context.Background(), "tcp", "rebind.example.com:80"); err == nil {
+		t.Fatal("拨号解析到内网 IP 应拒绝建连")
+	}
+	// 字面量 IP 不走拨号层复验（请求前 badHost 已拦内网字面量）：这里只验证路径不炸
+	if _, err := guardedDial(context.Background(), "tcp", "127.0.0.1:1"); err != nil && !strings.Contains(err.Error(), "不允许") {
+		t.Logf("字面量回环直连失败属预期（本测只验证不复检路径）: %v", err)
 	}
 }

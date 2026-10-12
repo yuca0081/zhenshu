@@ -108,7 +108,8 @@ func readFeatures(dir string) (videoFeatures, error) {
 	return f, nil
 }
 
-// FeatureFrame 关键帧（Path 相对 features.json 所在目录）。
+// FeatureFrame 关键帧（Path 是 ai/extract_video_features.py 写入的绝对路径——
+// 那边存 str(png.resolve())，别当相对路径拼接）。
 type FeatureFrame = featureFrame
 
 // ReadFeatures 某目录 features.json 的帧清单（无文件/损坏返回 nil）。

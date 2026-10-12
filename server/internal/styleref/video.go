@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -67,7 +66,8 @@ func (s *Store) ensureClip(ctx context.Context, video, refDir, tag string, start
 		return "", err
 	}
 	tmp := out + ".tmp"
-	if out2, err := exec.CommandContext(ctx, ff, clipArgs(video, tmp, start, end)...).CombinedOutput(); err != nil {
+	// pipeline.CommandContext：取消时整棵进程树击杀，ffmpeg 孙进程不残留
+	if out2, err := pipeline.CommandContext(ctx, ff, clipArgs(video, tmp, start, end)...).CombinedOutput(); err != nil {
 		_ = os.Remove(tmp)
 		return "", fmt.Errorf("剪辑失败: %w\n%s", err, tail(string(out2), 4))
 	}

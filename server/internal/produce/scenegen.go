@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -88,9 +87,9 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	cv := ProjectCanvas(p)
 	golden := goldenExample(r.RootDir)
 	// 样张截图（ai/snap_samples.py）→ 多模态注入：模型看着真图写画面（失败退纯文本）。
-	if err := r.python(ctx, "ai/snap_samples.py", p.Dir, time.Minute); err != nil {
-		r.emit(p.ID, "progress", "compositions", "样张截图失败，风格注入退回纯文本")
-	}
+	// 带指纹缓存：frameQA/preReview 修复轮对每个失败段各调一次 sceneGen，样张不变
+	// 却重复截图（5 段×2 轮=10 次浏览器作业）纯属白付。
+	r.snapSamples(ctx, p)
 	sampleImgs := styleSampleImages(p)
 	// 真迹关键帧（风格来源视频原片帧）全段注入：每段都看着真迹画——课堂通道，
 	// 与考卷（frameqa 对照真迹）配套；无媒体/压图失败静默缺省，退回纯样张。
@@ -221,6 +220,43 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	return firstErr
 }
 
+// snapSamplesCache 样张截图指纹缓存（key=项目目录）：指纹取 style_samples.json 的
+// mtime+size——样张重新生成（style_samples 阶段重写文件）指纹自然变化触发重截；
+// 截图失败不缓存，下轮 sceneGen 自动重试。包级 map + 锁：Runner 可能被测试重建，
+// 键用项目目录与具体实例解耦。
+var (
+	snapSamplesMu    sync.Mutex
+	snapSamplesCache = map[string]string{} // 项目目录 → 上次成功截图时的样张指纹
+)
+
+// styleSamplesFingerprint 样张文件的 mtime+size 指纹（缺失返回 "-"，照常尝试截图，
+// 失败不缓存所以缺失态不会被钉死）。
+func styleSamplesFingerprint(p *pipeline.Project) string {
+	fi, err := os.Stat(p.Artifact("style/style_samples.json"))
+	if err != nil {
+		return "-"
+	}
+	return fmt.Sprintf("%d|%d", fi.ModTime().UnixNano(), fi.Size())
+}
+
+// snapSamples 样张截图（指纹未变则跳过重跑）。失败只发进度提示不挡生成。
+func (r *Runner) snapSamples(ctx context.Context, p *pipeline.Project) {
+	fp := styleSamplesFingerprint(p)
+	snapSamplesMu.Lock()
+	cached := snapSamplesCache[p.Dir] == fp
+	snapSamplesMu.Unlock()
+	if cached {
+		return
+	}
+	if err := r.python(ctx, "ai/snap_samples.py", p.Dir, time.Minute); err != nil {
+		r.emit(p.ID, "progress", "compositions", "样张截图失败，风格注入退回纯文本")
+		return
+	}
+	snapSamplesMu.Lock()
+	snapSamplesCache[p.Dir] = fp
+	snapSamplesMu.Unlock()
+}
+
 // fallbackOldScene 整片制作里段级重生成反复过不了契约时，只要上一版产物还在就
 // 沿用旧画面继续出片——宁要旧设计的合格段，不要没有成片（2026-10-11 夜跑教训：
 // 设计一换全片段重画，一段连挂三轮把整片拖死，且每次重掷都是新骰子）。
@@ -303,7 +339,8 @@ func (r *Runner) sceneLintRun(ctx context.Context, html string) []string {
 		return []string{"lint 临时文件写失败: " + err.Error()}
 	}
 	tmp.Close()
-	cmd := exec.CommandContext(ctx, pipeline.PythonExe(), filepath.Join(r.RootDir, "ai", "scene_lint.py"), name)
+	// pipeline.CommandContext：取消时整棵进程树击杀，python 拉起的孙进程不残留
+	cmd := pipeline.CommandContext(ctx, pipeline.PythonExe(), filepath.Join(r.RootDir, "ai", "scene_lint.py"), name)
 	cmd.Dir = r.RootDir
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -354,7 +391,8 @@ func (r *Runner) vendorEnsure(ctx context.Context, spec string, timeout time.Dur
 	defer vendMu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, pipeline.PythonExe(), filepath.Join(r.RootDir, "ai", "vendor_tool.py"),
+	// pipeline.CommandContext：取消时整棵进程树击杀，npm 采购拉起的孙进程不残留
+	cmd := pipeline.CommandContext(ctx, pipeline.PythonExe(), filepath.Join(r.RootDir, "ai", "vendor_tool.py"),
 		"ensure", spec, "--allow-pending-replay")
 	cmd.Dir = r.RootDir
 	out, err := cmd.CombinedOutput()

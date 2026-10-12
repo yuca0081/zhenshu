@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -329,10 +328,11 @@ func projectCanvas(p *Project) contract.Canvas {
 
 // runPython 跑 ai/ 侧装配脚本（与 produce.Runner.python 同款：仓库根为 CWD、
 // 超时可取消、错误带尾部日志）。不走 runCLI——那是给 npx 的（会追加 npm 旗标）。
+// 走 ctxCommand：取消时整棵进程树击杀，python 拉起的孙进程不残留。
 func runPython(p *Project, script, projDir string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(pctx(p), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, PythonExe(), filepath.Join(rootDir, script), projDir)
+	cmd := ctxCommand(ctx, PythonExe(), filepath.Join(rootDir, script), projDir)
 	cmd.Dir = rootDir
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf

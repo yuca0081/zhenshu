@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -392,7 +391,12 @@ func (m *metClient) fetchOne(ctx context.Context, p *pipeline.Project, seg, quer
 	offset := 0
 	for got := 0; got <= idx && offset < len(ids); offset++ {
 		if offset > 0 {
-			time.Sleep(250 * time.Millisecond) // 节流：object 是逐个抓的
+			// 节流：object 是逐个抓的；select 版睡眠可被取消打断（与 object 重试同款）
+			select {
+			case <-time.After(250 * time.Millisecond):
+			case <-ctx.Done():
+				return Material{}, ctx.Err()
+			}
 		}
 		o, err := m.object(ctx, ids[offset])
 		if err != nil || !o.IsPublicDomain || o.PrimaryImage == "" {
@@ -434,6 +438,11 @@ func (m *metClient) download(ctx context.Context, p *pipeline.Project, seg, quer
 	if err != nil {
 		return Material{}, fmt.Errorf("下载原图失败: %w", err)
 	}
+	if n == materialDownloadMax {
+		// 恰好顶到 64MB 上限不可区分「真有这么大」与「被截断」，而截断图压图/渲染
+		// 必炸——按下载失败处理（真 ≥64MB 的公版原图罕见，宁缺毋滥）
+		return Material{}, fmt.Errorf("原图达到下载上限 %d MB，疑似截断，放弃", materialDownloadMax>>20)
+	}
 	if n <= 256 { // 只防空响应；真垃圾交给 ffmpeg 压图环节拒绝
 		return Material{}, fmt.Errorf("原图过小（%d B）", n)
 	}
@@ -446,7 +455,7 @@ func (m *metClient) download(ctx context.Context, p *pipeline.Project, seg, quer
 	if err != nil {
 		return Material{}, err
 	}
-	cmd := exec.CommandContext(ctx, ff, "-y", "-v", "error", "-i", tmp.Name(),
+	cmd := pipeline.CommandContext(ctx, ff, "-y", "-v", "error", "-i", tmp.Name(),
 		"-vf", fmt.Sprintf("scale='min(%d,iw)':-2", materialWidthMax), "-q:v", "4", dst)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return Material{}, fmt.Errorf("压图失败: %s\n%s", err, pipeline.TailLines(string(out), 5))

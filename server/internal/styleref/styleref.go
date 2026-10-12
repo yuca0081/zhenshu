@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -139,11 +138,19 @@ func (s *Store) Save(name string, save func(dst string) error) (*Ref, error) {
 	if ext == "" || len(ext) > 6 {
 		ext = ".mp4"
 	}
+	// 目录由本次 Mkdir 原子占号新建，写盘失败时清掉它——不留孤儿占号目录
+	// （List 按「ref* 目录里有 ref.json」过滤，孤儿目录会一直在列表里当坏档）。
+	// 只清本次创建的 id，已存在的目录不可能走到这里（Mkdir 撞号会换下一个）。
 	if err := save(filepath.Join(s.dir(id), "video"+ext)); err != nil {
+		os.RemoveAll(s.dir(id))
 		return nil, err
 	}
 	ref := &Ref{ID: id, Name: name, Status: "pending", CreatedAt: time.Now()}
-	return ref, s.saveRef(ref)
+	if err := s.saveRef(ref); err != nil {
+		os.RemoveAll(s.dir(id))
+		return nil, err
+	}
+	return ref, nil
 }
 
 // List 全部引用，新在前。
@@ -182,7 +189,9 @@ func (s *Store) loadRef(id string) (*Ref, error) {
 
 func (s *Store) saveRef(ref *Ref) error {
 	b, _ := json.MarshalIndent(ref, "", "  ")
-	return os.WriteFile(filepath.Join(s.dir(ref.ID), "ref.json"), b, 0o644)
+	// 原子写：List/Get/api 侧并发读 ref.json，裸 os.WriteFile 有撕裂窗口
+	// （读到半截 JSON 的引用会从列表里静默消失）
+	return pipeline.WriteFileAtomic(filepath.Join(s.dir(ref.ID), "ref.json"), b, 0o644)
 }
 
 // MarkConfirmed 入库完成标记（幂等）。
@@ -434,90 +443,13 @@ func synthesizeUserPrompt(lib *stylelib.Library, name string, feats videoFeature
 		contract.SignatureKindNames(), dynamicSrc, videoBlock, retryNote)
 }
 
-// resolveDraft LLM 原始输出 → 落表草稿：词表 id 直用；新词申请走查重（归一化精确
-// 匹配 → LLM 语义查重）后建词条/挂别名。这是「申请新词」工具的 Go 侧执行体。
+// resolveDraft LLM 原始输出 → 落表草稿（视频解析版）。词表落表机制与成片反哺的
+// resolveDesignDraft 共用 resolveTaggerDraft——此前两处约 60 行逐字重复，改一处
+// 漏一处即行为漂移。唯一差异是证据帧：解析版带 frames（存在性校验由调用方
+// synthesize 的 validateStyle 做）。
 func (s *Store) resolveDraft(ctx context.Context, prov *llm.Provider, lib *stylelib.Library,
 	raw *taggerOutput, feats videoFeatures) (*StyleDraft, error) {
-	if len(raw.Tags) < 1 || len(raw.Tags) > 3 {
-		return nil, fmt.Errorf("tags 数量 %d 不合法（主 1 + 辅 ≤2）", len(raw.Tags))
-	}
-	vocab, err := lib.LoadVocab()
-	if err != nil {
-		return nil, fmt.Errorf("词表读取失败: %w", err)
-	}
-	// 先集中归一化精确查重 + 收集语义查重候选
-	var pend []*newWord
-	ids := make([]string, 0, len(raw.Tags))
-	names := make([]string, 0, len(raw.Tags)) // 各标签正式名（草稿名缺省回退用）
-	for i, t := range raw.Tags {
-		switch {
-		case t.ID != "" && vocab.Has(t.ID):
-			ids = append(ids, t.ID)
-			names = append(names, vocab.Entries[t.ID].Name)
-		case t.New != nil && strings.TrimSpace(t.New.Name) != "":
-			if hit, ok := vocab.Find(t.New.Name); ok {
-				ids = append(ids, hit.ID) // 精确撞车：复用词条
-				names = append(names, hit.Name)
-			} else {
-				ids = append(ids, "") // 占位：语义查重后落表
-				names = append(names, strings.TrimSpace(t.New.Name))
-				pend = append(pend, t.New)
-			}
-		default:
-			return nil, fmt.Errorf("第 %d 个标签既不在词表也没申请新词", i+1)
-		}
-	}
-	// 语义查重（一次 LLM 调用批处理全部候选；命中挂别名复用，未命中建词条）。
-	// blanks 预先记下占位下标——循环里逐个回填后空白位会变，边数边填会错位。
-	if len(pend) > 0 {
-		blanks := make([]int, 0, len(pend))
-		for i, id := range ids {
-			if id == "" {
-				blanks = append(blanks, i)
-			}
-		}
-		cands := make([]string, 0, len(pend))
-		for _, w := range pend {
-			cands = append(cands, w.Name)
-		}
-		hits, derr := semanticDedup(ctx, prov, lib, cands)
-		if derr != nil {
-			return nil, fmt.Errorf("新词语义查重失败: %w", derr)
-		}
-		for pi, w := range pend {
-			if exID := hits[w.Name]; exID != "" && vocab.Has(exID) {
-				if aerr := lib.VocabAttachAlias(exID, w.Name); aerr != nil {
-					return nil, aerr
-				}
-				ids[blanks[pi]] = exID
-				continue
-			}
-			id, cerr := lib.VocabCreate(stylelib.VocabEntry{
-				ID: w.ID, Name: w.Name, Aliases: w.Aliases, Brief: w.Brief, Tells: w.Tells,
-			})
-			if cerr != nil {
-				return nil, fmt.Errorf("新词 %q 入表失败: %w", w.Name, cerr)
-			}
-			ids[blanks[pi]] = id
-		}
-	}
-	d := &StyleDraft{
-		Name:    strings.TrimSpace(raw.Name),
-		Subject: strings.TrimSpace(raw.Subject),
-		Tags:    contract.StyleTags{Main: ids[0], Aux: ids[1:]},
-	}
-	if d.Name == "" {
-		d.Name = names[0] // 缺省用主标签正式名
-	}
-	for i, t := range raw.Tags {
-		ev := contract.TagEvidence{Tag: ids[i], Note: strings.TrimSpace(t.Note), Frames: t.Frames}
-		d.TagEvidence = append(d.TagEvidence, ev)
-	}
-	d.Signatures = append(d.Signatures, raw.Signatures...)
-	if err := stylelib.ValidateSignatures(d.Signatures); err != nil {
-		return nil, err
-	}
-	return d, nil
+	return resolveTaggerDraft(ctx, prov, lib, raw, true)
 }
 
 // semanticDedupFn 语义查重实现（var 化供测试注入；真实实现打一次 LLM）。
@@ -620,7 +552,8 @@ func runPython(ctx context.Context, rootDir, script string, args ...string) (str
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	argv := append([]string{filepath.Join(rootDir, script)}, args...)
-	cmd := exec.CommandContext(ctx, pipeline.PythonExe(), argv...)
+	// pipeline.CommandContext：取消时整棵进程树击杀，python/ffmpeg 孙进程不残留
+	cmd := pipeline.CommandContext(ctx, pipeline.PythonExe(), argv...)
 	cmd.Dir = rootDir
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {

@@ -144,6 +144,7 @@ func fixupFrameFonts(p *Project) {
 	if err != nil {
 		return
 	}
+	assets := loadFontAssets(p) // 循环外读一次：N 帧 N 次读盘+JSON 解析是白付的
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".html") {
 			continue
@@ -153,7 +154,7 @@ func fixupFrameFonts(p *Project) {
 		if err != nil {
 			continue
 		}
-		fixed := ensureFontFaces(string(b), loadFontAssets(p))
+		fixed := ensureFontFaces(string(b), assets)
 		if fixed != string(b) {
 			_ = writeFile(path, fixed)
 		}
