@@ -69,7 +69,10 @@ var tools = []tool{
 			if err := pipeline.Run(ctx, p, "storyboard"); err != nil {
 				return "分镜生成失败：" + err.Error()
 			}
-			sb, _ := p.LoadStoryboard()
+			sb, err := p.LoadStoryboard()
+			if err != nil { // 管线称成功却读不出分镜：如实报错，不拿零值分镜编数字
+				return "分镜生成后读取失败：" + err.Error()
+			}
 			if a.OnEvent != nil {
 				a.OnEvent(p.ID, "storyboard", "")
 			}
@@ -101,13 +104,53 @@ var tools = []tool{
 			if strings.TrimSpace(in.Instruction) == "" {
 				return "缺少修改要求"
 			}
-			_ = os.WriteFile(p.Artifact("input/storyboard_notes.txt"), []byte(in.Instruction), 0o644)
-			_ = os.Remove(p.Artifact("storyboards/storyboard.json"))
-			_ = os.Remove(p.LLMOutput("storyboard"))
-			if err := pipeline.Run(ctx, p, "storyboard"); err != nil {
-				return "分镜重生成失败：" + err.Error()
+			sbPath := p.Artifact("storyboards/storyboard.json")
+			llmPath := p.LLMOutput("storyboard")
+			// 旧分镜与 LLM 中间产物先改名 .bak（等价删除但可还原）：重生成失败时
+			// 原样放回——项目任何时刻不留「分镜空洞」，对齐 regenerateStyle 的备份模式
+			bak, llmBak := sbPath+".bak", llmPath+".bak"
+			hadPrev := true
+			if err := os.Rename(sbPath, bak); err != nil {
+				if _, serr := os.Stat(sbPath); serr != nil {
+					hadPrev = false // 首次出分镜：无旧可备
+				} else {
+					return "备份旧分镜失败：" + err.Error()
+				}
 			}
-			sb, _ := p.LoadStoryboard()
+			hadLLM := false
+			if _, err := os.Stat(llmPath); err == nil {
+				if lerr := os.Rename(llmPath, llmBak); lerr != nil {
+					if hadPrev { // 分镜已挪走，先还回去再报错
+						_ = os.Rename(bak, sbPath)
+					}
+					return "备份 LLM 中间产物失败：" + lerr.Error()
+				}
+				hadLLM = true
+			}
+			restore := func(cause error) string {
+				if hadLLM { // 中间产物一并还原，下次重试的起点与本次相同
+					_ = os.Rename(llmBak, llmPath)
+				}
+				if !hadPrev {
+					return "分镜重生成失败：" + cause.Error()
+				}
+				if rerr := os.Rename(bak, sbPath); rerr != nil {
+					return fmt.Sprintf("分镜重生成失败，且还原旧分镜也失败（备份在 %s）：%v（原因：%v）", bak, rerr, cause)
+				}
+				return "分镜重生成失败（已还原旧分镜）：" + cause.Error()
+			}
+			if err := os.WriteFile(p.Artifact("input/storyboard_notes.txt"), []byte(in.Instruction), 0o644); err != nil {
+				return restore(err)
+			}
+			if err := pipeline.Run(ctx, p, "storyboard"); err != nil {
+				return restore(err)
+			}
+			_ = os.Remove(bak)
+			_ = os.Remove(llmBak)
+			sb, err := p.LoadStoryboard()
+			if err != nil { // 管线称成功却读不出分镜：如实报错，不拿零值分镜编数字
+				return "分镜重生成后读取失败：" + err.Error()
+			}
 			if a.OnEvent != nil {
 				a.OnEvent(p.ID, "storyboard", "")
 			}
@@ -781,21 +824,4 @@ func toolDef(name, desc string, params map[string]any) openai.Tool {
 	return openai.Tool{Type: openai.ToolTypeFunction, Function: &openai.FunctionDefinition{
 		Name: name, Description: desc, Parameters: params,
 	}}
-}
-
-func toolSchemas() []openai.Tool {
-	out := make([]openai.Tool, len(tools))
-	for i, t := range tools {
-		out[i] = t.def
-	}
-	return out
-}
-
-func findTool(name string) *tool {
-	for i := range tools {
-		if tools[i].def.Function.Name == name {
-			return &tools[i]
-		}
-	}
-	return nil
 }

@@ -228,17 +228,21 @@ func scanArtifacts(p *pipeline.Project) []artifactEntry {
 	return out
 }
 
-// tailManifest manifest 尾部 n 条（坏行剔除，时间正序）。activity 接口与
-// scanManifest 的 tail 各取所需：前者给事件流面板 500 条全量回放，后者只要 20 条。
-func tailManifest(b []byte, n int) []manifestEvent {
-	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
+// tailManifest manifest 尾部 n 条（坏行剔除，时间正序）。activity 接口（事件流
+// 面板 500 条全量回放）的数据口。尾部窗口读走 produce.ReadJSONLTail：manifest
+// 随制作轮次无限增长，逐次轮询都全量读+解析会让 I/O 随历史线性上涨。
+// 恒返回非 nil（读不了 = 空切片）：空列表必须序列化成 [] 不能 null（前端直吃）。
+func tailManifest(path string, n int) []manifestEvent {
+	lines, err := produce.ReadJSONLTail(path, n)
 	out := make([]manifestEvent, 0, len(lines))
+	if err != nil {
+		return out
+	}
+	// 坏行（撕裂/半行）与空事件行照旧剔除——unmarshalJSONL 只滤解析失败，
+	// 这里还要求 event 字段非空（口径与 scanManifest 一致）
 	for _, line := range lines {
 		var e manifestEvent
-		if json.Unmarshal([]byte(line), &e) != nil || e.Event == "" {
+		if json.Unmarshal(line, &e) != nil || e.Event == "" {
 			continue
 		}
 		out = append(out, e)
@@ -256,18 +260,14 @@ func (s *Server) activity(c *gin.Context) {
 	if !ok {
 		return
 	}
-	rows := []manifestEvent{}
-	if b, err := os.ReadFile(p.Artifact("manifest.jsonl")); err == nil {
-		rows = tailManifest(b, 500)
-	}
-	c.JSON(200, rows)
+	// 无 manifest（新建项目没开过工）回 [] 而不是 404/null：前端 .length/.map 直吃
+	c.JSON(200, tailManifest(p.Artifact("manifest.jsonl"), 500))
 }
 
 func (s *Server) overview(c *gin.Context) {
 	id := c.Param("id")
-	p := pipeline.NewProject(s.DataDir, id)
-	if _, err := os.Stat(p.Dir); err != nil {
-		c.JSON(404, gin.H{"error": "项目不存在"})
+	p, ok := s.project(c) // 与其余 :id 接口同语义：不存在的项目统一 404
+	if !ok {
 		return
 	}
 	name, status, aspect, topic, created := "", "", "16:9", "", ""

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -47,6 +48,13 @@ type Server struct {
 	APIToken string
 
 	turnMu sync.Map // projectID → *sync.Mutex：同项目对话轮串行（见 chat）
+
+	// chatSlots 对话轮排队信号量（容量 chatQueueMax）：每条 POST /chat 起一个
+	// goroutine 排队等 turnMu，无上限时连点消息会堆出一串不可取消的排队轮。
+	// 非阻塞占位，满即 429 拒新。sync.Once 惰性建 channel——Server 是字面量
+	// 构造无构造函数，channel 字段的零值 nil 会让 select 永远走 default。
+	chatSlotsOnce sync.Once
+	chatSlots     chan struct{}
 
 	// ensured projectID → struct{}{}：listProjects 的 DB 行自愈记账，每进程每项目
 	// 至多 EnsureProject 一次——列表是高频轮询接口，逐项目逐次 COUNT 是 N+1 查询。
@@ -227,6 +235,11 @@ func (s *Server) createProject(c *gin.Context) {
 	// 与 styleref.Save 同一写法。
 	id := "p" + time.Now().Format("20060102-150405")
 	p := pipeline.NewProject(s.DataDir, id)
+	// os.Mkdir 只建最后一层：全新数据目录还没有 projects/ 时，占号会报路径不存在
+	if err := os.MkdirAll(filepath.Join(s.DataDir, "projects"), 0o755); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
 	for n := 2; ; n++ {
 		if err := os.Mkdir(p.Dir, 0o755); err == nil {
 			break
@@ -381,7 +394,10 @@ func (s *Server) deleteProject(c *gin.Context) {
 }
 
 func (s *Server) manuscript(c *gin.Context) {
-	p := pipeline.NewProject(s.DataDir, c.Param("id"))
+	p, ok := s.project(c) // 不存在的项目统一 404「项目不存在」，不与「文稿不存在」混谈
+	if !ok {
+		return
+	}
 	var m struct {
 		Content   string `json:"content"`
 		WordCount int    `json:"word_count"`
@@ -416,6 +432,12 @@ func (s *Server) saveManuscript(c *gin.Context) {
 	}
 	p, ok := s.project(c)
 	if !ok {
+		return
+	}
+	// 制作中拒绝保存：管线正拿着旧稿配音/拼画面，半道换 article.txt 会让本轮
+	// 产物一半旧一半新（与 deleteProject 的 IsRunning 拒绝同一口径）。
+	if s.Producer != nil && s.Producer.IsRunning(p.ID) {
+		c.JSON(409, gin.H{"error": "制作/重做进行中，先等本条完成再改稿"})
 		return
 	}
 	id := p.ID
@@ -485,6 +507,12 @@ func (s *Server) applyStyle(c *gin.Context) {
 	}
 	_ = os.RemoveAll(p.Artifact("style/clips"))
 	_ = os.RemoveAll(p.Artifact(".hf-clip"))
+	// 选定条目记入 project.json：读-改-写全程持 per-project 锁——agent 轮内的
+	// SetProjectField 与此处并发时，双方各基于旧快照整文件回写、后写覆盖先写
+	//（style_id 被抹掉那类丢更新），单笔原子写防撕裂不防丢更新。锁必须只在
+	// 这一段持有：下面的 updateStatus 内部 SetProjectField 要拿同一把锁。
+	mu := pipeline.ProjectMu(p)
+	mu.Lock()
 	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil {
 		var meta map[string]any
 		if json.Unmarshal(b, &meta) == nil {
@@ -492,6 +520,7 @@ func (s *Server) applyStyle(c *gin.Context) {
 			_ = pipeline.WriteFileAtomic(p.Artifact("project.json"), pipeline.MustJSONBytes(meta), 0o644)
 		}
 	}
+	mu.Unlock()
 	// 风格门回到「等出样张」：状态按剩余前置降级（有分镜=storyboard，有稿=manuscript）
 	back := "created"
 	if _, err := os.Stat(p.Artifact("input/article.txt")); err == nil {
@@ -520,9 +549,14 @@ func (s *Server) storyboard(c *gin.Context) {
 // 段身份字段（id/idx）锁死——它们是时间轴/画面注册表/聊天引用的锚；文案/画面要点/时长自由改。
 // 段数不可变：增删段走对话重新生成。落盘即换 mtime，成片过期灯（video_stale.storyboard）自动亮。
 func (s *Server) saveStoryboard(c *gin.Context) {
-	p := pipeline.NewProject(s.DataDir, c.Param("id"))
-	if _, err := os.Stat(p.Dir); err != nil {
-		c.JSON(404, gin.H{"error": "项目不存在"})
+	p, ok := s.project(c)
+	if !ok {
+		return
+	}
+	// 制作中拒绝保存：管线正按旧分镜渲染/寻址，半道换 storyboard.json 会串段
+	//（与 deleteProject 的 IsRunning 拒绝同一口径）。
+	if s.Producer != nil && s.Producer.IsRunning(p.ID) {
+		c.JSON(409, gin.H{"error": "制作/重做进行中，先等本条完成再改分镜"})
 		return
 	}
 	prev, err := p.LoadStoryboard()
@@ -541,14 +575,25 @@ func (s *Server) saveStoryboard(c *gin.Context) {
 	}
 	byIdx := map[int]string{}
 	for _, sg := range prev.Segments {
+		if _, dup := byIdx[sg.Idx]; dup {
+			// 存量重复 idx 会让 byIdx 折叠、多个段静默回填同一 ID 串段——拒收并明示
+			c.JSON(500, gin.H{"error": fmt.Sprintf("存量分镜段序重复（idx=%d），请在对话里重新生成分镜", sg.Idx)})
+			return
+		}
 		byIdx[sg.Idx] = sg.ID
 	}
+	inIdx := map[int]bool{}
 	for i := range in.Segments {
 		id, ok := byIdx[in.Segments[i].Idx]
 		if !ok {
 			c.JSON(400, gin.H{"error": fmt.Sprintf("第 %d 段不存在——段序不可增删改", in.Segments[i].Idx)})
 			return
 		}
+		if inIdx[in.Segments[i].Idx] { // 请求里重复 idx 同样会把两段回填成同一 ID
+			c.JSON(400, gin.H{"error": fmt.Sprintf("第 %d 段重复出现——每段一份", in.Segments[i].Idx)})
+			return
+		}
+		inIdx[in.Segments[i].Idx] = true
 		if strings.TrimSpace(in.Segments[i].Narration) == "" {
 			c.JSON(400, gin.H{"error": fmt.Sprintf("第 %d 段旁白为空", in.Segments[i].Idx)})
 			return
@@ -582,13 +627,16 @@ func (s *Server) confirmStyle(c *gin.Context) {
 	// 对话轮进行中拒绝确认：draft_style_samples 收尾时还会重写 style_samples.json，
 	// 半道确认会被最后一笔打回 confirmed=false（2026-10-11 夜跑竞态实录：
 	// 确认返回 200，两分钟后制作管线读到 false 硬门炸停）。等轮次说完再确认。
-	if mu, ok := s.turnMu.Load(id); ok {
-		if !mu.(*sync.Mutex).TryLock() {
-			c.JSON(409, gin.H{"error": "对话轮还在进行（可能正在出样张），等它说完再确认"})
-			return
-		}
-		mu.(*sync.Mutex).Unlock()
+	// TryLock 成功后必须持锁完成整个确认写操作再解锁：只探测不解锁就写，
+	// 探测与写入之间仍有窗口放进下一轮（TOCTOU）。确认是快操作，持锁期间
+	// 排队的对话轮自然等它写完；对话轮不会反过来拿这把锁做长操作，无死锁。
+	// LoadOrStore 与 chat 同源取锁：若确认先到且无人排过队，chat 随后取到的是同一把。
+	mu, _ := s.turnMu.LoadOrStore(id, &sync.Mutex{})
+	if !mu.(*sync.Mutex).TryLock() {
+		c.JSON(409, gin.H{"error": "对话轮还在进行（可能正在出样张），等它说完再确认"})
+		return
 	}
+	defer mu.(*sync.Mutex).Unlock()
 	p := pipeline.NewProject(s.DataDir, id)
 	path := p.Artifact("style/style_samples.json")
 	b, err := os.ReadFile(path)
@@ -675,16 +723,39 @@ func (s *Server) chat(c *gin.Context) {
 	_ = s.Store.SaveMsg(m)
 	s.Hub.Emit(id, "msg", "", in.Content)
 	// 同项目对话轮互斥：连发两条消息会并发跑两个 Agent 循环，互相增删共享产物
-	// （如 update_storyboard 删 spec 时另一轮正读）。排队等上一轮结束，不拒绝。
+	// （如 update_storyboard 删 spec 时另一轮正读）。排队等上一轮结束；但排队
+	// 本身要有上限——每条 POST 无限起 goroutine 等锁，连点会堆出不可取消的轮。
+	if !s.acquireChatSlot() {
+		c.JSON(429, gin.H{"error": "已有排队的消息，稍后再试"})
+		return
+	}
 	mu, _ := s.turnMu.LoadOrStore(id, &sync.Mutex{})
 	go func() {
 		mu := mu.(*sync.Mutex)
 		mu.Lock()
 		defer mu.Unlock()
+		defer s.releaseChatSlot() // 轮结束才释放槽位（排队+执行全程占槽）
 		s.Agent.Run(id, in.Content, in.Refs)
 	}()
 	c.JSON(202, gin.H{"ok": true})
 }
+
+// chatQueueMax 对话轮排队上限（不含正在执行的一轮）：够吸收连点，又不至于
+// 堆出一串用户等不到、也无法取消的幽灵轮。
+const chatQueueMax = 2
+
+// acquireChatSlot 非阻塞占一个对话轮排队槽位；false = 队列已满，调用方应拒新。
+func (s *Server) acquireChatSlot() bool {
+	s.chatSlotsOnce.Do(func() { s.chatSlots = make(chan struct{}, chatQueueMax) })
+	select {
+	case s.chatSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) releaseChatSlot() { <-s.chatSlots }
 
 // sanitizeRefs 引用卡片是模型上下文也是落盘数据：限量、限长、剔无效。
 func sanitizeRefs(refs []store.Ref) []store.Ref {
@@ -720,6 +791,8 @@ func (s *Server) messages(c *gin.Context) {
 	fmt.Sscanf(c.Query("after"), "%d", &after)
 	msgs, err := s.Store.ListMsgs(id, after, 200)
 	if err != nil {
+		// 存储故障吞成空列表，用户看到的是「聊天记录没了」——至少留痕可排查
+		log.Printf("[api] ListMsgs(%s) 失败: %v", id, err)
 		msgs = nil
 	}
 	if msgs == nil {
@@ -827,7 +900,10 @@ func (s *Server) startRework(c *gin.Context) {
 
 // reworkLast 某段最近一次重做指令（按钮预填用）。
 func (s *Server) reworkLast(c *gin.Context) {
-	p := pipeline.NewProject(s.DataDir, c.Param("id"))
+	p, ok := s.project(c) // 与其余 :id 接口同语义：不存在的项目 404
+	if !ok {
+		return
+	}
 	c.JSON(200, gin.H{"instruction": produce.LastReworkInstruction(p, c.Query("seg"))})
 }
 
@@ -864,7 +940,10 @@ func (s *Server) extractLink(c *gin.Context) {
 // xfade 成片附带 renders/timeline.json（实际段边界，比裸配音累计每边界早 xfadeDur），
 // 合并为 timeline 字段——前端 segTable 有它就用真实边界。
 func (s *Server) audioMeta(c *gin.Context) {
-	p := pipeline.NewProject(s.DataDir, c.Param("id"))
+	p, ok := s.project(c) // 不存在的项目统一 404，不与「未出配音」混谈
+	if !ok {
+		return
+	}
 	b, err := os.ReadFile(p.Artifact("audio_meta.json"))
 	if err != nil {
 		c.JSON(404, gin.H{"error": "音频对齐数据不存在（未出配音）"})
@@ -1010,9 +1089,10 @@ func (s *Server) sse(c *gin.Context) {
 	}
 }
 
+// updateStatus 状态落两处（project.json + Store 行）。实现收敛在 agent 包的
+// WriteProjectStatus：与 agent 轮内终态回写是同一件事，两份手抄迟早漂移。
 func (s *Server) updateStatus(id, status string) {
-	_ = pipeline.SetProjectField(pipeline.NewProject(s.DataDir, id), "status", status)
-	_ = s.Store.UpdateStatus(id, status)
+	agent.WriteProjectStatus(s.DataDir, s.Store, id, status)
 }
 
 // project 按路由 :id 构造 Project 并确认存在；不存在时已回 404，调用方直接 return。
@@ -1034,15 +1114,21 @@ func serveFile(c *gin.Context, path, name, cache string) {
 		return
 	}
 	defer f.Close()
-	if st, _ := f.Stat(); st == nil || st.IsDir() {
+	st, err := f.Stat()
+	if err != nil || st.IsDir() {
 		c.JSON(404, gin.H{"error": "文件不存在"})
 		return
 	}
 	c.Header("Cache-Control", cache)
-	http.ServeContent(c.Writer, c.Request, name, time.Now(), f)
+	// 条件请求吃文件真实 mtime：拿 time.Now() 当 modtime，If-Modified-Since
+	// 永远不可能命中，304 短路形同虚设
+	http.ServeContent(c.Writer, c.Request, name, st.ModTime(), f)
 }
 
 // ── 参考视频解析（风格库「视频解析」）────────────────────────
+
+// refVideoExt 参考视频扩展名白名单（常量表，包级一份：不值得逐请求重建 map）。
+var refVideoExt = map[string]bool{".mp4": true, ".mov": true, ".webm": true, ".m4v": true}
 
 // uploadReference 上传视频 → 落盘登记 → 立即异步解析。
 func (s *Server) uploadReference(c *gin.Context) {
@@ -1052,7 +1138,6 @@ func (s *Server) uploadReference(c *gin.Context) {
 		return
 	}
 	name := filepath.Base(fh.Filename)
-	var refVideoExt = map[string]bool{".mp4": true, ".mov": true, ".webm": true, ".m4v": true}
 	if !refVideoExt[strings.ToLower(filepath.Ext(name))] {
 		c.JSON(400, gin.H{"error": "只支持 mp4/mov/webm/m4v 视频文件"})
 		return

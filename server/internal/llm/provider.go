@@ -144,6 +144,18 @@ func mediaParts(user string, imageURLs []string, videoURL string) []glmMediaPart
 // httpClient 包级复用（连接池）；10 分钟超时兜底端点偶发挂住，防 Agent 循环/管线永久卡死。
 var httpClient = &http.Client{Timeout: 10 * time.Minute}
 
+// StatusError 上游非 2xx 的结构化错误：状态码 + 响应体。重试策略按它分流——
+// 401/403/400 这类客户端错（key 错/欠费封禁/参数非法）重试也不会好，烧满 3 次
+// 退避只是把失败拖慢几秒并掩盖真实病因；429/5xx/网络错才值得重试。
+type StatusError struct {
+	Code int    // HTTP 状态码
+	Body string // 响应体（截断展示）
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("HTTP %d: %.300s", e.Code, e.Body)
+}
+
 func (p *Provider) generate(ctx context.Context, system, user string, imageURLs []string, videoURL string, out any, temperature float32, effort Effort) (openai.Usage, error) {
 	var lastErr error
 	var usage openai.Usage
@@ -160,6 +172,12 @@ func (p *Provider) generate(ctx context.Context, system, user string, imageURLs 
 		if err != nil {
 			if ctx.Err() != nil { // 取消/超时不是可重试错误
 				return usage, ctx.Err()
+			}
+			// 4xx 客户端错（除 429）重试不会好：立即失败并透传状态码；
+			// 429 限流/5xx/网络错照旧退避重试
+			var se *StatusError
+			if errors.As(err, &se) && se.Code >= 400 && se.Code < 500 && se.Code != http.StatusTooManyRequests {
+				return usage, fmt.Errorf("LLM 请求被上游拒绝（HTTP %d，不重试）: %w", se.Code, se)
 			}
 			lastErr = err
 			continue // 网络/限流类错误重试
@@ -251,7 +269,7 @@ func (p *Provider) postChat(ctx context.Context, req glmChatRequest) (openai.Cha
 		return openai.ChatCompletionResponse{}, err
 	}
 	if httpResp.StatusCode != http.StatusOK {
-		return openai.ChatCompletionResponse{}, fmt.Errorf("HTTP %d: %.300s", httpResp.StatusCode, b)
+		return openai.ChatCompletionResponse{}, &StatusError{Code: httpResp.StatusCode, Body: string(b)}
 	}
 	var resp openai.ChatCompletionResponse
 	if err := json.Unmarshal(b, &resp); err != nil {

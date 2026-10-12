@@ -102,6 +102,9 @@ type Store interface {
 	DeleteProject(diskID string) error // 行+聊天+任务镜像全删（磁盘目录由调用方删）
 	SaveMsg(m *Msg) error
 	ListMsgs(projectID string, afterID int64, limit int) ([]Msg, error)
+	// ListMsgsTail 取该项目最近 limit 条消息，按时间正序返回。对话历史窗口用：
+	// ListMsgs 恒从最旧往后取，消息一超量最新对话永远进不了 LLM 上下文。
+	ListMsgsTail(projectID string, limit int) ([]Msg, error)
 	// render_jobs 记账：起跑插 running 行，终态回写该项目最近一行 running
 	//（同项目同时最多一个任务，见 produce.running 幂等锁）。
 	StartRenderJob(projectID, kind string) error
@@ -254,6 +257,27 @@ func (s *pgStore) ListMsgs(projectID string, afterID int64, limit int) ([]Msg, e
 	return rows, err
 }
 
+// ListMsgsTail 最近 limit 条消息：id 倒序取尾部再反转回正序（与 ListMsgs 同列同
+// 过滤，双实现形状不漂移）。
+func (s *pgStore) ListMsgsTail(projectID string, limit int) ([]Msg, error) {
+	uuid, err := s.findUUID(projectID)
+	if err != nil {
+		return nil, err
+	}
+	var rows []Msg
+	err = s.db.Table("chat_messages").
+		Select("id, role, type, content, refs, tool_name, tool_args, tool_result, created_at").
+		Where("project_id = ? AND type IN ('text','tool_call','error')", uuid).
+		Order("id DESC").Limit(limit).Scan(&rows).Error
+	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 { // 反转回时间正序
+		rows[i], rows[j] = rows[j], rows[i]
+	}
+	for i := range rows {
+		rows[i].ProjectID = projectID
+	}
+	return rows, err
+}
+
 // ── 内存实现（PG 不可达时的降级）────────────────────────────
 
 type memStore struct {
@@ -387,6 +411,24 @@ func (s *memStore) ListMsgs(projectID string, afterID int64, limit int) ([]Msg, 
 				break
 			}
 		}
+	}
+	return out, nil
+}
+
+// ListMsgsTail 尾部倒序收集 limit 条再反转回正序（与 PG 实现同过滤同语义：
+// 双实现形状漂移会让同一份历史在两种存储下喂给 LLM 不同的窗口）。
+func (s *memStore) ListMsgsTail(projectID string, limit int) ([]Msg, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Msg
+	for i := len(s.msgs) - 1; i >= 0 && len(out) < limit; i-- {
+		m := s.msgs[i]
+		if m.ProjectID == projectID && (m.Type == "text" || m.Type == "tool_call" || m.Type == "error") {
+			out = append(out, m)
+		}
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 { // 反转回时间正序
+		out[i], out[j] = out[j], out[i]
 	}
 	return out, nil
 }

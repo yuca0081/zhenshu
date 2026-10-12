@@ -316,7 +316,7 @@ func designDigest(p *pipeline.Project) (string, error) {
 func (a *Agent) regenerateStyle(ctx context.Context, p *pipeline.Project, instruction, out string) string {
 	var prev contract.StyleSamples
 	prevDir := ""
-	if json.Unmarshal(mustReadFile(out), &prev) == nil {
+	if json.Unmarshal(readFileLoose(out), &prev) == nil {
 		prevDir = prev.Direction
 	}
 	bak := out + ".bak"
@@ -417,7 +417,10 @@ func clipSummary(ss *contract.StyleSamples) string {
 	return fmt.Sprintf("（%d 张全部带迷你真段小样，所见即所得）", n)
 }
 
-func mustReadFile(path string) []byte {
+// readFileLoose 宽松读：读失败返回 nil 不报错。调用方按「无此文件」处理
+// （如 regenerateStyle 探测旧样张方向，nil 时 Unmarshal 必败即当无旧方向）；
+// 名字里不带 must——它从不 panic，吞错是特性不是事故。
+func readFileLoose(path string) []byte {
 	b, _ := os.ReadFile(path)
 	return b
 }
@@ -547,7 +550,8 @@ func (a *Agent) Run(projectID, userText string, refs []store.Ref) {
 }
 
 // reactTools 把包级工具表适配成 react 核心：门禁按实时状态求值，执行体绑当前项目。
-// 工具表本体不动——签名带宿主上下文，测试与 API 直调仍走 findTool/tools 表。
+// 工具表本体不动——签名带宿主上下文。生产路径只有 react 循环这一个消费方，
+// 直接遍历 tools 表（findTool/toolSchemas 无生产调用方，仅测试直测单项用）。
 func (a *Agent) reactTools(p *pipeline.Project) []react.Tool {
 	out := make([]react.Tool, 0, len(tools))
 	for i := range tools {
@@ -635,8 +639,15 @@ func (a *Agent) finish(projectID, content, typ string) {
 
 // setDoneStatus 终态落两处：project.json（磁盘事实源，projectView 读它）+ PG 行（首页列表读它）。
 func (a *Agent) setDoneStatus(projectID, status string) {
-	_ = pipeline.SetProjectField(pipeline.NewProject(a.DataDir, projectID), "status", status)
-	_ = a.Store.UpdateStatus(projectID, status)
+	WriteProjectStatus(a.DataDir, a.Store, projectID, status)
+}
+
+// WriteProjectStatus 项目状态落两处：project.json（磁盘事实源，projectView 读它）
+// + Store 行（首页列表读它）。agent 终态与 api 状态更新此前各持一份逐行相同的实现，
+// 改一处漏一处就是状态分叉——收敛到这一个入口（api 包引用，无 import 环）。
+func WriteProjectStatus(dataDir string, st store.Store, projectID, status string) {
+	_ = pipeline.SetProjectField(pipeline.NewProject(dataDir, projectID), "status", status)
+	_ = st.UpdateStatus(projectID, status)
 }
 
 // PostNotice 制作运行器的非终态插话（如开机自动续跑通知）：落聊天框、推 SSE，
@@ -711,7 +722,9 @@ func (a *Agent) saveToolMsg(projectID, name, args, result string) {
 }
 
 func (a *Agent) history(projectID string, n int) []openai.ChatCompletionMessage {
-	msgs, err := a.Store.ListMsgs(projectID, 0, 100)
+	// 尾部窗口取最近 100 条：ListMsgs 恒从最旧往后取，消息一超量最新对话
+	// 永远进不了 LLM 上下文（模型只记得项目头 100 条，越聊越失忆）
+	msgs, err := a.Store.ListMsgsTail(projectID, 100)
 	if err != nil {
 		return nil
 	}

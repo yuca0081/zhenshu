@@ -7,10 +7,31 @@ import (
 	"strings"
 	"testing"
 
+	openai "github.com/sashabaranov/go-openai"
+
 	"webpage-video-agent/server/internal/pipeline"
 	"webpage-video-agent/server/internal/produce"
 	"webpage-video-agent/server/internal/store"
 )
+
+// findTool / toolSchemas 测试辅助：按名取单项工具直测门禁/执行体、枚举全表 schema。
+// 生产路径的 reactTools 直接遍历 tools 表，这两个函数已无生产调用方，收进测试文件。
+func findTool(name string) *tool {
+	for i := range tools {
+		if tools[i].def.Function.Name == name {
+			return &tools[i]
+		}
+	}
+	return nil
+}
+
+func toolSchemas() []openai.Tool {
+	out := make([]openai.Tool, len(tools))
+	for i, t := range tools {
+		out[i] = t.def
+	}
+	return out
+}
 
 // 门禁同权矩阵：start_production 在「成片过期/上次失败·中断」时必须放行整片重做
 // （与舞台「按最新内容重做」按钮同权）；成片新鲜健康才挡回 rework。
@@ -89,11 +110,11 @@ func TestReworkStaleNote(t *testing.T) {
 
 // 记忆通道：agent 的失败通告（type=error）必须进历史；tool_call 仍排除。
 type histStoreStub struct {
-	store.Store // 只覆写 ListMsgs（history 唯一依赖）；其余方法不应被打到
+	store.Store // 只覆写 ListMsgsTail（history 唯一依赖）；其余方法不应被打到
 	msgs        []store.Msg
 }
 
-func (s *histStoreStub) ListMsgs(projectID string, afterID int64, limit int) ([]store.Msg, error) {
+func (s *histStoreStub) ListMsgsTail(projectID string, limit int) ([]store.Msg, error) {
 	return s.msgs, nil
 }
 

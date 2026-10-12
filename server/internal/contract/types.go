@@ -85,6 +85,8 @@ func ValidateStoryboard(sb *Storyboard) error {
 	if len(sb.Segments) == 0 {
 		return fmt.Errorf("segments 为空")
 	}
+	seenID := map[string]bool{}
+	seenIdx := map[int]bool{}
 	for i, s := range sb.Segments {
 		if s.Narration == "" {
 			return fmt.Errorf("段 %d（%s）旁白为空", i+1, s.ID)
@@ -92,6 +94,16 @@ func ValidateStoryboard(sb *Storyboard) error {
 		if s.DurationHint <= 0 {
 			return fmt.Errorf("段 %d（%s）duration_hint 非正", i+1, s.ID)
 		}
+		// 段身份（id/idx）是时间轴/画面注册表/聊天引用的锚：模型产出重复段会让
+		// 按 idx/id 寻址的环节静默串段（两段共用一个 id/注册表），必须在这里拦下
+		if seenID[s.ID] {
+			return fmt.Errorf("段 %d（%s）id 重复——每个段的 id 必须唯一", i+1, s.ID)
+		}
+		seenID[s.ID] = true
+		if seenIdx[s.Idx] {
+			return fmt.Errorf("段 %d（%s）idx=%d 重复——段序必须连续唯一", i+1, s.ID, s.Idx)
+		}
+		seenIdx[s.Idx] = true
 	}
 	if sb.TotalHint() > MaxDurationSec {
 		return fmt.Errorf("总时长 %.0fs 超过上限 %ds（需压缩取舍并与用户协商）", sb.TotalHint(), MaxDurationSec)

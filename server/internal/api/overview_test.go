@@ -104,10 +104,14 @@ func TestTailManifest(t *testing.T) {
 	lines := []string{
 		`{"event":"produce.start","detail":"","ts":"2026-09-30T10:00:00+08:00","ms":1791000000000}`,
 		`not json`,
+		``, // 撕裂/空行：坏行剔除（manifest 逐事件一行，空行只出现在写入被杀的中间）
 		`{"event":"stage.start","detail":"tts","ts":"2026-09-30T10:00:05+08:00"}`, // 老条目：无 ms
-		``,
 	}
-	got := tailManifest([]byte(joinLines(lines)), 500)
+	path := filepath.Join(t.TempDir(), "manifest.jsonl")
+	if err := os.WriteFile(path, []byte(joinLines(lines)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := tailManifest(path, 500)
 	if len(got) != 2 {
 		t.Fatalf("坏行/空行应剔除，得 %d 条: %+v", len(got), got)
 	}
@@ -118,12 +122,12 @@ func TestTailManifest(t *testing.T) {
 		t.Fatalf("老条目 ms 缺省、事件保留: %+v", got[1])
 	}
 	// 尾部截断：只要最后 1 条
-	got = tailManifest([]byte(joinLines(lines)), 1)
+	got = tailManifest(path, 1)
 	if len(got) != 1 || got[0].Event != "stage.start" {
 		t.Fatalf("应只留尾部 1 条 stage.start: %+v", got)
 	}
-	// 空 manifest（新建项目没开过工）：空切片而非 nil（JSON 必须 [] 不能 null）
-	if got := tailManifest(nil, 500); got == nil || len(got) != 0 {
+	// manifest 不存在（新建项目没开过工）：空切片而非 nil（JSON 必须 [] 不能 null）
+	if got := tailManifest(filepath.Join(t.TempDir(), "none.jsonl"), 500); got == nil || len(got) != 0 {
 		t.Fatalf("空输入应为空切片: %+v", got)
 	}
 }

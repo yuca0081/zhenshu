@@ -99,7 +99,28 @@ func cmdNew(cfg *config.Config, articlePath, name string) {
 			name = string([]rune(name)[:24])
 		}
 	}
+	// os.Mkdir 只建最后一层：全新数据目录还没有 projects/ 时，占号会报路径不存在
+	if err := os.MkdirAll(filepath.Join(cfg.DataDir, "projects"), 0o755); err != nil {
+		fatal(err)
+	}
+	// id 秒级时间戳：同秒两次 new 会撞号——os.Mkdir 原子占号（先 Stat 后 MkdirAll
+	// 有竞态缝：双方都探到不存在再互踩同一目录），撞号换下一个号重试。
+	// 与 api 建项目/styleref.Save 同一写法。
 	p := pipeline.NewProject(cfg.DataDir, id)
+	for n := 2; ; n++ {
+		err := os.Mkdir(p.Dir, 0o755)
+		if err == nil {
+			break
+		}
+		if !os.IsExist(err) {
+			fatal(err)
+		}
+		if n > 10 { // 正常只有同秒连发才会撞；连撞 10 次说明时钟/磁盘异常，报错止损
+			fatal(fmt.Errorf("项目 ID 连续撞号 %d 次，放弃创建（%s）", n-1, p.Dir))
+		}
+		id = fmt.Sprintf("p%s-%d", time.Now().Format("20060102-150405"), n)
+		p = pipeline.NewProject(cfg.DataDir, id)
+	}
 	for _, d := range []string{
 		"input", "llm", "manuscripts", "storyboards", "style",
 		"audio", "compositions/frames", "compositions/registry", "renders",
@@ -177,7 +198,11 @@ func cmdStatus(cfg *config.Config, id string) {
 				Detail string `json:"detail"`
 			}
 			if json.Unmarshal([]byte(l), &ev) == nil {
-				fmt.Printf("  %s  %-18s %s\n", ev.TS[11:19], ev.Event, truncate(ev.Detail, 60))
+				ts := ev.TS
+				if len(ev.TS) >= 19 { // RFC3339 前 19 字节是日期+时刻；短串/畸形串直接原样显示
+					ts = ev.TS[11:19]
+				}
+				fmt.Printf("  %s  %-18s %s\n", ts, ev.Event, truncate(ev.Detail, 60))
 			}
 		}
 	}

@@ -50,14 +50,14 @@ func WebSearch(ctx context.Context, query, recency, location string) ([]SearchRe
 		args["location"] = location
 	}
 
-	init, _ := json.Marshal(map[string]any{
+	handshake, _ := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "initialize",
 		"params": map[string]any{
 			"protocolVersion": "2025-03-26", "capabilities": map[string]any{},
 			"clientInfo": map[string]any{"name": "zhenshu-agent", "version": "1.0"},
 		},
 	})
-	_, hdr, err := mcpPost(ctx, endpoint, key, "", init)
+	_, hdr, err := mcpPost(ctx, endpoint, key, "", handshake)
 	if err != nil {
 		return nil, fmt.Errorf("MCP 握手失败: %w", err)
 	}
