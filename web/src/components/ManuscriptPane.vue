@@ -9,7 +9,7 @@ import { errMsg } from '../format'
 // article.txt 是唯一真源；manuscript.json 是管线产物（保存即删防旧稿重放）。
 // AI 起草按目标字数直驱（时长概念归分镜：分镜页签定总时长，逐段规划）。
 // AI 写稿期间（本页起草 or 对话栏 Agent 轮）编辑区整体锁定：防手写与 AI 落盘
-// 互相写穿，横幅上给取消/中断出口。
+// 互相写穿，编辑区浮层上给取消/中断出口。
 const props = defineProps<{
   projectId: string
   topic: string
@@ -105,22 +105,22 @@ async function extract() {
       <span class="ms-count">{{ wordCount }} 字</span>
       <NButton type="primary" size="small" :loading="saving" :disabled="!content.trim() || locked" @click="save">保存</NButton>
     </div>
-    <!-- AI 占用编辑区横幅：本页起草给「取消」，对话轮给「中断 AI」——出口永远在明面上 -->
-    <div v-if="drafting" class="ms-lock">
-      <NSpin :size="13" />
-      <span>正在AI生成稿件…（生成完成前编辑区已锁定）</span>
-      <NButton size="tiny" quaternary @click="cancelDraft">取消</NButton>
+    <!-- AI 占用编辑区：不再单独占一行横幅，提示+出口浮在编辑区内部（覆盖层不挤压布局）。
+         本页起草给「取消」，对话轮给「中断 AI」——出口永远在明面上 -->
+    <div class="ms-editor">
+      <NInput
+        v-model:value="content" class="ms-input" type="textarea" :maxlength="200000" :disabled="locked"
+        placeholder="把文章全文粘进来——这就是视频文稿"
+        @update:value="dirty = true"
+      />
+      <div v-if="locked" class="ms-lock-cover">
+        <NSpin :size="14" />
+        <span>{{ drafting ? '正在 AI 生成稿件…生成完成前编辑区已锁定' : 'AI 正在工作中——本轮可能改写文稿，编辑区已临时锁定' }}</span>
+        <NButton size="tiny" quaternary @click="drafting ? cancelDraft() : emit('cancel-agent')">
+          {{ drafting ? '取消生成' : '中断 AI' }}
+        </NButton>
+      </div>
     </div>
-    <div v-else-if="agentBusy" class="ms-lock">
-      <NSpin :size="13" />
-      <span>AI 正在工作中——本轮可能改写文稿，编辑区已临时锁定</span>
-      <NButton size="tiny" quaternary @click="emit('cancel-agent')">中断 AI</NButton>
-    </div>
-    <NInput
-      v-model:value="content" class="ms-input" type="textarea" :maxlength="200000" :disabled="locked"
-      placeholder="把文章全文粘进来——这就是视频文稿"
-      @update:value="dirty = true"
-    />
     <div class="ms-tools">
       <div class="tool-row">
         <NInputNumber v-model:value="words" size="small" :min="100" :max="5000" :step="100" :disabled="agentBusy" style="width: 120px">
@@ -149,18 +149,21 @@ async function extract() {
 .ms-hint { font-size: 11.5px; color: #55555f; line-height: 1.6; flex: 1; min-width: 200px; }
 .ms-count { font-size: 12px; color: #7c7c88; margin-left: auto; }
 /* 编辑框吃满剩余高度：NInput textarea 需要高度穿透 */
+.ms-editor { position: relative; flex: 1; min-height: 120px; display: flex; }
 .ms-input { flex: 1; min-height: 120px; }
 .ms-input :deep(.n-input-wrapper) { height: 100%; }
 .ms-input :deep(textarea) { height: 100%; resize: none; }
+/* AI 占用编辑区：覆盖在编辑框内部的琥珀提示 + 内联出口按钮（不单独占一行） */
+.ms-lock-cover {
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  background: rgba(20, 20, 26, .66); border-radius: 8px;
+  color: #f0c674; font-size: 12.5px; text-align: center; padding: 0 16px;
+}
+.ms-lock-cover :deep(.n-button) { color: #f0c674; flex: none; }
+.ms-lock-cover :deep(.n-button:hover) { color: #ffdd9a; }
 .ms-tools { display: flex; flex-direction: column; gap: 8px; }
 .tool-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-/* AI 占用编辑区横幅：琥珀底提示 + 内联出口按钮 */
-.ms-lock {
-  display: flex; align-items: center; gap: 10px;
-  color: #f0c674; font-size: 12.5px; background: #211d12;
-  border: 1px solid #5c4d24; border-radius: 8px; padding: 8px 12px;
-}
-.ms-lock span { flex: 1; }
 .ms-warn-inline { font-size: 11px; color: #f0c674; }
 .ms-warn { color: #f0c674; font-size: 12px; background: #211d12; border: 1px solid #5c4d24; border-radius: 8px; padding: 8px 12px; }
 .ms-err { color: #ff9d9d; font-size: 12.5px; }

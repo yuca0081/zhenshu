@@ -554,8 +554,8 @@ async function confirmStyle() {
             </div>
           </main>
           <ChatPanel
-            :key="current" :project-id="current" :msgs="msgs" :busy="agentBusy" v-model:draft="chatDraft" :refs="chatRefs" :view="view"
-            @sent="markBusy" @remove-ref="removeRef" @clear-refs="chatRefs = []" @open-gate="setTab"
+            :key="current" :project-id="current" :msgs="msgs" :busy="agentBusy" v-model:draft="chatDraft" :refs="chatRefs"
+            @sent="markBusy" @remove-ref="removeRef" @clear-refs="chatRefs = []"
           />
         </div>
       </div>

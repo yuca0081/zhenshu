@@ -1059,6 +1059,10 @@ func (s *Server) chat(c *gin.Context) {
 		// 是"正在执行"那轮的取消函数，取消按钮打不到还在排队的幽灵轮。
 		turnCtx, cancelTurn := context.WithTimeout(context.Background(), 20*time.Minute)
 		defer cancelTurn()
+		// 归属上下文进轮：list_projects 按它过滤、create_project 按它落 user_id
+		//（开放模式 uid/role 为空 = 不过滤/系统项目，与列表接口同语义）
+		uid, role := s.currentUser(c)
+		turnCtx = agent.WithUser(turnCtx, uid, role)
 		s.turnCancels.Store(id, cancelTurn)
 		defer s.turnCancels.Delete(id)
 		s.Agent.Run(turnCtx, id, in.Content, in.Refs)

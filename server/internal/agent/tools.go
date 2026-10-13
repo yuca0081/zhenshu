@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
+	"webpage-video-agent/server/internal/produce"
 	"webpage-video-agent/server/internal/stylelib"
 	"webpage-video-agent/server/internal/styleref"
 	"webpage-video-agent/server/internal/webfetch"
@@ -177,23 +179,58 @@ var tools = []tool{
 				Content string `json:"content"`
 			}
 			_ = json.Unmarshal([]byte(args), &in)
-			content := strings.TrimSpace(in.Content)
-			if content == "" {
-				return "缺少文稿正文"
+			return a.saveManuscriptContent(p, in.Content)
+		},
+	},
+	{
+		def: toolDef("draft_manuscript", "AI 起草一篇口播文稿（自主联网核实时效资料后成稿，默认 500 字）。用户给了选题/主题还没给文稿时用它；默认只出稿给用户过目，用户明确说「直接用」才 save=true 落盘", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"topic": map[string]any{"type": "string", "description": "一句话主题（例：蚊子为什么嗡嗡叫）"},
+				"words": map[string]any{"type": "integer", "description": "目标字数（可选，默认 500，上限 5000）"},
+				"save":  map[string]any{"type": "boolean", "description": "true=起草后直接保存为项目文稿；默认 false=只把稿子给用户过目"},
+			},
+			"required": []string{"topic"},
+		}),
+		gate: func(s State) string {
+			if s.Producing {
+				return "制作运行中，先等本条完成"
 			}
-			if err := os.WriteFile(p.Artifact("input/article.txt"), []byte(content), 0o644); err != nil {
-				return "保存失败：" + err.Error()
+			return ""
+		},
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
+			var in struct {
+				Topic string `json:"topic"`
+				Words int    `json:"words"`
+				Save  bool   `json:"save"`
 			}
-			// 与文稿弹窗保存同语义：article.txt 是唯一真源；manuscript.json 是重放产物，
-			// 不删的话重新制作时 TTS 拿的还是旧稿。
-			_ = os.Remove(p.Artifact("manuscripts/manuscript.json"))
-			_, hasSb := os.Stat(p.Artifact("storyboards/storyboard.json"))
-			a.setDoneStatus(p.ID, "manuscript")
-			msg := fmt.Sprintf("文稿已保存（%d 字）", len([]rune(content)))
-			if hasSb == nil {
-				msg += "；已有分镜基于旧稿，要重新出分镜才会生效"
+			_ = json.Unmarshal([]byte(args), &in)
+			in.Topic = strings.TrimSpace(in.Topic)
+			if in.Topic == "" {
+				return "缺少主题"
 			}
-			return msg
+			if in.Words <= 0 {
+				in.Words = 500
+			}
+			if in.Words > 5000 { // 与文稿弹窗同上限：更长的一次性成稿后半段易注水
+				in.Words = 5000
+			}
+			prov, err := llm.FromEnv(llm.RoleDialogue)
+			if err != nil {
+				return "起草需要 API 模式（LLM_API_KEY）。可让用户直接把文稿发进来，你调 save_manuscript 存下"
+			}
+			// 360s 与文稿弹窗起草同预算：时事题材先联网核实（预算帽 2 次搜索）再成稿，
+			// 收尾 high 思考一轮就要 1-3 分钟，短了必砍死最长的成稿轮
+			dctx, cancel := context.WithTimeout(ctx, 360*time.Second)
+			defer cancel()
+			content, err := DraftManuscript(dctx, prov, in.Topic, in.Words)
+			if err != nil {
+				return "起草失败：" + err.Error()
+			}
+			if !in.Save {
+				return "草稿如下（尚未保存，用户点头后调 save_manuscript 落盘，或带 save=true 重新起草）：\n\n" + content
+			}
+			return "已按主题起草并保存。" + a.saveManuscriptContent(p, content)
 		},
 	},
 	{
@@ -507,7 +544,7 @@ var tools = []tool{
 				return "风格库为空：出片后我会自动起草风格，或在风格库页上传参考视频解析入库"
 			}
 			return fmt.Sprintf("风格库 %d 条：\n", len(lines)) + strings.Join(lines, "\n") +
-				"\n选用：风格门弹窗点卡片（可关掉不想吸收的特色），或让我把 id 记入 project（style_id）"
+				"\n选用：用户点头后你调 apply_style（style_id）记入项目并出样张；或用户在风格门弹窗点卡片"
 		},
 	},
 	{
@@ -643,6 +680,14 @@ var tools = []tool{
 			var b strings.Builder
 			for _, seg := range sb.Segments {
 				fmt.Fprintf(&b, "段%d %s「%s」（约%.0fs）旁白：%s\n", seg.Idx, seg.ID, seg.Key, seg.DurationHint, pipeline.FirstLine(seg.Narration, 60))
+				// 画面构想与章节角标带上：模型答「这段画面是什么」不用猜，
+				// 全文另读 storyboard.json 的场景用 edit_segment/rework 定位
+				if strings.TrimSpace(seg.VisualBrief) != "" {
+					fmt.Fprintf(&b, "  画面：%s\n", pipeline.FirstLine(seg.VisualBrief, 100))
+				}
+				if strings.TrimSpace(seg.Chapter) != "" {
+					fmt.Fprintf(&b, "  章节：%s\n", seg.Chapter)
+				}
 				if rb, rerr := os.ReadFile(p.Artifact("compositions/registry/" + seg.ID + ".json")); rerr == nil {
 					var reg contract.ElementRegistry
 					if json.Unmarshal(rb, &reg) == nil && len(reg.Elements) > 0 {
@@ -801,6 +846,534 @@ var tools = []tool{
 			return addr
 		},
 	},
+	{
+		def: toolDef("read_manuscript", "读项目文稿全文（唯一真源 article.txt）。涉及文稿内容、措辞、或要核对文稿与分镜是否一致时，先读它再答——禁止凭印象答文本内容", nil),
+		gate: func(s State) string {
+			if !s.HasManuscript {
+				return "还没有文稿"
+			}
+			return ""
+		},
+		run: func(_ context.Context, a *Agent, p *pipeline.Project, _ string) string {
+			raw, err := os.ReadFile(p.Artifact("input/article.txt"))
+			if err != nil { // 真源缺失回退管线产物（State.HasManuscript 的同款回退）
+				var m contract.Manuscript
+				if b, jerr := os.ReadFile(p.Artifact("manuscripts/manuscript.json")); jerr == nil && json.Unmarshal(b, &m) == nil {
+					raw = []byte(m.Content)
+					err = nil
+				}
+			}
+			if err != nil {
+				return "文稿读取失败：" + err.Error()
+			}
+			content := strings.TrimSpace(string(raw))
+			const maxRunes = 8000
+			r := []rune(content)
+			if len(r) > maxRunes {
+				return fmt.Sprintf("文稿（共 %d 字，超长只保留前 %d 字）：\n%s", len(r), maxRunes, string(r[:maxRunes]))
+			}
+			return fmt.Sprintf("文稿全文（%d 字）：\n%s", len(r), content)
+		},
+	},
+	{
+		def: toolDef("edit_segment", "精准编辑单个分镜段：旁白用词/段名/时长预估/章节角标，不动其他段。旁白改了下次制作会自动只重配该段（内容指纹检测）。重构段落划分/整体节奏才用 update_storyboard 整表重生成", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"segment":       map[string]any{"type": "string", "description": "目标段：段号（如 3）或段 id（如 seg03）"},
+				"narration":     map[string]any{"type": "string", "description": "新的旁白全文（整段替换，不能为空）；不改就不带"},
+				"key":           map[string]any{"type": "string", "description": "新的段名（舞台展示用）；不改就不带"},
+				"duration_hint": map[string]any{"type": "number", "description": "新的时长预估（秒）；不改就不带"},
+				"chapter":       map[string]any{"type": "string", "description": "章节角标（空串=清除）；不改就不带"},
+			},
+			"required": []string{"segment"},
+		}),
+		gate: func(s State) string {
+			if !s.HasStoryboard {
+				return "还没有分镜"
+			}
+			if s.Producing {
+				return "制作/重做运行中，先等完成"
+			}
+			return ""
+		},
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
+			var in struct {
+				Segment      string   `json:"segment"`
+				Narration    *string  `json:"narration"`
+				Key          *string  `json:"key"`
+				DurationHint *float64 `json:"duration_hint"`
+				Chapter      *string  `json:"chapter"`
+			}
+			if err := json.Unmarshal([]byte(args), &in); err != nil {
+				return "参数解析失败：" + err.Error()
+			}
+			changed := 0
+			if in.Narration != nil {
+				changed++
+			}
+			if in.Key != nil {
+				changed++
+			}
+			if in.DurationHint != nil {
+				changed++
+			}
+			if in.Chapter != nil {
+				changed++
+			}
+			if changed == 0 {
+				return "没有要改的字段（narration/key/duration_hint/chapter 至少给一个）"
+			}
+			if in.Narration != nil && strings.TrimSpace(*in.Narration) == "" {
+				return "旁白不能为空（空旁白段两个 TTS 引擎都合不出声）"
+			}
+			sbPath := p.Artifact("storyboards/storyboard.json")
+			// 先在内存里改好并过校验，才动磁盘文件：备份-写-失败还原的窗口越小越好
+			sb, err := p.LoadStoryboard()
+			if err != nil {
+				return "分镜读取失败：" + err.Error()
+			}
+			segID, label, err := a.resolveSegment(p, in.Segment)
+			if err != nil {
+				return err.Error()
+			}
+			var seg *contract.Segment
+			for i := range sb.Segments {
+				if sb.Segments[i].ID == segID {
+					seg = &sb.Segments[i]
+					break
+				}
+			}
+			if seg == nil {
+				return "段 " + segID + " 不在分镜里"
+			}
+			var what []string
+			if in.Narration != nil {
+				seg.Narration = strings.TrimSpace(*in.Narration)
+				what = append(what, "旁白")
+			}
+			if in.Key != nil {
+				seg.Key = strings.TrimSpace(*in.Key)
+				what = append(what, "段名")
+			}
+			if in.DurationHint != nil {
+				if *in.DurationHint <= 0 || *in.DurationHint > 600 {
+					return "duration_hint 需在 (0,600] 秒"
+				}
+				seg.DurationHint = *in.DurationHint
+				what = append(what, fmt.Sprintf("时长（约 %.0fs）", seg.DurationHint))
+			}
+			if in.Chapter != nil {
+				seg.Chapter = strings.TrimSpace(*in.Chapter)
+				what = append(what, "章节角标")
+			}
+			if err := contract.ValidateStoryboard(sb); err != nil {
+				return "修改后分镜未过校验（未落盘）：" + err.Error()
+			}
+			// 备份旧文件再原子写：写失败原样还原，项目任何时刻不留「分镜空洞」
+			bak := sbPath + ".bak"
+			if err := os.Rename(sbPath, bak); err != nil {
+				return "备份旧分镜失败：" + err.Error()
+			}
+			if err := pipeline.WriteFileAtomic(sbPath, pipeline.MustJSONBytes(sb), 0o644); err != nil {
+				if rerr := os.Rename(bak, sbPath); rerr != nil {
+					return fmt.Sprintf("写入失败，且还原旧分镜也失败（备份在 %s）：%v（原因：%v）", bak, rerr, err)
+				}
+				return "写入失败（已还原旧分镜）：" + err.Error()
+			}
+			_ = os.Remove(bak)
+			if a.OnEvent != nil {
+				a.OnEvent(p.ID, "storyboard", "")
+			}
+			msg := fmt.Sprintf("%s 已改（%s）", label, strings.Join(what, "、"))
+			if in.Narration != nil {
+				msg += "；该段旁白下次制作自动重配，已有成片现为旧版"
+			} else {
+				msg += "；重新制作才会进成片"
+			}
+			return msg
+		},
+	},
+	{
+		def: toolDef("apply_style", "把风格库条目选定为本片强参考（记 style_id + 写风格简报，旧样张作废）。用户在检索结果里点了头就用它；选完必须再调 draft_style_samples 出样张（硬门不变）", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"style_id": map[string]any{"type": "string", "description": "风格库条目 id（search_styles 结果里拿）"},
+				"disabled": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "要关掉的特色 id（默认全开吸收）"},
+			},
+			"required": []string{"style_id"},
+		}),
+		gate: func(s State) string {
+			if s.Producing {
+				return "制作运行中，先等本条完成"
+			}
+			return ""
+		},
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
+			var in struct {
+				StyleID  string   `json:"style_id"`
+				Disabled []string `json:"disabled"`
+			}
+			_ = json.Unmarshal([]byte(args), &in)
+			id := strings.TrimSpace(in.StyleID)
+			if id == "" {
+				return "缺少 style_id（search_styles 结果里拿）"
+			}
+			pack, ok := a.Lib.Get(id)
+			if !ok || !pack.Published {
+				return "风格不存在或未入库（草稿条目要用户在风格库页点「入库」）"
+			}
+			disabled := map[string]bool{}
+			for _, sig := range in.Disabled {
+				disabled[sig] = true
+			}
+			brief, err := a.Lib.BuildBrief(pack.ID, disabled)
+			if err != nil {
+				return "简报组装失败：" + err.Error()
+			}
+			if err := stylelib.WriteBriefFile(p.Artifact("style/style_brief.json"), brief); err != nil {
+				return "简报写入失败：" + err.Error()
+			}
+			// 旧样张产物作废（强参考换了，设计必须重发明）：与舞台「选用」同清单
+			for _, f := range []string{
+				"style/style_samples.json", "style/skin.json", "style/design.md", "llm/style_samples.json",
+				"style/sample-0.png", "style/sample-1.png", "style/sample-2.png",
+			} {
+				_ = os.Remove(p.Artifact(f))
+			}
+			_ = os.RemoveAll(p.Artifact("style/clips"))
+			_ = os.RemoveAll(p.Artifact(".hf-clip"))
+			// style_id 记入 project.json：持 per-project 锁——对话轮内其他 SetProjectField
+			// 与此处并发时各基于旧快照整文件回写、后写覆盖先写
+			mu := pipeline.ProjectMu(p)
+			mu.Lock()
+			wrote := false
+			if b, rerr := os.ReadFile(p.Artifact("project.json")); rerr == nil {
+				var meta map[string]any
+				if json.Unmarshal(b, &meta) == nil {
+					meta["style_id"] = pack.ID
+					wrote = pipeline.WriteFileAtomic(p.Artifact("project.json"), pipeline.MustJSONBytes(meta), 0o644) == nil
+				}
+			}
+			mu.Unlock()
+			if !wrote {
+				return "style_id 记入 project.json 失败（文件读不出或写坏），简报已落、可重试"
+			}
+			// 风格门回到「等出样张」：状态按剩余前置降级（与舞台选用同语义）
+			back := "created"
+			if _, err := os.Stat(p.Artifact("input/article.txt")); err == nil {
+				back = "manuscript"
+			}
+			if _, err := p.LoadStoryboard(); err == nil {
+				back = "storyboard"
+			}
+			a.setDoneStatus(p.ID, back)
+			if a.Emit != nil {
+				a.Emit(p.ID, "style_applied", "", pack.Name)
+			}
+			msg := fmt.Sprintf("已选用风格「%s」（特色×%d 吸收），旧样张已作废。接着调 draft_style_samples 出样张（可带用户要求）", pack.Name, len(brief.Signatures))
+			if len(in.Disabled) > 0 {
+				msg += fmt.Sprintf("（关掉 %d 条特色）", len(in.Disabled))
+			}
+			return msg
+		},
+	},
+	{
+		def:  toolDef("cancel_production", "取消正在运行的制作/重做（整片或段级）。用户说停就停，别劝阻；取消终态会自动报进对话", nil),
+		gate: noGate,
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
+			if a.Producer == nil {
+				return "制作运行器未接线（Producer 为空）"
+			}
+			if !a.Producer.Cancel(p.ID) {
+				return "当前没有正在进行的制作任务"
+			}
+			return "已请求取消，收尾几秒，终态我会报进对话"
+		},
+	},
+	{
+		def:  toolDef("read_check", "读最近一轮制作的逐段检查报告（frameqa 各段 pass/fail 与问题明细）与制作过程事件。用户问「哪几段没过/为什么」、或制作失败要定位原因时用它", nil),
+		gate: noGate,
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
+			lines, err := produce.ReadJSONLTail(p.Artifact("manifest.jsonl"), 512)
+			if err != nil {
+				return "没有制作记录（manifest 读不出）：" + err.Error()
+			}
+			var qa, proc []string
+			for _, l := range lines {
+				var e struct {
+					Event  string `json:"event"`
+					Detail string `json:"detail"`
+					TS     string `json:"ts"`
+				}
+				if json.Unmarshal(l, &e) != nil {
+					continue
+				}
+				line := ""
+				if len(e.TS) >= 19 {
+					line = e.TS[11:19] + " "
+				}
+				line += e.Detail
+				switch {
+				case strings.HasPrefix(e.Event, "frameqa."):
+					qa = append(qa, line)
+				case strings.HasPrefix(e.Event, "produce.") || strings.HasPrefix(e.Event, "rework.") ||
+					strings.HasPrefix(e.Event, "prereview.") || strings.HasPrefix(e.Event, "check."):
+					proc = append(proc, e.Event+" "+line)
+				}
+			}
+			if len(qa) == 0 && len(proc) == 0 {
+				return "manifest 里没有画面检查/制作事件（还没制作过，或记录太老被截断）"
+			}
+			// 过程事件只留尾部 30 条：过程很长，头部全是开场白
+			if len(proc) > 30 {
+				proc = proc[len(proc)-30:]
+			}
+			var b strings.Builder
+			if len(qa) > 0 {
+				b.WriteString("画面检查（最近一轮）：\n" + strings.Join(qa, "\n") + "\n\n")
+			}
+			b.WriteString("制作过程（尾部）：\n" + strings.Join(proc, "\n"))
+			return b.String()
+		},
+	},
+	{
+		def:  toolDef("list_projects", "列出数据目录里的全部项目（id/名称/状态/有无成片）。用户问「有哪些项目」「之前那个 XX 项目」时用它", nil),
+		gate: noGate,
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
+			entries, err := os.ReadDir(filepath.Join(a.DataDir, "projects"))
+			if err != nil {
+				return "项目目录读不出：" + err.Error()
+			}
+			uid, role := userFrom(ctx)
+			filterByOwner := uid != "" && role != "admin" // 开放模式/直测不过滤，与 api 列表同语义
+			var rows []string
+			for _, e := range entries {
+				if !e.IsDir() || strings.HasPrefix(e.Name(), "_") {
+					continue
+				}
+				b, rerr := os.ReadFile(filepath.Join(a.DataDir, "projects", e.Name(), "project.json"))
+				if rerr != nil {
+					continue
+				}
+				var meta struct {
+					Name   string `json:"name"`
+					Status string `json:"status"`
+					UserID string `json:"user_id"`
+				}
+				if json.Unmarshal(b, &meta) != nil {
+					continue
+				}
+				if filterByOwner && meta.UserID != uid {
+					continue
+				}
+				video := ""
+				if _, serr := os.Stat(filepath.Join(a.DataDir, "projects", e.Name(), "renders", "main.mp4")); serr == nil {
+					video = " ✓成片"
+				}
+				rows = append(rows, fmt.Sprintf("- %s「%s」%s%s", e.Name(), meta.Name, meta.Status, video))
+			}
+			if len(rows) == 0 {
+				return "没有项目（create_project 可新建）"
+			}
+			return fmt.Sprintf("共 %d 个项目：\n", len(rows)) + strings.Join(rows, "\n")
+		},
+	},
+	{
+		def: toolDef("create_project", "新建一个视频项目（名称+一句话主题；可选带文稿直建）。新建成功后用户在项目列表里打开它——对话仍留在当前项目", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":       map[string]any{"type": "string", "description": "项目名（缺省取主题前 24 字）"},
+				"topic":      map[string]any{"type": "string", "description": "一句话主题（带 manuscript 时可省）"},
+				"manuscript": map[string]any{"type": "string", "description": "可选：文稿全文直建（等同建完粘贴保存）"},
+				"aspect":     map[string]any{"type": "string", "description": "画幅：9:16（默认）| 16:9"},
+			},
+		}),
+		gate: noGate,
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
+			var in struct {
+				Name       string `json:"name"`
+				Topic      string `json:"topic"`
+				Manuscript string `json:"manuscript"`
+				Aspect     string `json:"aspect"`
+			}
+			_ = json.Unmarshal([]byte(args), &in)
+			in.Topic = strings.TrimSpace(in.Topic)
+			in.Manuscript = strings.TrimSpace(in.Manuscript)
+			if in.Topic == "" && in.Manuscript == "" {
+				return "主题必填（一句话说清要讲什么），或带上文稿全文"
+			}
+			if in.Aspect != "16:9" && in.Aspect != "9:16" {
+				in.Aspect = "9:16"
+			}
+			if in.Name == "" {
+				src := in.Topic
+				if src == "" {
+					src = strings.SplitN(in.Manuscript, "\n", 2)[0]
+				}
+				in.Name = src
+				if r := []rune(in.Name); len(r) > 24 {
+					in.Name = string(r[:24])
+				}
+			}
+			// id 秒级时间戳 + os.Mkdir 原子占号（与 api 建项目同一写法，同秒连建撞号换号重试）
+			id := "p" + time.Now().Format("20060102-150405")
+			if err := os.MkdirAll(filepath.Join(a.DataDir, "projects"), 0o755); err != nil {
+				return "建目录失败：" + err.Error()
+			}
+			np := pipeline.NewProject(a.DataDir, id)
+			n := 2
+			for {
+				err := os.Mkdir(np.Dir, 0o755)
+				if err == nil {
+					break
+				}
+				if !os.IsExist(err) {
+					return "建项目目录失败：" + err.Error()
+				}
+				if n > 10 {
+					return "项目 ID 连续撞号，放弃创建（时钟/磁盘异常？）"
+				}
+				id = fmt.Sprintf("p%s-%d", time.Now().Format("20060102-150405"), n)
+				np = pipeline.NewProject(a.DataDir, id)
+				n++
+			}
+			for _, d := range []string{
+				"input", "llm", "manuscripts", "storyboards", "style",
+				"audio", "compositions/frames", "compositions/registry", "renders",
+			} {
+				_ = os.MkdirAll(filepath.Join(np.Dir, d), 0o755)
+			}
+			if in.Manuscript != "" {
+				if err := os.WriteFile(np.Artifact("input/article.txt"), []byte(in.Manuscript), 0o644); err != nil {
+					return "文稿写入失败：" + err.Error()
+				}
+			}
+			uid, _ := userFrom(ctx)
+			meta, _ := json.MarshalIndent(map[string]any{
+				"id": id, "name": in.Name, "status": "created", "aspect": in.Aspect,
+				"topic": in.Topic, "user_id": uid, "created_at": time.Now().Format(time.RFC3339),
+			}, "", "  ")
+			if err := os.WriteFile(np.Artifact("project.json"), meta, 0o644); err != nil {
+				return "project.json 写入失败：" + err.Error()
+			}
+			np.Manifest("project.created", fmt.Sprintf("%s（%s）", in.Name, in.Aspect))
+			_ = a.Store.CreateProject(id, in.Name, uid)
+			msg := fmt.Sprintf("项目已建：%s（%s，%s）。用户在项目列表里打开它继续——当前对话还在「%s」",
+				id, in.Name, in.Aspect, a.State(p.ID).Name)
+			if in.Manuscript != "" {
+				msg += "；文稿已带入，下一步 draft_storyboard 出分镜"
+			} else {
+				msg += "；补文稿：draft_manuscript 起草或让用户粘贴后 save_manuscript"
+			}
+			return msg
+		},
+	},
+	{
+		def:  toolDef("list_references", "列出风格参考视频库（上传的参考片及其解析状态：pending/running/done/error、是否已入库）。用户问参考素材、或要引导上传参考片时用它", nil),
+		gate: noGate,
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
+			if a.Refs == nil {
+				return "参考视频库未接线（服务端未配置）"
+			}
+			refs, err := a.Refs.List()
+			if err != nil {
+				return "参考库读取失败：" + err.Error()
+			}
+			if len(refs) == 0 {
+				return "参考库为空。用户可在「参考」页上传 mp4/mov/webm（≤200MB），上传即自动解析出标签+特色"
+			}
+			tagName := a.tagNames()
+			var rows []string
+			for _, r := range refs {
+				state := map[string]string{"pending": "待解析", "running": "解析中", "done": "已解析", "error": "解析失败"}[r.Status]
+				if state == "" {
+					state = r.Status
+				}
+				if r.Confirmed {
+					state += "·已入库"
+				}
+				line := fmt.Sprintf("- %s「%s」%s", r.ID, r.Name, state)
+				if r.Status == "error" && r.Error != "" {
+					line += "：" + pipeline.FirstLine(r.Error, 80)
+				}
+				if r.Style != nil {
+					names := tagName(r.Style.Tags.Main)
+					for _, aux := range r.Style.Tags.Aux {
+						names += "+" + tagName(aux)
+					}
+					line += fmt.Sprintf(" | 标签:%s | 特色×%d", names, len(r.Style.Signatures))
+				}
+				rows = append(rows, line)
+			}
+			return fmt.Sprintf("参考库 %d 条：\n", len(rows)) + strings.Join(rows, "\n") +
+				"\n入库确认在「参考」页人工过目证据帧后进行；入库后条目出现在风格库（search_styles 可检索）"
+		},
+	},
+	{
+		def: toolDef("analyze_reference", "触发/重试一个参考视频的解析（上传时已自动起过一次）。解析是后台作业，完成后用 list_references 看结果", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{"type": "string", "description": "参考条目 id（list_references 结果里拿）"},
+			},
+			"required": []string{"id"},
+		}),
+		gate: noGate,
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
+			if a.Refs == nil {
+				return "参考视频库未接线（服务端未配置）"
+			}
+			var in struct {
+				ID string `json:"id"`
+			}
+			_ = json.Unmarshal([]byte(args), &in)
+			id := strings.TrimSpace(in.ID)
+			if id == "" {
+				return "缺少参考条目 id"
+			}
+			started, err := a.Refs.Analyze(id)
+			if err != nil {
+				return "解析启动失败：" + err.Error()
+			}
+			if !started {
+				return "该参考已在解析中，等 list_references 里状态变 done"
+			}
+			return "解析已启动（后台跑，抽帧+打标约一两分钟），完成后 list_references 看结果"
+		},
+	},
+}
+
+// tagNames 词表 id → 正式名（参考库/风格库列标签用；查不到原样显示 id）。
+func (a *Agent) tagNames() func(id string) string {
+	vocab := a.Lib.VocabList()
+	return func(id string) string {
+		for _, e := range vocab {
+			if e.ID == id {
+				return e.Name
+			}
+		}
+		return id
+	}
+}
+
+// saveManuscriptContent 文稿落盘的统一语义（save_manuscript 与 draft_manuscript
+// save=true 共用）：article.txt 是唯一真源；manuscript.json 是重放产物，不删的话
+// 重新制作时 TTS 拿的还是旧稿；已有分镜回报过期但不硬删——与文稿弹窗保存同语义。
+func (a *Agent) saveManuscriptContent(p *pipeline.Project, content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "缺少文稿正文"
+	}
+	if err := os.WriteFile(p.Artifact("input/article.txt"), []byte(content), 0o644); err != nil {
+		return "保存失败：" + err.Error()
+	}
+	_ = os.Remove(p.Artifact("manuscripts/manuscript.json"))
+	_, hasSb := os.Stat(p.Artifact("storyboards/storyboard.json"))
+	a.setDoneStatus(p.ID, "manuscript")
+	msg := fmt.Sprintf("文稿已保存（%d 字）", len([]rune(content)))
+	if hasSb == nil {
+		msg += "；已有分镜基于旧稿，要重新出分镜才会生效"
+	}
+	return msg
 }
 
 // formatArticle 网页正文整理成回喂文本：超长截断，防一次读取撑爆上下文。

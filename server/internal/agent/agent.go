@@ -23,21 +23,42 @@ import (
 	"webpage-video-agent/server/internal/react"
 	"webpage-video-agent/server/internal/store"
 	"webpage-video-agent/server/internal/stylelib"
+	"webpage-video-agent/server/internal/styleref"
 )
 
 type Producer interface {
 	Start(projectID string) (bool, error)
 	Rework(projectID string, segIDs []string, instruction string) (bool, error)
+	Cancel(projectID string) bool
 	IsRunning(projectID string) bool
 }
 
 type Agent struct {
 	DataDir  string
+	RootDir  string // 仓库根（参考视频解析的脚本工作目录，与 api.Server.RootDir 同源）
 	Store    store.Store
 	Lib      *stylelib.Library
+	Refs     *styleref.Store // 参考视频库（列/解析工具用；nil = 未接线，工具如实回报）
 	Emit     func(projectID, typ, stage, detail string)
 	Producer Producer
 	OnEvent  func(projectID, event, detail string) // 状态回写钩子（storyboard/style 等里程碑）
+}
+
+// ── 轮级用户上下文（list_projects 归属过滤 / create_project 归属落盘用）──────
+// api 层 chat handler 把 currentUser 塞进 turnCtx；工具执行体在此取。
+// 无（直测/CLI）= 空：list 不过滤、create 落成系统项目，与开放模式同语义。
+
+type userKey struct{}
+
+func WithUser(ctx context.Context, uid, role string) context.Context {
+	return context.WithValue(ctx, userKey{}, [2]string{uid, role})
+}
+
+func userFrom(ctx context.Context) (uid, role string) {
+	if v, ok := ctx.Value(userKey{}).([2]string); ok {
+		return v[0], v[1]
+	}
+	return "", ""
 }
 
 // ── 项目状态（从磁盘产物读，磁盘是唯一事实源）──────────────────
@@ -66,6 +87,14 @@ type State struct {
 		Style      bool `json:"style"`
 	}
 	Producing bool
+	// 当前设置（project.json 事实源）：摘要注入让模型答「现在什么音色/配乐」
+	// 不用拿 set_* 空参数当查询用；StyleID 含被选库内风格（可能尚未出样张）。
+	Voice      string // 完整音色 id（空 = 引擎默认）
+	BGM        string // 曲名（空 = 关）
+	SFX        bool   // 转场音效
+	BiSubtitle bool   // 双语字幕
+	StyleID    string // project.json style_id（空 = 未选库内风格）
+	StyleName  string // 上面 id 对应的库名（查不到则留空，只报 id）
 	// 最近一轮制作终态（manifest 里 produce/rework 的终态，含 interrupted）。
 	// 不注入它，agent 会拿失败前渲染的旧成片把失败轮幻觉成「已完成」。
 	LastEvent  string
@@ -119,11 +148,35 @@ func (a *Agent) State(id string) State {
 		st.LastAt, _ = time.Parse(time.RFC3339, ts)
 	}
 	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil {
-		var pj struct {
+		var meta struct {
 			Name string `json:"name"`
+			// Voice/BGM/SFX/Subtitle/StyleID：settings summary 注入的当前值。
+			// style_id 旧字段 stylepack_id 兜底（与 selectedStyle 同口径）。
+			Voice      string `json:"voice"`
+			BGM        string `json:"bgm"`
+			SFX        *bool  `json:"transition_sfx"`
+			BiSubtitle bool   `json:"bi_subtitle"`
+			StyleID    string `json:"style_id"`
+			StylePack  string `json:"stylepack_id"`
 		}
-		_ = json.Unmarshal(b, &pj)
-		st.Name = pj.Name
+		if json.Unmarshal(b, &meta) == nil {
+			st.Name = meta.Name
+			st.Voice = strings.TrimSpace(meta.Voice)
+			st.BGM = strings.TrimSpace(meta.BGM)
+			if meta.SFX != nil {
+				st.SFX = *meta.SFX
+			}
+			st.BiSubtitle = meta.BiSubtitle
+			st.StyleID = strings.TrimSpace(meta.StyleID)
+			if st.StyleID == "" {
+				st.StyleID = strings.TrimSpace(meta.StylePack)
+			}
+			if st.StyleID != "" && a.Lib != nil {
+				if s, ok := a.Lib.Get(st.StyleID); ok {
+					st.StyleName = s.Name
+				}
+			}
+		}
 	}
 	return st
 }
@@ -152,6 +205,23 @@ func (s State) summary() string {
 	} else {
 		add(false, "风格样张")
 	}
+	// 当前设置一行带出：模型答「现在什么音色/配乐」直接照抄，不用拿 set_* 空参当查询
+	settings := []string{"音色 " + voiceDisplayName(s.Voice)}
+	if s.BGM != "" {
+		settings = append(settings, "BGM "+s.BGM)
+	} else {
+		settings = append(settings, "BGM 关")
+	}
+	settings = append(settings, "转场音效 "+map[bool]string{true: "开", false: "关"}[s.SFX],
+		"双语字幕 "+map[bool]string{true: "开", false: "关"}[s.BiSubtitle])
+	if s.StyleID != "" {
+		v := s.StyleID
+		if s.StyleName != "" {
+			v = s.StyleName + "（" + s.StyleID + "）"
+		}
+		settings = append(settings, "库内风格 "+v)
+	}
+	lines = append(lines, "设置："+strings.Join(settings, " · "))
 	// 最近一轮制作终态不看 HasVideo：首做失败没有旧成片，藏了它模型就看着
 	// 三门全✓把失败轮幻觉成「制作还在后台跑」，永远不再开工。中断/取消同理——
 	// 终态一律无条件汇报，靠消费方自行取舍必漏。
@@ -187,6 +257,19 @@ func (s State) summary() string {
 		lines = append(lines, "⏳ 制作管线运行中（成片/失败都会自动汇报到对话）")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// voiceDisplayName 音色 id → 人话名（voiceAliases 反查；陌生 id 原样显示，空 = 引擎默认）。
+func voiceDisplayName(id string) string {
+	if id == "" {
+		return "引擎默认"
+	}
+	for name, vid := range voiceAliases {
+		if vid == id {
+			return name
+		}
+	}
+	return id
 }
 
 // staleAxes 成片过期的轴（中文名，空 = 未过期）。摘要与工具门禁共用同一判别，
@@ -468,7 +551,10 @@ func (a *Agent) resolveSegment(p *pipeline.Project, ref string) (id, label strin
 
 // ── ReAct 循环 ───────────────────────────────────────────────
 
-const maxSteps = 8
+// maxSteps 单轮工具调用上限。16 而不是 8：系统提示鼓励「出分镜→出样张→自检」
+// 一路做下去，查询类前置（read_manuscript/list_segments/read_check）+ 多段操作
+// 很容易把 8 步吃满被硬剪——上限只防失控循环，不卡正常长链。
+const maxSteps = 16
 
 func (a *Agent) systemPrompt(id string, s State) string {
 	return fmt.Sprintf(`你是「帧述」的主管 Agent——靠谱的剪辑搭档：懂行、话少、主动汇报、给专业建议但尊重用户决定。
@@ -478,13 +564,19 @@ func (a *Agent) systemPrompt(id string, s State) string {
 
 工作准则：
 - 上面这份状态是唯一事实，说话前先对照它：「成片已就绪」才给下载地址 /api/projects/%s/video/main.mp4；状态说「旧版/失败/中断/未出过」就按它说，制作没在跑（无 ⏳ 行）就绝不说「在跑/渲染中」；不确定先 read_project 核对，禁止按聊天历史想象状态。
-- 三前置硬门：文稿、分镜、风格样张（用户确认）——齐了才能 start_production，代码强制，别硬闯；缺哪项就引导用户补齐——文稿直接粘进对话由你 save_manuscript 存下，分镜/风格点对话栏上方的同名标签。成片就绪且未过期时不再 start_production；成片过期（「成片是旧版」）或上次失败/中断后用户要重做，就调 start_production 整片重来。
+- 涉及文稿/分镜文本内容的问题（讲了什么、措辞、文稿与分镜是否一致）：先 read_manuscript 读全文、list_segments 看各段，核对后再答——你没有任何「凭记忆」的资格，文本比对必须基于刚读到的内容。
+- 改旁白：改一两段的用词/段名用 edit_segment（精准、不动其他段）；要重构段落划分/整体节奏才用 update_storyboard 整表重生成。
+- 三前置硬门：文稿、分镜、风格样张（用户确认）——齐了才能 start_production，代码强制，别硬闯；缺哪项就引导用户补齐——文稿可由你 draft_manuscript 起草（或用户粘贴后你 save_manuscript 存下），分镜 draft_storyboard，风格 search_styles 检索后 apply_style 选用（或用户描述方向直接出样张）。
+- 用户停制作：cancel_production。别劝阻，取消终态会自动报进对话。
+- 起草新稿（draft_manuscript）默认只出稿给用户过目；用户明确说「直接用/存下来」才 save=true 一步落盘。已有文稿时再起草先确认是「重写」。
 - 换风格/调样张：调 draft_style_samples 并把用户要求原样放进 instruction，样张没重新生成就不能说「已出新样张」——没做工具调用就当没做。
 - 成片就绪后：改某段画面用 rework（整段重生成画面、音频不动）；用户带 📎 段/元素引用的消息几乎都是 rework 意图。元素引用指名了改哪个元素，rework 的 instruction 里点名它（人话名，必要时带元素 id 与时刻）。要精确定位段与元素先 list_segments。换配音音色用 set_voice（空参列音色，设置后自动整片重制）。出片后主动 extract_stylepack 沉淀风格（一次就够，已提炼过不必重复）。
 - 默认自主连贯：能做的直接做（出分镜→出样张→自检一路做下去），到用户门（风格确认）停下说清楚等什么。
 - 涉及时效性事实（新闻/版本/价格/数据）先用 web_search 核实再写进文稿/分镜；搜索不可用就说明信息可能过时，别编。
 - web_search 消耗套餐月度额度（每月仅约 200 次，与其他 MCP 共享）——非必要不搜：一轮对话合并成尽量少的精准查询；空结果最多换个词再试一次，仍空就如实说并标明信息可能过时，不连环重试。
 - 用户贴了链接、或要细读某条搜索结果时用 fetch_url 抓网页正文——它免费不占额度，能用它就别为看内容再搜一次；读不到正文就如实说，让用户直接粘贴。
+- 制作画面检查没过/用户问「哪几段有问题」：read_check 看逐段检查报告，别拿 140 字摘要猜。
+- 用户新建项目/看有哪些项目：create_project / list_projects。新建后项目列表里打开它，对话仍留在当前项目。
 - 工具被拒就换路或向用户解释，不重复硬试；每轮最多 %d 步。
 - 回复短：一段话讲清做了什么、下一步是什么，不堆术语、不复述参数。`, s.Name, id, s.summary(), id, maxSteps)
 }

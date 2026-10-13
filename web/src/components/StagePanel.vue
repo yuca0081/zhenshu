@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { KeepAlive, computed, ref, watch } from 'vue'
-import { NButton, NInput, NInputNumber, NSelect, useMessage } from 'naive-ui'
+import { NButton, NInput, NInputNumber, NSelect, NSpin, useMessage } from 'naive-ui'
 import { api, videoURL } from '../api'
 import type { ActivityEvent, AudioMeta, Manuscript, ProjectView, Storyboard, StyleSamples, TabID } from '../types'
 import ManuscriptPane from './ManuscriptPane.vue'
@@ -95,7 +95,7 @@ watch(() => props.view?.total_hint, t => {
   targetMin.value = near
 }, { immediate: true })
 async function replanStoryboard() {
-  if (!props.videoId || replanning.value) return
+  if (!props.videoId || replanning.value || props.agentBusy) return
   replanning.value = true
   try {
     await api.chat(props.videoId,
@@ -224,10 +224,10 @@ async function redoFull() {
               分镜表
               <span class="sb-meta">{{ edSb?.segments.length ?? storyboard.segments.length }} 段 / 约 {{ Math.round(edTotalSec || view.total_hint) }} 秒</span>
               <span class="sb-dur">
-                <NSelect v-model:value="targetMin" size="tiny" :options="minOptions" style="width: 108px" />
-                <NButton size="tiny" :loading="replanning" @click="replanStoryboard">按此时长重排</NButton>
+                <NSelect v-model:value="targetMin" size="tiny" :options="minOptions" :disabled="agentBusy" style="width: 108px" />
+                <NButton size="tiny" :loading="replanning" :disabled="agentBusy" @click="replanStoryboard">按此时长重排</NButton>
                 <NButton v-if="sbDirty" size="tiny" @click="resetSb">还原</NButton>
-                <NButton size="tiny" type="primary" :disabled="!sbDirty" :loading="savingSb" @click="saveSb">保存修改</NButton>
+                <NButton size="tiny" type="primary" :disabled="!sbDirty || agentBusy" :loading="savingSb" @click="saveSb">保存修改</NButton>
               </span>
             </div>
             <div class="sb-scroll">
@@ -236,14 +236,20 @@ async function redoFull() {
                 <tbody>
                   <tr v-for="s in edSb!.segments" :key="s.id" class="sb-row edit">
                     <td class="c">{{ s.idx }}</td>
-                    <td><NInput v-model:value="s.key" size="tiny" @update:value="sbDirty = true" /></td>
-                    <td><NInput v-model:value="s.narration" type="textarea" size="tiny" :autosize="{ minRows: 2, maxRows: 7 }" @update:value="sbDirty = true" /></td>
-                    <td><NInput v-model:value="s.visual_brief" type="textarea" size="tiny" :autosize="{ minRows: 2, maxRows: 7 }" @update:value="sbDirty = true" /></td>
-                    <td class="c"><NInputNumber v-model:value="s.duration_hint" size="tiny" :min="0.5" :max="180" :step="0.5" style="width: 80px" @update:value="sbDirty = true" /></td>
+                    <td><NInput v-model:value="s.key" size="tiny" :disabled="agentBusy" @update:value="sbDirty = true" /></td>
+                    <td><NInput v-model:value="s.narration" type="textarea" size="tiny" :autosize="{ minRows: 2, maxRows: 7 }" :disabled="agentBusy" @update:value="sbDirty = true" /></td>
+                    <td><NInput v-model:value="s.visual_brief" type="textarea" size="tiny" :autosize="{ minRows: 2, maxRows: 7 }" :disabled="agentBusy" @update:value="sbDirty = true" /></td>
+                    <td class="c"><NInputNumber v-model:value="s.duration_hint" size="tiny" :min="0.5" :max="180" :step="0.5" :disabled="agentBusy" style="width: 80px" @update:value="sbDirty = true" /></td>
                   </tr>
                 </tbody>
               </table>
               <div class="hint">直接在表格里改文案和秒数，改完点右上「保存修改」（保存后成片会标记为旧版）；要增删段或大改结构，在对话里说。加聊天引用请到时间轴点段。</div>
+            </div>
+            <!-- Agent 轮进行中锁分镜：与文稿页同款——提示+中断出口浮在分镜区域内，不单独占行 -->
+            <div v-if="agentBusy" class="sb-lock">
+              <NSpin :size="14" />
+              <span>AI 正在工作中——本轮可能重排分镜，编辑已临时锁定</span>
+              <NButton size="tiny" quaternary @click="emit('cancel-agent')">中断 AI</NButton>
             </div>
           </div>
           <div v-else-if="tab === 'storyboard'" class="sb-empty">
@@ -330,7 +336,7 @@ async function redoFull() {
 .none { color: #55555f; }
 
 /* ── 分镜表 ── */
-.sb-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.sb-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .sb-head {
   flex: none; display: flex; align-items: center; gap: 10px;
   padding: 12px 18px; font-weight: 600; border-bottom: 1px solid #202027; color: #d9d9e0;
@@ -344,4 +350,13 @@ async function redoFull() {
 .c { color: #7c7c88; text-align: center; vertical-align: middle; }
 .hint { padding: 10px 14px; color: #55555f; font-size: 12px; }
 .sb-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: #55555f; font-size: 13px; line-height: 1.9; text-align: center; padding: 20px 40px; }
+/* Agent 轮进行中的分镜锁：覆盖整个分镜区域（含表头按钮行）的琥珀提示 + 中断出口 */
+.sb-lock {
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 30;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  background: rgba(20, 20, 26, .66);
+  color: #f0c674; font-size: 12.5px; text-align: center; padding: 0 24px;
+}
+.sb-lock :deep(.n-button) { color: #f0c674; flex: none; }
+.sb-lock :deep(.n-button:hover) { color: #ffdd9a; }
 </style>

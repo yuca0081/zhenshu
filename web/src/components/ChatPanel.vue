@@ -3,11 +3,11 @@ import { nextTick, ref, watch } from 'vue'
 import { useMessage, NButton, NInput, NScrollbar, NSpin } from 'naive-ui'
 import { api } from '../api'
 import { fmtClock } from '../segtime'
-import type { ChatRef, Msg, ProjectView } from '../types'
+import type { ChatRef, Msg } from '../types'
 
-const props = defineProps<{ projectId: string; msgs: Msg[]; busy: boolean; refs: ChatRef[]; view: ProjectView | null }>()
+const props = defineProps<{ projectId: string; msgs: Msg[]; busy: boolean; refs: ChatRef[] }>()
 const draft = defineModel<string>('draft')
-const emit = defineEmits<{ sent: []; 'remove-ref': [ref: ChatRef]; 'clear-refs': []; 'open-gate': [g: 'manuscript' | 'storyboard' | 'style'] }>()
+const emit = defineEmits<{ sent: []; 'remove-ref': [ref: ChatRef]; 'clear-refs': [] }>()
 
 const message = useMessage()
 const listRef = ref<InstanceType<typeof NScrollbar> | null>(null)
@@ -52,24 +52,9 @@ const refKey = (r: ChatRef) => r.elementId ?? (r.t != null ? `s${r.idx}t${r.t}` 
 
 <template>
   <aside class="chat">
-    <div class="head">
-      对话
-      <span v-if="busy" class="busy"><NSpin :size="12" /> Agent 工作中</span>
-      <!-- 三前置硬门：同名标签即入口，点开补内容，齐了灯亮才能开工 -->
-      <div v-if="view" class="gates">
-        <button class="chip" :class="{ ok: view.gates.manuscript }" title="文稿——点开编辑 / AI 起草" @click="emit('open-gate', 'manuscript')">文稿</button>
-        <button class="chip" :class="{ ok: view.gates.storyboard }" title="分镜——点开查看整份分镜文档" @click="emit('open-gate', 'storyboard')">
-          分镜{{ view.gates.storyboard ? `·${view.seg_count}段` : '' }}
-        </button>
-        <button
-          class="chip" :class="{ ok: view.gates.style_confirmed, wait: view.gates.style_draft && !view.gates.style_confirmed }"
-          title="风格——点开选库内风格或描述方向" @click="emit('open-gate', 'style')"
-        >风格{{ view.gates.style_confirmed ? '已确认' : '' }}</button>
-      </div>
-    </div>
     <NScrollbar ref="listRef" class="list">
       <div v-if="!msgs.length" class="none">
-        把文稿粘进对话、或点上方「文稿」标签填写——<br />我会出分镜、出风格样张，你确认风格后开工出片。
+        把文稿粘进对话、或在中间「文稿」页签填写——<br />我会出分镜、出风格样张，你确认风格后开工出片。
       </div>
       <div v-for="m in msgs" :key="m.id" class="row" :class="m.role">
         <template v-if="m.type === 'tool_call'">
@@ -116,21 +101,6 @@ const refKey = (r: ChatRef) => r.elementId ?? (r.t != null ? `s${r.idx}t${r.t}` 
   width: 400px; flex: none; display: flex; flex-direction: column;
   background: #121217; border-left: 1px solid #1d1d24;
 }
-.head {
-  flex: none; height: 44px; display: flex; align-items: center; gap: 10px;
-  padding: 0 16px; font-weight: 600; color: #d9d9e0; border-bottom: 1px solid #1d1d24;
-}
-.busy { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 400; color: #8fc7ff; }
-/* 三前置标签（硬门进度）：就在标题行里，点开即入口 */
-.gates { margin-left: auto; display: flex; gap: 6px; flex: none; }
-.chip {
-  font-size: 11px; padding: 2px 9px; border-radius: 999px; cursor: pointer;
-  background: #1c1c23; color: #7c7c88; border: 1px solid #2b2b33;
-}
-.chip:hover { border-color: #4a4a56; color: #b9b9c4; }
-.chip.ok { color: #7ee2a8; border-color: #2c5c40; background: #14211a; }
-.chip.ok:hover { border-color: #3d7a56; }
-.chip.wait { color: #f0c674; border-color: #5c4d24; background: #211d12; }
 .list { flex: 1; padding: 14px 12px; }
 .none { color: #55555f; font-size: 13px; line-height: 1.9; text-align: center; padding: 40px 20px; }
 .row { margin-bottom: 12px; }

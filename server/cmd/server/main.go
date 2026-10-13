@@ -54,7 +54,7 @@ func main() {
 		AutoResume: true, // 启动对账时自动续跑被重启打断的整片制作，不让用户再打「继续」
 	}
 	ag := &agent.Agent{
-		DataDir: cfg.DataDir, Store: st, Lib: lib, Producer: producer,
+		DataDir: cfg.DataDir, RootDir: root, Store: st, Lib: lib, Producer: producer,
 		Emit:    hub.Emit,
 		OnEvent: func(id, event, detail string) { hub.Emit(id, event, "", detail) },
 	}
@@ -64,6 +64,7 @@ func main() {
 	// 启动对账：上次进程死在制作中途的项目补写终态+聊天通知（必须先于任何新任务）
 	producer.Reconcile()
 	refs := styleref.NewStore(cfg.DataDir, root)
+	ag.Refs = refs // 参考库补线（list/analyze 参考工具用）
 	// 会话密钥与初始管理员：SESSION_SECRET > API_TOKEN 派生 > 随机（开放模式）。
 	// 仅鉴权启用时引导建管理员——开放模式没有登录，建了也是死数据。
 	sessionSecret, authActive := auth.DeriveSecret(os.Getenv("SESSION_SECRET"), os.Getenv("API_TOKEN"))
