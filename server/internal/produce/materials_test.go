@@ -14,11 +14,13 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"webpage-video-agent/server/internal/events"
 	"webpage-video-agent/server/internal/pipeline"
 )
 
-// 素材工位回归钉（真图拼贴链路，2026-10-04 试验后正式化）。
+// 素材工位回归钉（真图按需申请制）。
 
 // Met 客户端：检索→筛公版→下载原图→压图落盘，全程 stub API（不花真调用）。
 func TestMetClientFetchOne(t *testing.T) {
@@ -57,7 +59,7 @@ func TestMetClientFetchOne(t *testing.T) {
 	p := &pipeline.Project{ID: "t", Dir: dir}
 	t.Setenv("MET_API_BASE", strings.TrimSuffix(api.URL, "/public/collection"))
 	c := newMetClient()
-	m, err := c.fetchOne(context.Background(), p, "seg01", "test relief", "撕边照片卡", 0)
+	m, err := c.fetchOne(context.Background(), p, "seg01", "test relief", "主视觉照片", 0)
 	if err != nil {
 		t.Fatalf("fetchOne: %v", err)
 	}
@@ -82,23 +84,76 @@ func TestMetClientFetchOne(t *testing.T) {
 	}
 }
 
-// 素材库落盘后：清单块渲染、引用白名单两件齐活；清单外引用必须被拒；无素材库全量静默。
+// 申请单清洗：空词/重复词剔除、用途截断、单次上限夹取。
+func TestCleanRequests(t *testing.T) {
+	got := cleanRequests([]materialRequest{
+		{Query: "  socrates bust ", Why: "主视觉"},
+		{Query: "", Why: "空词"},
+		{Query: "SOCRATES BUST", Why: "重复词（大小写不敏感）"},
+		{Query: "greek amphora", Why: strings.Repeat("长", 100)},
+		{Query: "parthenon temple", Why: "超出上限应被夹掉"},
+	})
+	if len(got) != 2 {
+		t.Fatalf("应剩 2 条（去重+上限）: %+v", got)
+	}
+	if got[0].Query != "socrates bust" {
+		t.Fatalf("检索词应去空格: %q", got[0].Query)
+	}
+	if n := len([]rune(got[1].Why)); n > 41 { // TruncRunes(40) 带 … 后缀
+		t.Fatalf("用途应截断到 40 字: %d", n)
+	}
+	if cleanRequests(nil) != nil {
+		t.Fatalf("空申请单应返回空")
+	}
+}
+
+// 申请单处理：登记簿同词直接复用（跨段共享，不发网络）；空词已被清洗层挡掉。
+func TestFulfillRequestsReusesRegistry(t *testing.T) {
+	dir := t.TempDir()
+	p := &pipeline.Project{ID: "t", Dir: dir}
+	st := &MaterialStore{PlannedAt: time.Now(), Materials: []Material{{
+		File: "assets/img/seg01-1-bust-11.jpg", Seg: "seg01", Query: "Socrates Bust",
+		Source: "met", Title: "Bust of Socrates",
+	}}}
+	matStoreMu.Lock()
+	if err := saveMaterials(p, st); err != nil {
+		t.Fatal(err)
+	}
+	matStoreMu.Unlock()
+
+	r := &Runner{Hub: events.NewHub()}
+	got := r.fulfillRequests(context.Background(), p, "seg03", []materialRequest{
+		{Query: "socrates bust", Why: "主视觉"},
+	})
+	if len(got) != 1 || got[0].File != "assets/img/seg01-1-bust-11.jpg" {
+		t.Fatalf("同词应复用登记簿素材: %+v", got)
+	}
+	// 复用不改登记簿（Seg 仍是首次申请段）
+	if got2 := materialsForSeg(p, "seg03"); len(got2) != 0 {
+		t.Fatalf("复用不应改归属段: %+v", got2)
+	}
+	if got3 := materialsForSeg(p, "seg01"); len(got3) != 1 {
+		t.Fatalf("本段素材应可按段取回: %+v", got3)
+	}
+}
+
+// 素材库落盘后：清单块渲染、引用白名单两件齐活；清单外引用必须被拒；无素材全量静默。
 func TestMaterialsNoteAndWhitelist(t *testing.T) {
 	dir := t.TempDir()
 	p := &pipeline.Project{ID: "t", Dir: dir}
-	if materialsNote(p) != "" || materialImages(p) != nil || materialNote(0) != "" {
-		t.Fatalf("无素材库时应全量静默")
+	if materialsNote(nil) != "" || materialNote(0) != "" {
+		t.Fatalf("无素材时应全量静默")
 	}
 	// 白名单校验：无素材库跳过
 	if errs := materialWhitelistCheck(p, `<img src="assets/img/x.jpg">`); errs != nil {
 		t.Fatalf("无素材库不应校验: %v", errs)
 	}
 
-	st := &MaterialStore{Materials: []Material{{
+	mats := []Material{{
 		File: "assets/img/seg01-1-bust-11.jpg", Seg: "seg01", Title: "Test Relief", Source: "met",
-		Artist: "Anon", Date: "4th c BCE", Width: 733, Height: 900, Note: "撕边照片卡",
-	}}}
-	b, _ := json.MarshalIndent(st, "", " ")
+		Artist: "Anon", Date: "4th c BCE", Width: 733, Height: 900, Note: "标题旁主视觉",
+	}}
+	b, _ := json.MarshalIndent(&MaterialStore{Materials: mats}, "", " ")
 	if err := os.MkdirAll(filepath.Join(dir, "assets"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -106,10 +161,16 @@ func TestMaterialsNoteAndWhitelist(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	note := materialsNote(p)
-	for _, want := range []string{"assets/img/seg01-1-bust-11.jpg", "Test Relief", "撕边照片卡", "只准引用上面清单内的文件", "撕边 clip-path"} {
+	note := materialsNote(mats)
+	for _, want := range []string{"assets/img/seg01-1-bust-11.jpg", "Test Relief", "标题旁主视觉", "只准引用上面清单内的文件"} {
 		if !strings.Contains(note, want) {
 			t.Fatalf("素材块缺 %q\n---\n%s", want, note)
+		}
+	}
+	// 轻纪律：不再有写死的拼贴配方（撕边/胶带/旋转），呈现方式交还模型
+	for _, banned := range []string{"撕边", "胶带", "图钉", "轻微旋转", "米白纸衬底"} {
+		if strings.Contains(note, banned) {
+			t.Fatalf("素材块不应含配方措辞 %q\n---\n%s", banned, note)
 		}
 	}
 	// 白名单：清单内引用放行，清单外拒绝
@@ -121,13 +182,14 @@ func TestMaterialsNoteAndWhitelist(t *testing.T) {
 		t.Fatalf("清单外引用应被拒: %v", errs)
 	}
 	// 视觉注入：素材图文件缺失时静默跳过，不炸
-	if imgs := materialImages(p); imgs != nil {
+	if imgs := materialDataURLs(p, mats); imgs != nil {
 		t.Fatalf("文件缺失应返回 nil: %v", imgs)
 	}
 }
 
 func TestMaterialNoteAndSlugify(t *testing.T) {
-	if n := materialNote(2); !strings.Contains(n, "2 张") || !strings.Contains(n, "assets/img/") {
+	n := materialNote(2)
+	if !strings.Contains(n, "2 张") || !strings.Contains(n, "素材真图") {
 		t.Fatalf("素材视觉注入说明不对: %s", n)
 	}
 	// 超长 slug 按连字符边界截断（不把词切一半）

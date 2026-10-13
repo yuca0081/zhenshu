@@ -152,6 +152,10 @@ type StyleSamples struct {
 	// stageStyleSamples（草稿校验通过后追加），这里只承载不校验（老文件无此字段）。
 	SignatureAbsorption []SigAbsorption `json:"signature_absorption,omitempty"`
 
+	// Post 全片统一后期质感（可选）：暗角/颗粒/色差是设计决策不是平台默认——
+	// 设计没写 post = 成片不叠任何后期。写进 project.json "post"，stitch 消费。
+	Post *PostFXSpec `json:"post,omitempty"`
+
 	Confirmed bool `json:"confirmed"` // 硬门：用户点头后才允许开工
 }
 
@@ -222,6 +226,14 @@ type MotionMove struct {
 	UseFor string `json:"use_for"` // 适用：哪类元素/哪类版式（标题/面板组/数据卡/满幅场景）
 }
 
+// PostFXSpec 全片统一后期（0–1；全 0 或缺省 = 关）。设计阶段按本片气质决定
+// 要不要这层质感（怀旧/胶片感可以开颗粒，干净的 UI/科技风开色差反而脏）。
+type PostFXSpec struct {
+	Vignette float64 `json:"vignette"` // 暗角
+	Grain    float64 `json:"grain"`    // 胶片颗粒
+	Chroma   float64 `json:"chroma"`   // 轻微色差
+}
+
 // DeviceSpec 贯穿装置：全片反复出现、随内容变奏的招牌画面机制
 // （列LEN访客卡×5、西西弗斯单版式状态机）——段间呼应正是风格本身（plan §2.5）。
 type DeviceSpec struct {
@@ -263,7 +275,6 @@ type SkinSlots struct {
 	PanelTxt string `json:"panel_txt,omitempty"` // 面板内文字色（缺省由 bg/txt 推导）
 	Radius   int    `json:"radius,omitempty"`    // 圆角 px（0–40）
 	BorderW  int    `json:"border_w,omitempty"`  // 描边宽 px（0–6）
-	ImgRot   int    `json:"img_rot,omitempty"`   // 配图旋转角（-8–8，构成主义斜置等）
 }
 
 // ValidateSkin 风格文件实测校验（§12.2：实测过闸才允许确认锁定）：

@@ -113,3 +113,33 @@ func TestFixupFrameFontsCoversCaps(t *testing.T) {
 		t.Fatalf("frames 补声明被回归破坏:\n%s", fb)
 	}
 }
+
+// 目录字体的 local() 空声明必须被纠错：模型写了声明但指向渲染端没装的字体，
+// 空声明骗过了「已声明」检查，真字体永远进不了正片（2026-10-13 齐马蓝实录：
+// 样张与正片双双回退雅黑）。纠错 = 该块重写为 url() 真声明；已带 url( 的不动。
+func TestRewriteAssetFontDecls(t *testing.T) {
+	html := `<template><style>` +
+		`@font-face{font-family:'ZCOOL QingKe HuangYou';src:local('ZCOOL QingKe HuangYou');}` +
+		`@font-face{font-family:'KaiTi';src:local('KaiTi');}` +
+		`#t{font-family:'ZCOOL QingKe HuangYou','Microsoft YaHei',sans-serif;}` +
+		`</style></template>`
+	assets := map[string]string{"zcool qingke huangyou": "data:font/woff2;base64,AAECAw=="}
+	out, n := rewriteAssetFontDecls(html, assets)
+	if n != 1 {
+		t.Fatalf("应改写 1 块，得到 %d:\n%s", n, out)
+	}
+	if !strings.Contains(out, `@font-face{font-family:'ZCOOL QingKe HuangYou';src:url("data:font/woff2;base64,AAECAw==") format('woff2');}`) {
+		t.Fatalf("空声明未重写为真字体:\n%s", out)
+	}
+	if strings.Contains(out, "src:local('ZCOOL") {
+		t.Fatalf("空声明应被替换掉:\n%s", out)
+	}
+	if !strings.Contains(out, `@font-face{font-family:'KaiTi';src:local('KaiTi');}`) {
+		t.Fatalf("系统字体 local 声明不应被动:\n%s", out)
+	}
+	// 幂等：url() 声明再跑不动
+	again, n2 := rewriteAssetFontDecls(out, assets)
+	if n2 != 0 || again != out {
+		t.Fatalf("纠错应幂等: n=%d", n2)
+	}
+}

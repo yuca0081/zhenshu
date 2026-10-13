@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/pipeline"
@@ -24,6 +25,45 @@ func designNoteFor(p *pipeline.Project, segIdx int) string {
 		return "\n" + pipeline.DesignDocWithBrief(&ss, segIdx, pipeline.LoadStyleBrief(p))
 	}
 	return styleNoteFor(p)
+}
+
+// sampleStyleNote 样张源码注入（文字样式的权威规范）：场景模型此前只能"看图猜"样张
+// 的文字用法——标题/副标题各用什么色、字距多大、分隔线细框怎么画，全在样张 HTML 里，
+// 图像给不了这个粒度，正片文字样式于是漂移（副标题被升成金色标题、装饰线丢失，
+// 2026-10-13 齐马蓝实录）。把确认样张的 HTML 源码直接注入场景提示：样式照抄，
+// 内容按画面提示重写。上限防护：每张截 2400 字符、总量 6000（样式集中在头部
+// <style>，截尾不伤关键段）。
+func sampleStyleNote(p *pipeline.Project) string {
+	var ss contract.StyleSamples
+	if b, err := os.ReadFile(p.Artifact("style/style_samples.json")); err != nil ||
+		json.Unmarshal(b, &ss) != nil {
+		return ""
+	}
+	var parts []string
+	total := 0
+	for i, s := range ss.Samples {
+		if i >= 3 || total >= 6000 {
+			break
+		}
+		h := strings.TrimSpace(s.HTML)
+		if h == "" {
+			continue
+		}
+		if len(h) > 2400 {
+			h = h[:2400]
+		}
+		parts = append(parts, fmt.Sprintf("样张 %d（%s）：\n```html\n%s\n```", i, s.Tag, h))
+		total += len(h)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "\n## 样张源码（文字样式的权威规范——样式照它，内容按本段画面提示）\n" +
+		"- 字体族/字重/字距/颜色/阴影柔光/装饰（分隔线、细框、角标）以样张写法为准；\n" +
+		"  标题层、副标题层、弱化注脚各用什么颜色照抄样张，别把强调色挪去当标题色\n" +
+		"- 只搬样式不搬内容：样张里的具体文案与物件禁止出现，画面内容跟本段画面提示走\n" +
+		"- 版式构图按本段画幅与本段指定版式重排（样张是 960×540 横版，画幅不同时自己换算）\n" +
+		strings.Join(parts, "\n") + "\n"
 }
 
 // hasDesignSystem 是否 v2 设计系统（区别于 v1 纯皮肤文件——升级换代的判别器）。

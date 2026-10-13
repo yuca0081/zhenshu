@@ -128,6 +128,63 @@ def fontasset_css(proj, *font_stacks):
     return '\n    '.join(out)
 
 
+def load_font_assets(proj):
+    """目录字体解析产物：family(小写) → woff2 data URL（无文件/损坏 → 空 dict）。"""
+    try:
+        d = json.loads((pathlib.Path(proj) / 'style' / 'font_assets.json').read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+    return {str(k).strip().lower(): v for k, v in (d.get('resolved') or {}).items() if k and v}
+
+
+_FF_BLOCK = re.compile(r'@font-face\s*\{[^}]*\}', re.I | re.S)
+_FF_FAMILY = re.compile(r"font-family\s*:\s*['\"]?([^'\";}]+)", re.I)
+# 已声明集合只认 @font-face 块内的 font-family（否则与 used 同源恒等，missing 恒空）
+_FF_DECL_FAMILY = re.compile(r"@font-face\s*\{[^}]*?font-family\s*:\s*['\"]?([^'\";}]+)", re.I | re.S)
+_FF_USE = re.compile(r"font-family\s*:\s*['\"]?([^;}\">]+)", re.I)
+
+
+def ensure_font_faces(html, resolved):
+    """HTML 里的目录字体声明纠错 + 补齐（与 Go fontface.go ensureFontFaces 同源）：
+    local() 空声明（渲染端没装 → 静默回退雅黑，设计字体进不了正片/样张）对备了
+    真字体的族重写为 url()；引用了却没声明的补 url() 声明（挂在 </body> 前——
+    后写的同族声明胜出，模型自己写的 local() 会被压掉）。幂等：改写过的块带
+    url( 不再命中。"""
+    if not resolved or not html:
+        return html
+    n = 0
+
+    def _rewrite(m):
+        nonlocal n
+        block = m.group(0)
+        fm = _FF_FAMILY.search(block)
+        if not fm:
+            return block
+        fam = fm.group(1).strip().strip('\'"')
+        url = resolved.get(fam.lower())
+        if not url or 'url(' in block:
+            return block
+        n += 1
+        return "@font-face{font-family:'%s';src:url('%s') format('woff2');}" % (fam, url)
+
+    html = _FF_BLOCK.sub(_rewrite, html)
+    declared = {fm.group(1).strip().strip('\'"').lower() for fm in _FF_DECL_FAMILY.finditer(html)}
+    used = set()
+    for um in _FF_USE.finditer(html):
+        for name in um.group(1).split(','):
+            name = name.strip().strip('\'"').lower()
+            if name in resolved:
+                used.add(name)
+    missing = sorted(used - declared)
+    if missing:
+        decls = '\n'.join("@font-face { font-family: '%s'; src: url('%s') format('woff2'); }" % (f, resolved[f])
+                          for f in missing)
+        style = '<style data-font-assets>' + decls + '</style>'
+        idx = html.lower().rfind('</body>')
+        html = html[:idx] + style + html[idx:] if idx >= 0 else html + style
+    return html
+
+
 def _hex_rgb(c):
     m = re.match(r'#([0-9a-fA-F]{6})$', str(c or '').strip())
     if not m:
@@ -381,7 +438,7 @@ def main(proj_dir: str) -> int:
 {katex_head}    <style>
       * {{ margin: 0; padding: 0; box-sizing: border-box; }}
       html, body {{ width: {w}px; height: {h}px; overflow: hidden; background: #000; }}
-      #root {{ position: relative; width: {w}px; height: {h}px; overflow: hidden; background: #FDF6E3; }}
+      #root {{ position: relative; width: {w}px; height: {h}px; overflow: hidden; background: {slots.get('bg') or '#FDF6E3'}; }}
       .scene {{ position: absolute; inset: 0; width: 100%; height: 100%; }}
       {fontface}
     </style>
@@ -408,10 +465,12 @@ def main(proj_dir: str) -> int:
 """
 
     first_chapter = next((c for c in map(chapters.get, ids) if c), '')
-    # 转场模式：styles.json tokens.transition（cut|fade|xfade，缺省 fade）。
-    # fade=v1 段首尾页内黑场微叠化；xfade=v1b 真交叉叠化在 Go concat 侧做
-    # （xfadeConcat），页内不能再叠黑场（双重变暗），故页内层只在 fade 时注入。
-    trans = str(tokens.get('transition') or 'fade').strip().lower()
+    # 转场模式：project.json "transition"（cut|fade|xfade，缺省 cut）。
+    # 令牌由设计系统映射写入（server design.go transitionTokenOf）：段间转场是
+    # 设计决策——没写 = 直切，段间节奏由场景内的退场/入场编排接管。
+    # fade=段首尾页内黑场微叠化；xfade=真交叉叠化在 Go concat 侧做（xfadeConcat），
+    # 页内不能再叠黑场（双重变暗），故页内层只在 fade 时注入。
+    trans = str(pj.get('transition') or 'cut').strip().lower()
     xfade = trans == 'fade'
     # index 与字幕带共用同一段表，只构造一次
     seg_scenes = [(sid, starts[sid], scene[sid], durs[sid]) for sid in ids]

@@ -14,7 +14,7 @@ import shutil
 import sys
 
 AI_DIR = pathlib.Path(__file__).resolve().parent
-from assemble import GSAP_SRC, _esc_html, fontface_css, load_style_tokens, subtitle_text_color
+from assemble import GSAP_SRC, _esc_html, ensure_font_faces, fontface_css, load_font_assets, load_style_tokens, subtitle_text_color
 
 
 def load_slots(proj):
@@ -30,14 +30,13 @@ def load_slots(proj):
 
 
 def transition_mode(proj):
-    """转场模式：styles.json tokens.transition（与 assemble.py 同源；缺省 fade）。"""
-    style_id = ''
+    """转场模式：project.json "transition"（LockDesign 从设计系统转场政策映射写入；
+    缺省 cut——段间节奏交给场景编排，与 assemble.py 同口径）。"""
     try:
-        sb = json.loads((proj / 'storyboards' / 'storyboard.json').read_text(encoding='utf-8'))
-        style_id = sb.get('style_id') or ''
+        pj = json.loads((proj / 'project.json').read_text(encoding='utf-8'))
+        return str(pj.get('transition') or 'cut').strip().lower()
     except Exception:
-        pass
-    return str(load_style_tokens(style_id).get('transition') or 'fade').strip().lower()
+        return 'cut'
 
 
 def caption_block(clip_id, dur, narration, slots):
@@ -61,9 +60,10 @@ def caption_block(clip_id, dur, narration, slots):
     return body, js
 
 
-def mini_html(w, h, dur, clip_id, frag_src, cap_body, cap_js, xfade, fontface):
+def mini_html(w, h, dur, clip_id, frag_src, cap_body, cap_js, xfade, fontface, bg):
     """单段工程壳：与 assemble.py project_html 同构（gsap/hf.js 资产、黑场微叠化、
-    scene div 以 data-composition-src 挂片段）。"""
+    scene div 以 data-composition-src 挂片段）。bg = 皮肤底色槽位——片段 HTML 不铺
+    满屏底色，露出的就是这层；硬编码浅色会把深色系样张整体衬成浅色。"""
     xf_body = ('      <div id="xfade" style="position:absolute;inset:0;background:#000;'
                'z-index:100;pointer-events:none;opacity:1;"></div>\n') if xfade else ''
     xf_js = ''
@@ -80,7 +80,7 @@ def mini_html(w, h, dur, clip_id, frag_src, cap_body, cap_js, xfade, fontface):
     <style>
       * {{ margin: 0; padding: 0; box-sizing: border-box; }}
       html, body {{ width: {w}px; height: {h}px; overflow: hidden; background: #000; }}
-      #root {{ position: relative; width: {w}px; height: {h}px; overflow: hidden; background: #FDF6E3; }}
+      #root {{ position: relative; width: {w}px; height: {h}px; overflow: hidden; background: {bg}; }}
       .scene {{ position: absolute; inset: 0; width: 100%; height: 100%; }}
       {fontface}
     </style>
@@ -120,6 +120,7 @@ def main(proj_dir: str) -> int:
     entries = json.loads((proj / 'style' / 'clips' / 'clips.json').read_text(encoding='utf-8'))
 
     fontface = fontface_css(slots.get('font') or '')
+    resolved = load_font_assets(proj)
     segdir = proj / '.hf-clip'
     segdir.mkdir(exist_ok=True)
     done = 0
@@ -130,10 +131,19 @@ def main(proj_dir: str) -> int:
             print(f'跳过 {clip_id}：片段不存在')
             continue
         dur = float(e.get('duration') or 3.0)
+        if resolved:
+            # 片段字体声明纠错+补齐（幂等）：目录字体 local() 空声明 → 真字体 url，
+            # 小样里的标题字体才和确认样张一致
+            src = frag.read_text(encoding='utf-8')
+            fixed = ensure_font_faces(src, resolved)
+            if fixed != src:
+                frag.write_text(fixed, encoding='utf-8')
         cap_body, cap_js = caption_block(clip_id, dur, (e.get('narration') or '').strip(), slots)
         out = segdir / f'{clip_id}.html'
+        # 壳底色取皮肤 bg 槽位；槽位缺失（样张读不出/老数据）回退米白保旧行为
         out.write_text(mini_html(W, H, dur, clip_id, f'style/clips/{e["file"]}',
-                                 cap_body, cap_js, xfade, fontface), encoding='utf-8')
+                                 cap_body, cap_js, xfade, fontface,
+                                 slots.get('bg') or '#FDF6E3'), encoding='utf-8')
         done += 1
 
     # 渲染器要的工程底座（与 assemble.py 同款；样张阶段先于正式 assemble 跑，得自备）

@@ -5,7 +5,10 @@ spec 生成（produce.genSpecs）把这些 PNG 附给多模态模型——看着
 替代纯文字风格注入（glm-5.3-flash 图片输入已实测支持）。
 
 用 Edge 无头截图（Windows 自带，零新依赖；样张是 960×540 自包含 HTML）。
-缓存：style_samples.json 未比已产 PNG 新则全跳过（spec 重生成不重复截图）。
+字体：截图前对样张做目录字体声明纠错+补齐（style/font_assets.json 的真字体
+woff2）——渲染端没装的目录字体 local() 必回退雅黑，"所见"就不再是设计确认的
+那个样子（2026-10-13 齐马蓝：样张与正片双双回退，样张承诺失真）。
+缓存：style_samples.json / font_assets.json 任一比已产 PNG 新则重截，否则全跳过。
 
 用法：python ai/snap_samples.py <项目目录>
 """
@@ -14,6 +17,8 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+
+from assemble import ensure_font_faces, load_font_assets
 
 BROWSERS = [
     r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
@@ -42,16 +47,24 @@ def main(proj_dir: str) -> int:
         return 0
 
     outs = [proj / 'style' / f'sample-{i}.png' for i in range(min(len(samples), MAX_SAMPLES))]
-    if all(o.exists() and o.stat().st_mtime >= ss_path.stat().st_mtime for o in outs):
+    # 缓存键 = 样张 JSON 与字体资产二者的新鲜度：font_tool 重跑（字体产物更新）
+    # 而样张未变时，旧 PNG 仍是回退渲染，也要重截
+    deps = [ss_path, proj / 'style' / 'font_assets.json']
+    newest = max((p.stat().st_mtime for p in deps if p.exists()), default=0)
+    if all(o.exists() and o.stat().st_mtime >= newest for o in outs):
         return 0  # 缓存有效
     browser = next((p for p in BROWSERS if pathlib.Path(p).exists()), None)
     if not browser:
         print('未找到 Edge/Chrome，跳过样张截图（spec 生成退回纯文本风格）')
         return 0
 
+    resolved = load_font_assets(proj)
     for i, out in enumerate(outs):
+        html = samples[i].get('html', '')
+        if resolved:
+            html = ensure_font_faces(html, resolved)
         tmp = proj / 'style' / f'.snap-{i}.html'
-        tmp.write_text(samples[i].get('html', ''), encoding='utf-8')
+        tmp.write_text(html, encoding='utf-8')
         try:
             # --headless（旧模式）+ 独立 user-data-dir：--headless=new 在默认
             # profile 被 Edge 占用时静默不出图（rc=0 无产物，2026-09-28 实测）

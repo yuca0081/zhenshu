@@ -97,21 +97,16 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	if len(keyImgs) > 0 {
 		sampleImgs = append(sampleImgs, keyImgs...)
 	}
-	// 真图素材（素材工位产物，assets/materials.json）：看着真图摆位置。
-	matImgs := materialImages(p)
-	if len(matImgs) > 0 {
-		sampleImgs = append(sampleImgs, matImgs...)
-	}
 	// NoThink：画面是结构化 HTML 作业，开思考单段 5-13 分钟；关思考配合段间并发
 	// 把全片压进分钟级（v1 spec 路径同款取舍）。
-	gen := func(user string, out any) (openai.Usage, error) {
-		if len(sampleImgs) > 0 {
-			return prov.GenerateJSONVisionNoThink(ctx, sceneSystemFor(p), user, sampleImgs, 0.7, out)
+	gen := func(imgs []string, user string, out any) (openai.Usage, error) {
+		if len(imgs) > 0 {
+			return prov.GenerateJSONVisionNoThink(ctx, sceneSystemFor(p), user, imgs, 0.7, out)
 		}
 		return prov.GenerateJSONNoThink(ctx, sceneSystemFor(p), user, out)
 	}
-	// 附图说明三段每段同一套：循环外拼一次（materialsNote 每段重读盘是白付的）
-	styleSuffix := keyframeNote(len(keyImgs)) + materialNote(len(matImgs)) + materialsNote(p)
+	// 样张源码（文字样式规范）全段同一份：循环外读一次盘
+	sampleSrc := sampleStyleNote(p)
 	if feedback != "" && only == "" { // 全片重生成：先清旧产物
 		for _, seg := range sb.Segments {
 			_ = os.Remove(p.Artifact("llm/comp-" + seg.ID + ".json"))
@@ -152,17 +147,39 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	work := func(seg contract.Segment) {
 		v := voices[seg.ID]
 		sceneM, compM := methodsFor(r.RootDir, seg)
-		// 附图顺序 = 样张 → 真迹关键帧 → 素材真图；三段说明各自对号入座
-		style := designNoteFor(p, seg.Idx) + styleSuffix
-		user := sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM)
-		var payload struct {
-			HTML     string                  `json:"html"`
-			Elements []contract.NamedElement `json:"elements"`
+		// 附图顺序 = 样张 → 真迹关键帧 → 本段素材真图（按需申请制，无素材不带图）
+		imgs := append([]string{}, sampleImgs...)
+		style := designNoteFor(p, seg.Idx) + sampleSrc + keyframeNote(len(keyImgs))
+		segMats := materialsForSeg(p, seg.ID)
+		if len(segMats) > 0 {
+			imgs = append(imgs, materialDataURLs(p, segMats)...)
+			style += materialNote(len(segMats)) + materialsNote(segMats)
 		}
-		u1, gerr := gen(user, &payload)
+		user := sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, len(segMats) == 0)
+		var payload struct {
+			HTML          string                  `json:"html"`
+			Elements      []contract.NamedElement `json:"elements"`
+			ImageRequests []materialRequest       `json:"image_requests,omitempty"`
+		}
+		u1, gerr := gen(imgs, user, &payload)
 		if gerr != nil {
 			fail(fmt.Errorf("%s 场景生成失败: %w", seg.ID, gerr))
 			return
+		}
+		// 素材申请单（两段式）：第一段式模型交了申请 → 检索公版图 → 带图出终稿。
+		// 检索全落空就按无素材继续——第一段式的画面稿直接生效，不挡出片。
+		if len(segMats) == 0 && len(payload.ImageRequests) > 0 {
+			if mats := r.fulfillRequests(ctx, p, seg.ID, cleanRequests(payload.ImageRequests)); len(mats) > 0 {
+				segMats = mats
+				imgs = append(imgs, materialDataURLs(p, segMats)...)
+				style += materialNote(len(segMats)) + materialsNote(segMats)
+				u2, err2 := gen(imgs, sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, false), &payload)
+				if err2 != nil {
+					fail(fmt.Errorf("%s 带素材终稿生成失败: %w", seg.ID, err2))
+					return
+				}
+				u1 = u2
+			}
 		}
 		errs := sceneValidate(r, ctx, p, payload.HTML, seg.ID)
 		for repair := 0; repair < 2 && len(errs) > 0; repair++ { // 外科修复：违规逐条回喂
@@ -171,12 +188,12 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 				HTML     string                  `json:"html"`
 				Elements []contract.NamedElement `json:"elements"`
 			}
-			u2, err2 := gen(sceneUserPrompt(seg, v, "", fb, cv, designNoteFor(p, seg.Idx)+styleSuffix, golden, sceneM, compM), &fixed)
+			u2, err2 := gen(imgs, sceneUserPrompt(seg, v, "", fb, cv, style, golden, sceneM, compM, false), &fixed)
 			if err2 != nil {
 				fail(fmt.Errorf("%s 场景修复失败: %w", seg.ID, err2))
 				return
 			}
-			u1, payload = u2, fixed
+			u1, payload.HTML, payload.Elements = u2, fixed.HTML, fixed.Elements
 			errs = sceneValidate(r, ctx, p, payload.HTML, seg.ID)
 		}
 		if len(errs) > 0 {
@@ -429,7 +446,8 @@ func (r *Runner) sceneLintWithVend(ctx context.Context, html string) []string {
 }
 
 // sceneUserPrompt 场景生成作业正文：契约摘要 + 段信息 + 风格/方法注入 + 词序表。
-func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback string, cv contract.Canvas, style, golden, sceneTpl, compMethods string) string {
+// allowAsk=本段尚无素材，开放真图申请单（image_requests）；已有素材带图生成时关闭。
+func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback string, cv contract.Canvas, style, golden, sceneTpl, compMethods string, allowAsk bool) string {
 	var wb strings.Builder
 	for i, w := range v.Words {
 		if i > 0 && i%10 == 0 {
@@ -439,11 +457,11 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
 	}
 	rules := "- 内容安全区 x∈[0,1080]、y∈[0,1594]；底部 1594px 起是平台字幕带，禁放内容\n" +
 		"- 顶部两角是平台角标保留区（启用章节时左上放章名、右上放计数器）：内容避开左上(x<280,y<150)与右上(x>800,y<150)两个角域\n" +
-		"- 竖屏 1080×1920：元素横向少列（≤2 列），纵向多行铺排；主视觉放 y≈300–1200"
+		"- 竖屏 1080×1920：构图自己按本段画面与设计系统定——竖屏画幅天然适合纵向叙事，主体尺寸与位置不受限"
 	if cv.Aspect == "16:9" {
 		rules = "- 内容安全区 x∈[0,1920]、y∈[0,896]；底部 896px 起是平台字幕带，禁放内容\n" +
 			"- 顶部两角是平台角标保留区（启用章节时左上放章名、右上放计数器）：内容避开左上(x<500,y<150)与右上(x>1420,y<150)两个角域\n" +
-			"- 横屏 1920×1080：主视觉放 y≈260–560 一带，层次拉开（主体 300px+、次级 120–200px）"
+			"- 横屏 1920×1080：构图自己按本段画面与设计系统定——主体尺寸、位置、层次都由你编排"
 	}
 	instrBlock := ""
 	briefLabel := "画面提示"
@@ -454,6 +472,11 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
 	goldenBlock := ""
 	if golden != "" {
 		goldenBlock = "\n## 结构金样例（结构/时序/canvas 写法照这个模式；视觉内容必须按本段重写）\n```html\n" + golden + "\n```\n"
+	}
+	askBlock, reqField := "", ""
+	if allowAsk {
+		askBlock = materialAskBlock
+		reqField = `"image_requests":[{"query":"英文检索词","why":"画面哪里要用一句话"}],`
 	}
 	return fmt.Sprintf(`为这一段视频直接写场景文件 HTML（你是画面工程师，版式/动效/图形程序全部自己写）。
 
@@ -494,26 +517,26 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
 
 ## 布局规则
 %s
-- 每屏至少一个视觉锚点（大字/图表/程序化画布/大 icon 之一），禁止全屏小元素平铺；
-  段落适合铺氛围时优先写背景层（渐变/纹理/程序化画布），别停在纯色底
+- 每屏至少一个可辨认的视觉重心（它是什么、多大、放哪由你按本段画面决定）；
+  禁止全屏无差别小元素平铺；段落适合铺氛围时优先写背景层（渐变/纹理/程序化画布），别停在纯色底
 
-## 动效手感（硬要求——渲染前预审会拦生硬的入场）
+## 动效手感（防呆板——节奏与编排的硬要求，手法本身自由）
 - 入场手法从设计系统「入场手法菜单」取用并轮换：同一段至少两种手法、相邻段主手法不重复；全片只用一种「淡入+浮入」=PPT，打回
 - 段内按设计系统「段内节奏」下限排事件：旁白每转一个信息点画面必须响应（新元素入场/已有元素强调变色/运镜变向）；入场完成后静坐到段尾=PPT，打回
-- 运镜按设计系统「运镜」条执行：背景持续运动必须可感知（幅度基准见设计系统）；看不见的推镜不算动
+- 运镜按设计系统「运镜」条执行（安静段/定格也是合法设计，全片没有一处可感知运动才是失败）
 - 禁所有元素同秒砸入：入场错峰对齐旁白短语节拍，间隔有快慢变化，不要均匀排队
+- 缓动与时长按设计系统档位取用，与本段气质一致即可——手法与性格你自己定
 - 扫屏条/横移/滑轨类位移一律用 x/y transform 补间（元素锚定后改 x），禁补间 left/top——
   那是布局属性，逐帧重排会卡顿且过不了检查
 - 禁 ease:"none" 的平移/淡入裸入场（canvas 驱动线本身的 ease:"none" 不受此限，那是时钟）：
-  主元素入场用带性格的缓动并与画面气质一致——轻快/科技感用干脆回弹（back.out 类，
-  0.4–0.6s），庄重/人文感用绵长缓入缓出（power2.inOut 类，0.6s+）；canvas 内运动
-  把缓动写进 f(t) 包络，同样禁匀速直线
+  入场要有性格；canvas 内运动把缓动写进 f(t) 包络，同样禁匀速直线
 - 次要元素跟随主元素滞后 0.1–0.3s 入场，成组出现要有主次
 - 出场干脆不拖尾：该退的元素在旁白收尾前退完，不恋战
 %s
 %s
+%s
 ## 输出（只输出一个 JSON 对象：第一个字符必须是 {、最后一个字符必须是 }，前后不许有任何字、标签、围栏或解释）
-{"note":"画面思路一句话","html":"<template>…整段场景文件…</template>","elements":[{"id":"元素DOM id","name":"人话名（与 data-hf-name 一致）"}]}
+{"note":"画面思路一句话",%s"html":"<template>…整段场景文件…</template>","elements":[{"id":"元素DOM id","name":"人话名（与 data-hf-name 一致）"}]}
 `, seg.ID, int(cv.W), int(cv.H), seg.ID, v.DurationS+contract.SegTail, seg.Key, len(v.Words), v.DurationS, seg.Narration, briefLabel, seg.VisualBrief,
-		instrBlock, style, goldenBlock, sceneTpl, wb.String(), rules, compMethods, feedbackBlock(feedback))
+		instrBlock, style, goldenBlock, sceneTpl, wb.String(), rules, compMethods, askBlock, feedbackBlock(feedback), reqField)
 }

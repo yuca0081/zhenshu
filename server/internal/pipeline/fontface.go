@@ -35,6 +35,8 @@ var osFontWhitelist = map[string]bool{
 
 var (
 	reFontFaceFamily = regexp.MustCompile(`(?is)@font-face\s*\{[^}]*?font-family\s*:\s*['"]?([^'";}]+)`)
+	// 完整 @font-face 块（块内无嵌套 }，到第一个 } 收）
+	reFontFaceBlock = regexp.MustCompile(`(?is)@font-face\s*\{[^}]*\}`)
 	// 单引号/裸字体栈：值到 ; } > 为止（' 在值内合法，拆完剥引号）
 	reFontFamilyUse = regexp.MustCompile(`(?i)font-family\s*:\s*['"]?([^;}">]+)`)
 	// 双引号字体栈："首族"后的剩余段（"Arial Narrow", Georgia, serif → ", Georgia, serif"）
@@ -44,7 +46,12 @@ var (
 // ensureFontFaces 补齐缺失的系统字体 @font-face 声明，返回原文或补齐后的文本。
 // assets：目录字体（fontCatalog）的 family(小写) → data URL——设计可点名目录字体，
 // 场景 HTML 引用它时这里补真字体文件声明（下载/子集化由 ai/font_tool.py 已备好）。
+// 目录字体声明纠错先行：模型对目录字体写 src:local(...) 是空头支票（渲染端没装
+// → 静默回退雅黑，设计字体进不了正片，2026-10-13 齐马蓝实录），资产里备了
+// woff2 的族一律重写为 url() 真声明。
 func ensureFontFaces(html string, assets map[string]string) string {
+	html, _ = rewriteAssetFontDecls(html, assets)
+
 	declared := map[string]bool{}
 	for _, m := range reFontFaceFamily.FindAllStringSubmatch(html, -1) {
 		declared[strings.ToLower(strings.TrimSpace(m[1]))] = true
@@ -102,6 +109,31 @@ func ensureFontFaces(html string, assets map[string]string) string {
 		}
 	}
 	return "<style>" + decl.String() + "</style>" + html
+}
+
+// rewriteAssetFontDecls 目录字体声明纠错：@font-face 块的族在 assets 里有真字体、
+// 但块内没有任何 url( 源（即 local() 空声明）→ 整块重写为 url() 真声明。
+// 已正确的块（带 url(）与不在资产里的族（系统字体 local 本就正确）不动。
+// 幂等：改写后的块含 url(，再跑不再命中。返回新 html 与改写块数。
+func rewriteAssetFontDecls(html string, assets map[string]string) (string, int) {
+	if len(assets) == 0 || !strings.Contains(html, "@font-face") {
+		return html, 0
+	}
+	n := 0
+	out := reFontFaceBlock.ReplaceAllStringFunc(html, func(block string) string {
+		m := reFontFaceFamily.FindStringSubmatch(block)
+		if m == nil {
+			return block
+		}
+		dataURL, ok := assets[strings.ToLower(strings.TrimSpace(m[1]))]
+		if !ok || strings.Contains(block, "url(") {
+			return block
+		}
+		n++
+		return fmt.Sprintf("@font-face{font-family:'%s';src:url(\"%s\") format('woff2');}",
+			strings.TrimSpace(m[1]), dataURL)
+	})
+	return out, n
 }
 
 // loadFontAssets 读目录字体解析产物（ai/font_tool.py 写）：family(小写) → data URL。

@@ -97,7 +97,6 @@ export interface SkinSlots {
   panel_txt?: string
   radius?: number
   border_w?: number
-  img_rot?: number
 }
 
 export interface Skin {

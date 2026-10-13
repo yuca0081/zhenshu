@@ -135,3 +135,39 @@ func TestDesignDocLayeredLayout(t *testing.T) {
 		}
 	}
 }
+
+// 转场令牌映射：设计系统 motion.transition 的现场发明措辞 → 机械令牌。
+// 缺省 cut（段间节奏交给场景编排）；明说黑场→fade；明说叠化/交叉→xfade；
+// 招牌转场（措辞自由）一律 cut——机械层不越权实现手法本体。
+func TestTransitionTokenOf(t *testing.T) {
+	cases := []struct {
+		transition string
+		want       string
+	}{
+		{"", "cut"},
+		{"招牌转场：上段卡片旋出、下段同位旋入（场景内编排）", "cut"},
+		{"段尾黑场一瞬（片尾挽歌气质，论证见 notes）", "fade"},
+		{"闪黑切换，新闻纪事感", "fade"},
+		{"相邻段交叉叠化，呼吸感", "xfade"},
+		{"淡入淡出", "xfade"},
+		{"每段首尾元素递进推入", "cut"},
+		{"禁黑场翻页，全片蓝光扫屏换景（场景内实现）", "cut"},  // 否定词不算数
+		{"不用黑场，也不用叠化，硬切带光效", "cut"},            // 多关键词全被否定
+		{"叠化太软，禁叠化，改用闪黑硬转", "fade"},              // 前否后用：以未否定的为准
+	}
+	for _, c := range cases {
+		ss := designFixture()
+		ss.Motion.Transition = c.transition
+		if got := transitionTokenOf(ss); got != c.want {
+			t.Fatalf("transition=%q 应映射 %s，得到 %s", c.transition, c.want, got)
+		}
+	}
+	if got := transitionTokenOf(nil); got != "cut" {
+		t.Fatalf("nil 设计应 cut，得到 %s", got)
+	}
+	noMotion := *designFixture()
+	noMotion.Motion = nil
+	if got := transitionTokenOf(&noMotion); got != "cut" {
+		t.Fatalf("无 motion 应 cut，得到 %s", got)
+	}
+}

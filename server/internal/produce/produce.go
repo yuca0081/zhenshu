@@ -411,7 +411,6 @@ func (r *Runner) runRework(ctx context.Context, p *pipeline.Project, segs []cont
 	r.Manifest(p, EventReworkStart, only+": "+pipeline.FirstLine(instruction, 80))
 	r.jobStart(id, "rework")
 	r.emit(id, "progress", "rework", "重做 "+strings.Join(labels, "、"))
-	r.ensureMaterials(ctx, p, false) // 只加载已有素材库，不现抓网络
 
 	// 1. 目标段画面重生成（删旧场景文件强制重出；其余段产物原样复用）
 	r.emit(id, "stage", "compositions", "running")
@@ -614,11 +613,8 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 		r.emit(id, "progress", "tts", "双语字幕翻译跳过: "+err.Error())
 	}
 
-	// ── 1.6 真图素材工位（可选）：策划→Met 公版检索下载→assets/materials.json。
-	// 素材是加分项，任何失败降级为无素材继续（sceneGen 注入处静默缺省）。
-	r.ensureMaterials(ctx, p, true)
-
 	// ── 2. 语义 spec 生成（LLM）+ 确定性渲染 + 合成物落盘 ────────
+	// 真图素材不在此采购：场景生成两段式按需申请（materials.go），模型要才检索。
 	if err := r.compositions(ctx, p); err != nil {
 		return err
 	}
@@ -1501,7 +1497,7 @@ func methodsFor(rootDir string, seg contract.Segment) (sceneBlock, compBlock str
 	rank(comps)
 	if len(scenes) > 0 {
 		m := scenes[0]
-		sceneBlock = fmt.Sprintf("\n## scene 参考实现（仿写起点：改参数与造型，机制逐字保留）\n```\n%s\n```\n", m.body)
+		sceneBlock = fmt.Sprintf("\n## scene 参考实现（可运行的起点：参数、造型、机制都鼓励改写成本段的画面）\n```\n%s\n```\n", m.body)
 	}
 	if len(comps) > 2 {
 		comps = comps[:2]
@@ -1511,7 +1507,7 @@ func methodsFor(rootDir string, seg contract.Segment) (sceneBlock, compBlock str
 		for i, c := range comps {
 			parts[i] = "### " + c.m.Title + "\n" + strings.TrimSpace(c.body)
 		}
-		compBlock = "\n## 构图方法（高级感公式——按此纪律编排本段画面）\n" + strings.Join(parts, "\n\n") + "\n"
+		compBlock = "\n## 构图参考（别的片用过有效的手法，仅作启发——不是纪律；与本片设计系统或画面提示冲突时，一律以设计系统和画面提示为准，按本段气质自由取舍）\n" + strings.Join(parts, "\n\n") + "\n"
 	}
 	return sceneBlock, compBlock
 }
@@ -1570,7 +1566,7 @@ func skinNote(p *pipeline.Project) string {
 	if s.Surface != "" {
 		note += " / 面板底 " + s.Surface
 	}
-	note += "\n- 配图 query 描述配色时往皮肤气质靠（底色/强调色的邻近词）；custom 特效底也用这套色"
+	note += "\n- 画面措辞往皮肤气质靠（底色/强调色的邻近词）；custom 特效底也用这套色"
 	return note
 }
 

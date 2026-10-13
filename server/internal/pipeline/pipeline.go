@@ -454,9 +454,10 @@ func stageStyleSamples(p *Project) error {
 	}
 
 	// API 模式：直出设计系统（confirmed 置 false，等用户在舞台确认——硬门由 final 落定校验把守）。
-	// NoThink：设计+样张是结构化 CSS 作业，开思考烧上万 reasoning token、拖到分钟级。
-	// 产出比 v1 大（皮肤×2+三角色+动效+装置+样张），草稿校验带修复循环（缺项回喂重出，≤2 轮）；
-	// 风格简报存在时追加特色落点覆盖检查（v3 §4.5：机械数数，缺/越枚举=打回）。
+	// 开思考：设计系统是全片最有创造力的作业（现场发明视觉语言），值得慢与贵；
+	// NoThink 实测产出发明性弱、往安全牌靠。每片一次成本可控，草稿校验带修复循环
+	// （缺项回喂重出，≤2 轮）；风格简报存在时追加特色落点覆盖检查（v3 §4.5：
+	// 机械数数，缺/越枚举=打回）。
 	sb, err := p.LoadStoryboard()
 	if err != nil {
 		return fmt.Errorf("先完成 storyboard: %w", err)
@@ -467,7 +468,7 @@ func stageStyleSamples(p *Project) error {
 		prompt := designUserPrompt(p, sb)
 		var lastErr error
 		for round := 0; round < 3; round++ {
-			usage, gerr := prov.GenerateJSONNoThink(pctx(p), designSystemPrompt, prompt, &ss)
+			usage, gerr := prov.GenerateJSON(pctx(p), designSystemPrompt, prompt, &ss)
 			if gerr != nil {
 				lastErr = gerr
 				break
@@ -838,7 +839,9 @@ func transitionFor(p *Project) string {
 			}
 		}
 	}
-	return "fade"
+	// 缺省 cut：段间转场是设计决策（LockDesign 从 motion.transition 映射写入），
+	// 没写 = 直切——段间节奏由场景内的退场/入场编排接管，平台不默认黑场翻页。
+	return "cut"
 }
 
 // timelineRow xfade 成片的实际段边界（sfx 布点/前端时间轴对齐的权威口径）。
@@ -1379,22 +1382,21 @@ func sfxStem(p *Project) string {
 // ── 统一后期（P0-1：暗角/颗粒/色差）────────────────────────────────
 
 // postFX 全片统一后期参数（stitch 阶段滤镜，0–1；全 0 = 关闭）。
-// 来源优先级：project.json "post"（false=关 / 对象=整组替换）> 风格 tokens.post > 默认轻后期。
+// 来源唯一：project.json "post"（LockDesign 从设计系统 post 槽位写入；
+// 设计没写 post = false = 不加后期）。后期质感是设计决策，平台不再默认施加。
 type postFX struct {
 	Vignette float64 `json:"vignette"` // 暗角
 	Grain    float64 `json:"grain"`    // 胶片颗粒
 	Chroma   float64 `json:"chroma"`   // 轻微色差
 }
 
-// 默认轻后期：风格未配 post 节时的兜底（轻暗角+轻颗粒；色差默认关，按风格再开）。
-var defaultPostFX = postFX{Vignette: 0.35, Grain: 0.4}
-
 func (fx *postFX) off() bool {
 	return fx == nil || (fx.Vignette <= 0 && fx.Grain <= 0 && fx.Chroma <= 0)
 }
 
 // postFor 后期参数解析（stitch 每次执行时读盘——换风格/改配置无需重启）。
-// v3 库条目不携带 tokens，读库 post 的旧路径已随 schema 退役。
+// project.json "post"：false/null/缺省 = 不加后期；对象 = 按 0–1 施加。
+// 写入方是 LockDesign（设计系统 post 槽位）；没有设计 post 的项目干净出片。
 func postFor(p *Project) *postFX {
 	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil {
 		var meta struct {
@@ -1411,8 +1413,7 @@ func postFor(p *Project) *postFX {
 			}
 		}
 	}
-	d := defaultPostFX
-	return &d
+	return nil
 }
 
 // videoChain 后期视频滤镜链（空 = 无滤镜）。顺序：色差 → 暗角 → 颗粒

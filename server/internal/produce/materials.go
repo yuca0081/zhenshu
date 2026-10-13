@@ -1,11 +1,12 @@
 package produce
 
-// 素材工位（真图拼贴材料链）：分镜定稿后，素材策划（LLM，每片一次）挑出值得贴真图的段
-// → Met 开放藏品检索（公版，API 可达性见 e2e 实测：本机 wikimedia 不通、met 通）→
-// 下载压规格进 assets/img/ + assets/materials.json 归档授权 → 场景生成注入素材清单与
-// 真图（模型撕边拼贴入画，引用白名单校验防裂图）。契约 A4（docs/contract.md）本就允许
-// 引用 assets/img/ 本地图——口子是设计内的，这里补的是检索与注入。
-// 素材是加分项：任何一步失败都降级为无素材继续（与真迹同纪律），不挡出片。
+// 素材工位（真图按需申请制）：场景生成两段式——第一段模型自己判断这段画面要不要
+// 真图，要就交素材申请单（英文检索词 + 用途一句话）；平台拿申请单去 Met 开放藏品
+// 检索（公版）→ 下载压规格进 assets/img/ + assets/materials.json 归档 → 回图让模型
+// 出带图终稿。素材是加分项：不申请/检索落空/任何失败都按无素材继续（第一段式的
+// 画面稿直接生效），不挡出片。场景 HTML 对 assets/img/ 的引用仍过白名单校验防裂图
+// （契约 A4 本就允许引用 assets/img/ 本地图）。贴图的呈现方式（裁剪/构图/边框/角度）
+// 不设配方，由模型按本段画面与本片设计系统自己定。
 
 import (
 	"context"
@@ -21,15 +22,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
-	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
 )
 
 const (
-	materialMaxPerSeg   = 3        // 每段素材上限
-	materialMaxTotal    = 12       // 全片素材上限（防跑飞）
+	materialMaxPerReq   = 2        // 一段一次申请单上限
+	materialMaxTotal    = 24       // 全片素材上限（防跑飞）
 	materialDownloadMax = 64 << 20 // 原图下载上限 64MB
 	materialWidthMax    = 1600     // 压图目标宽
 )
@@ -37,7 +38,7 @@ const (
 // Material 一条真图素材（file 是项目根相对路径，场景 <img src> 直用）。
 type Material struct {
 	File      string `json:"file"`
-	Seg       string `json:"seg"`             // 策划建议用段（可跨段复用）
+	Seg       string `json:"seg"`             // 首次申请段（可跨段复用：登记簿按检索词共享）
 	Query     string `json:"query,omitempty"` // 检索词
 	Source    string `json:"source"`          // met
 	ObjectID  int    `json:"object_id,omitempty"`
@@ -48,10 +49,10 @@ type Material struct {
 	OriginURL string `json:"origin_url,omitempty"`
 	Width     int    `json:"width,omitempty"`
 	Height    int    `json:"height,omitempty"`
-	Note      string `json:"note,omitempty"` // 策划给的用法一句话
+	Note      string `json:"note,omitempty"` // 申请时给的用途一句话
 }
 
-// MaterialStore 素材库落盘（assets/materials.json）。
+// MaterialStore 素材库落盘（assets/materials.json，按需追加）。
 type MaterialStore struct {
 	Materials []Material `json:"materials"`
 	PlannedAt time.Time  `json:"planned_at"`
@@ -60,6 +61,10 @@ type MaterialStore struct {
 
 func materialsPath(p *pipeline.Project) string { return p.Artifact("assets/materials.json") }
 
+// matStoreMu 登记簿读改写串行化：sceneGen 段间并发（SCENE_CONCURRENCY），fulfillRequests
+// 会并发追加入库。
+var matStoreMu sync.Mutex
+
 // loadMaterials 读素材库（无文件/损坏返回 nil——素材永远可选）。
 func loadMaterials(p *pipeline.Project) *MaterialStore {
 	var st MaterialStore
@@ -67,6 +72,18 @@ func loadMaterials(p *pipeline.Project) *MaterialStore {
 		return &st
 	}
 	return nil
+}
+
+// saveMaterials 登记簿落盘（调用方持有 matStoreMu）。
+func saveMaterials(p *pipeline.Project, st *MaterialStore) error {
+	if err := os.MkdirAll(filepath.Dir(materialsPath(p)), 0o755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(materialsPath(p), b, 0o644)
 }
 
 // materialFiles 素材白名单（相对路径集合）。
@@ -81,162 +98,132 @@ func materialFiles(st *MaterialStore) map[string]bool {
 	return out
 }
 
-// materialNeeds 素材策划（LLM）作业：哪些段值得贴真图、用什么检索词。
-type materialNeeds struct {
-	Needs []struct {
-		Seg   string `json:"seg"`
-		Query string `json:"query"`
-		Count int    `json:"count"`
-		Use   string `json:"use"`
-	} `json:"needs"`
-	Notes string `json:"notes,omitempty"`
+// materialsForSeg 登记簿里首次申请段是 segID 的素材——本段此前申请到的真图，
+// 重生成/修复轮直接带图，不再走申请单。
+func materialsForSeg(p *pipeline.Project, segID string) []Material {
+	st := loadMaterials(p)
+	if st == nil {
+		return nil
+	}
+	var out []Material
+	for _, m := range st.Materials {
+		if m.Seg == segID {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
-// ensureMaterials 素材工位入口。required=true 全量策划+抓取（produce 首跑）；
-// required=false 只加载已有（rework 不现抓网络）。任何失败降级为无素材，不挡出片。
-func (r *Runner) ensureMaterials(ctx context.Context, p *pipeline.Project, required bool) {
-	if _, err := os.Stat(materialsPath(p)); err == nil {
-		return // 已建库（幂等）
-	}
-	if !required {
-		return
-	}
-	if err := ctx.Err(); err != nil {
-		return
-	}
-	id := p.ID
-	r.emit(id, "stage", "materials", "running")
-	r.Manifest(p, "stage.start", "materials")
-	defer func() {
-		if st := loadMaterials(p); st != nil && len(st.Materials) > 0 {
-			r.emit(id, "stage", "materials", fmt.Sprintf("done（%d 张）", len(st.Materials)))
-			r.Manifest(p, "stage.finish", "materials")
-		} else {
-			r.emit(id, "stage", "materials", "skipped（无素材需求或获取失败，画面走程序化）")
-			r.Manifest(p, "stage.finish", "materials")
+// materialRequest 场景生成第一段式提交的素材申请单条目。
+type materialRequest struct {
+	Query string `json:"query"` // Met 检索词（具体英文实物名词）
+	Why   string `json:"why"`   // 画面哪里要用（一句话）
+}
+
+// cleanRequests 清洗申请单：去空词去重、用途截断、夹到单次上限。
+func cleanRequests(reqs []materialRequest) []materialRequest {
+	var out []materialRequest
+	seen := map[string]bool{}
+	for _, req := range reqs {
+		q := strings.TrimSpace(req.Query)
+		if q == "" || seen[strings.ToLower(q)] {
+			continue
 		}
-	}()
-
-	needs, err := r.planMaterials(ctx, p)
-	if err != nil {
-		r.Manifest(p, "materials.plan_error", pipeline.FirstLine(err.Error(), 120))
-		return
+		seen[strings.ToLower(q)] = true
+		out = append(out, materialRequest{Query: q, Why: pipeline.TruncRunes(strings.TrimSpace(req.Why), 40)})
+		if len(out) >= materialMaxPerReq {
+			break
+		}
 	}
-	if len(needs.Needs) == 0 {
-		r.Manifest(p, "materials.plan", "no-needs")
-		return
-	}
+	return out
+}
 
+// fulfillRequests 处理一段的申请单：登记簿里同检索词已采过的直接复用（跨段共享），
+// 未命中的走 Met 检索下载入库。逐条独立，失败跳过（manifest 记录），全落空返回空
+// ——调用方按无素材继续（第一段式画面稿生效）。
+func (r *Runner) fulfillRequests(ctx context.Context, p *pipeline.Project, segID string, reqs []materialRequest) []Material {
+	if len(reqs) == 0 {
+		return nil
+	}
 	client := newMetClient()
-	st := &MaterialStore{PlannedAt: time.Now(), Notes: needs.Notes}
-	perSeg := map[string]int{}
-	for _, n := range needs.Needs {
+	var out []Material
+	for _, req := range reqs {
 		if ctx.Err() != nil {
 			break
 		}
-		if len(st.Materials) >= materialMaxTotal {
-			break // 总量到顶：整个采购收工
-		}
-		if perSeg[n.Seg] >= materialMaxPerSeg {
-			continue // 该段满了：跳过这条需求，后面段的需求照常采购
-		}
-		count := n.Count
-		if count < 1 {
-			count = 1
-		}
-		if count > materialMaxPerSeg-perSeg[n.Seg] {
-			count = materialMaxPerSeg - perSeg[n.Seg]
-		}
-		for i := 0; i < count; i++ {
-			m, err := client.fetchOne(ctx, p, n.Seg, n.Query, n.Use, perSeg[n.Seg])
-			if err != nil {
-				r.Manifest(p, "materials.skip", n.Seg+": "+pipeline.FirstLine(err.Error(), 100))
-				continue
-			}
-			st.Materials = append(st.Materials, m)
-			perSeg[n.Seg]++
-			if len(st.Materials) >= materialMaxTotal {
-				break
-			}
-		}
-	}
-	if len(st.Materials) == 0 {
-		r.Manifest(p, "materials.result", "0 张（检索全部落空）")
-		return
-	}
-	b, _ := json.MarshalIndent(st, "", "  ")
-	if err := os.MkdirAll(filepath.Dir(materialsPath(p)), 0o755); err != nil {
-		r.Manifest(p, "materials.error", err.Error())
-		return
-	}
-	if err := os.WriteFile(materialsPath(p), b, 0o644); err != nil {
-		r.Manifest(p, "materials.error", err.Error())
-		return
-	}
-	r.Manifest(p, "materials.result", fmt.Sprintf("%d 张", len(st.Materials)))
-}
-
-// planMaterials 素材策划：LLM 通读分镜，挑段+给英文检索词（Met 库是英文）。
-func (r *Runner) planMaterials(ctx context.Context, p *pipeline.Project) (*materialNeeds, error) {
-	sb, err := p.LoadStoryboard()
-	if err != nil {
-		return nil, fmt.Errorf("需要分镜: %w", err)
-	}
-	prov, err := llm.FromEnv(llm.RoleVisual)
-	if err != nil {
-		return nil, fmt.Errorf("素材策划需要 API 模式: %w", err)
-	}
-	var b strings.Builder
-	for _, seg := range sb.Segments {
-		fmt.Fprintf(&b, "- %s｜%s｜画面提示：%s\n", seg.ID, seg.Key, pipeline.TruncRunes(seg.VisualBrief, 60))
-	}
-	var out materialNeeds
-	_, err = prov.GenerateJSONNoThink(ctx, "你是短视频的视觉素材策划，只输出 JSON。", fmt.Sprintf(`下面是分镜清单。判断哪些段值得贴**真图拼贴素材**（名画/雕像/陶器/遗址/历史实物照片，来自大都会博物馆开放藏品库，全部公版），哪些段程序化图形就够（抽象概念/图表/氛围/人物剪影）。
-
-## 分镜
-%s
-## 输出（只输出 JSON，无围栏）
-{"needs":[{"seg":"segNN","query":"英文检索词","count":1,"use":"这条素材在这段怎么用（人话 ≤30字）"}],"notes":"整体素材策略一句话"}
-
-纪律：
-- 宁缺毋滥：只有画面里出现**具体历史实物/人物/场景**的段才要；全片 ≤10 条
-- query 是 met 藏品库检索词，用具体英文名词（如 "socrates bust"、"greek amphora chariot"、"parthenon temple"），别用抽象词（如 "philosophy"）
-- 同一实物只搜一次；count 一般 1（备选 2）
-- 一段都没有就给 {"needs":[]}
-`, b.String()), &out)
-	if err != nil {
-		return nil, fmt.Errorf("素材策划失败: %w", err)
-	}
-	// 清洗：seg 必须在分镜内，count 夹取
-	valid := map[string]bool{}
-	for _, seg := range sb.Segments {
-		valid[seg.ID] = true
-	}
-	clean := &materialNeeds{Notes: out.Notes}
-	for _, n := range out.Needs {
-		if !valid[n.Seg] || strings.TrimSpace(n.Query) == "" {
+		matStoreMu.Lock()
+		// 复用双检：查先（免下载）；下载后再查（并发段可能刚采了同词）
+		if m, ok := findByQuery(p, req.Query); ok {
+			matStoreMu.Unlock()
+			out = append(out, m)
 			continue
 		}
-		if n.Count < 1 {
-			n.Count = 1
+		matStoreMu.Unlock()
+		m, err := client.fetchOne(ctx, p, segID, req.Query, req.Why, 0)
+		if err != nil {
+			r.Manifest(p, "materials.skip", segID+" "+req.Query+": "+pipeline.FirstLine(err.Error(), 100))
+			continue
 		}
-		if n.Count > materialMaxPerSeg {
-			n.Count = materialMaxPerSeg
+		matStoreMu.Lock()
+		st := loadMaterials(p)
+		if st == nil {
+			st = &MaterialStore{PlannedAt: time.Now()}
 		}
-		clean.Needs = append(clean.Needs, n)
+		if dup, ok := findByQuery(p, req.Query); ok { // 并发同词：丢本次下载复用已入库的
+			matStoreMu.Unlock()
+			out = append(out, dup)
+			continue
+		}
+		if len(st.Materials) >= materialMaxTotal {
+			matStoreMu.Unlock()
+			r.Manifest(p, "materials.skip", segID+" "+req.Query+": 全片素材到顶 "+fmt.Sprint(materialMaxTotal))
+			continue
+		}
+		st.Materials = append(st.Materials, m)
+		err = saveMaterials(p, st)
+		matStoreMu.Unlock()
+		if err != nil {
+			r.Manifest(p, "materials.error", err.Error())
+			continue
+		}
+		out = append(out, m)
+		r.emit(p.ID, "progress", "compositions", fmt.Sprintf("%s 素材检索 %q ✓（%s）", segID, req.Query, m.Title))
 	}
-	return clean, nil
+	return out
 }
 
-// materialsNote 场景生成提示里的素材块（清单+拼贴语法纪律）。无素材返回 ""。
-func materialsNote(p *pipeline.Project) string {
+// findByQuery 登记簿里找同检索词条目（大小写不敏感；调用方持有 matStoreMu）。
+func findByQuery(p *pipeline.Project, query string) (Material, bool) {
 	st := loadMaterials(p)
-	if st == nil || len(st.Materials) == 0 {
+	if st == nil {
+		return Material{}, false
+	}
+	for _, m := range st.Materials {
+		if strings.EqualFold(strings.TrimSpace(m.Query), query) {
+			return m, true
+		}
+	}
+	return Material{}, false
+}
+
+// materialAskBlock 第一段式的申请单机制说明（本段暂无素材时注入）。
+const materialAskBlock = `
+## 真图素材申请（可选）
+- 本段画面若需要**真实世界的实物图像**（历史实物/名画/雕像/建筑/遗址等照片级素材），
+  在输出 JSON 里加 "image_requests":[{"query":"英文检索词","why":"画面哪里要用一句话"}]，最多 2 条
+- 检索词用具体英文实物名词（如 "socrates bust"、"greek amphora chariot"、"parthenon temple"），
+  别用抽象词；图源是大都会博物馆公版藏品库，检索结果不保证贴合——平台回图后你再决定用不用
+- 画面用程序化图形就够的段（抽象概念/图表/氛围/人物剪影）不要申请，省略 image_requests 即可
+`
+
+// materialsNote 场景生成提示里的本段素材块（清单+引用语法，呈现方式不设配方）。
+func materialsNote(mats []Material) string {
+	if len(mats) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("\n## 本片真图拼贴素材（公版，已落盘 assets/img/，可直接引用）\n")
-	for _, m := range st.Materials {
+	b.WriteString("\n## 本段真图素材（公版，已落盘，可直接引用）\n")
+	for _, m := range mats {
 		line := "- `" + m.File + "`｜" + m.Title
 		if m.Artist != "" {
 			line += "（" + m.Artist + "）"
@@ -248,13 +235,12 @@ func materialsNote(p *pipeline.Project) string {
 			line += fmt.Sprintf("｜原图 %d×%d", m.Width, m.Height)
 		}
 		if m.Note != "" {
-			line += "｜建议用途：" + m.Note
+			line += "｜申请用途：" + m.Note
 		}
 		b.WriteString(line + "\n")
 	}
 	b.WriteString(`- 引用语法：<img src="assets/img/文件名">，**只准引用上面清单内的文件**（清单外引用会被校验拒绝）
-- 拼贴语法：撕边 clip-path + 米白纸衬底 + 胶带/图钉固定 + 轻微旋转 + 底部说明行（作者/年代），照片当**拼贴材料**按构图摆，不是满屏壁纸；禁止拉伸变形
-- 素材可跨段复用；没有合适素材就照常程序化画，别硬凑
+- 用不用、选哪张、怎么裁剪构图与呈现（满幅/局部/形状/角度全由你按本段画面和本片设计系统定）；禁止拉伸变形；没有合适的就一张都不用
 `)
 	return b.String()
 }
@@ -264,20 +250,13 @@ func materialNote(n int) string {
 	if n == 0 {
 		return ""
 	}
-	return fmt.Sprintf("\n- 附图最后 %d 张是本片素材库的真图（公版，已落盘 assets/img/，清单见素材块）：看清内容再决定哪张进画面，摆位与裁剪按构图需要（object-fit/clip-path 撕边），别整幅满屏\n", n)
+	return fmt.Sprintf("\n- 附图最后 %d 张是本段素材真图（公版，清单见素材块）：看清内容再决定用不用、怎么用\n", n)
 }
 
-// materialImages 素材图 → data URL（注入场景生成的视觉上下文，让模型看着真图摆位置）。
-func materialImages(p *pipeline.Project) []string {
-	st := loadMaterials(p)
-	if st == nil {
-		return nil
-	}
+// materialDataURLs 素材图 → data URL（注入场景生成的视觉上下文，让模型看着真图定摆位）。
+func materialDataURLs(p *pipeline.Project, mats []Material) []string {
 	var urls []string
-	for _, m := range st.Materials {
-		if len(urls) >= 6 {
-			break
-		}
+	for _, m := range mats {
 		b, err := os.ReadFile(p.Artifact(filepath.FromSlash(m.File)))
 		if err != nil {
 			continue
@@ -380,14 +359,14 @@ func (m *metClient) getJSON(ctx context.Context, url string, out any) error {
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-// fetchOne 检索→挑公版→下载压图→登记。i 是该段第几张（0 起），决定文件名序号；
-// 检索词跨段去重由调用方保证（same query repeated 会在 skip 清单里暴露）。
+// fetchOne 检索→挑公版→下载压图→返回登记条目（入库由调用方做，登记簿要串行化）。
+// i 是该检索词第几张（0 起），决定文件名序号。
 func (m *metClient) fetchOne(ctx context.Context, p *pipeline.Project, seg, query, use string, idx int) (Material, error) {
 	ids, err := m.search(ctx, query)
 	if err != nil {
 		return Material{}, fmt.Errorf("检索失败: %w", err)
 	}
-	// 同段同一检索词多张时错位取（第 idx 个公版结果），避免三张同名
+	// 同检索词多张时错位取（第 idx 个公版结果），避免多张同名
 	offset := 0
 	for got := 0; got <= idx && offset < len(ids); offset++ {
 		if offset > 0 {
@@ -448,7 +427,7 @@ func (m *metClient) download(ctx context.Context, p *pipeline.Project, seg, quer
 	}
 	tmp.Close()
 
-	// 压图：宽 ≤1600 保比例，JPEG q4（确定性规格，与真迹压图同思路）
+	// 压图：宽 ≤1600 保比例，JPEG q4（确定性规格）
 	file := fmt.Sprintf("%s-%d-%s.jpg", seg, idx+1, slugify(o.Title, o.ObjectID))
 	dst := filepath.Join(dir, file)
 	ff, err := pipeline.FFmpegPath()

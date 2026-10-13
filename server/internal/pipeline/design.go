@@ -67,7 +67,7 @@ func designBrief(p *Project, sb *contract.Storyboard) string {
 
 ### 2. skins 皮肤（1–2 套）
 - 必填槽位：bg 底色 / txt 文字色 / accent 强调色（#RRGGBB；txt 落 bg 上对比度必须 ≥4.5:1，实测校验会拒）/ font 字体栈（中文字体打头）。
-- 可选槽位：mute 次级文字 / surface 卡片底 / panel_txt 面板字 / radius 圆角0–40 / border_w 描边0–6 / img_rot 配图旋转-8~8。
+- 可选槽位：mute 次级文字 / surface 卡片底 / panel_txt 面板字 / radius 圆角0–40 / border_w 描边0–6。
 - css 自由 CSS（≤4000 字符）：纹理/质感/装饰/特效底——风格差异化的主战场，认真写。
   挂点 .skin-root（根容器）、.skin-paper（满画幅背景层）；CSS 变量 var(--bg/--txt/--accent/--mute)。
   动效质感用静态多层渐变/噪点/边框模拟（暗角、纸纹、网格、光斑、色带）。
@@ -84,11 +84,11 @@ func designBrief(p *Project, sb *contract.Storyboard) string {
 
 ### 4. motion 动效语言（全片节奏一致性的来源，档次分水岭——生动还是像PPT，在这里定档）
 可补间只有 opacity/x/y/scale/rotation 系（数字滚动用 count）。动效必须设计成**一套编排**，不是一个档位：
-- entrances 入场手法菜单 3–5 条：每条 name/how/use_for 三件齐，手法之间必须一眼不同（参考族：逐行点亮/滑入揭示/字卡打字机/缩放落定/计数滚动/描边生长——按本片气质现场发明）；只交一种「淡入+浮入」=整片像PPT，打回；
+- entrances 入场手法菜单 3–5 条：每条 name/how/use_for 三件齐，手法之间必须一眼不同（参考族：逐行点亮/滑入揭示/字卡打字机/缩放落定/计数滚动/描边生长——参考族只是例子，按本片气质现场发明优先）；只交一种「淡入+浮入」=整片像PPT，打回；
 - rhythm 段内节奏下限：旁白每推进一个信息点，画面必须有一次可见响应（新元素入场/已有元素强调/运镜变向）；写出量化档（如「每 3–5 秒一个可见事件」）；入场完成后静坐到段尾=失败；
 - exits 出场：该退的元素在旁白收尾前退完，怎么退（淡出/反向滑出/缩小回收）写成规矩，禁拖尾；
-- camera 运镜：全段持续的背景运动必须有**可感知**的幅度基准（如 10 秒内 scale≥1.08 或位移≥画面宽度 5%%）；看不见的推镜不算动；
-- transition 段间转场政策：发明一个配本片气质的招牌转场（简报含转场类特色时必须按其机制实现）；「黑场一瞬」只在气质确实需要时用且须在 notes 里论证——它是观众感知里的「翻页」，滥用=PPT；
+- camera 运镜：是否持续运镜、什么幅度，按本片气质决定并写清依据——需要呼吸感的片可以设计安静段（定格/微幅呼吸也是运镜决策），但「全片没有一处可感知运动」仍是失败；
+- transition 段间转场政策：发明一个配本片气质的招牌转场（简报含转场类特色时必须按其机制实现）；转场手法本体画进各段场景文件（上段收尾/下段开场自己编排），机械拼接层只认三种出口——措辞明说「黑场/闪黑」会用页内黑场叠化实现，明说「叠化/交叉」会用交叉叠化拼接，其余一律直切（段间节奏全靠你的场景编排接管）；「黑场一瞬」只在气质确实需要时用且须在 notes 里论证——它是观众感知里的「翻页」，滥用=PPT；
 - 全片所有段从这套菜单取用并轮换，段间节奏一致性靠统一档位（ease/时长档）而不是靠「都一样呆」。
 
 ### 5. device 贯穿装置
@@ -96,9 +96,10 @@ func designBrief(p *Project, sb *contract.Storyboard) string {
 - per_seg 对着上面分镜逐段写：它怎么重复/变奏/演变。
 
 ### 6. layouts 版式（3–5 个）与 anti_patterns 负面清单（≤8 条）
-- 每个版式构图明显不同（大字海报 / 主视觉分栏 / 数据焦点 / 满幅底图+侧栏各取其一），不要每张都排成「标题+元素网格」；段轮换用；
+- 版式按本片内容与气质**现场发明**构图（大字海报/主视觉分栏/数据焦点/满幅底图只是参考形态，不是菜单）；每个版式构图明显不同，段轮换用；
 - 叠字可以是有意手法，但必须声明：若某版式的层次感依赖文字叠压（大字衬底词/标徽压引言/水印字），在该版式 layered 字段写明叠压关系与可读依据（衬底层低对比度、前景层带实底衬/描边）。没有叠层构图的版式禁止写 layered——实色字压实色字的「叠」不是手法是事故，不配声明；
 - 负面清单 = 本片禁用的俗手，按本片内容挑真实风险（右半空版式/假密度/文字压图不可读……）。
+- post 全片后期质感（可选，0–1）：暗角 vignette / 胶片颗粒 grain / 轻微色差 chroma。默认全 0 = 不加后期（干净的画面是正当选择）；只有本片气质确实需要这层质感才开（怀旧/胶片感可开颗粒，干净的 UI/科技风开了反而脏）。
 
 ## 样张 = 用主皮肤渲出的静态小画面（所见即所得，1–3 张）
 - 颜色/字体必须来自主皮肤槽位（色值逐字一致）——样张即皮肤预览，两处不一致会被打回；
@@ -174,7 +175,7 @@ func designJSONShape() string {
       "slots": { "bg": "#0D0A07", "txt": "#E8DCC0", "accent": "#C9A227",
                  "font": "'SimSun','Microsoft YaHei',serif",
                  "mute": "#9C8F72", "surface": "#1A1410", "panel_txt": "#EFE6CF",
-                 "radius": 0, "border_w": 1, "img_rot": 0 },
+                 "radius": 0, "border_w": 1 }
       "css": "/* 自由 CSS ≤4000 字符：纹理/特效/装饰，挂 .skin-paper/.skin-root，用 var(--bg) 等 */" }
   ],
   "skin_rule": "双皮肤时必填：哪类段/哪个节拍穿哪套；单皮肤省略此字段",
@@ -197,9 +198,11 @@ func designJSONShape() string {
     "notes": "性格一句话：什么怎么动、禁什么动" },
   "device": { "name": "装置名（如：访客卡片）", "desc": "装置是什么、观众为什么会记住它",
               "per_seg": "seg01 首次亮相…seg02 变奏…seg03 起每章复现…" },
+  "post": { "vignette": 0, "grain": 0, "chroma": 0 },
   "layouts": [ { "id": "hero-title", "name": "大字海报", "desc": "构图描述：主体位置/元素铺排/留白方向",
                  "layered": "仅叠层版式写：哪层压哪层、为何可读（衬底低对比/前景有实底）；无叠层留空不写" } ],
   "anti_patterns": ["大面积辉光", "金句+引号+装饰线+作者+边框五件套", "右半空版式"],
+  "post": { "vignette": 0, "grain": 0, "chroma": 0 },
   "signature_absorption": [ { "sig_id": "sig1", "lands_in": "device|motion|skins|camera_plan|transition_policy|material_policy", "how": "一句话写清这条特色怎么落在该组件" } ],
   "samples": [
     { "tag": "样张 A · 标题帧", "desc": "用了哪个版式、展示什么", "html": "<!doctype html>…整文档 960×540…" }
@@ -376,6 +379,13 @@ func DesignDocWithBrief(ss *contract.StyleSamples, segIdx int, brief *contract.S
 			}
 		}
 	}
+	if ss.Post != nil {
+		w("\n### 全片后期质感（stitch 统一施加；0=关）\n- 暗角 %.2f / 颗粒 %.2f / 色差 %.2f", ss.Post.Vignette, ss.Post.Grain, ss.Post.Chroma)
+		if ss.Post.Vignette == 0 && ss.Post.Grain == 0 && ss.Post.Chroma == 0 {
+			w("（不加后期，画面保持原样）")
+		}
+		w("\n")
+	}
 	// v3：特色落点表（简报特色 × 设计交卷自报落点）。渲染画面按落点执行对应手法；
 	// 特色机制只写「怎么做到」，物件永远跟画面提示走。
 	if brief != nil && len(brief.Signatures) > 0 {
@@ -406,6 +416,12 @@ func DesignDocWithBrief(ss *contract.StyleSamples, segIdx int, brief *contract.S
 // LockDesign 确认后的设计系统落盘：design.md（人读 + 门2 + scene_gen 注入源，含
 // 强参考特色落点表）+ skin.json（引擎件=主皮肤，assemble 字幕带配色消费）。
 // tokens 本体就是 style/style_samples.json——不另立 tokens.json，防双源漂移（宪法 #1）。
+// 同时把设计决策接线到机械层（此前机械层自作主张，出口行为模型管不到）：
+//   - transition 令牌：motion.transition 现场发明的转场 → 机械映射 cut|fade|xfade
+//     写 project.json，assemble 页内黑场与 Go 拼接都消费它（缺省 cut——段间节奏
+//     由场景内的退场/入场编排接管，平台不再默认黑场翻页）；
+//   - post 后期槽位：design post {vignette,grain,chroma}（0–1，全 0=关）写
+//     project.json——暗角/颗粒不再是全片默认，是设计系统发明的可选质感。
 func LockDesign(p *Project, ss *contract.StyleSamples) error {
 	changed, matched := clampDesignFonts(ss)
 	if changed {
@@ -431,9 +447,95 @@ func LockDesign(p *Project, ss *contract.StyleSamples) error {
 	if err := writeFile(p.Artifact("style/skin.json"), string(sbj)); err != nil {
 		return fmt.Errorf("skin.json 落盘失败: %w", err)
 	}
+	// 设计决策 → 机械令牌（幂等：内容指纹变了才重写）。project.json 缺失（测试
+	// 夹具/裸项目）只跳过接线不失败——令牌落不进机械层，设计本体照常锁定。
+	if _, err := os.Stat(p.Artifact("project.json")); err == nil {
+		if tok := transitionTokenOf(ss); tok != "" {
+			if err := SetProjectField(p, "transition", tok); err != nil {
+				return fmt.Errorf("转场令牌落盘失败: %w", err)
+			}
+			p.Manifest("design.transition", tok)
+		}
+		if err := writePostFX(p, ss); err != nil {
+			return fmt.Errorf("post 后期槽位落盘失败: %w", err)
+		}
+	}
 	p.Manifest("design.version", designVersion(ss))
 	p.Manifest("design.skins", strconv.Itoa(len(skins)))
 	return nil
+}
+
+// transitionTokenOf 设计系统的转场政策 → 机械令牌。现场发明的转场千姿百态，
+// 机械层只认三种出口：cut（直切——默认，段间节奏交给场景内退场/入场编排）、
+// fade（页内黑场微叠化）、xfade（真交叉叠化）。映射只认**未被否定的**关键词：
+// 「段尾黑场一瞬」→ fade，「禁黑场翻页」不算（设计在禁它）；明说「叠化/交叉」
+// → xfade；其余一切（含缺省）→ cut——招牌转场的手法本体本来就该画在场景
+// 文件里，机械层不越权实现。
+func transitionTokenOf(ss *contract.StyleSamples) string {
+	if ss == nil || ss.Motion == nil {
+		return "cut"
+	}
+	t := strings.ToLower(ss.Motion.Transition)
+	switch {
+	case hasUnnegated(t, "黑场"), hasUnnegated(t, "闪黑"), hasUnnegated(t, "黑一瞬"):
+		return "fade"
+	case hasUnnegated(t, "叠化"), hasUnnegated(t, "交叉"), hasUnnegated(t, "淡入淡出"):
+		return "xfade"
+	}
+	return "cut"
+}
+
+// hasUnnegated t 里存在未被否定的 kw 出现：关键词前 2 字内出现否定词
+// （禁/不/无/没/别/非/拒绝/远离）即视为否定——「禁黑场翻页」≠ 用黑场。
+func hasUnnegated(t, kw string) bool {
+	neg := []string{"禁", "不", "无", "没", "别", "非", "拒绝", "远离"}
+	for i := 0; ; {
+		j := strings.Index(t[i:], kw)
+		if j < 0 {
+			return false
+		}
+		start := i + j
+		lo := start - 6 // 最多回看 3 个 CJK 字（否定词紧贴关键词）
+		if lo < 0 {
+			lo = 0
+		}
+		prefix := t[lo:start]
+		negated := false
+		for _, n := range neg {
+			if strings.Contains(prefix, n) {
+				negated = true
+				break
+			}
+		}
+		if !negated {
+			return true
+		}
+		i = start + len(kw)
+	}
+}
+
+// postFXOf 设计 post 槽位（0–1）→ project.json "post"。设计没写 post 节 = 明确
+// 不加后期（写 false），机械层不再自作主张叠默认暗角颗粒——质感是设计决策。
+func postFXOf(ss *contract.StyleSamples) any {
+	if ss == nil || ss.Post == nil {
+		return false
+	}
+	return ss.Post
+}
+
+// writePostFX post 槽位接线（幂等条件写：值变化才动盘）。
+func writePostFX(p *Project, ss *contract.StyleSamples) error {
+	want := postFXOf(ss)
+	b, _ := os.ReadFile(p.Artifact("project.json"))
+	var meta map[string]any
+	if json.Unmarshal(b, &meta) == nil {
+		cur, _ := json.Marshal(meta["post"])
+		w, _ := json.Marshal(want)
+		if string(cur) == string(w) {
+			return nil
+		}
+	}
+	return SetProjectField(p, "post", want)
 }
 
 // cssGenericFonts CSS 通用字体族关键字：任何渲染端都能解析，不需要声明。
