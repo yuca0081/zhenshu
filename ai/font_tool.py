@@ -11,8 +11,9 @@
      按本项目用字子集化成 woff2 → base64 data URL
   3. 写 style/font_assets.json:{"resolved": {"<Family>": "<data_url>"}},消费方
      (assemble 字幕 / fixupFrameFrames 场景)按 family 名注入 @font-face
-  4. 某款失败(下载/子集/超体积):该家族从设计三件套(skin/style_samples/design.md)
-     的字体栈里剥除并记入 "stripped"——降级回系统字体,绝不带病进渲染
+  4. 某款失败(下载/子集/超体积,先退避重试 3 次):该家族从设计三件套
+     (skin/style_samples/design.md)的字体栈里剥除并记入 "stripped"——降级回系统
+     字体,绝不带病进渲染;剥前原文备份进 style/font_strip_backup.json(可手动恢复)
 """
 import base64
 import hashlib
@@ -59,6 +60,20 @@ def _http_get(url: str, headers: dict = None) -> bytes:
     return b''.join(chunks)
 
 
+def _http_get_retry(url: str, headers: dict = None, attempts: int = 3) -> bytes:
+    """下载失败先退避重试（2s/6s）再认输——剥族降级是不可逆动作，一次网络抖动
+    就触发太重；真不可达（字体源永久下架）重试烧完照常上抛走剥族。"""
+    for i in range(attempts):
+        try:
+            return _http_get(url, headers)
+        except Exception as e:
+            if i == attempts - 1:
+                raise
+            wait = (2, 6)[i]
+            print('font_tool: 下载失败(%s)，%ds 后重试 %d/%d' % (e, wait, i + 1, attempts - 1))
+            time.sleep(wait)
+
+
 def _load_manifest() -> dict:
     if MANIFEST.exists():
         return json.loads(MANIFEST.read_text(encoding='utf-8'))
@@ -74,7 +89,7 @@ def _cached_ttf(entry: dict) -> pathlib.Path:
     key = '%s@%s' % (entry['id'], entry['version'])
     if path.exists() and key in manifest['fonts']:
         return path
-    raw = _http_get(entry['url'], headers={
+    raw = _http_get_retry(entry['url'], headers={
         'Accept': 'application/vnd.github.raw',
         'User-Agent': 'zhenshu-font-tool'})
     if not raw.startswith(b'\x00\x01\x00\x00') and not raw.startswith(b'OTTO'):
@@ -128,8 +143,11 @@ def _subset_woff2(ttf_path: pathlib.Path, text: str) -> bytes:
 
 
 def _strip_family_from_stacks(proj: pathlib.Path, family: str):
-    """把失败家族从设计三件套的字体栈里剥除(与 Go 侧 clampFontStack 同语义)。"""
+    """把失败家族从设计三件套的字体栈里剥除(与 Go 侧 clampFontStack 同语义)。
+    剥前把原文备份进 style/font_strip_backup.json——剥族不可逆太重(网络恢复后
+    重跑也不会把家族加回去)，至少留一份可手动恢复的底账。"""
     pat = re.compile(r"'%s'\s*,\s*|,\s*'%s'|'%s'" % ((re.escape(family),) * 3), re.IGNORECASE)
+    backup = {}
     for rel in ('style/skin.json', 'style/style_samples.json', 'style/design.md'):
         p = proj / rel
         if not p.exists():
@@ -138,7 +156,22 @@ def _strip_family_from_stacks(proj: pathlib.Path, family: str):
             s = p.read_text(encoding='utf-8')
             s2 = pat.sub('', s)
             if s2 != s:
+                backup[rel] = s
                 p.write_text(s2, encoding='utf-8')
+        except Exception:
+            pass
+    if backup:
+        bp = proj / 'style' / 'font_strip_backup.json'
+        try:
+            ledger = json.loads(bp.read_text(encoding='utf-8')) if bp.exists() else []
+            if not isinstance(ledger, list):
+                ledger = []
+        except Exception:
+            ledger = []
+        ledger.append({'family': family, 'at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+                       'files': backup})
+        try:
+            bp.write_text(json.dumps(ledger, ensure_ascii=False), encoding='utf-8')
         except Exception:
             pass
 
@@ -152,6 +185,12 @@ def ensure(proj_dir: str) -> int:
     req = json.loads(req_path.read_text(encoding='utf-8'))
     resolved, stripped = {}, []
     for entry in req.get('fonts', []):
+        # 缺 family 的坏申请项按单款失败计（退出码非 0 进台账），不崩整个工具——
+        # 一项坏全部字体连坐丢掉才是大事
+        if not isinstance(entry, dict) or not entry.get('family'):
+            stripped.append(str(entry))
+            print('font_tool: 申请项缺 family，跳过:%r' % (entry,))
+            continue
         family = entry['family']
         try:
             ttf = _cached_ttf(entry)

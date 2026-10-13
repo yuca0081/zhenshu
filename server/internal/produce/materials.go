@@ -411,8 +411,9 @@ func (m *metClient) download(ctx context.Context, p *pipeline.Project, seg, quer
 	if err != nil {
 		return Material{}, err
 	}
-	defer tmp.Close() // 提前 return 的错误路径也要关：Windows 上句柄开着 Remove 删不掉
 	defer os.Remove(tmp.Name())
+	defer tmp.Close() // defer 后进先出：先关句柄再删文件——注册顺序反了的话 Remove
+	// 先跑而句柄还开着，Windows 上必失败，错误路径的临时文件照样漏
 	n, err := io.Copy(tmp, io.LimitReader(resp.Body, materialDownloadMax))
 	if err != nil {
 		return Material{}, fmt.Errorf("下载原图失败: %w", err)

@@ -120,10 +120,17 @@ def fontasset_css(proj, *font_stacks):
     渲染要真字体，这里两个一起给；没有产物文件就静默空串（font_tool 失败时
     家族已被剥除，不会走到这）。"""
     resolved = _load_font_assets(proj).get('resolved') or {}
-    low = str(' '.join(s for s in font_stacks if s) or '').lower()
+    # 按逗号分词精确匹配（与 Go 侧 clampFontStack 同语义）：子串匹配会在目录
+    # 扩大后误注入无关家族（如 'MiSans' 命中 'MiSans Light' 的栈）
+    used = set()
+    for stack in font_stacks:
+        for tok in str(stack or '').split(','):
+            tok = tok.strip().strip('\'"').lower()
+            if tok:
+                used.add(tok)
     out = []
     for fam, url in resolved.items():
-        if url and fam and fam.lower() in low:
+        if url and fam and fam.lower() in used:
             out.append("@font-face { font-family: '%s'; src: url('%s') format('woff2'); }" % (fam, url))
     return '\n    '.join(out)
 
