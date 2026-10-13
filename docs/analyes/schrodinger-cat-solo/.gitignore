@@ -1,0 +1,6 @@
+build/*
+!build/timeline.json
+!build/segments.json
+__pycache__/
+*.mp3
+*.wav
