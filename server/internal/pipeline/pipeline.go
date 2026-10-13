@@ -331,6 +331,7 @@ func stageStoryboard(p *Project) error {
 		if err := readJSON(out, &sb); err != nil {
 			return err
 		}
+		directorPass(p, &sb) // 导演定调（有 API key 才跑；失败降级不挡）
 		return accept(&sb)
 	}
 
@@ -345,6 +346,7 @@ func stageStoryboard(p *Project) error {
 		if gerr == nil {
 			p.Manifest("llm.usage", fmt.Sprintf("storyboard prompt=%d completion=%d tokens",
 				usage.PromptTokens, usage.CompletionTokens))
+			directorPass(p, &sb) // 导演定调（失败降级：分镜照常入库）
 			if aerr := accept(&sb); aerr == nil {
 				p.Manifest("storyboard.api", prov.Name+"/"+prov.Model)
 				return nil
@@ -407,6 +409,117 @@ func storyboardNotes(p *Project) string {
 func storyboardUserPrompt(p *Project, article string) string {
 	return storyboardBrief(article, storyboardNotes(p)) +
 		"\n\n只输出 JSON：第一个字符必须是 {、最后一个字符必须是 }，无 markdown 围栏、无注释。"
+}
+
+// ── 导演定调（storyboard 阶段第二段作业，director layer M1）──────────
+
+// directorPass 导演定调：分镜本体落库前，读全片分镜补注 arc/motifs/逐段节拍
+// （全片叙事视野的唯一生产者——分镜规划器逐段盲写，设计阶段只管视觉）。
+// 校验拒绝回喂重出（≤3 轮，同设计阶段循环）；烧尽或无 provider → 降级：
+// 清空导演字段按原分镜入库，绝不阻塞分镜落地（无 key 老路径零行为变化）。
+func directorPass(p *Project, sb *contract.Storyboard) {
+	prov, perr := llm.FromEnv(llm.RolePlan)
+	if perr != nil {
+		p.Manifest("director.plan_skipped", "无 LLM 配置，分镜不带导演统筹（全链路可正常制作）")
+		return
+	}
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		var dp contract.DirectorPlan
+		usage, gerr := prov.GenerateJSON(pctx(p),
+			"你是视频的导演统筹。只输出 JSON。", directorUserPrompt(sb, lastErr), &dp)
+		if gerr == nil {
+			if merr := applyDirectorPlan(sb, &dp); merr != nil {
+				lastErr = merr
+			} else if verr := contract.ValidateStoryboard(sb); verr != nil {
+				lastErr = verr
+			} else {
+				chapters, motifs, beats := 0, len(sb.Motifs), 0
+				if sb.Arc != nil {
+					chapters = len(sb.Arc.Chapters)
+				}
+				for _, seg := range sb.Segments {
+					beats += len(seg.Beats)
+				}
+				p.Manifest("llm.usage", fmt.Sprintf("director prompt=%d completion=%d tokens",
+					usage.PromptTokens, usage.CompletionTokens))
+				p.Manifest("director.plan", fmt.Sprintf("%d 章 / %d 母题 / %d 节拍", chapters, motifs, beats))
+				return
+			}
+		} else {
+			lastErr = gerr
+		}
+		p.Manifest("director.plan.rejected", fmt.Sprintf("第 %d 轮: %v", attempt, lastErr))
+	}
+	// 降级收尾：最后一轮可能已部分合入（合入成功但校验失败），清场再还分镜本体。
+	sb.Arc, sb.Motifs = nil, nil
+	for i := range sb.Segments {
+		sb.Segments[i].Beats = nil
+	}
+	p.Manifest("director.plan_skipped", "导演统筹三轮未过，分镜按无导演字段入库: "+FirstLine(lastErr.Error(), 120))
+}
+
+// applyDirectorPlan 把导演定调合入分镜：本体字段（旁白/时长/标题）不经导演之手，
+// 只动 arc/motifs/beats。先清场再合入——重试轮上一版的部分结果不能残留。
+func applyDirectorPlan(sb *contract.Storyboard, dp *contract.DirectorPlan) error {
+	byIdx := map[string]int{}
+	for i, seg := range sb.Segments {
+		byIdx[seg.ID] = i
+	}
+	for _, s := range dp.Segs {
+		if _, ok := byIdx[s.ID]; !ok {
+			return fmt.Errorf("导演节拍引用了不存在的段 %s", s.ID)
+		}
+	}
+	sb.Arc = dp.Arc
+	sb.Motifs = dp.Motifs
+	for i := range sb.Segments {
+		sb.Segments[i].Beats = nil
+	}
+	for _, s := range dp.Segs {
+		sb.Segments[byIdx[s.ID]].Beats = s.Beats
+	}
+	return nil
+}
+
+// directorUserPrompt 导演作业正文 + 上轮校验拒绝的回喂（修复轮）。
+func directorUserPrompt(sb *contract.Storyboard, lastErr error) string {
+	feedback := ""
+	if lastErr != nil {
+		feedback = "\n\n上一版被自动校验拒绝，逐条修正后重新输出完整 JSON：\n- " + lastErr.Error()
+	}
+	return directorBrief(sb) + feedback
+}
+
+// directorBrief 导演定调作业正文。节拍锚句要求逐字抄旁白（校验硬拦），
+// 所以这里给全文旁白而不是截断摘要。题材中立：对内容类型零预设。
+func directorBrief(sb *contract.Storyboard) string {
+	var segs strings.Builder
+	for _, seg := range sb.Segments {
+		fmt.Fprintf(&segs, "### %s（%s，约 %.0f 秒）\n旁白：%s\n画面提示：%s\n\n",
+			seg.ID, seg.Key, seg.DurationHint, seg.Narration, seg.VisualBrief)
+	}
+	return fmt.Sprintf(`你是这部视频的导演。分镜表已经把内容切好了段；你的工作不是改它，而是补上「全片视角」——观众需要的起伏弧线、能被记住的复现意象、每一段「此刻该看到什么」的节拍。这些会被注入画面生成与审片验收，写得像给剧组下指令一样具体。
+
+## 要求
+- arc.spine：全片一句话主线（观众看完能复述的那一句）
+- arc.chapters：2–5 章，segs 按段序连续铺满全部分段（不重不漏、不改顺序）；每章 tension 取 1–5；弧线必须有起伏，相邻章张力全部相同＝没有设计，会被打回
+- motifs：0–3 个贯穿母题——同一视觉意象在 ≥2 段复现（role：establish 首次立起 / callback 中途复现 / echo 结尾呼应）；不是每片都需要母题，内容节奏快、意象扁平就写 []，硬编的母题会被审片打回
+- segments[].beats：每段 2–5 条节拍，覆盖本段旁白的开头与收尾信息点。
+  quote 必须逐字抄本段旁白的原句（连续原文，一个字都不能改——锚句要用来对时间轴）；
+  expect 写「观众此刻该看到什么」（审片照它逐帧找画面），不写实现手法——怎么画是画面工程师的事
+- 全片视角：钩子怎么立住、中段怎么递进、结尾怎么收束；只盯着单段写的节拍会被打回
+
+## 分镜（%d 段 / 约 %.0f 秒）
+%s## 输出 JSON 形态
+{
+  "arc": { "spine": "一句话主线", "chapters": [ { "title": "章名", "mood": "章情绪", "tension": 3, "segs": ["seg01","seg02"] } ] },
+  "motifs": [ { "name": "母题名", "desc": "视觉形态一句话", "appearances": [ { "seg_id": "seg01", "role": "establish" } ] } ],
+  "segments": [ { "id": "seg01", "beats": [ { "quote": "旁白原句", "expect": "观众此刻该看到什么" } ] } ]
+}
+
+只输出 JSON：第一个字符必须是 {、最后一个字符必须是 }，无 markdown 围栏、无注释。`,
+		len(sb.Segments), sb.TotalHint(), segs.String())
 }
 
 // stageStyleSamples 风格样张 + 本片设计系统（LLM 作业 #2，v2 笼子二，见 design.go）：

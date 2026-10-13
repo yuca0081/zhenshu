@@ -378,6 +378,15 @@ func reviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta, keys [
 - 旁白：%s
 - 画面提示（本段该画什么，以此为准）：%s
 `, header, seg.Key, seg.Narration, seg.VisualBrief))
+	// 节拍表（导演定调产物）：frameQA 的预期考卷维度——查"该出现的没出现"
+	// （内容缺失型真 bug 静态检查全盲，只有对照预期看帧能抓，拉普拉斯妖实验实证）。
+	if len(seg.Beats) > 0 {
+		b.WriteString("- 本段节拍（导演定的逐拍画面预期）\n")
+		for _, bt := range seg.Beats {
+			fmt.Fprintf(&b, "  - 「%s」→ %s\n", bt.Quote, bt.Expect)
+		}
+		b.WriteString("  落定帧（图3）对照节拍表：此刻应有的画面主体没出现或货不对板 = high（内容缺失——代码不报错但少演了内容）\n")
+	}
 	// scene 段（P1-1）：全画幅画布构图——大片深底/留白/暗调层次是设计不是缺陷，
 	// 卡片式「空白>25%/重心失衡」判定整组关闭；canvas 像素不参与 DOM 检查。
 	if specHasScene(p, seg.ID) {

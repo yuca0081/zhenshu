@@ -31,8 +31,16 @@ import (
 
 // sceneFingerprint 段级场景文件缓存键（内容指纹）：分镜改稿后段 id 复用而
 // 旁白/画面提示已换，只看「产物存在」跳过会把旧画面静默复用进新成片。
+// 节拍表（导演定调）在场时一并入键：改节拍=改这一段的编排要求，必须过期重生成；
+// 无节拍时保持旧拼接格式——老项目指纹不变，段缓存不被无谓冲掉。
 func sceneFingerprint(seg contract.Segment) string {
-	h := sha256.Sum256([]byte(seg.Key + "\x00" + seg.Narration + "\x00" + seg.VisualBrief + "\x00" + strconv.Itoa(int(seg.DurationHint))))
+	beats := ""
+	if len(seg.Beats) > 0 {
+		if b, err := json.Marshal(seg.Beats); err == nil {
+			beats = "\x00" + string(b)
+		}
+	}
+	h := sha256.Sum256([]byte(seg.Key + "\x00" + seg.Narration + "\x00" + seg.VisualBrief + "\x00" + strconv.Itoa(int(seg.DurationHint)) + beats))
 	return hex.EncodeToString(h[:8])
 }
 
@@ -41,11 +49,13 @@ func sceneSidecarPath(p *pipeline.Project, segID string) string {
 	return p.Artifact("llm/comp-" + segID + ".scene.src")
 }
 
-// sceneSidecarFingerprint 段内容指纹 + 设计系统版本（笼子二版本戳）：
+// sceneSidecarFingerprint 段内容指纹 + 设计系统版本（笼子二版本戳）+ 导演统筹
+// 版本（弧线/母题改动 → 全段过期）：
 // 设计一改（确认重出/字段变化）designFingerprint 变 → 按旧版画的段自动过期重生成；
 // 设计未变时指纹不变，缓存照常命中。旧旁车（无冒号后缀）与新格式必然不等 → 首跑全量刷新一次。
-func sceneSidecarFingerprint(p *pipeline.Project, seg contract.Segment) string {
-	return sceneFingerprint(seg) + ":" + designFingerprint(p)
+// 无导演字段时 directorFingerprint 为空串，指纹与旧格式逐字节一致（老项目缓存不冲）。
+func sceneSidecarFingerprint(p *pipeline.Project, sb *contract.Storyboard, seg contract.Segment) string {
+	return sceneFingerprint(seg) + ":" + designFingerprint(p) + directorFingerprint(sb)
 }
 
 // designFingerprint 设计系统内容指纹（style/style_samples.json 文件字节哈希）。
@@ -125,9 +135,9 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		}
 		out := p.Artifact("llm/comp-" + seg.ID + ".json")
 		if _, err := os.Stat(out); err == nil && feedback == "" && instruction == "" {
-			// 已有产物还要过指纹关：旁车指纹（段内容+设计版本）与当前一致才复用
-			// （分镜改稿/设计改稿生效的关键闸）。
-			if fp, ferr := os.ReadFile(sceneSidecarPath(p, seg.ID)); ferr == nil && string(fp) == sceneSidecarFingerprint(p, seg) {
+			// 已有产物还要过指纹关：旁车指纹（段内容+设计版本+导演统筹）与当前一致才复用
+			// （分镜改稿/设计改稿/弧线改动生效的关键闸）。
+			if fp, ferr := os.ReadFile(sceneSidecarPath(p, seg.ID)); ferr == nil && string(fp) == sceneSidecarFingerprint(p, sb, seg) {
 				continue
 			}
 		}
@@ -149,7 +159,9 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		sceneM, compM := methodsFor(r.RootDir, seg)
 		// 附图顺序 = 样张 → 真迹关键帧 → 本段素材真图（按需申请制，无素材不带图）
 		imgs := append([]string{}, sampleImgs...)
-		style := designNoteFor(p, seg.Idx) + sampleSrc + keyframeNote(len(keyImgs))
+		// 导演统筹块（弧线定位/母题任务/邻段衔接/本段节拍）在最前：先知道本段
+		// 在全片中的角色，再进设计系统约束——无导演字段时空串零占位。
+		style := directorNoteFor(sb, seg) + designNoteFor(p, seg.Idx) + sampleSrc + keyframeNote(len(keyImgs))
 		segMats := materialsForSeg(p, seg.ID)
 		if len(segMats) > 0 {
 			imgs = append(imgs, materialDataURLs(p, segMats)...)
@@ -216,7 +228,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			return
 		}
 		// 指纹旁车紧随产物落盘（写失败按过期处理：下次重生成，宁重复不陈旧）。
-		_ = os.WriteFile(sceneSidecarPath(p, seg.ID), []byte(sceneSidecarFingerprint(p, seg)), 0o644)
+		_ = os.WriteFile(sceneSidecarPath(p, seg.ID), []byte(sceneSidecarFingerprint(p, sb, seg)), 0o644)
 		p.Manifest("llm.usage", fmt.Sprintf("scene %s prompt=%d completion=%d tokens", seg.ID, u1.PromptTokens, u1.CompletionTokens))
 		r.emit(p.ID, "progress", "compositions", fmt.Sprintf("%s 场景文件 ✓（%d 元素）", seg.ID, len(payload.Elements)))
 	}

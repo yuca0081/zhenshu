@@ -628,6 +628,13 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 	r.emit(id, "stage", "assemble", "done")
 	r.Manifest(p, "stage.finish", "assemble")
 
+	// ── 3.5 导演审片（全片连环画 × 预期考卷，见 director.go）：有导演统筹的
+	//    长片才跑；意见 high 段重出画面，随后的 check 门禁统一兜机械问题。
+	//    审片类故障降级放行（非阻塞哲学同 prereview/frameQA）──────
+	if err := r.directorReview(ctx, p); err != nil {
+		return err
+	}
+
 	// ── 4. check 门禁（自修复：报错回喂重生成 spec）────────────
 	if err := r.checkWithRepair(ctx, p, "", ""); err != nil {
 		return err

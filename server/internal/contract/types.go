@@ -28,11 +28,15 @@ func NewManuscript(content, source string) *Manuscript {
 
 // Storyboard 分镜：系统中枢数据结构（TTS 输入 / 合成物生成输入 / 重渲寻址单元）。
 type Storyboard struct {
-	TimingBasis string    `json:"timing_basis"` // narration | music
-	StyleID     string    `json:"style_id,omitempty"`
-	Plan        string    `json:"plan,omitempty"`
-	Overlay     *Overlay  `json:"overlay,omitempty"` // 跨段统一角标（P0-2，可选）
-	Segments    []Segment `json:"segments"`
+	TimingBasis string   `json:"timing_basis"` // narration | music
+	StyleID     string   `json:"style_id,omitempty"`
+	Plan        string   `json:"plan,omitempty"`
+	Overlay     *Overlay `json:"overlay,omitempty"` // 跨段统一角标（P0-2，可选）
+	// Arc/Motifs 导演统筹（导演定调产物，可选）：弧线给设计/生成/审查提供全片
+	// 视野；缺省 = 无导演字段的老项目，全链路零感知（见 ValidateStoryboard）。
+	Arc      *Arc      `json:"arc,omitempty"`
+	Motifs   []Motif   `json:"motifs,omitempty"`
+	Segments []Segment `json:"segments"`
 }
 
 type Segment struct {
@@ -45,6 +49,60 @@ type Segment struct {
 	// Chapter 跨段章节角标（overlay 启用时）：相邻同值段视为同一章；
 	// 可带英文小字：主标题|英文（竖线分隔）。
 	Chapter string `json:"chapter,omitempty"`
+	// Beats 本段节拍表（导演定调产物，可选）：旁白锚句 → 画面预期。
+	// 生成侧照此编排元素揭示，审查侧（M2 审片）照此验收内容缺失。
+	Beats []Beat `json:"beats,omitempty"`
+}
+
+// Arc 全片叙事弧线：一句话主线 + 分章张力曲线。张力 1–5 整数，审查时
+// 对照实际观感（连续多章同张力 = 弧线没有起伏 = 定调不合格）。
+type Arc struct {
+	Spine    string       `json:"spine"` // 全片一句话主线
+	Chapters []ArcChapter `json:"chapters"`
+}
+
+// ArcChapter 章：按段序连续铺满全片（ValidateStoryboard 硬校验）。
+type ArcChapter struct {
+	Title   string   `json:"title"`
+	Mood    string   `json:"mood,omitempty"` // 章情绪（克制/递进/爆发…，可缺省）
+	Tension int      `json:"tension"`        // 1–5
+	Segs    []string `json:"segs"`           // 本章覆盖的段 id（连续）
+}
+
+// Motif 贯穿母题：同一视觉意象跨段复现（首立/复现/尾呼应）。不是每片都该有——
+// 短平快题材零母题是合法选择；但声明的母题至少出现 2 次（单段出现的不是母题）。
+type Motif struct {
+	Name        string     `json:"name"`
+	Desc        string     `json:"desc"` // 视觉形态一句话
+	Appearances []MotifApp `json:"appearances"`
+}
+
+// MotifApp 母题的一次出场。
+type MotifApp struct {
+	SegID string `json:"seg_id"`
+	Role  string `json:"role"` // establish 首次立起 | callback 中途复现 | echo 结尾呼应
+}
+
+// Beat 段内节拍：锚句必须逐字来自本段旁白（防导演幻觉锚句——审查时还要用
+// 词级时间戳把锚句换算成精确时刻）。Expect 写「观众此刻该看到什么」（验收
+// 口径），不写实现手法——怎么画是 scenegen 的事。
+type Beat struct {
+	Quote  string `json:"quote"`
+	Expect string `json:"expect"`
+}
+
+// DirectorPlan 导演定调作业的输出形态（独立于 Storyboard，合入见
+// pipeline.applyDirectorPlan——旁白/时长等分镜本体字段不经导演之手）。
+type DirectorPlan struct {
+	Arc    *Arc               `json:"arc,omitempty"`
+	Motifs []Motif            `json:"motifs,omitempty"`
+	Segs   []DirectorSegBeats `json:"segments"`
+}
+
+// DirectorSegBeats 逐段节拍（id 必须是已有段）。
+type DirectorSegBeats struct {
+	ID    string `json:"id"`
+	Beats []Beat `json:"beats"`
 }
 
 // Overlay 跨段统一角标（HUD）：数据在分镜层（跨段天然一致），渲染时 assemble
@@ -108,6 +166,10 @@ func ValidateStoryboard(sb *Storyboard) error {
 	if sb.TotalHint() > MaxDurationSec {
 		return fmt.Errorf("总时长 %.0fs 超过上限 %ds（需压缩取舍并与用户协商）", sb.TotalHint(), MaxDurationSec)
 	}
+	// 导演统筹字段（全部可选；出现才校验——老项目零字段零感知）。
+	if verr := validateDirector(sb); verr != nil {
+		return verr
+	}
 	if sb.Overlay != nil {
 		if !sb.Overlay.Enabled {
 			return nil // 配了但未启用 = 整体关闭，不再校验内部字段
@@ -125,6 +187,115 @@ func ValidateStoryboard(sb *Storyboard) error {
 		}
 	}
 	return nil
+}
+
+// validateDirector 导演统筹字段校验（出现才查，老项目零字段零感知）：
+// 弧线章必须按段序连续铺满全片、弧线在场则每段必须有节拍表、节拍锚句必须
+// 逐字来自本段旁白（防导演幻觉锚句——锚句是 M2 审片换算时刻的定位键）、
+// 母题出场合法。子串比对忽略空白差异（旁白排版空格不构成否决锚句的理由）。
+func validateDirector(sb *Storyboard) error {
+	if sb.Arc != nil {
+		if strings.TrimSpace(sb.Arc.Spine) == "" {
+			return fmt.Errorf("arc.spine 为空（全片主线一句话不能缺）")
+		}
+		if n := len(sb.Arc.Chapters); n < 2 || n > 6 {
+			return fmt.Errorf("arc.chapters %d 章越界（2–6：一章不叫弧线，太多章观众记不住）", n)
+		}
+		var flat []string
+		inChapter := map[string]bool{}
+		for i, ch := range sb.Arc.Chapters {
+			if strings.TrimSpace(ch.Title) == "" {
+				return fmt.Errorf("arc.chapters[%d].title 为空", i)
+			}
+			if ch.Tension < 1 || ch.Tension > 5 {
+				return fmt.Errorf("arc.chapters[%d]（%s）tension=%d 越界（1–5）", i, ch.Title, ch.Tension)
+			}
+			if len(ch.Segs) == 0 {
+				return fmt.Errorf("arc.chapters[%d]（%s）没有覆盖任何段", i, ch.Title)
+			}
+			for _, id := range ch.Segs {
+				if inChapter[id] {
+					return fmt.Errorf("段 %s 出现在多个章里（章划分不能重叠）", id)
+				}
+				inChapter[id] = true
+				flat = append(flat, id)
+			}
+		}
+		for i, seg := range sb.Segments {
+			if i >= len(flat) {
+				return fmt.Errorf("arc.chapters 没有铺满全片：段 %s 不属于任何章", seg.ID)
+			}
+			if flat[i] != seg.ID {
+				return fmt.Errorf("arc.chapters 必须按段序连续铺满全片：第 %d 个应是 %s，得到 %s", i+1, seg.ID, flat[i])
+			}
+		}
+		if len(flat) > len(sb.Segments) {
+			return fmt.Errorf("arc.chapters 引用了不存在的段（章内 %d 段 > 全片 %d 段）", len(flat), len(sb.Segments))
+		}
+	}
+	for i, seg := range sb.Segments {
+		if sb.Arc != nil && len(seg.Beats) < 2 {
+			return fmt.Errorf("段 %d（%s）节拍表不足 2 条（弧线在场时逐段必须有节拍）", i+1, seg.ID)
+		}
+		if len(seg.Beats) > 6 {
+			return fmt.Errorf("段 %d（%s）节拍 %d 条超上限（≤6：节拍是骨架不是逐句字幕）", i+1, seg.ID, len(seg.Beats))
+		}
+		for j, b := range seg.Beats {
+			if strings.TrimSpace(b.Quote) == "" || strings.TrimSpace(b.Expect) == "" {
+				return fmt.Errorf("段 %d（%s）节拍 %d 的 quote/expect 为空", i+1, seg.ID, j+1)
+			}
+			if !containsIgnoreSpaces(seg.Narration, b.Quote) {
+				return fmt.Errorf("段 %d（%s）节拍 %d 锚句不是旁白原文（必须逐字抄本段旁白）：%s", i+1, seg.ID, j+1, b.Quote)
+			}
+		}
+	}
+	if n := len(sb.Motifs); n > 3 {
+		return fmt.Errorf("motifs %d 个超上限（≤3：母题多了观众一个都记不住）", n)
+	}
+	segIDs := map[string]bool{}
+	for _, s := range sb.Segments {
+		segIDs[s.ID] = true
+	}
+	for i, m := range sb.Motifs {
+		if strings.TrimSpace(m.Name) == "" || strings.TrimSpace(m.Desc) == "" {
+			return fmt.Errorf("motifs[%d] name/desc 为空", i)
+		}
+		if len(m.Appearances) < 2 {
+			return fmt.Errorf("母题「%s」只出场 %d 次（≥2 才算贯穿，单段出现的不是母题）", m.Name, len(m.Appearances))
+		}
+		for _, ap := range m.Appearances {
+			switch ap.Role {
+			case "establish", "callback", "echo":
+			default:
+				return fmt.Errorf("母题「%s」出场角色 %q 非法（establish|callback|echo）", m.Name, ap.Role)
+			}
+			if !segIDs[ap.SegID] {
+				return fmt.Errorf("母题「%s」引用了不存在的段 %s", m.Name, ap.SegID)
+			}
+		}
+	}
+	return nil
+}
+
+// containsIgnoreSpaces 子串比对忽略空白差异。
+func containsIgnoreSpaces(hay, needle string) bool {
+	if strings.Contains(hay, needle) {
+		return true
+	}
+	if needle == "" {
+		return false
+	}
+	return strings.Contains(stripSpaces(hay), stripSpaces(needle))
+}
+
+func stripSpaces(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\t', '\n', '\r':
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // StyleSamples 风格样张 + 本片设计系统（plan-v2 §4 笼子二）：唯一必须用户确认的前置件

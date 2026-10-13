@@ -60,6 +60,7 @@ func designBrief(p *Project, sb *contract.Storyboard) string {
 %s
 ## 全部分镜（设计必须从这些内容里长出来）
 %s
+%s
 ## 设计系统六件套（缺一件会被校验打回）
 
 ### 1. concept 概念
@@ -106,7 +107,7 @@ func designBrief(p *Project, sb *contract.Storyboard) string {
 - 不用图片/网络资源，纯 CSS；多张样张构图版式必须明显不同，每张 desc 写明用了哪个版式；
 - 画布硬约束（违反必被裁切）：每张 html 是完整自包含文档，画布固定 960×540：
   html,body{width:960px;height:540px;overflow:hidden}；内容全部落在画布内，不依赖滚动；
-  禁 vw/vh；大字标题留边距；每张 html ≤2000 字符%s`, briefBlock(p), storyboardDigest(sb), FontCatalogList(), notes)
+  禁 vw/vh；大字标题留边距；每张 html ≤2000 字符%s`, briefBlock(p), storyboardDigest(sb), directorDesignBlock(sb), FontCatalogList(), notes)
 }
 
 // briefBlock 强参考注入块（v3 §4.5）：简报存在时给设计阶段立「用户选定的硬要求」。
@@ -163,6 +164,37 @@ func storyboardDigest(sb *contract.Storyboard) string {
 		fmt.Fprintf(&b, "- %s（%s，约%.0f 秒）旁白：%s\n  画面提示：%s\n",
 			seg.ID, seg.Key, seg.DurationHint, TruncRunes(seg.Narration, 90), TruncRunes(seg.VisualBrief, 60))
 	}
+	return b.String()
+}
+
+// directorDesignBlock 导演统筹注入（设计侧）：叙事弧线/母题给设计系统当呼应对象
+// ——母题的视觉形态可进 concept/贯穿装置，各章情绪差异可进双皮肤 skin_rule。
+// 无导演字段返回空串（老项目零感知）。
+func directorDesignBlock(sb *contract.Storyboard) string {
+	if sb.Arc == nil && len(sb.Motifs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## 导演统筹（本片叙事结构——设计系统要呼应它）\n")
+	if sb.Arc != nil {
+		fmt.Fprintf(&b, "- 主线：%s\n- 弧线：", sb.Arc.Spine)
+		for i, ch := range sb.Arc.Chapters {
+			if i > 0 {
+				b.WriteString(" → ")
+			}
+			fmt.Fprintf(&b, "「%s」%s（张力 %d/5，%s–%s）",
+				ch.Title, ch.Mood, ch.Tension, ch.Segs[0], ch.Segs[len(ch.Segs)-1])
+		}
+		b.WriteString("\n")
+	}
+	for _, m := range sb.Motifs {
+		roles := make([]string, len(m.Appearances))
+		for i, ap := range m.Appearances {
+			roles[i] = ap.SegID + "(" + ap.Role + ")"
+		}
+		fmt.Fprintf(&b, "- 母题「%s」：%s——出场 %s\n", m.Name, m.Desc, strings.Join(roles, "、"))
+	}
+	b.WriteString("- 设计侧动作：母题的视觉形态写进 concept 或贯穿装置（device）；各章情绪差异可用双皮肤 skin_rule 承接；张力是节奏不是图形，别把弧线画进画面\n\n")
 	return b.String()
 }
 
