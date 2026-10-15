@@ -20,8 +20,9 @@ import (
 	"webpage-video-agent/server/internal/stylelib"
 )
 
-// styleBudget ②的回合预算（§5.2：②≤12）。
-const styleBudget = 12
+// styleBudget ②的回合预算（§5.2 基线 ②≤12；用户拍板放宽到 30——样张渲染
+// 一张一轮，探索+衍生+3 张样张+交稿的链不宽裕）。预算不进提示词。
+const styleBudget = 30
 
 // styleSampleMax 样张上限（与 contract.StyleSamples 契约一致）。
 const styleSampleMax = 3
@@ -60,6 +61,9 @@ func runStyleStation(ctx context.Context, p *pipeline.Project, d Deps) error {
 
 func styleKickoff(p *pipeline.Project) string {
 	k := "开工。用 get_script 读取口播稿，然后开始探索风格库。"
+	if idea := noteFile(p, IdeaFile); idea != "" {
+		k += "\n用户的想法（导演意图参考——风格气质可以从中取材，与口播稿冲突时以稿为准）：" + idea
+	}
 	if notes := noteFile(p, "input/style_notes.txt"); notes != "" {
 		k += "\n用户对本片风格的要求（优先满足）：" + notes
 	}
@@ -463,7 +467,18 @@ func (r *styleRun) registerStyleTool() Tool {
 				Facets: &stylelib.StyleFacets{Mood: in.Mood, Tone: in.Tone, Density: in.Density},
 			})
 			if err != nil {
-				return Observation{Text: "登记被拒：" + err.Error()}
+				msg := "登记被拒：" + err.Error()
+				// 词表相关的拒绝把现有词表列出来——盲猜词表名是死循环的根源
+				if strings.Contains(msg, "词表") && r.d.Lib != nil {
+					if vocab := r.d.Lib.VocabList(); len(vocab) > 0 {
+						names := make([]string, 0, len(vocab))
+						for _, e := range vocab {
+							names = append(names, e.Name)
+						}
+						msg += "。当前词表收了这些风格名（任选其一或衍生）：" + strings.Join(names, "、")
+					}
+				}
+				return Observation{Text: msg}
 			}
 			r.registered = st.ID
 			r.p.Manifest("prep.style_registered", st.ID+" "+st.Name)

@@ -89,6 +89,20 @@ func main() {
 	pipeline.PrepFn = func(ctx context.Context, p *pipeline.Project) error {
 		return prep.Run(ctx, p, prepDeps)
 	}
+	// 准备阶段异步运行器（想法页签/对话入口共用）：终态回写状态 + 落聊天框
+	preps := prep.NewRunner(cfg.DataDir, prepDeps)
+	preps.OnDone = func(id string, err error) {
+		pp := pipeline.NewProject(cfg.DataDir, id)
+		switch {
+		case err == nil:
+			agent.WriteProjectStatus(cfg.DataDir, st, id, "style")
+			ag.PostNotice(id, "✅ 准备阶段完成（"+prep.Summary(pp)+"）——在「终审」页签打包确认后即可开工")
+		case errors.Is(err, context.Canceled):
+			ag.PostNotice(id, "⏹ 准备阶段已取消，可在「想法」页签随时重来")
+		default:
+			ag.PostNotice(id, "❌ 准备阶段没能跑完："+pipeline.FirstLine(err.Error(), 160)+"——「想法」页签可重试，或在对话里让我接着修")
+		}
+	}
 	// 会话密钥与初始管理员：SESSION_SECRET > API_TOKEN 派生 > 随机（开放模式）。
 	// 仅鉴权启用时引导建管理员——开放模式没有登录，建了也是死数据。
 	sessionSecret, authActive := auth.DeriveSecret(os.Getenv("SESSION_SECRET"), os.Getenv("API_TOKEN"))
@@ -98,7 +112,7 @@ func main() {
 		}
 	}
 	srv := &api.Server{
-		DataDir: cfg.DataDir, RootDir: root, Store: st, Hub: hub, Agent: ag, Producer: producer, Lib: lib, Refs: refs,
+		DataDir: cfg.DataDir, RootDir: root, Store: st, Hub: hub, Agent: ag, Producer: producer, Preps: preps, Lib: lib, Refs: refs,
 		APIToken:      os.Getenv("API_TOKEN"),
 		SessionSecret: sessionSecret, AuthActive: authActive,
 	}

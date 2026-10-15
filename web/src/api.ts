@@ -91,6 +91,11 @@ export const api = {
   // 准备阶段三工件打包视图（终审页签；exists=false = 非新路径项目）
   prep: (id: string) => req<PrepView>(`/api/projects/${id}/prep`),
 
+  // 启动/取消三工位链（想法页签；异步跑，进度走 SSE 与轮询）
+  runPrep: (id: string, idea: string, force = false) =>
+    post<{ ok: boolean; started: boolean }>(`/api/projects/${id}/prep/run`, { idea, force }),
+  cancelPrep: (id: string) => post<{ ok: boolean }>(`/api/projects/${id}/prep/cancel`),
+
   // 打包终审确认（全流程唯一人工门）：文字稿+风格包+分镜稿一次确认
   confirmPrep: (id: string) => post<{ ok: boolean; direction: string }>(`/api/projects/${id}/prep/confirm`),
 

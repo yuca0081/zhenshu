@@ -163,7 +163,8 @@ async function loadProject(id: string) {
     style.value = st
     manuscript.value = ms
     audioMeta.value = am
-    prep.value = pp && pp.exists ? pp : null
+    // exists=false 也要保留：running/legacy/idea 是「想法」页签的状态源
+    prep.value = pp
   } finally {
     if (inflight.get(key) === seq) inflight.delete(key)
   }
@@ -436,6 +437,9 @@ const autoTab = computed<TabID>(() => {
   const v = view.value
   if (!v) return 'manuscript'
   if (v.has_video || v.producing) return 'video'
+  // 准备链在跑 / 白板新项目（无文稿无工件非 legacy）→ 停在「想法」启动页
+  if (prep.value?.running) return 'idea'
+  if (prep.value && !prep.value.exists && !prep.value.legacy && !v.gates.manuscript) return 'idea'
   // 打包终审（全流程唯一人工门）：三工件出齐未确认 → 停在终审
   if (prep.value?.exists && prep.value.script && prep.value.stylepack && prep.value.draft && !prep.value.confirmed) return 'review'
   if (v.gates.style_draft) return 'style'
@@ -485,6 +489,14 @@ const stageSummary = computed(() => {
   if (!states.some(Boolean)) return null
   return stageOrder.map((s, i) => ({ key: s, state: states[i] }))
 })
+
+// 准备工位各站实时态（SSE stage 事件：prep/script|style|storyboard → running/done/error）
+// → 想法页签的「进行到哪一步」显示
+const prepProgress = computed(() => ({
+  script: stageState.value['prep/script'] ?? '',
+  style: stageState.value['prep/style'] ?? '',
+  storyboard: stageState.value['prep/storyboard'] ?? '',
+}))
 
 // 确认风格（唯一必须用户拍板的门）：失败弹错但仍然刷新——把服务端的真实状态拉回来，
 // 不能让前端停在「已确认」的假象里
@@ -549,11 +561,12 @@ async function confirmStyle() {
               :prep="prep"
               :stage-summary="stageSummary" :video-id="current" :audio-meta="audioMeta"
               :picked-idx="chatRefs.map(r => r.idx)" :video-rev="videoRev" :progress-line="progressLine"
-              :activity="activity" :agent-busy="turnActive"
+              :activity="activity" :agent-busy="turnActive" :prep-progress="prepProgress"
               @tab="setTab" @go-tab="setTab"
               @saved="refresh" @chat-sent="markBusy"
               @confirm-style="confirmStyle"
               @confirm-prep="refresh"
+              @prep-refresh="refresh"
               @seg="addRef"
               @pick-time="addTimeRef"
               @cancel="async () => { if (current) { await api.cancel(current).catch(() => {}); refresh() } }"

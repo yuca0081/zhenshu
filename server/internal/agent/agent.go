@@ -91,6 +91,9 @@ type State struct {
 	// Prep 准备工位三工件就绪态（scripts/script.json 在 = 项目走新路径）：
 	// 摘要注入让模型答「现在风格包/分镜稿是什么状态」不用猜，反馈路由据此选 target。
 	Prep string
+	// Topic 一句话主题（project.json）：主题模式项目的判定依据——没有文稿但有
+	// 主题时，准备工位①可以从主题起步（想法页签/对话都走这条）。
+	Topic string
 	// 当前设置（project.json 事实源）：摘要注入让模型答「现在什么音色/配乐」
 	// 不用拿 set_* 空参数当查询用；StyleID 含被选库内风格（可能尚未出样张）。
 	Voice      string // 完整音色 id（空 = 引擎默认）
@@ -166,9 +169,11 @@ func (a *Agent) State(id string) State {
 			BiSubtitle bool   `json:"bi_subtitle"`
 			StyleID    string `json:"style_id"`
 			StylePack  string `json:"stylepack_id"`
+			Topic      string `json:"topic"`
 		}
 		if json.Unmarshal(b, &meta) == nil {
 			st.Name = meta.Name
+			st.Topic = strings.TrimSpace(meta.Topic)
 			st.Voice = strings.TrimSpace(meta.Voice)
 			st.BGM = strings.TrimSpace(meta.BGM)
 			if meta.SFX != nil {

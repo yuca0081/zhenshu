@@ -98,6 +98,12 @@ var vocabIDRe = regexp.MustCompile(`[^a-z0-9_]+`)
 func (l *Library) VocabCreate(e VocabEntry) (string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.vocabCreateLocked(e)
+}
+
+// vocabCreateLocked 同 VocabCreate，锁由调用方持有（Derive 等复合操作在持锁
+// 事务内自动种词用——sync.Mutex 不可重入，这里绝不能再拿锁）。
+func (l *Library) vocabCreateLocked(e VocabEntry) (string, error) {
 	v, err := l.LoadVocab()
 	if err != nil {
 		return "", err
@@ -128,6 +134,7 @@ func (l *Library) VocabCreate(e VocabEntry) (string, error) {
 	if err := l.cat.PutVocab(e); err != nil {
 		return "", err
 	}
+	v.Entries[e.ID] = e // 回填内存副本，同批多次种词互相可见
 	return id, nil
 }
 

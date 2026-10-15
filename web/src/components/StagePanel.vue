@@ -6,6 +6,7 @@ import type { ActivityEvent, AudioMeta, Manuscript, PrepView, ProjectView, Story
 import ManuscriptPane from './ManuscriptPane.vue'
 import StylePane from './StylePane.vue'
 import PrepPane from './PrepPane.vue'
+import IdeaPane from './IdeaPane.vue'
 import VideoPane from './VideoPane.vue'
 import ActivityFeed from './ActivityFeed.vue'
 
@@ -28,6 +29,8 @@ const props = defineProps<{
   progressLine: string
   activity: ActivityEvent[]
   agentBusy: boolean // 对话栏 Agent 轮进行中（文稿页签据此锁编辑区）
+  // 准备工位各站实时态（App 从 SSE stage 事件取，想法页签的进行中显示用）
+  prepProgress: { script?: string; style?: string; storyboard?: string }
 }>()
 const emit = defineEmits<{
   tab: [t: TabID]
@@ -41,19 +44,18 @@ const emit = defineEmits<{
   'chat-sent': []
   'go-tab': [t: TabID]
   'cancel-agent': []
+  'prep-refresh': []
 }>()
 
 // 页签状态灯（title 悬停说明）：绿=这关过了；黄=还没弄好（没存文稿/没生成分镜/
 // 风格没确认）；琥珀描边=成片生成后又改过；视频页蓝=制作中。
 // 段数/已确认之类的小字标已撤——状态看灯就够，细节在悬停说明和面板里。
+// 想法页签：非 legacy 项目常驻（准备工位的启动页，完成后留作「换个想法重跑」入口）。
+const showIdea = computed(() => !!props.prep && !props.prep.legacy)
 const tabs = computed(() => {
-  const base = [
-    { id: 'manuscript', label: '文稿' },
-    { id: 'storyboard', label: '分镜' },
-    { id: 'style', label: '风格' },
-  ] as const
-  // 终审页签：准备工位三工件（新路径项目）才有——打包终审是全流程唯一人工门
-  const list: { id: TabID; label: string }[] = [...base]
+  const list: { id: TabID; label: string }[] = []
+  if (showIdea.value) list.push({ id: 'idea', label: '想法' })
+  list.push({ id: 'manuscript', label: '文稿' }, { id: 'storyboard', label: '分镜' }, { id: 'style', label: '风格' })
   if (props.prep?.exists) list.push({ id: 'review', label: '终审' })
   list.push({ id: 'video', label: '视频' })
   return list
@@ -64,6 +66,14 @@ function tabState(id: TabID): { cls: string[]; title: string; label: string } {
   if (!v) return { cls: [], title: '', label: '' }
   const stale = v.video_stale
   switch (id) {
+    case 'idea':
+      return {
+        cls: [props.prep?.running ? 'run' : props.prep?.exists ? 'ok' : 'wait'],
+        title: props.prep?.running
+          ? '准备阶段进行中（文稿→风格→分镜）'
+          : props.prep?.exists ? '准备工件已出——这里可以换个想法重跑' : '说一句话想法（可空），让 AI 自动跑完文稿→风格→分镜',
+        label: '',
+      }
     case 'manuscript':
       return {
         cls: [v.gates.manuscript ? 'ok' : 'wait', stale.manuscript ? 'stale' : ''].filter(Boolean),
@@ -230,9 +240,14 @@ async function redoFull() {
       <template v-if="view">
         <!-- KeepAlive 要求恰好一个子节点：内部不许放注释/多根（v-if 链整体算一个） -->
         <KeepAlive>
+          <IdeaPane
+            v-if="tab === 'idea'"
+            :project-id="videoId" :prep="prep" :progress="prepProgress"
+            @go-tab="t => emit('go-tab', t)" @refresh="emit('prep-refresh')"
+          />
           <ManuscriptPane
-            v-if="tab === 'manuscript'"
-            :project-id="videoId" :topic="view.topic" :manuscript="manuscript"
+            v-else-if="tab === 'manuscript'"
+            :project-id="videoId" :manuscript="manuscript"
             :video-stale="view.video_stale.manuscript" :agent-busy="agentBusy"
             @saved="emit('saved')" @cancel-agent="emit('cancel-agent')"
           />

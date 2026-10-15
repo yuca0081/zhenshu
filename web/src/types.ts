@@ -53,8 +53,8 @@ export interface ProjectView {
   last_produce?: { event: string; ts: string } | null
 }
 
-// 工作区中央页签（文稿/分镜/风格/终审/视频——准备阶段三工位出齐后「终审」亮起）
-export type TabID = 'manuscript' | 'storyboard' | 'style' | 'review' | 'video'
+// 工作区中央页签（想法/文稿/分镜/风格/终审/视频——「想法」是准备工位的启动页）
+export type TabID = 'idea' | 'manuscript' | 'storyboard' | 'style' | 'review' | 'video'
 
 // ── 准备阶段三工件（GET /prep；docs/prep-agents-design.md）──────
 export interface PrepSentence { id: string; text: string }
@@ -88,6 +88,9 @@ export interface PrepDraftSeg {
 export interface PrepView {
   exists: boolean // scripts/script.json 在 = 项目走准备工位（终审页签的显示条件）
   confirmed: boolean // 打包终审是否已确认（=开工硬门）
+  running?: boolean // 三工位链在跑（想法页签的进度态）
+  legacy?: boolean // 老项目（legacy 分镜已在，不走准备工位——隐藏想法页签）
+  idea?: string // 已落盘的用户想法（回填文本框）
   style_name?: string
   script?: PrepScript
   stylepack?: {

@@ -74,6 +74,32 @@ func (l *Library) Derive(in DeriveInput) (*Style, error) {
 		return nil, fmt.Errorf("风格库读取失败（不写入）: %w", err)
 	}
 	s.ID = newID(styles)
+	// 标签自动种词：词表冷启动为空表，「自定义登记的标签必须在词表」会把自定义
+	// 路径整个堵死（模型瞎猜词表名永被拒）。词表是策展登记册不是闸门——缺的
+	// 标签种进去（「标签必在词表」不变量靠生长维持，词表页可修剪），登记畅通。
+	if v, verr := l.LoadVocab(); verr == nil {
+		seed := func(tag *string) {
+			t := strings.TrimSpace(*tag)
+			if t == "" {
+				return
+			}
+			if hit, ok := v.Find(t); ok {
+				*tag = hit.ID // 归一化命中：换正式词条 id
+				return
+			}
+			if id, err := l.vocabCreateLocked(VocabEntry{
+				Name:  t,
+				Brief: "风格工位登记「" + name + "」时收入",
+			}); err == nil && id != "" {
+				*tag = id
+			}
+			// 种词失败按原值走 validateWrite——要么碰巧在词表要么被拒，不静默放行
+		}
+		seed(&s.Tags.Main)
+		for i := range s.Tags.Aux {
+			seed(&s.Tags.Aux[i])
+		}
+	}
 	s.Signatures = renumberSigs(s.Signatures)
 	if err := l.validateWrite(&s); err != nil {
 		return nil, err

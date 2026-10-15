@@ -42,6 +42,7 @@ type Server struct {
 	Hub      *events.Hub
 	Agent    *agent.Agent
 	Producer *produce.Runner
+	Preps    *prep.Runner // 准备阶段运行器（想法页签/对话启动三工位链；nil = 未接线）
 	Lib      *stylelib.Library
 	Refs     *styleref.Store
 
@@ -106,6 +107,9 @@ func (s *Server) Router() *gin.Engine {
 	// 准备阶段三工件（prep-agents-design）：打包终审视图与确认门
 	api.GET("/projects/:id/prep", s.prepView)
 	api.POST("/projects/:id/prep/confirm", s.confirmPrep)
+	// 想法页签：启动/取消三工位链（异步，SSE 播报进度）
+	api.POST("/projects/:id/prep/run", s.runPrep)
+	api.POST("/projects/:id/prep/cancel", s.cancelPrep)
 	api.POST("/projects/:id/chat", s.chat)
 	api.POST("/projects/:id/chat/cancel", s.cancelChat)
 	api.POST("/draft/manuscript", s.draftManuscript)
@@ -995,6 +999,63 @@ func (s *Server) confirmStyle(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true, "direction": ss.Direction})
 }
 
+// runPrep 启动三工位链（想法页签「自动完成」按钮 / 对话入口同路）：
+// 异步后台跑，进度走 SSE（stage prep/*），完成/失败经 OnDone 落聊天框。
+func (s *Server) runPrep(c *gin.Context) {
+	id := c.Param("id")
+	if s.Preps == nil {
+		c.JSON(500, gin.H{"error": "准备运行器未接线"})
+		return
+	}
+	if _, err := os.Stat(filepath.Join(s.DataDir, "projects", id)); err != nil {
+		c.JSON(404, gin.H{"error": "项目不存在"})
+		return
+	}
+	if s.Producer != nil && s.Producer.IsRunning(id) {
+		c.JSON(409, gin.H{"error": "制作运行中，先等本条完成再跑准备工位"})
+		return
+	}
+	var in struct {
+		Idea  string `json:"idea"`
+		Force bool   `json:"force"`
+	}
+	_ = c.ShouldBindJSON(&in)
+	started, err := s.Preps.Start(id, in.Idea, in.Force)
+	if err != nil {
+		switch {
+		case errors.Is(err, prep.ErrPrepRunning):
+			c.JSON(409, gin.H{"error": "准备阶段已在运行中"})
+		case errors.Is(err, prep.ErrPrepLegacy):
+			c.JSON(400, gin.H{"error": err.Error()})
+		case errors.Is(err, prep.ErrPrepNoLLM):
+			c.JSON(400, gin.H{"error": err.Error()})
+		default:
+			c.JSON(409, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	if !started {
+		c.JSON(200, gin.H{"ok": true, "started": false})
+		return
+	}
+	note := "准备阶段已启动：文稿 → 风格 → 分镜，进度在「想法」页签与事件流。"
+	if in.Idea != "" {
+		note = "准备阶段已带着你的想法启动：文稿 → 风格 → 分镜，完成后去「终审」页签确认。"
+	}
+	s.Hub.Emit(id, "msg", "", note)
+	c.JSON(202, gin.H{"ok": true, "started": true})
+}
+
+// cancelPrep 取消在跑的准备链（工位回合边界退出；终态经 OnDone 落聊天框）。
+func (s *Server) cancelPrep(c *gin.Context) {
+	id := c.Param("id")
+	if s.Preps == nil || !s.Preps.Cancel(id) {
+		c.JSON(409, gin.H{"error": "没有正在运行准备阶段"})
+		return
+	}
+	c.JSON(202, gin.H{"ok": true})
+}
+
 // ── 准备阶段：打包终审（全流程唯一人工门，prep-agents-design §2）──────
 
 // prepView 三工件打包视图（终审页签数据源）：文字稿（句编号+事实清单）、
@@ -1005,12 +1066,25 @@ func (s *Server) prepView(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// 想法页签的状态三件（exists=false 的早返回也要带：链在跑时页签全靠它）
+	state := gin.H{
+		"running": s.Preps != nil && s.Preps.IsRunning(p.ID),
+		"legacy":  prep.LegacyProject(p),
+		"idea":    strings.TrimSpace(readFileLoose(p.Artifact("input/prep_idea.txt"))),
+	}
 	script, err := prep.LoadScript(p)
 	if err != nil {
-		c.JSON(200, gin.H{"exists": false})
+		out := gin.H{"exists": false, "confirmed": false}
+		for k, v := range state {
+			out[k] = v
+		}
+		c.JSON(200, out)
 		return
 	}
 	out := gin.H{"exists": true, "confirmed": false}
+	for k, v := range state {
+		out[k] = v
+	}
 	if sp, err := prep.LoadStylePack(p); err == nil {
 		confirmed := sp.Confirmed
 		var ss contract.StyleSamples
@@ -1049,6 +1123,12 @@ func (s *Server) prepView(c *gin.Context) {
 		return err == nil
 	}()
 	c.JSON(200, out)
+}
+
+// readFileLoose 宽松读：读失败返回空串（想法未落盘是常态，不是错误）。
+func readFileLoose(path string) string {
+	b, _ := os.ReadFile(path)
+	return string(b)
 }
 
 // confirmPrep 打包终审确认（全流程唯一人工门）：文字稿+风格包+分镜稿一次确认。

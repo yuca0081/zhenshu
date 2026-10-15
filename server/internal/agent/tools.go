@@ -110,19 +110,21 @@ var tools = []tool{
 	{
 		def: toolDef("draft_storyboard", "根据文稿生成分镜表（LLM 作业，自动完成）", nil),
 		gate: func(s State) string {
-			if !s.HasManuscript {
-				return "还没有文稿，无法出分镜"
+			// 主题模式放行：没文稿但有一句话主题时，准备工位①从主题起步
+			if !s.HasManuscript && s.Topic == "" {
+				return "还没有文稿也没有主题——补文稿（粘贴/AI 起草），或确认建项目时给了主题"
 			}
 			return ""
 		},
 		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
-			// 新路径（准备工位产物在）：分镜稿由③产出，不走 legacy 单发
-			if prep.HasArtifact(p, prep.StationScript) {
+			// 新路径：非 legacy 项目一律走准备工位链（缺哪站跑哪站）——
+			// 主题项目从①起步，已有文字稿的从缺的工位续跑
+			if !prep.LegacyProject(p) {
 				if prep.HasArtifact(p, prep.StationStoryboard) {
 					return "分镜稿已出（准备工位产物）。要改结构/场景直接说要求，我走反馈重跑；开工前在「终审」页签确认。"
 				}
 				if err := prep.RunStrict(ctx, p, a.prepDeps()); err != nil {
-					return "分镜生成失败：" + err.Error()
+					return "准备阶段失败：" + err.Error()
 				}
 				dr, derr := prep.LoadDraft(p)
 				if derr != nil {
@@ -132,7 +134,8 @@ var tools = []tool{
 				if a.OnEvent != nil {
 					a.OnEvent(p.ID, "storyboard", "")
 				}
-				return fmt.Sprintf("分镜稿已产出：%d 段 / 约 %.0f 秒。等用户在「终审」页签打包确认后才能开工", len(dr.Segments), dr.TotalHint())
+				return fmt.Sprintf("准备阶段完成：%s。分镜稿 %d 段 / 约 %.0f 秒。等用户在「终审」页签打包确认后才能开工",
+					prep.Summary(p), len(dr.Segments), dr.TotalHint())
 			}
 			if err := pipeline.Run(ctx, p, "storyboard"); err != nil {
 				return "分镜生成失败：" + err.Error()
@@ -584,8 +587,8 @@ var tools = []tool{
 			if s.Producing {
 				return "制作运行中，先等本条完成"
 			}
-			if !s.HasManuscript {
-				return "还没有文稿，无处重跑"
+			if !s.HasManuscript && s.Topic == "" {
+				return "还没有文稿/主题，无处重跑"
 			}
 			return ""
 		},
@@ -597,7 +600,7 @@ var tools = []tool{
 			if err := json.Unmarshal([]byte(args), &in); err != nil {
 				return "参数解析失败：" + err.Error()
 			}
-			if !prep.HasArtifact(p, prep.StationScript) {
+			if !prep.HasArtifact(p, prep.StationScript) && prep.LegacyProject(p) {
 				return "这个项目没走准备工位（无文字稿工件）——改稿用 save_manuscript + draft_storyboard 老路径"
 			}
 			return a.rerunPrep(ctx, p, strings.TrimSpace(in.Target), strings.TrimSpace(in.Note))
