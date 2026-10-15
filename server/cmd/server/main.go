@@ -47,8 +47,24 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// 风格库媒体后端：MinIO（配了且 PG 已接；连不上 fail-fast，媒体正本在对象存储）
+	// 或本地目录（现状行为，demo/无 PG 环境用）。docs/style-library-cloud-storage.md。
+	var media stylelib.MediaStore
+	if cfg.MinIO.Endpoint != "" {
+		if st.DB() == nil {
+			log.Printf("⚠  MINIO_* 已配但 PG 未接（风格库账本在内存/文件）——MinIO 无从挂靠，忽略之，媒体走本地目录")
+		} else {
+			m, err := stylelib.NewMinioMedia(cfg.MinIO.Endpoint, cfg.MinIO.AccessKey, cfg.MinIO.SecretKey,
+				cfg.MinIO.Bucket, cfg.MinIO.Secure, cfg.DataDir)
+			if err != nil {
+				log.Fatal(err)
+			}
+			media = m
+		}
+	}
 	hub := events.NewHub()
-	lib := stylelib.New(cfg.DataDir)
+	lib := stylelib.NewWith(cfg.DataDir, st.DB(), media)
+	lib.Migrate() // 化石导入（PG 账本才生效）：styles.json/vocab.json → 0005 表 + 媒体上 MinIO
 	producer := &produce.Runner{
 		DataDir: cfg.DataDir, RootDir: root, Hub: hub, Store: st,
 		AutoResume: true, // 启动对账时自动续跑被重启打断的整片制作，不让用户再打「继续」
@@ -64,6 +80,7 @@ func main() {
 	// 启动对账：上次进程死在制作中途的项目补写终态+聊天通知（必须先于任何新任务）
 	producer.Reconcile()
 	refs := styleref.NewStore(cfg.DataDir, root)
+	refs.Lib = lib // 参考解析打标要查风格词表/落新词（同一实例，含账本后端选型）
 	ag.Refs = refs // 参考库补线（list/analyze 参考工具用）
 	// 会话密钥与初始管理员：SESSION_SECRET > API_TOKEN 派生 > 随机（开放模式）。
 	// 仅鉴权启用时引导建管理员——开放模式没有登录，建了也是死数据。

@@ -1,16 +1,15 @@
 package stylelib
 
-// 风格词表（data/library/vocab.json，v3 §4.2）：公认风格名词的策展登记册。
+// 风格词表（style_vocab 账本，v3 §4.2）：公认风格名词的策展登记册。
 // 冷启动 = 空表——第一条片入库时打的标签经查重后自动成为第一批词条。
 // 收录标准（写进打标提示词）：只收有公认视觉定义的风格名词（设计史/影视行话
 // 立得住），拒收「高级感/简洁大气」类空话。同义词归词表管（挂别名）；
 // 条目不去重（同标签多条目正常，特色各自不同）。
+// 存储在 catalog 后端（PG style_vocab 表或 vocab.json 回退），本文件只管复合逻辑。
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -19,8 +18,7 @@ import (
 	"webpage-video-agent/server/internal/contract"
 )
 
-// Vocab 风格词表。Entries 以 id 为 key；磁盘损坏时读取报错（读失败不落盘，
-// 防止空表覆盖真表），文件不存在 = 合法空表。
+// Vocab 风格词表（内存形态）。Entries 以 id 为 key。
 type Vocab struct {
 	Entries map[string]VocabEntry `json:"entries"`
 }
@@ -37,41 +35,15 @@ type VocabEntry struct {
 
 func (v *Vocab) Has(id string) bool { return v != nil && id != "" && v.Entries[id].ID != "" }
 
-func (l *Library) vocabPath() string { return filepath.Join(l.dir, "vocab.json") }
-
-// loadVocabLocked 读词表（须持 l.mu）。文件不存在返回空表；损坏返回错误。
-func (l *Library) loadVocabLocked() *Vocab {
-	v := &Vocab{Entries: map[string]VocabEntry{}}
-	b, err := os.ReadFile(l.vocabPath())
-	if os.IsNotExist(err) {
-		return v
-	}
-	if err != nil {
-		return v // 读失败按空表处理（只影响本次核对，不落盘）
-	}
-	if json.Unmarshal(b, v) != nil || v.Entries == nil {
-		return &Vocab{Entries: map[string]VocabEntry{}}
-	}
-	return v
-}
-
 // LoadVocab 读词表（公开只读口；损坏返回错误——申请流程必须能区分空表与坏表）。
 func (l *Library) LoadVocab() (*Vocab, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	b, err := os.ReadFile(l.vocabPath())
-	if os.IsNotExist(err) {
-		return &Vocab{Entries: map[string]VocabEntry{}}, nil
-	}
+	entries, err := l.cat.AllVocab()
 	if err != nil {
 		return nil, err
 	}
-	v := &Vocab{}
-	if err := json.Unmarshal(b, v); err != nil {
-		return nil, fmt.Errorf("vocab.json 损坏: %w", err)
-	}
-	if v.Entries == nil {
-		v.Entries = map[string]VocabEntry{}
+	v := &Vocab{Entries: map[string]VocabEntry{}}
+	for _, e := range entries {
+		v.Entries[e.ID] = e
 	}
 	return v, nil
 }
@@ -80,6 +52,7 @@ func (l *Library) LoadVocab() (*Vocab, error) {
 func (l *Library) VocabList() []VocabEntry {
 	v, err := l.LoadVocab()
 	if err != nil {
+		log.Printf("[stylelib] 词表读取失败: %v", err)
 		return nil
 	}
 	out := make([]VocabEntry, 0, len(v.Entries))
@@ -95,7 +68,7 @@ func NormWord(s string) string {
 	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(s))), "")
 }
 
-// VocabFind 归一化精确查重：name+aliases 全集里找（返回词条，命中=true）。
+// Find 归一化精确查重：name+aliases 全集里找（返回词条，命中=true）。
 func (v *Vocab) Find(name string) (VocabEntry, bool) {
 	if v == nil {
 		return VocabEntry{}, false
@@ -125,11 +98,10 @@ var vocabIDRe = regexp.MustCompile(`[^a-z0-9_]+`)
 func (l *Library) VocabCreate(e VocabEntry) (string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.vocabCreateLocked(e)
-}
-
-func (l *Library) vocabCreateLocked(e VocabEntry) (string, error) {
-	v := l.loadVocabLocked()
+	v, err := l.LoadVocab()
+	if err != nil {
+		return "", err
+	}
 	if hit, ok := v.Find(e.Name); ok {
 		return hit.ID, nil // 归一化撞车：复用已有词条（申请新词幂等）
 	}
@@ -153,8 +125,7 @@ func (l *Library) vocabCreateLocked(e VocabEntry) (string, error) {
 	e.Name = name
 	e.Aliases = dedupeAliases(e.Aliases)
 	e.CreatedAt = time.Now()
-	v.Entries[id] = e
-	if err := l.saveVocabLocked(v); err != nil {
+	if err := l.cat.PutVocab(e); err != nil {
 		return "", err
 	}
 	return id, nil
@@ -169,7 +140,10 @@ func (l *Library) VocabAttachAlias(id, alias string) error {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	v := l.loadVocabLocked()
+	v, err := l.LoadVocab()
+	if err != nil {
+		return err
+	}
 	e, ok := v.Entries[id]
 	if !ok {
 		return fmt.Errorf("词条 %s 不存在", id)
@@ -179,9 +153,7 @@ func (l *Library) VocabAttachAlias(id, alias string) error {
 			return nil
 		}
 	}
-	e.Aliases = append(e.Aliases, alias)
-	v.Entries[id] = e
-	return l.saveVocabLocked(v)
+	return l.cat.SetAliases(id, append(e.Aliases, alias))
 }
 
 // VocabBriefs 词表词条人话摘要（简报 TagBriefs 用；缺词条的 id 静默跳过——
@@ -198,18 +170,6 @@ func (l *Library) VocabBriefs(ids ...string) []contract.TagBrief {
 		}
 	}
 	return out
-}
-
-func (l *Library) saveVocabLocked(v *Vocab) error {
-	if err := os.MkdirAll(l.dir, 0o755); err != nil {
-		return err
-	}
-	b, _ := json.MarshalIndent(v, "", "  ")
-	tmp := l.vocabPath() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, l.vocabPath())
 }
 
 // dedupeAliases 别名去重（含与 name 归一化同值的）。

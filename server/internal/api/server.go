@@ -1750,69 +1750,35 @@ func (s *Server) referenceFrames(c *gin.Context) {
 
 // refMediaName 参考媒体文件名白名单：抽帧 frame-*.png / 原视频 video.mp4 /
 // 封面 cover.png（入库时代表帧拷贝，封面样张的 <img> 引用它）。
-func refMediaName(name string) bool {
-	if name == "video.mp4" || name == "cover.png" {
-		return true
-	}
-	return isPngName(name) && strings.HasPrefix(name, "frame-")
-}
+// 与风格媒体同款名单，规则收在 stylelib 一处。
+func refMediaName(name string) bool { return stylelib.ValidMediaName(name) }
 
-// styleMediaResolve 风格媒体定位：快照目录（style_media/<id>）优先，
-// 缺文件回退参考视频目录（origin_project="video:<refID>" 的老条目）。
-// 返回 (文件路径, ok)；ok=false 时调用方回 404。
-func (s *Server) styleMediaResolve(styleID, name string) (string, bool) {
-	if !isSlug(styleID) || !refMediaName(name) {
-		return "", false
-	}
-	if p := filepath.Join(s.Lib.MediaDir(styleID), name); fileExists(p) {
-		return p, true
-	}
-	st, ok := s.Lib.Get(styleID)
-	if !ok || !strings.HasPrefix(st.OriginProject, "video:") {
-		return "", false
-	}
-	refID := strings.TrimPrefix(st.OriginProject, "video:")
-	p := filepath.Join(s.DataDir, "references", refID, name)
-	return p, fileExists(p)
-}
-
-// libraryFrames 风格媒体抽帧清单：快照目录（style_media/<id>）优先，
-// 空（老条目/快照失败）回退 origin 指向的参考视频目录。
+// libraryFrames 风格媒体抽帧清单：媒体后端（MinIO 或本地快照目录）优先，
+// 空（老条目/快照失败）回退 origin 指向的参考视频目录。定位逻辑在 stylelib。
 func (s *Server) libraryFrames(c *gin.Context) {
 	id := c.Param("id")
 	if !isSlug(id) {
 		c.JSON(400, gin.H{"error": "非法路径"})
 		return
 	}
-	frames, hasVideo := scanMediaDir(s.Lib.MediaDir(id))
-	if len(frames) == 0 { // 抽帧缺失就回退（快照只带 video 时也要能列出参考抽帧）
-		if st, ok := s.Lib.Get(id); ok && strings.HasPrefix(st.OriginProject, "video:") {
-			frames2, hv2 := scanMediaDir(filepath.Join(s.DataDir, "references", strings.TrimPrefix(st.OriginProject, "video:")))
-			frames = frames2
-			if !hasVideo {
-				hasVideo = hv2
-			}
-		}
-	}
+	frames, hasVideo := s.Lib.MediaNames(id)
 	if frames == nil {
 		frames = []string{}
 	}
 	c.JSON(200, gin.H{"frames": frames, "has_video": hasVideo})
 }
 
-// libraryMedia 风格媒体本体（路径只出自快照/参考目录拼装，无遍历面）。
+// libraryMedia 风格媒体本体（文件名白名单在 Library 侧，无遍历面；
+// MinIO 后端为对象流回源，本地后端为文件回源，api 无感）。
 func (s *Server) libraryMedia(c *gin.Context) {
-	p, ok := s.styleMediaResolve(c.Param("id"), c.Param("file"))
+	rc, _, modTime, ok := s.Lib.OpenMedia(c.Param("id"), c.Param("file"))
 	if !ok {
 		c.JSON(404, gin.H{"error": "文件不存在"})
 		return
 	}
-	serveFile(c, p, filepath.Base(p), "max-age=3600")
-}
-
-func fileExists(p string) bool {
-	st, err := os.Stat(p)
-	return err == nil && !st.IsDir()
+	defer rc.Close()
+	c.Header("Cache-Control", "max-age=3600")
+	http.ServeContent(c.Writer, c.Request, c.Param("file"), modTime, rc)
 }
 
 // referenceMedia 参考引用媒体文件（抽帧 png / 原视频 mp4，白名单文件名防目录穿越）。

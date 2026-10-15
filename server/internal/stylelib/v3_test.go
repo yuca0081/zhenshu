@@ -125,25 +125,25 @@ func TestIngestVideoRefV3(t *testing.T) {
 	}
 }
 
-// 加载即校验：schema 不合格的条目跳过；证据帧文件缺失只剪枝不拒条目。
-func TestListPrunesMissingFrames(t *testing.T) {
+// 加载即校验：schema 不合格的条目跳过。缺帧剪枝已随云存储退役——引用缺失由
+// 前端单帧 404 兜底，列表不再逐帧探测（MinIO 逐帧 Stat 太贵，行为两后端拉齐）。
+func TestListSkipsInvalidEntries(t *testing.T) {
 	dir := t.TempDir()
 	l := New(dir)
 	main := mustVocab(t, l, "包豪斯", "x")
 	// 手工造一条带失效帧引用的库
+	libDir := filepath.Join(dir, "library")
+	if err := os.MkdirAll(libDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	b := `[{"id":"vid-x","name":"X","tags":{"main":"` + main + `"},
-	  "tag_evidence":[{"tag":"` + main + `","note":"n","frames":["frame-gone.png","cover.png"]}],
+	  "tag_evidence":[{"tag":"` + main + `","note":"n","frames":["frame-gone.png"]}],
 	  "signatures":[{"id":"sig1","kind":"palette","name":"p","mechanism":"m","frames":["frame-gone.png"]}],
 	  "published":true,"created_at":"2026-10-08T00:00:00Z"},
 	 {"id":"vid-bad","name":"","tags":{"main":"nope"},"published":true,"created_at":"2026-10-08T00:00:00Z"}]`
-	if err := os.MkdirAll(l.dir, 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(libDir, "styles.json"), []byte(b), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(l.path(), []byte(b), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	os.MkdirAll(l.MediaDir("vid-x"), 0o755)
-	os.WriteFile(filepath.Join(l.MediaDir("vid-x"), "cover.png"), []byte("x"), 0o644)
 
 	got, err := l.List()
 	if err != nil {
@@ -152,11 +152,9 @@ func TestListPrunesMissingFrames(t *testing.T) {
 	if len(got) != 1 || got[0].ID != "vid-x" {
 		t.Fatalf("坏条目应被跳过、好条目保留: %+v", got)
 	}
-	if len(got[0].TagEvidence[0].Frames) != 1 || got[0].TagEvidence[0].Frames[0] != "cover.png" {
-		t.Fatalf("失效帧应剪枝: %+v", got[0].TagEvidence)
-	}
-	if len(got[0].Signatures[0].Frames) != 0 {
-		t.Fatalf("特色失效帧应剪枝: %+v", got[0].Signatures)
+	// 帧引用原样保留（不再剪枝）：账本忠实于写入内容，缺失由读取端兜底
+	if len(got[0].TagEvidence[0].Frames) != 1 || got[0].TagEvidence[0].Frames[0] != "frame-gone.png" {
+		t.Fatalf("帧引用不应被改动: %+v", got[0].TagEvidence)
 	}
 }
 

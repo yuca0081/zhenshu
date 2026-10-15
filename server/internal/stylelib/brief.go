@@ -17,7 +17,8 @@ import (
 const maxBriefEvidence = 6
 
 // BuildBrief 组装简报：disabled 是用户关掉的特色 id 集合（默认全开）。
-// Evidence 从 style_media 实存文件取（标签证据优先，再补特色证据帧，去重截 6）。
+// Evidence 走 media.Localize 取本地实存文件（MinIO 后端读穿缓存；标签证据优先，
+// 再补特色证据帧，去重截 6）——设计阶段的多模态调用只认本地路径。
 func (l *Library) BuildBrief(id string, disabled map[string]bool) (*contract.StyleBrief, error) {
 	st, ok := l.Get(id)
 	if !ok {
@@ -44,11 +45,12 @@ func (l *Library) BuildBrief(id string, disabled map[string]bool) (*contract.Sty
 			if n == "" || seen[n] {
 				continue
 			}
-			if _, err := os.Stat(filepath.Join(l.MediaDir(st.ID), n)); err != nil {
-				continue // 快照缺失的帧不进简报
+			p, err := l.media.Localize(st.ID, n)
+			if err != nil {
+				continue // 缺失的帧不进简报
 			}
 			seen[n] = true
-			b.Evidence = append(b.Evidence, filepath.Join(l.MediaDir(st.ID), n))
+			b.Evidence = append(b.Evidence, p)
 			if len(b.Evidence) >= maxBriefEvidence {
 				return
 			}

@@ -100,6 +100,7 @@ type paletteCluster struct {
 type Store struct {
 	DataDir string // data/（引用库存 data/references/）
 	RootDir string // 仓库根（ai/ 脚本）
+	Lib     *stylelib.Library // 风格库（打标查词表/申请新词落表用；main 接线，解析前置）
 
 	mu      sync.Mutex
 	running map[string]bool
@@ -305,7 +306,10 @@ func (s *Store) analyzeCompositions(ctx context.Context, prov *llm.Provider, fra
 // videoURL 非空 = 附原视频剪辑直读（运镜/转场以视频实测为准）；空 = 纯帧推断。
 func (s *Store) synthesize(ctx context.Context, prov *llm.Provider, name string,
 	feats videoFeatures, notes string, videoURL string) (*StyleDraft, error) {
-	lib := stylelib.New(s.DataDir)
+	if s.Lib == nil {
+		return nil, fmt.Errorf("风格库未接线（Store.Lib 为空）")
+	}
+	lib := s.Lib
 	var lastErr error
 	for round := 0; round < 3; round++ {
 		var retryNote string

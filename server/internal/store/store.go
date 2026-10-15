@@ -134,6 +134,9 @@ type Store interface {
 	UserByName(username string) (*User, error) // 无此用户回 ErrNoUser
 	ListUsers() ([]User, error)
 	Kind() string
+	// DB 暴露 GORM 句柄给同库共生的账本（stylelib 风格库 PG 后端共用连接池）；
+	// 内存实现返回 nil（调用方据此判定「PG 未接」）。
+	DB() *gorm.DB
 }
 
 // Open 先试 PG（3s 超时）。未配 DSN = 内存模式（开发）；配了但连不上 = 报错，
@@ -178,6 +181,8 @@ func Open(dsn string) (Store, error) {
 type pgStore struct{ db *gorm.DB }
 
 func (s *pgStore) Kind() string { return "pg" }
+
+func (s *pgStore) DB() *gorm.DB { return s.db }
 
 func (s *pgStore) findUUID(diskID string) (string, error) {
 	var row struct {
@@ -364,6 +369,8 @@ type memStore struct {
 func newMem() *memStore { return &memStore{} }
 
 func (s *memStore) Kind() string { return "mem" }
+
+func (s *memStore) DB() *gorm.DB { return nil }
 
 func (s *memStore) upsert(diskID, name, userID string) {
 	for i := range s.projects {
