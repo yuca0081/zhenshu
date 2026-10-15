@@ -16,11 +16,59 @@ import (
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
+	"webpage-video-agent/server/internal/prep"
 	"webpage-video-agent/server/internal/produce"
 	"webpage-video-agent/server/internal/stylelib"
 	"webpage-video-agent/server/internal/styleref"
 	"webpage-video-agent/server/internal/webfetch"
 )
+
+// prepDeps 准备阶段工位依赖（rerun 工具与三条改稿路径共用）。
+func (a *Agent) prepDeps() prep.Deps {
+	return prep.Deps{RootDir: a.RootDir, Lib: a.Lib, Emit: a.Emit}
+}
+
+// rerunPrep 反馈路由的重跑执行体：note 落工位附注 → 从 station 起级联失效 →
+// 链式重跑缺的工位 → 汇报三工件状态。失败原文返回（调用方回喂对话）。
+// 同步执行（与 draft_storyboard 跑管线同模式）；对话轮 20min 时限兜底。
+func (a *Agent) rerunPrep(ctx context.Context, p *pipeline.Project, station, note string) string {
+	switch station {
+	case prep.StationScript:
+		if note != "" {
+			if err := os.WriteFile(p.Artifact("input/script_notes.txt"), []byte(note), 0o644); err != nil {
+				return "附注写入失败：" + err.Error()
+			}
+		}
+	case prep.StationStyle:
+		if note != "" {
+			if err := os.WriteFile(p.Artifact("input/style_notes.txt"), []byte(note), 0o644); err != nil {
+				return "附注写入失败：" + err.Error()
+			}
+		}
+	case prep.StationStoryboard:
+		if note != "" {
+			if err := os.WriteFile(p.Artifact("input/storyboard_notes.txt"), []byte(note), 0o644); err != nil {
+				return "附注写入失败：" + err.Error()
+			}
+		}
+	default:
+		return "target 只能是 script / style / storyboard"
+	}
+	prep.InvalidateFrom(p, station)
+	if err := prep.RunStrict(ctx, p, a.prepDeps()); err != nil {
+		if ctx.Err() != nil {
+			return "重跑被中断。"
+		}
+		return "重跑失败：" + err.Error()
+	}
+	// 三工件齐 → 状态回「等终审确认」（与出样张后的门语义一致）
+	a.setDoneStatus(p.ID, "style")
+	if a.Emit != nil {
+		a.Emit(p.ID, "prep_updated", "", station)
+	}
+	return "准备工件已按反馈重跑完成（" + station + " 起级联）：" + prep.Summary(p) +
+		"。等用户在「终审」页签重新确认后才能开工"
+}
 
 // ── 工具定义 ─────────────────────────────────────────────────
 
@@ -68,6 +116,24 @@ var tools = []tool{
 			return ""
 		},
 		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
+			// 新路径（准备工位产物在）：分镜稿由③产出，不走 legacy 单发
+			if prep.HasArtifact(p, prep.StationScript) {
+				if prep.HasArtifact(p, prep.StationStoryboard) {
+					return "分镜稿已出（准备工位产物）。要改结构/场景直接说要求，我走反馈重跑；开工前在「终审」页签确认。"
+				}
+				if err := prep.RunStrict(ctx, p, a.prepDeps()); err != nil {
+					return "分镜生成失败：" + err.Error()
+				}
+				dr, derr := prep.LoadDraft(p)
+				if derr != nil {
+					return "分镜稿生成后读取失败：" + derr.Error()
+				}
+				a.setDoneStatus(p.ID, "style")
+				if a.OnEvent != nil {
+					a.OnEvent(p.ID, "storyboard", "")
+				}
+				return fmt.Sprintf("分镜稿已产出：%d 段 / 约 %.0f 秒。等用户在「终审」页签打包确认后才能开工", len(dr.Segments), dr.TotalHint())
+			}
 			if err := pipeline.Run(ctx, p, "storyboard"); err != nil {
 				return "分镜生成失败：" + err.Error()
 			}
@@ -105,6 +171,10 @@ var tools = []tool{
 			_ = json.Unmarshal([]byte(args), &in)
 			if strings.TrimSpace(in.Instruction) == "" {
 				return "缺少修改要求"
+			}
+			// 新路径：分镜稿是③的产物——反馈路由（改结构场景→只重③）
+			if prep.HasArtifact(p, prep.StationScript) {
+				return a.rerunPrep(ctx, p, prep.StationStoryboard, in.Instruction)
 			}
 			sbPath := p.Artifact("storyboards/storyboard.json")
 			llmPath := p.LLMOutput("storyboard")
@@ -241,10 +311,11 @@ var tools = []tool{
 			},
 		}),
 		gate: func(s State) string {
-			if !s.HasStoryboard {
-				return "先出分镜，再出风格样张"
+			// 新路径（文字稿工件在）：②在③之前，不需要先有分镜
+			if s.HasStoryboard || s.Prep != "" {
+				return ""
 			}
-			return ""
+			return "先出分镜，再出风格样张"
 		},
 		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
 			var in struct {
@@ -252,6 +323,31 @@ var tools = []tool{
 			}
 			_ = json.Unmarshal([]byte(args), &in)
 			out := p.Artifact("style/style_samples.json")
+			// 新路径：风格包是②的产物——带要求=反馈重跑（②③级联），不带=等终审
+			if prep.HasArtifact(p, prep.StationScript) {
+				if prep.HasArtifact(p, prep.StationStyle) {
+					if strings.TrimSpace(in.Instruction) == "" {
+						return "风格包已出（准备工位产物），等用户在「终审」页签打包确认；要改风格方向，把要求带在 instruction 里我走反馈重跑"
+					}
+					return a.rerunPrep(ctx, p, prep.StationStyle, in.Instruction)
+				}
+				if err := prep.RunStrict(ctx, p, a.prepDeps()); err != nil {
+					return "风格包生成失败：" + err.Error()
+				}
+				sp, serr := prep.LoadStylePack(p)
+				if serr != nil {
+					return "风格包生成后读取失败：" + serr.Error()
+				}
+				a.setDoneStatus(p.ID, "style")
+				dir := ""
+				if sp.DesignSystem != nil {
+					dir = sp.DesignSystem.Direction
+				}
+				if a.OnEvent != nil {
+					a.OnEvent(p.ID, "style_draft", dir)
+				}
+				return fmt.Sprintf("风格包已产出（%s），样张见「终审」页签。等用户打包确认后才能开工", dir)
+			}
 			if strings.TrimSpace(in.Instruction) != "" {
 				// 带要求（首次或重生成一律走这条）：用户明确的方向优先于任何选定风格，
 				// 直接按要求现写——样张与风格文件（skin）同产（§12.2）
@@ -473,6 +569,38 @@ var tools = []tool{
 			}
 			return fmt.Sprintf("风格「%s」已起草（标签 %s + 特色×%d，草稿）。用户在风格库页点「入库」确认后，之后新建项目可直接复用",
 				pack.Name, pack.Tags.Main, len(pack.Signatures))
+		},
+	},
+	{
+		def: toolDef("rerun_prep", "准备阶段反馈重跑（打包终审后的反馈路由）：target=\"script\" 改文字（①②③级联）/ \"style\" 改风格（②③级联）/ \"storyboard\" 改结构场景（只重③）。note=用户的具体修改要求。三个准备工位会按链重跑，完成后等用户在「终审」页签重新确认", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"target": map[string]any{"type": "string", "description": "script | style | storyboard——按用户改的是哪类内容选，拿不准就问一句"},
+				"note":   map[string]any{"type": "string", "description": "用户的修改要求（原样转述，工位会优先满足）"},
+			},
+			"required": []string{"target"},
+		}),
+		gate: func(s State) string {
+			if s.Producing {
+				return "制作运行中，先等本条完成"
+			}
+			if !s.HasManuscript {
+				return "还没有文稿，无处重跑"
+			}
+			return ""
+		},
+		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
+			var in struct {
+				Target string `json:"target"`
+				Note   string `json:"note"`
+			}
+			if err := json.Unmarshal([]byte(args), &in); err != nil {
+				return "参数解析失败：" + err.Error()
+			}
+			if !prep.HasArtifact(p, prep.StationScript) {
+				return "这个项目没走准备工位（无文字稿工件）——改稿用 save_manuscript + draft_storyboard 老路径"
+			}
+			return a.rerunPrep(ctx, p, strings.TrimSpace(in.Target), strings.TrimSpace(in.Note))
 		},
 	},
 	{
@@ -1372,6 +1500,12 @@ func (a *Agent) saveManuscriptContent(p *pipeline.Project, content string) strin
 	msg := fmt.Sprintf("文稿已保存（%d 字）", len([]rune(content)))
 	if hasSb == nil {
 		msg += "；已有分镜基于旧稿，要重新出分镜才会生效"
+	}
+	// 新路径（准备工位产物在）：改文字 → ①②③ 级联作废（反馈路由同款），
+	// 下次重跑产出配套的新文字稿/风格包/分镜稿
+	if prep.HasArtifact(p, prep.StationScript) {
+		prep.InvalidateFrom(p, prep.StationScript)
+		msg += "；准备工件（文字稿/风格包/分镜稿）已按新稿级联作废，重跑后需重新终审确认"
 	}
 	return msg
 }

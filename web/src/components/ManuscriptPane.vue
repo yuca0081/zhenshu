@@ -29,6 +29,7 @@ watch(
 const wordCount = computed(() => content.value.trim().length)
 
 const stale = ref(false) // 分镜基于旧稿（保存响应带回）
+const prepInvalidated = ref(false) // 准备工件按新稿级联作废（保存响应带回）
 const savedMsg = ref('')
 const saveErr = ref('')
 const saving = ref(false)
@@ -39,6 +40,7 @@ async function save() {
   try {
     const r = await api.saveManuscript(props.projectId, content.value)
     stale.value = r.storyboard_stale
+    prepInvalidated.value = !!(r as { prep_invalidated?: boolean }).prep_invalidated
     savedMsg.value = `已保存（${r.word_count} 字）`
     dirty.value = false
     emit('saved')
@@ -137,6 +139,7 @@ async function extract() {
       </div>
     </div>
     <div v-if="stale" class="ms-warn">分镜是基于旧稿生成的——改稿后请在对话里让我重新生成分镜。</div>
+    <div v-if="prepInvalidated" class="ms-warn">准备工件（文字稿/风格包/分镜稿）已按新稿级联作废——在对话里说「重跑文稿工位」重新出齐，然后在「终审」页签重新确认。</div>
     <div v-if="videoStale" class="ms-warn">成片还是旧稿的版本——去「视频」页签点「按最新内容重做」才会进新片。</div>
     <div v-if="saveErr" class="ms-err">{{ saveErr }}</div>
     <div v-if="savedMsg" class="ms-ok">{{ savedMsg }}</div>

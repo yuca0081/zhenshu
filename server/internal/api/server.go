@@ -27,6 +27,7 @@ import (
 	"webpage-video-agent/server/internal/events"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
+	"webpage-video-agent/server/internal/prep"
 	"webpage-video-agent/server/internal/produce"
 	"webpage-video-agent/server/internal/store"
 	"webpage-video-agent/server/internal/stylelib"
@@ -102,6 +103,9 @@ func (s *Server) Router() *gin.Engine {
 	api.GET("/projects/:id/style", s.style)
 	api.POST("/projects/:id/style/apply", s.applyStyle)
 	api.POST("/projects/:id/style/confirm", s.confirmStyle)
+	// 准备阶段三工件（prep-agents-design）：打包终审视图与确认门
+	api.GET("/projects/:id/prep", s.prepView)
+	api.POST("/projects/:id/prep/confirm", s.confirmPrep)
 	api.POST("/projects/:id/chat", s.chat)
 	api.POST("/projects/:id/chat/cancel", s.cancelChat)
 	api.POST("/draft/manuscript", s.draftManuscript)
@@ -762,12 +766,18 @@ func (s *Server) saveManuscript(c *gin.Context) {
 		return
 	}
 	_ = os.Remove(p.Artifact("manuscripts/manuscript.json"))
+	// 新路径（准备工件在）：改文字 → ①②③ 级联作废（与 agent saveManuscriptContent 同语义）
+	prepInvalidated := false
+	if _, serr := os.Stat(p.Artifact("scripts/script.json")); serr == nil {
+		prep.InvalidateFrom(p, prep.StationScript)
+		prepInvalidated = true
+	}
 	_, sbErr := os.Stat(p.Artifact("storyboards/storyboard.json"))
 	s.updateStatus(id, "manuscript")
 	words := len([]rune(content))
 	p.Manifest("manuscript.saved", fmt.Sprintf("%d 字", words))
 	s.Hub.Emit(id, "msg", "", fmt.Sprintf("文稿已更新（%d 字）", words))
-	c.JSON(200, gin.H{"ok": true, "word_count": words, "storyboard_stale": sbErr == nil})
+	c.JSON(200, gin.H{"ok": true, "word_count": words, "storyboard_stale": sbErr == nil, "prep_invalidated": prepInvalidated})
 }
 
 // applyStyle 风格弹窗选定库内条目（v3 §4.5）：写 style/style_brief.json（含特色
@@ -983,6 +993,133 @@ func (s *Server) confirmStyle(c *gin.Context) {
 	s.updateStatus(id, "style")
 	s.Hub.Emit(id, "style_confirmed", "", ss.Direction)
 	c.JSON(200, gin.H{"ok": true, "direction": ss.Direction})
+}
+
+// ── 准备阶段：打包终审（全流程唯一人工门，prep-agents-design §2）──────
+
+// prepView 三工件打包视图（终审页签数据源）：文字稿（句编号+事实清单）、
+// 风格包（描述+剪辑语法+样张）、分镜稿（段落+段表）。非新路径项目返回
+// exists=false，前端不显示终审页签。
+func (s *Server) prepView(c *gin.Context) {
+	p, ok := s.project(c)
+	if !ok {
+		return
+	}
+	script, err := prep.LoadScript(p)
+	if err != nil {
+		c.JSON(200, gin.H{"exists": false})
+		return
+	}
+	out := gin.H{"exists": true, "confirmed": false}
+	if sp, err := prep.LoadStylePack(p); err == nil {
+		confirmed := sp.Confirmed
+		var ss contract.StyleSamples
+		if b, rerr := os.ReadFile(p.Artifact("style/style_samples.json")); rerr == nil && json.Unmarshal(b, &ss) == nil {
+			confirmed = confirmed && ss.Confirmed
+		}
+		direction := ""
+		if sp.DesignSystem != nil {
+			direction = sp.DesignSystem.Direction
+		}
+		out["stylepack"] = gin.H{
+			"style_id": sp.StyleID, "description": sp.Description,
+			"grammar": sp.Grammar, "sample_ids": sp.SampleIDs,
+			"direction": direction, "confirmed": sp.Confirmed,
+		}
+		out["design"] = sp.DesignSystem
+	}
+	if dr, err := prep.LoadDraft(p); err == nil {
+		out["draft"] = dr
+	}
+	var styleName string
+	if sp, err := prep.LoadStylePack(p); err == nil {
+		if st, ok := s.Lib.Get(sp.StyleID); ok {
+			styleName = st.Name
+		}
+	}
+	out["style_name"] = styleName
+	// 确认态以 style_samples.json（硬门消费方）为准
+	var ss contract.StyleSamples
+	if b, rerr := os.ReadFile(p.Artifact("style/style_samples.json")); rerr == nil && json.Unmarshal(b, &ss) == nil {
+		out["confirmed"] = ss.Confirmed
+	}
+	out["script"] = script
+	out["storyboard_ready"] = func() bool {
+		_, err := p.LoadStoryboard()
+		return err == nil
+	}()
+	c.JSON(200, out)
+}
+
+// confirmPrep 打包终审确认（全流程唯一人工门）：文字稿+风格包+分镜稿一次确认。
+// 确认 = 设计系统锁定（design.md/skin.json 落盘）+ 风格包工件置 confirmed——
+// 制作阶段的既有硬门（style_samples.confirmed）从这里拿到 true。
+func (s *Server) confirmPrep(c *gin.Context) {
+	id := c.Param("id")
+	// 对话轮互斥与 confirmStyle 同源：prep 工位可能还在对话轮里重跑，
+	// 半道确认会被最后一笔打回未确认（TryLock 语义见 confirmStyle 注释）
+	mu, _ := s.turnMu.LoadOrStore(id, &sync.Mutex{})
+	if !mu.(*sync.Mutex).TryLock() {
+		c.JSON(409, gin.H{"error": "AI 还在准备工位上工作，等它说完再确认"})
+		return
+	}
+	defer mu.(*sync.Mutex).Unlock()
+	p := pipeline.NewProject(s.DataDir, id)
+	if _, err := prep.LoadScript(p); err != nil {
+		c.JSON(400, gin.H{"error": "这个项目没有准备工件（非新路径），在「风格」页签走样张确认"})
+		return
+	}
+	sp, err := prep.LoadStylePack(p)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "风格包未出，先让 Agent 跑完准备工位"})
+		return
+	}
+	dr, err := prep.LoadDraft(p)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "分镜稿未出，先让 Agent 跑完准备工位"})
+		return
+	}
+	var script *contract.Script
+	script, _ = prep.LoadScript(p)
+	// 三工件校验兜底（submit 已各自过闸，这里防手改盘）
+	if verr := contract.ValidateStylePack(sp); verr != nil {
+		c.JSON(400, gin.H{"error": "风格包不合格，重新跑风格工位：" + verr.Error()})
+		return
+	}
+	if verr := contract.ValidateStoryboardDraft(dr, script, sp); verr != nil {
+		c.JSON(400, gin.H{"error": "分镜稿不合格，重新跑分镜工位：" + verr.Error()})
+		return
+	}
+	// 设计系统锁定（design.md/skin.json/project.json 接线），confirmed 落两处：
+	// stylepack.json（工件 B）+ style_samples.json（制作硬门消费方）
+	if sp.DesignSystem != nil {
+		if verr := contract.ValidateStyleSamplesDraft(sp.DesignSystem); verr != nil {
+			c.JSON(400, gin.H{"error": "设计系统不合格：" + verr.Error()})
+			return
+		}
+		sp.DesignSystem.Confirmed = true
+		if err := pipeline.LockDesign(p, sp.DesignSystem); err != nil {
+			c.JSON(500, gin.H{"error": "设计锁定失败：" + err.Error()})
+			return
+		}
+		if err := pipeline.WriteFileAtomic(p.Artifact("style/style_samples.json"), pipeline.MustJSONBytes(sp.DesignSystem), 0o644); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	sp.Confirmed = true
+	if err := pipeline.WriteFileAtomic(p.Artifact("style/stylepack.json"), pipeline.MustJSONBytes(sp), 0o644); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	direction := ""
+	if sp.DesignSystem != nil {
+		direction = sp.DesignSystem.Direction
+	}
+	p.Manifest("prep.confirmed", fmt.Sprintf("打包终审通过（%s，%d 段）", direction, len(dr.Segments)))
+	s.updateStatus(id, "style")
+	s.Hub.Emit(id, "prep_confirmed", "", direction)
+	c.JSON(200, gin.H{"ok": true, "direction": direction})
 }
 
 // ── 聊天 ─────────────────────────────────────────────────────

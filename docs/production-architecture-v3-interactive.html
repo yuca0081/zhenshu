@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>五工位制作架构 v3.1 · 交互流程图</title>
+<style>
+  :root {
+    --bg: #f7f7f8; --panel: #ffffff; --band: #eef0f4; --text: #1c1c1e; --muted: #6e6e73;
+    --line: #d9d9e0; --edge: #8e8e96; --accent: #2563eb; --accent-soft: #eef4ff;
+    --warn: #b45309; --warn-bg: #fff7ed;
+    --danger: #dc2626; --danger-bg: #fef2f2;
+    --ok: #15803d; --ok-bg: #f0fdf4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161618; --panel: #232326; --band: #1c1c20; --text: #ececf0; --muted: #9b9ba1;
+      --line: #3f3f46; --edge: #7c7c85; --accent: #6ea8ff; --accent-soft: #1d2a44;
+      --warn: #f0b357; --warn-bg: #33270f;
+      --danger: #f87171; --danger-bg: #3a1a1a;
+      --ok: #5fbf7a; --ok-bg: #12271a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    padding: 24px 20px 60px;
+  }
+  code { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font-size: 12.5px; }
+  header { max-width: 1220px; margin: 0 auto 18px; }
+  header h1 { font-size: 20px; margin: 0 0 4px; }
+  header .src { color: var(--muted); font-size: 13px; margin: 0; }
+
+  .controls {
+    max-width: 1220px; margin: 0 auto 16px; padding: 12px 16px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    display: flex; flex-wrap: wrap; gap: 12px 22px; align-items: center;
+  }
+  .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+  .switch input { position: absolute; opacity: 0; }
+  .switch .track {
+    width: 34px; height: 19px; border-radius: 10px; background: var(--line);
+    position: relative; transition: background .15s; flex: 0 0 auto;
+  }
+  .switch .track::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px;
+    border-radius: 50%; background: var(--panel); transition: left .15s;
+    box-shadow: 0 1px 2px rgba(0,0,0,.25);
+  }
+  .switch input:checked + .track { background: var(--accent); }
+  .switch input:checked + .track::after { left: 17px; }
+  .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .switch .lbl b { color: var(--accent); margin-right: 4px; }
+  .ctl-right { display: flex; gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap; }
+  .ctl-right button {
+    font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 8px;
+    border: 1px solid var(--line); background: transparent; color: var(--text); cursor: pointer;
+  }
+  .ctl-right button:hover { border-color: var(--accent); color: var(--accent); }
+  .viewchip { font-size: 12.5px; color: var(--muted); }
+
+  .layout {
+    max-width: 1220px; margin: 0 auto; display: flex;
+    flex-direction: column; gap: 16px; align-items: stretch;
+  }
+
+  .diagram-wrap {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 10px; overflow-x: auto;
+  }
+  #flowsvg { display: block; width: 100%; min-width: 960px; height: auto; font-family: inherit; }
+
+  /* SVG 图元样式 */
+  #flowsvg .band { fill: var(--band); rx: 12; }
+  #flowsvg .bandlabel { fill: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 2px; }
+  #flowsvg .edge { stroke: var(--edge); stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
+  #flowsvg .arrowfill { fill: var(--edge); }
+  #flowsvg .fnode { cursor: pointer; }
+  #flowsvg .fnode:focus { outline: none; }
+  #flowsvg .fnode .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; rx: 10; transition: stroke .12s; }
+  #flowsvg .fnode:hover .box { stroke: var(--accent); }
+  #flowsvg .fnode.active .box { stroke: var(--accent); stroke-width: 2.5; }
+  #flowsvg .fnode.prog .box { fill: transparent; stroke-dasharray: 5 4; }
+  #flowsvg .fnode.start .box { fill: var(--accent-soft); stroke: var(--accent-soft); }
+  #flowsvg .fnode.danger .box { fill: var(--danger-bg); stroke: var(--danger); stroke-dasharray: 6 4; }
+  #flowsvg .fnode.good .box { fill: var(--ok-bg); stroke: var(--ok); }
+  #flowsvg .t { fill: var(--text); font-size: 12.5px; font-weight: 600; text-anchor: middle; }
+  #flowsvg .ts { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+  #flowsvg .tw { fill: var(--warn); font-size: 11px; text-anchor: middle; }
+  #flowsvg .to { fill: var(--ok); font-size: 11px; text-anchor: middle; }
+  #flowsvg .tdanger { fill: var(--danger); font-size: 12.5px; font-weight: 600; text-anchor: middle; }
+  #flowsvg .chipbox { fill: var(--bg); stroke: var(--line); stroke-dasharray: 4 3; rx: 7; }
+  #flowsvg .chiptx { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+  #flowsvg .subbox-w { fill: var(--warn-bg); stroke: var(--warn); stroke-dasharray: 4 3; rx: 8; }
+  #flowsvg .subbox-o { fill: var(--ok-bg); stroke: var(--ok); rx: 8; }
+  #flowsvg .pill rect { rx: 9; }
+  #flowsvg .pill text { font-size: 11px; text-anchor: middle; }
+  #flowsvg .pill.new rect { fill: var(--accent-soft); } #flowsvg .pill.new text { fill: var(--accent); }
+  #flowsvg .pill.mod rect { fill: var(--warn-bg); } #flowsvg .pill.mod text { fill: var(--warn); }
+  #flowsvg .pill.has rect { fill: transparent; stroke: var(--line); } #flowsvg .pill.has text { fill: var(--muted); }
+  #flowsvg .pill.rev rect { fill: var(--ok-bg); } #flowsvg .pill.rev text { fill: var(--ok); }
+  #flowsvg .pill.gate rect { fill: var(--warn); } #flowsvg .pill.gate text { fill: #ffffff; }
+  @media (prefers-color-scheme: dark) { #flowsvg .pill.gate text { fill: #161618; } }
+  #flowsvg .lg-line { stroke: var(--text); opacity: .5; stroke-width: 2; }
+  #flowsvg .lg-line.dash { stroke-dasharray: 5 4; }
+  #flowsvg .lg-t { fill: var(--muted); font-size: 11px; }
+  #flowsvg .hint { fill: var(--muted); font-size: 11px; }
+
+  .detail { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
+  .d-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 2px 28px; }
+  @media (max-width: 760px) { .d-rows { grid-template-columns: 1fr; } }
+  .d-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .d-head h3 { font-size: 15px; margin: 0; }
+  .d-type { font-size: 11px; padding: 1px 8px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+  .d-type.bad { background: var(--danger-bg); color: var(--danger); }
+  .d-type.good { background: var(--ok-bg); color: var(--ok); }
+  .d-row { display: flex; gap: 10px; margin-top: 9px; }
+  .d-k { flex: 0 0 4.2em; color: var(--muted); font-size: 12px; padding-top: 2px; }
+  .d-v { flex: 1; font-size: 13px; min-width: 0; }
+  .d-v .q { color: var(--warn); }
+  .d-v em { font-style: normal; color: var(--accent); }
+
+  details.map { max-width: 1220px; margin: 22px auto 0; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 18px; }
+  details.map summary { cursor: pointer; font-weight: 600; }
+  details.map table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+  details.map th, details.map td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  details.map th { color: var(--muted); font-size: 12px; font-weight: normal; }
+
+  .undecided { max-width: 1220px; margin: 22px auto 0; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
+  .undecided h2 { font-size: 15px; margin: 0 0 8px; }
+  .undecided table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .undecided th, .undecided td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .undecided th { color: var(--muted); font-size: 12px; font-weight: normal; }
+  .stance { display: inline-block; font-size: 12px; padding: 1px 9px; border-radius: 9px; white-space: nowrap; }
+  .stance.yes { background: var(--accent-soft); color: var(--accent); }
+  .stance.merge { background: var(--warn-bg); color: var(--warn); }
+  .stance.defer { color: var(--muted); border: 1px solid var(--line); }
+
+  footer { max-width: 1220px; margin: 18px auto 0; color: var(--muted); font-size: 12px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>五工位制作架构 v3.1 · 交互流程图</h1>
+  <p class="src">依据 <code>docs/prep-agents-design.md</code>（2026-10-15 准备阶段定稿）与 <code>docs/production-architecture-discussion.md</code>（总架构纪要）绘制。准备阶段 = 三个 ReAct agent 工件链（文稿 → 风格 → 分镜），唯一人工门移到三步之后的<b>打包终审</b>；缝概念整体退役——首末拍写进场景 brief，转场归设计系统模板。点击节点，节点信息卡显示在图上方；顶部开关逐条叠加「AI 的三条修正」（仍待拍板）。</p>
+</header>
+
+<section class="controls">
+  <label class="switch"><input type="checkbox" id="t1"><span class="track"></span><span class="lbl"><b>修正①</b> 考卷拆两次调用</span></label>
+  <label class="switch"><input type="checkbox" id="t2"><span class="track"></span><span class="lbl"><b>修正②</b> 拼接后加全片终审</span></label>
+  <label class="switch"><input type="checkbox" id="t3"><span class="track"></span><span class="lbl"><b>修正③</b> 刹车规则写死</span></label>
+  <div class="ctl-right">
+    <button type="button" id="reset">还原定稿</button>
+    <button type="button" id="all">全部采纳</button>
+    <span class="viewchip" id="view">当前视图：v3.1 定稿</span>
+  </div>
+</section>
+
+<main class="layout">
+  <aside class="detail" id="detail" aria-live="polite"></aside>
+
+  <div class="diagram-wrap">
+    <svg id="flowsvg" viewBox="0 0 1180 540" role="img" aria-label="五工位 v3.1 制作流程图：准备阶段三 ReAct agent 工件链 + 打包终审门 + 制作阶段">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
+        </marker>
+      </defs>
+
+      <!-- 阶段底带 -->
+      <rect class="band" x="8" y="24" width="1164" height="116"></rect>
+      <text class="bandlabel" x="24" y="44">准备阶段 · 三步走 · 三个 ReAct AGENT · 工件链</text>
+      <rect class="band" x="8" y="168" width="1164" height="348"></rect>
+      <text class="bandlabel" x="24" y="188">制作阶段</text>
+
+      <!-- 连线 -->
+      <path class="edge" d="M124,90 L168,90"></path>
+      <path class="edge" d="M338,90 L382,90"></path>
+      <path class="edge" d="M572,90 L616,90"></path>
+      <path class="edge" d="M846,90 L890,90"></path>
+      <path class="edge" d="M1015,122 L1015,154 L88,154 L88,251"></path>
+      <path class="edge" d="M152,289 L194,289"></path>
+      <path class="edge" d="M390,249 L432,285"></path>
+      <path class="edge" d="M390,289 L432,289"></path>
+      <path class="edge" d="M390,329 L432,293"></path>
+      <path class="edge" d="M558,289 L600,289"></path>
+      <path class="edge" d="M856,289 L900,289"></path>
+      <path class="edge" d="M961,321 L961,420 L149,420 L149,426"></path>
+      <path class="edge" d="M731,380 L731,400 L295,400 L295,386"></path>
+      <path class="edge" d="M274,468 L316,468"></path>
+      <path class="edge" d="M432,468 L474,468"></path>
+      <path class="edge" d="M700,468 L742,468"></path>
+
+      <!-- 工件标签（准备阶段连线） -->
+      <g pointer-events="none">
+        <text class="ts" x="360" y="80">文字稿</text>
+        <text class="ts" x="594" y="80">风格包</text>
+        <text class="ts" x="868" y="80">分镜稿</text>
+      </g>
+
+      <!-- 打回回环标签（修正③切换） -->
+      <g id="brakeOffL" pointer-events="none">
+        <rect class="subbox-w" x="368" y="390" width="290" height="20"></rect>
+        <text class="tw" x="513" y="404">打回 ≤2 轮 · 同题两现即停？ · 烧尽降级＝？</text>
+      </g>
+      <g id="brakeOnL" class="hidden" pointer-events="none">
+        <rect x="353" y="390" width="320" height="20" rx="10" fill="var(--ok-bg)" stroke="var(--ok)"></rect>
+        <text class="to" x="513" y="404">意见挂条目ID · 同ID两轮失败＝停 · 降级＝带伤发布</text>
+      </g>
+
+      <!-- 图例（右下空档） -->
+      <g pointer-events="none">
+        <text class="lg-t" x="916" y="440" style="font-weight:600">图例</text>
+        <line class="lg-line" x1="916" y1="456" x2="944" y2="456"></line>
+        <text class="lg-t" x="950" y="460">LLM 工位</text>
+        <line class="lg-line dash" x1="1030" y1="456" x2="1058" y2="456"></line>
+        <text class="lg-t" x="1064" y="460">程序化</text>
+        <g class="pill new"><rect x="916" y="470" width="40" height="18"></rect><text x="936" y="483">新增</text></g>
+        <g class="pill mod"><rect x="962" y="470" width="40" height="18"></rect><text x="982" y="483">改造</text></g>
+        <g class="pill has"><rect x="1008" y="470" width="40" height="18"></rect><text x="1028" y="483">已有</text></g>
+        <g class="pill rev"><rect x="1054" y="470" width="84" height="18"></rect><text x="1096" y="483">修正②复活</text></g>
+        <text class="hint" x="916" y="504">点击节点看详情 · 开关叠加待拍板修正</text>
+      </g>
+
+      <!-- 起点 -->
+      <g class="fnode start" data-k="input" tabindex="0" role="button" aria-label="用户输入">
+        <rect class="box" x="24" y="58" width="100" height="64"></rect>
+        <text class="t" x="74" y="84">用户输入</text>
+        <text class="ts" x="74" y="104">主题 / 稿件</text>
+      </g>
+
+      <!-- ① 文稿工位 -->
+      <g class="fnode" data-k="g1" tabindex="0" role="button" aria-label="文稿工位 ReAct agent">
+        <rect class="box" x="168" y="58" width="170" height="64"></rect>
+        <text class="t" x="253" y="78">① 文稿工位</text>
+        <text class="ts" x="253" y="96">联网研究 · 口语化改写</text>
+        <text class="ts" x="253" y="112">产出：文字稿+事实清单</text>
+        <g class="pill mod"><rect x="294" y="49" width="40" height="18"></rect><text x="314" y="62">改造</text></g>
+      </g>
+
+      <!-- ② 风格工位 -->
+      <g class="fnode" data-k="g2" tabindex="0" role="button" aria-label="风格工位 ReAct agent">
+        <rect class="box" x="382" y="58" width="190" height="64"></rect>
+        <text class="t" x="477" y="78">② 风格工位</text>
+        <text class="ts" x="477" y="96">风格库全探索 · 样张验证</text>
+        <text class="ts" x="477" y="112">风格包：描述+语法+设计系统</text>
+        <g class="pill mod"><rect x="528" y="49" width="40" height="18"></rect><text x="548" y="62">改造</text></g>
+      </g>
+
+      <!-- ③ 分镜工位 -->
+      <g class="fnode" data-k="g3" tabindex="0" role="button" aria-label="分镜工位 ReAct agent">
+        <rect class="box" x="616" y="58" width="230" height="64"></rect>
+        <text class="t" x="731" y="78">③ 分镜工位</text>
+        <text class="ts" x="731" y="96">段落 · 切段 · 场景规划（纯内容）</text>
+        <text class="ts" x="731" y="112">首拍/末拍写进 brief · 不出现缝</text>
+        <g class="pill new"><rect x="802" y="49" width="40" height="18"></rect><text x="822" y="62">新增</text></g>
+      </g>
+
+      <!-- 👤 打包终审门 -->
+      <g class="fnode" data-k="gate" tabindex="0" role="button" aria-label="打包终审门，唯一人工门">
+        <rect class="box" x="890" y="58" width="250" height="64"></rect>
+        <text class="t" x="1015" y="78">打包终审门</text>
+        <text class="ts" x="1015" y="96">文字稿+风格包+分镜稿 一次确认</text>
+        <text class="ts" x="1015" y="112">反馈按工件路由</text>
+        <g class="pill gate"><rect x="894" y="49" width="96" height="18"></rect><text x="942" y="62">👤 唯一人工门</text></g>
+      </g>
+
+      <!-- TTS -->
+      <g class="fnode prog" data-k="tts" tabindex="0" role="button" aria-label="TTS 与词级对齐">
+        <rect class="box" x="24" y="257" width="128" height="64"></rect>
+        <text class="t" x="88" y="285">TTS + 词级对齐</text>
+        <text class="ts" x="88" y="305">程序化 · 词级对齐</text>
+        <g class="pill has"><rect x="108" y="248" width="40" height="18"></rect><text x="128" y="261">已有</text></g>
+      </g>
+
+      <!-- ④ 写画面 ×N 并行（扇出容器） -->
+      <g class="fnode" data-k="gen" tabindex="0" role="button" aria-label="写画面工位，N 段并行">
+        <rect class="box" x="200" y="200" width="190" height="180"></rect>
+        <text class="t" x="295" y="222">④ 写画面 ×N 并行</text>
+        <rect class="chipbox" x="216" y="232" width="158" height="34"></rect>
+        <text class="chiptx" x="295" y="253">seg01.html</text>
+        <rect class="chipbox" x="216" y="272" width="158" height="34"></rect>
+        <text class="chiptx" x="295" y="293">seg02.html</text>
+        <rect class="chipbox" x="216" y="312" width="158" height="34"></rect>
+        <text class="chiptx" x="295" y="333">seg03.html</text>
+        <text class="chiptx" x="295" y="366">…… 段 = 并行 / 修复 / 缓存单位</text>
+        <g class="pill mod"><rect x="346" y="191" width="40" height="18"></rect><text x="366" y="204">改造</text></g>
+      </g>
+
+      <!-- 程序 check -->
+      <g class="fnode prog" data-k="chk" tabindex="0" role="button" aria-label="程序 check">
+        <rect class="box" x="438" y="257" width="120" height="64"></rect>
+        <text class="t" x="498" y="285">程序 check</text>
+        <text class="ts" x="498" y="305">lint + 产物不变量</text>
+        <g class="pill has"><rect x="514" y="248" width="40" height="18"></rect><text x="534" y="261">已有</text></g>
+      </g>
+
+      <!-- ⑤ 审核工位 · 渲前场 -->
+      <g class="fnode" data-k="s4pre" tabindex="0" role="button" aria-label="审核工位渲染前场">
+        <rect class="box" x="606" y="200" width="250" height="180"></rect>
+        <text class="t" x="731" y="222">⑤ 审核工位 · 渲前场（静态卷）</text>
+        <g id="examOffG" pointer-events="none">
+          <rect class="subbox-w" x="622" y="234" width="218" height="54"></rect>
+          <text class="tw" x="731" y="254">单调用：写清单 → 对照</text>
+          <text class="tw" x="731" y="272" style="opacity:.85">⚠ 写清单时已看过帧——顺序救不了</text>
+        </g>
+        <g id="examOnG" class="hidden" pointer-events="none">
+          <rect class="subbox-o" x="622" y="228" width="218" height="40"></rect>
+          <text class="to" x="731" y="252">调用A 纯文本：旁白 → 冻结考卷</text>
+          <path d="M731,270 L731,292" stroke="var(--ok)" stroke-width="1.5" fill="none" marker-end="url(#arrow)"></path>
+          <rect class="subbox-o" x="622" y="296" width="218" height="40"></rect>
+          <text class="to" x="731" y="320">调用B 带帧：对照 → 打分 → 意见单</text>
+        </g>
+        <text class="ts" x="731" y="360">分数从清单算出 · 意见单带证据</text>
+        <g class="pill new"><rect x="786" y="191" width="66" height="18"></rect><text x="819" y="204">收拢新建</text></g>
+      </g>
+
+      <!-- 段渲染 -->
+      <g class="fnode prog" data-k="render" tabindex="0" role="button" aria-label="段渲染">
+        <rect class="box" x="906" y="257" width="110" height="64"></rect>
+        <text class="t" x="961" y="285">段渲染</text>
+        <text class="ts" x="961" y="305">程序化 · 出段视频</text>
+        <g class="pill has"><rect x="972" y="248" width="40" height="18"></rect><text x="992" y="261">已有</text></g>
+      </g>
+
+      <!-- ⑤ 审核工位 · 渲后场 -->
+      <g class="fnode" data-k="s4post" tabindex="0" role="button" aria-label="审核工位渲染后场">
+        <rect class="box" x="24" y="432" width="250" height="72"></rect>
+        <text class="t" x="149" y="454">⑤ 审核工位 · 渲后场（动态卷）</text>
+        <text class="ts" x="149" y="472">边界帧对（对 brief 首末拍）+ 动效退场</text>
+        <text class="ts" x="149" y="490">机械修优先 · 段内重画 ≤1 轮</text>
+        <g class="pill new"><rect x="230" y="423" width="40" height="18"></rect><text x="250" y="436">新增</text></g>
+      </g>
+
+      <!-- 拼接 -->
+      <g class="fnode prog" data-k="stitch" tabindex="0" role="button" aria-label="拼接">
+        <rect class="box" x="322" y="432" width="110" height="72"></rect>
+        <text class="t" x="377" y="462">拼接</text>
+        <text class="ts" x="377" y="484">程序化 · ffmpeg · 零改动</text>
+        <g class="pill has"><rect x="388" y="423" width="40" height="18"></rect><text x="408" y="436">已有</text></g>
+      </g>
+
+      <!-- 原案：拼接后零检查 / 修正②：全片终审 -->
+      <g class="fnode danger" id="gapNode" data-k="gap" tabindex="0" role="button" aria-label="拼接后零检查">
+        <rect class="box" x="480" y="432" width="220" height="72"></rect>
+        <text class="tdanger" x="590" y="460">⚠ 拼接后零检查</text>
+        <text class="ts" x="590" y="482" style="fill:var(--danger);opacity:.8">成品无人看 · 点此看风险清单</text>
+      </g>
+      <g class="fnode good hidden" id="finalNode" data-k="final" tabindex="0" role="button" aria-label="全片终审">
+        <rect class="box" x="480" y="432" width="220" height="72"></rect>
+        <text class="t" x="590" y="456">全片终审（瘦身）</text>
+        <text class="ts" x="590" y="474">12–16 帧（段界 + 段落界）</text>
+        <text class="ts" x="590" y="492">查节奏 / 空转 / 拼接完整</text>
+        <g class="pill rev"><rect x="612" y="423" width="84" height="18"></rect><text x="654" y="436">修正②复活</text></g>
+      </g>
+
+      <!-- 出片 -->
+      <g class="fnode start" data-k="out" tabindex="0" role="button" aria-label="渲染出片">
+        <rect class="box" x="748" y="432" width="128" height="72"></rect>
+        <text class="t" x="812" y="473">渲染出片</text>
+      </g>
+    </svg>
+  </div>
+</main>
+
+<details class="map">
+  <summary>导演退役对照表：原来的两个介入点去哪了</summary>
+  <table>
+    <tr><th>原介入点</th><th>去向</th></tr>
+    <tr><td>M1 定调<br><span style="color:var(--muted)">分镜后补注章 / 母题 / 节拍表（f1097f2 已建）</span></td><td><b>退役。</b>节拍表的「预期考卷」职责 → 审核工位渲前场首轮清单（其生产方式由争议①决定：单调用还是两调用）；章 → 可砍 / 降可选；母题 → 可选（零母题本就合法）。代价：生成侧失去节拍注入，内容与节拍对应粗一档，记账观察。</td></tr>
+    <tr><td>M2 审片<br><span style="color:var(--muted)">组装后 24 帧连环画四查、high 打回 ≤1 轮</span></td><td><b>拆解。</b>expectation 查 → 渲前静态卷（考卷对照）；motif 查 → 随母题退役；<span style="color:var(--warn)">pacing / deadair 查 → 原案无人接手，修正②的全片终审即为此而设</span>；衔接查 → 渲后动态卷（边界帧对 brief 首末拍）。</td></tr>
+  </table>
+</details>
+
+<section class="undecided">
+  <h2>未决 / 缓做事项 · AI 的立场</h2>
+  <table>
+    <tr><th>事项</th><th>状态</th><th>立场</th><th>理由</th></tr>
+    <tr>
+      <td>审片误报记账提前开张</td><td>未拍板（建议项）</td>
+      <td><span class="stance yes">建议立即开张</span></td>
+      <td>夜跑已在产审片数据，成本只是结构化落盘；没有基线，架构前后「更好 / 更坏」不可证伪——未决里杠杆最高。</td>
+    </tr>
+    <tr>
+      <td>先配后切（TTS 前移，拿真实句级时间戳再切段）</td><td>未拍板（建议采纳）</td>
+      <td><span class="stance yes">建议采纳</span></td>
+      <td>停顿证据 × 话题完整 × 剪辑语法三层合一切段；③的 <code>tts_align</code> 工具已按「采纳后注册」预留，拍板即接通。</td>
+    </tr>
+    <tr>
+      <td>时长窗校验（原 8–20s 全局硬带）</td><td><b>已了结</b></td>
+      <td><span class="stance merge">每风格段长带 + 全局钳制</span></td>
+      <td>段长随风格剪辑语法出（羊皮纸 6–10s / 长镜头 12–18s），全局钳 5–20s（入场动画计入段长）保渲染与审核经济性；优先级：话题完整 &gt; 风格密度。</td>
+    </tr>
+    <tr>
+      <td>seam_in 缝型 / 转场库 / 缝处理推导器</td><td><b>已退役（v3.1 定稿）</b></td>
+      <td><span class="stance defer">缝概念整体退役</span></td>
+      <td>首末拍 = 场景 brief 的内容（③写）；转场 = 设计系统标准入场/收尾模板（②的风格资产）；邻段承诺对所有段白送注入。拼接层永远零改动——「转场分层动 assemble」不是缓做，是不需要。</td>
+    </tr>
+    <tr>
+      <td>接缝「治」（参考图修后段）</td><td>等记账</td>
+      <td><span class="stance defer">同意缓做</span></td>
+      <td>「防」（邻段承诺 + 设计系统模板）与「查」（渲后场对 brief 首末拍）均已并入；治等真伤。</td>
+    </tr>
+    <tr>
+      <td>逐缝编辑例外（风格语法 override 表）</td><td>缓做（等审片数据）</td>
+      <td><span class="stance defer">先不做</span></td>
+      <td>「跨段就要硬切」这类例外先不做；若审片频繁出现「推导出的开场处理生硬」，再议给③加可选内容级节拍标注。</td>
+    </tr>
+    <tr>
+      <td>风格包探索语境对③的价值</td><td>未证实（观察项）</td>
+      <td><span class="stance defer">记账观察</span></td>
+      <td>若场景规划反复与风格理由脱节，先做便宜实验：风格描述加「探索纪要」字段跑两批对比。</td>
+    </tr>
+    <tr>
+      <td>段级自检等 v2 概念</td><td>等数据</td>
+      <td><span class="stance defer">同意搁置</span></td>
+      <td>记账数据说话。</td>
+    </tr>
+  </table>
+</section>
+
+<footer>生成于 2026-10-15 讨论会 · 仅供架构讨论，不随代码发布 · 准备阶段定稿见 <code>docs/prep-agents-design.md</code> · 修正①②③需人工拍板后回写纪要</footer>
+
+<script>
+(function () {
+  var DETAILS = {
+    input: {
+      type: "起点 · 人工", cls: "", title: "用户输入主题 / 稿件",
+      rows: [["说明", "用户提供主题或整篇稿件，进入准备阶段。"], ["下游", "① 文稿工位（ReAct agent）"]]
+    },
+    g1: {
+      type: "ReAct agent · 纯文本 · v3.1 拆分", cls: "", title: "① 文稿工位",
+      rows: [
+        ["职责", "主题模式先联网搜集资料，再把材料改写成适合朗读的口播稿。只管「说什么」——不含段落/切段等结构决策，不含任何视觉决策。"],
+        ["工具", "<code>read_source</code>（材料唯一入口，含目标时长）/ <code>web_search</code> / <code>fetch_page</code> / <code>estimate_speech_duration</code>（≈4.5 字/秒，时长自检）/ <code>submit_script</code>——<em>唯一出口</em>（submit-or-die）。"],
+        ["产物", "文字稿 = 旁白正文（程序按句切分编号 N1…Nn）+ fact_sheet（断言 → 来源 URL）。硬事实逐条可溯源，随工件进指纹，供⑤「事实核查」查项。"],
+        ["防注入", "网页内容是数据不是指令——红线写进提示词；fetch_page 剥广告导航、超长截断。"],
+        ["预算", "回合预算 ①≤4，框架侧配置、不进提示词；超限 = 本步失败 + 记账 + 至多一次冷重试。"]
+      ]
+    },
+    g2: {
+      type: "ReAct agent · 多模态 · v3.1 改造", cls: "", title: "② 风格工位",
+      rows: [
+        ["职责", "为文字稿选定视觉风格，产出可直接指导制作的风格包。对风格库拥有完整探索能力：分面检索、详情+样张图库、历史使用与审核记账、样张渲染验证、衍生登记。"],
+        ["工具", "<code>get_script</code> / <code>search_styles</code>（情绪/题材/色调/密度分面）/ <code>get_style_detail</code> / <code>get_style_usage</code>（⑤记账反馈回②，数据驱动选型）/ <code>render_sample</code> / <code>register_style</code>（衍生治理：derived_from 出处 + 「未验证」标签，过⑤审核才转正，单 run 限 1 个）/ <code>submit_style</code>。"],
+        ["风格包四件", "① 风格描述（附选择理由，供③理解语境）；② 剪辑语法三字段：切分密度 / 段长带 / 同舞台延续；③ 设计系统——含<em>标准入场/收尾动画模板</em>（水墨晕染显影、羊皮纸翻页起手），转场的载体；④ 样张 id 列表。"],
+        ["纪律", "样张场景必须取自口播稿代表性内容，禁止通用示例；口播稿文本一个字不改（文字稿门后冻结）。"],
+        ["预算", "回合预算 ②≤12（框架侧）。"]
+      ]
+    },
+    g3: {
+      type: "ReAct agent · 纯文本 · v3.1 新增", cls: "", title: "③ 分镜工位",
+      rows: [
+        ["职责", "<em>纯内容</em>：段落 + 切段 + 逐段场景 brief（scene / first_frame / last_frame）。不出现任何缝/转场/机制概念。"],
+        ["切段三层", "话题完整（硬约束）&gt; 停顿证据（<code>tts_align</code>，先配后切采纳后注册）&gt; 剪辑语法（软约束）。全局段长钳 5–20s，入场动画计入段长。"],
+        ["首拍/末拍", "brief 必写首拍（如何开场；延续上段则写明接续点）与末拍（画面收在哪里）——相邻段衔接的全部依据。想要画面连续过渡 = <em>并成一段</em>，不是设缝。"],
+        ["旁白引用", "narration_refs 只引句编号（N3-N4）不抄文本，零转抄漂移；草稿先过 <code>validate_storyboard</code> 修到零错误，再 <code>submit_storyboard</code>。段落带一句话主题，按段序铺满。"],
+        ["预算", "回合预算 ③≤10（框架侧）。"]
+      ]
+    },
+    gate: {
+      type: "👤 人工门 · v3.1 移位", cls: "good", title: "打包终审门（唯一人工门）",
+      rows: [
+        ["位置", "三个步骤全部完成之后、昂贵制作开始之前。门不再切在②③中间——连续探索不被打断，<em>分镜稿从此有人工过目</em>。"],
+        ["看什么", "三工件打包一次确认：文字稿 + 风格包（描述 / 剪辑语法 / 设计系统 / 样张）+ 分镜稿。拦在昂贵的制作之前。"],
+        ["反馈路由", "改文字 → 重①（②③级联）；改风格 → 重②③；改结构/场景 → 重③。Go 拥有路由，manifest 记录。"],
+        ["设计原则", "工件即共享上下文：③看到的不是②的探索过程，而是②沉淀的风格包——<em>信号走工件，噪音留在过程里</em>。三个会话独立，无互相调用。"]
+      ]
+    },
+    tts: {
+      type: "程序化 · 已有", cls: "", title: "TTS + 词级对齐",
+      rows: [
+        ["职责", "整片 TTS 配音 + 词级时间戳对齐。"],
+        ["为什么重要", "句级时间戳是句末靶向抽帧、考卷锚句校验、打回靶向的物理基础；真实时长也只有 TTS 之后才知道（估算乐观约 12%）。"]
+      ]
+    },
+    gen: {
+      type: "LLM 工位 · v3.1 改造", cls: "", title: "④ 写画面工位 ×N 段并行",
+      rows: [
+        ["职责", "逐段并行生成自包含 HTML。段 = 文件 = 时间轴 = 渲染单位 = 缓存单位（四同构），画面是 t 的纯函数。"],
+        ["注入内容", "场景 brief（首拍/末拍）+ 段落主题 + 段内位置 + 词级时间戳 + 设计系统 + <em>邻段两行承诺</em>（所有段白送注入，内容取自相邻 brief 的末拍/首拍——防层，非某类缝专属）。"],
+        ["转场归属", "转场 = 设计系统的标准入场/收尾动画模板，一段内生效、计入段长预算；④不逐段即兴发明，<em>拼接层永远零改动</em>（装配由代码拥有，见确定性焊死清单）。"]
+      ]
+    },
+    chk: {
+      type: "程序化 · 已有", cls: "", title: "程序 check",
+      rows: [
+        ["职责", "契约 lint（唯一 paused timeline、禁页面自走时钟 / 未种子化随机 / CSS animation）+ 产物不变量（强制软件光栅、字幕完整性等）。"],
+        ["意义", "便宜门挡在贵门（多模态审核）之前；确定性、可重放。"]
+      ]
+    },
+    s4pre: {
+      type: "多模态 LLM 工位 · v3 收拢新建", cls: "", title: "⑤ 渲前场（静态卷）",
+      rows: [
+        ["职责", "句末靶向抽帧（每段封顶两三帧 + 首尾帧，帧身份标注「此刻刚念完某句」）→ 先写「该有什么」清单 → 对照打分 → 结构化意见单（位置 / 期望 / 现状 / 证据）。"],
+        ["考卷新增", "两类查项（改动清单 #11）：事实核查（对 fact_sheet 逐条抽验）、边界帧（对 brief 首末拍——brief 说延续就查接得住，说新场景就查开场对不对）。"],
+        ["v3 变化", "收拢原三处审查；考卷来源为「审核首轮清单」（落盘冻结，修复轮只销账不发明新标准）；接管导演退役后的 expectation 检查。"],
+        ["已接受代价", "审帧预算上升（约 30–40 帧 vs 现 24 帧）；Expect 质量无程序验证，误报只能记账。"],
+        ["争议", "<span class='q'>① 考卷单调用还是两调用（顶部开关可对比）；③ 刹车「同题」判定与降级出口未定义。</span>"],
+        ["打回", "≤2 轮，修复回 ④ 重画（只花一段的钱），回来销账 + 帧比对（图中橙色回环）。"]
+      ]
+    },
+    render: {
+      type: "程序化 · 已有", cls: "", title: "段渲染",
+      rows: [
+        ["职责", "逐段把 HTML 渲染成段视频：渲前场吃它的截帧，渲后场与拼接吃它的成片。"],
+        ["意义", "段是渲染原子单位——重渲只花一段的钱，这是打回循环经济性的物理基础；换转场语言 = 改设计系统模板 + 重渲受影响段（按段计价）。"]
+      ]
+    },
+    s4post: {
+      type: "多模态 LLM 工位 · v3 新增", cls: "", title: "⑤ 渲后场（动态卷）",
+      rows: [
+        ["职责", "段渲完、拼接前：边界帧对 + 动效 / 退场判据——查「动起来才可见」的问题（prereview 已知盲区）。"],
+        ["分诊", "机械修优先：转场 / 字幕时序在拼接层直接修，不打回；段内真动错了才重画，≤1 轮。"],
+        ["覆盖", "接缝「查」层并入：边界帧对直接<em>对 brief 查</em>——brief 说首拍延续推近终点，边界帧对比是否接得住；色量亮度跳变程序预筛。缝型词汇已退役，判据只剩 brief 首末拍。"]
+      ]
+    },
+    stitch: {
+      type: "程序化 · 已有", cls: "", title: "拼接",
+      rows: [
+        ["职责", "段视频按序拼接 + 音轨合成（ffmpeg）。"],
+        ["注", "渲后场发现的转场 / 字幕时序问题在此机械修（既有行为，非转场机制）。v3.1 定稿：转场是段内时间线的组成部分，<em>拼接层永远零改动</em>——原「转场分层动 assemble」事项不是缓做，是不需要。"]
+      ]
+    },
+    gap: {
+      type: "⚠ 空白 · 原案", cls: "bad", title: "拼接后零检查",
+      rows: [
+        ["现状风险", "拼接后无人看成品。暴露面：段序拼错、拼接处黑帧、音画错位、全片节奏 / 空转无人查。"],
+        ["为什么会这样", "现 M2（全片 24 帧连环画，pacing / deadair 坐标系 = 章）随导演一起退役；渲后场又止步于「拼接前」。此代价纪要未显式记录——是被静默丢掉的。"],
+        ["修正②", "拼接后加<em>瘦身全片终审</em>：12–16 帧（段界 + 段落界稀疏抽帧），只查 pacing / deadair / 拼接完整，一次便宜调用——约等于 M2 砍掉 expectation / motif 两查、抽帧密度减半。若决定不要，请显式写入「接受代价 + 记账清单」。"]
+      ]
+    },
+    final: {
+      type: "多模态 LLM 工位 · 修正②新增", cls: "good", title: "全片终审（瘦身）",
+      rows: [
+        ["职责", "拼接后的全片终审：12–16 帧稀疏连环画（段界 + 段落界时刻），只查三样——全片节奏（pacing）、单点空转（deadair）、拼接完整性（顺序 / 黑帧 / 音画）。"],
+        ["成本", "一次小调用，帧数约为现 M2 的一半。"],
+        ["取舍", "若判断不需要，须显式把「全片视角 QC 放弃」写入接受代价 + 记账清单，而不是静默丢失。"]
+      ]
+    },
+    out: {
+      type: "终点", cls: "", title: "渲染出片",
+      rows: [["说明", "渲染出片；manifest 全程可查，循环由 Go 拥有（确定性、可重放）。"]]
+    }
+  };
+
+  var detail = document.getElementById("detail");
+  var current = "gate";
+
+  function renderDetail(k) {
+    var d = DETAILS[k];
+    if (!d) return;
+    var html = '<div class="d-head"><span class="d-type ' + d.cls + '">' + d.type + "</span><h3>" + d.title + "</h3></div>";
+    var rowsHtml = "";
+    d.rows.forEach(function (r) {
+      rowsHtml += '<div class="d-row"><span class="d-k">' + r[0] + '</span><div class="d-v">' + r[1] + "</div></div>";
+    });
+    html += '<div class="d-rows">' + rowsHtml + "</div>";
+    detail.innerHTML = html;
+  }
+
+  function select(k) {
+    current = k;
+    document.querySelectorAll("#flowsvg .fnode.active").forEach(function (n) { n.classList.remove("active"); });
+    document.querySelectorAll('#flowsvg .fnode[data-k="' + k + '"]').forEach(function (n) { n.classList.add("active"); });
+    renderDetail(k);
+  }
+
+  document.querySelectorAll("#flowsvg .fnode").forEach(function (n) {
+    n.addEventListener("click", function () {
+      select(n.getAttribute("data-k"));
+      var r = detail.getBoundingClientRect();
+      if (r.top < 0) { detail.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+    });
+    n.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(n.getAttribute("data-k")); }
+    });
+  });
+
+  function apply() {
+    var t1 = document.getElementById("t1").checked;
+    var t2 = document.getElementById("t2").checked;
+    var t3 = document.getElementById("t3").checked;
+    document.getElementById("examOffG").classList.toggle("hidden", t1);
+    document.getElementById("examOnG").classList.toggle("hidden", !t1);
+    document.getElementById("brakeOffL").classList.toggle("hidden", t3);
+    document.getElementById("brakeOnL").classList.toggle("hidden", !t3);
+    document.getElementById("gapNode").classList.toggle("hidden", t2);
+    document.getElementById("finalNode").classList.toggle("hidden", !t2);
+    if (t2 && current === "gap") select("final");
+    if (!t2 && current === "final") select("gap");
+    var on = [];
+    if (t1) on.push("①"); if (t2) on.push("②"); if (t3) on.push("③");
+    document.getElementById("view").textContent = on.length ? "当前视图：定稿 + 修正 " + on.join("、") : "当前视图：v3.1 定稿";
+  }
+
+  ["t1", "t2", "t3"].forEach(function (id) {
+    document.getElementById(id).addEventListener("change", apply);
+  });
+  document.getElementById("reset").addEventListener("click", function () {
+    ["t1", "t2", "t3"].forEach(function (id) { document.getElementById(id).checked = false; });
+    apply();
+  });
+  document.getElementById("all").addEventListener("click", function () {
+    ["t1", "t2", "t3"].forEach(function (id) { document.getElementById(id).checked = true; });
+    apply();
+  });
+
+  select("gate");
+  apply();
+})();
+</script>
+</body>
+</html>

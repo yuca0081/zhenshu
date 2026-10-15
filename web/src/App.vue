@@ -13,7 +13,7 @@ import LoginView from './components/LoginView.vue'
 import AccountMenu from './components/AccountMenu.vue'
 import UserAdminModal from './components/UserAdminModal.vue'
 import { api, setOnUnauthorized, sseURL } from './api'
-import type { ActivityEvent, AudioMeta, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, Storyboard, Style, StyleSamples, TabID, UserInfo } from './types'
+import type { ActivityEvent, AudioMeta, ChatRef, Manuscript, Msg, PrepView, ProjectRow, ProjectView, Storyboard, Style, StyleSamples, TabID, UserInfo } from './types'
 import { errMsg } from './format'
 import { segAt, segTable } from './segtime'
 
@@ -76,6 +76,7 @@ const view = ref<ProjectView | null>(null)
 const storyboard = ref<Storyboard | null>(null)
 const style = ref<StyleSamples | null>(null)
 const manuscript = ref<Manuscript | null>(null)
+const prep = ref<PrepView | null>(null) // 准备阶段三工件（终审页签数据源）
 const msgs = ref<Msg[]>([])
 const chatDraft = ref('')
 const chatRefs = ref<ChatRef[]>([]) // 引用列表（时间轴/分镜点选加入，输入框上方展示）
@@ -149,18 +150,20 @@ async function loadProject(id: string) {
     const v = await api.project(id)
     if (seq !== reqSeq) return
     view.value = v
-    const [sb, st, ms, am] = await Promise.all([
+    const [sb, st, ms, am, pp] = await Promise.all([
       v.gates.storyboard ? api.storyboard(id).catch(() => null) : Promise.resolve(null),
       v.gates.style_draft ? api.style(id).catch(() => null) : Promise.resolve(null),
       // 门未过给 null：清掉旧项目的残留（否则新项目页会闪现上一个项目的文稿/分镜/样张）
       v.gates.manuscript ? api.manuscript(id).catch(() => null) : Promise.resolve(null),
       api.audioMeta(id).catch(() => null),
+      api.prep(id).catch(() => null),
     ])
     if (seq !== reqSeq) return
     storyboard.value = sb
     style.value = st
     manuscript.value = ms
     audioMeta.value = am
+    prep.value = pp && pp.exists ? pp : null
   } finally {
     if (inflight.get(key) === seq) inflight.delete(key)
   }
@@ -221,6 +224,7 @@ function selectProject(id: string) {
   storyboard.value = null
   style.value = null
   manuscript.value = null
+  prep.value = null
   audioMeta.value = null
 }
 
@@ -335,6 +339,9 @@ function openSSE(id: string) {
   })
   es.addEventListener('style_confirmed', () => loadProject(id).catch(() => {}))
   es.addEventListener('style_applied', () => { loadProject(id).catch(() => {}); loadLibrary() })
+  // 准备工位：确认门落定 / 反馈重跑完成 → 重拉三工件与门态
+  es.addEventListener('prep_confirmed', () => loadProject(id).catch(() => {}))
+  es.addEventListener('prep_updated', () => loadProject(id).catch(() => {}))
   es.addEventListener('done', () => {
     stageState.value = {}
     progressLine.value = ''
@@ -429,6 +436,8 @@ const autoTab = computed<TabID>(() => {
   const v = view.value
   if (!v) return 'manuscript'
   if (v.has_video || v.producing) return 'video'
+  // 打包终审（全流程唯一人工门）：三工件出齐未确认 → 停在终审
+  if (prep.value?.exists && prep.value.script && prep.value.stylepack && prep.value.draft && !prep.value.confirmed) return 'review'
   if (v.gates.style_draft) return 'style'
   if (v.gates.storyboard) return 'storyboard'
   return 'manuscript'
@@ -537,12 +546,14 @@ async function confirmStyle() {
             <StagePanel
               v-if="current" :key="current"
               :tab="activeTab" :view="view" :storyboard="storyboard" :style-samples="style" :manuscript="manuscript"
+              :prep="prep"
               :stage-summary="stageSummary" :video-id="current" :audio-meta="audioMeta"
               :picked-idx="chatRefs.map(r => r.idx)" :video-rev="videoRev" :progress-line="progressLine"
               :activity="activity" :agent-busy="turnActive"
               @tab="setTab" @go-tab="setTab"
               @saved="refresh" @chat-sent="markBusy"
               @confirm-style="confirmStyle"
+              @confirm-prep="refresh"
               @seg="addRef"
               @pick-time="addTimeRef"
               @cancel="async () => { if (current) { await api.cancel(current).catch(() => {}); refresh() } }"

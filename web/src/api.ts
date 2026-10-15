@@ -1,4 +1,4 @@
-import type { ActivityEvent, AudioMeta, AuthStatus, ChatRef, Manuscript, Msg, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, UserInfo, UserRow, VocabEntry } from './types'
+import type { ActivityEvent, AudioMeta, AuthStatus, ChatRef, Manuscript, Msg, PrepView, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, UserInfo, UserRow, VocabEntry } from './types'
 
 // ── 会话认证（cookie 会话，HttpOnly，浏览器自动携带）──────────
 // 凭据不进 JS：localStorage 存 token / ?token= 进 URL 的旧方案已废。
@@ -87,6 +87,12 @@ export const api = {
   style: (id: string) => req<StyleSamples>(`/api/projects/${id}/style`),
 
   confirmStyle: (id: string) => post<{ ok: boolean }>(`/api/projects/${id}/style/confirm`),
+
+  // 准备阶段三工件打包视图（终审页签；exists=false = 非新路径项目）
+  prep: (id: string) => req<PrepView>(`/api/projects/${id}/prep`),
+
+  // 打包终审确认（全流程唯一人工门）：文字稿+风格包+分镜稿一次确认
+  confirmPrep: (id: string) => post<{ ok: boolean; direction: string }>(`/api/projects/${id}/prep/confirm`),
 
   chat: (id: string, content: string, refs: ChatRef[] = []) =>
     post<{ ok: boolean }>(`/api/projects/${id}/chat`, { content, refs }),

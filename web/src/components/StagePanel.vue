@@ -2,15 +2,16 @@
 import { KeepAlive, computed, ref, watch } from 'vue'
 import { NButton, NInput, NInputNumber, NSelect, NSpin, useMessage } from 'naive-ui'
 import { api, videoURL } from '../api'
-import type { ActivityEvent, AudioMeta, Manuscript, ProjectView, Storyboard, StyleSamples, TabID } from '../types'
+import type { ActivityEvent, AudioMeta, Manuscript, PrepView, ProjectView, Storyboard, StyleSamples, TabID } from '../types'
 import ManuscriptPane from './ManuscriptPane.vue'
 import StylePane from './StylePane.vue'
+import PrepPane from './PrepPane.vue'
 import VideoPane from './VideoPane.vue'
 import ActivityFeed from './ActivityFeed.vue'
 
-// 舞台页签宿主（弹窗体系退役）：文稿/分镜/风格/视频四页占据中间区域。
+// 舞台页签宿主（弹窗体系退役）：文稿/分镜/风格/终审/视频五页占据中间区域。
 // 页签常亮 + 红绿灯（门过没过）+ 过期点（成片落后上游）——App 持有 activeTab
-// （未手动选择时按管线进度自动落页）。KeepAlive 缓存三个组件页签：切页不丢
+// （未手动选择时按管线进度自动落页）。KeepAlive 缓存组件页签：切页不丢
 // 文稿编辑态/风格开关态/视频播放位置。右上角常驻 下载成片 + 事件流开关。
 const props = defineProps<{
   tab: TabID
@@ -18,6 +19,7 @@ const props = defineProps<{
   storyboard: Storyboard | null
   styleSamples: StyleSamples | null
   manuscript: Manuscript | null
+  prep: PrepView | null
   stageSummary: { key: string; state: string }[] | null
   videoId: string
   audioMeta: AudioMeta | null
@@ -34,6 +36,7 @@ const emit = defineEmits<{
   'pick-time': [t: number]
   'rework-started': []
   'confirm-style': []
+  'confirm-prep': []
   saved: []
   'chat-sent': []
   'go-tab': [t: TabID]
@@ -43,12 +46,18 @@ const emit = defineEmits<{
 // 页签状态灯（title 悬停说明）：绿=这关过了；黄=还没弄好（没存文稿/没生成分镜/
 // 风格没确认）；琥珀描边=成片生成后又改过；视频页蓝=制作中。
 // 段数/已确认之类的小字标已撤——状态看灯就够，细节在悬停说明和面板里。
-const tabs = [
-  { id: 'manuscript', label: '文稿' },
-  { id: 'storyboard', label: '分镜' },
-  { id: 'style', label: '风格' },
-  { id: 'video', label: '视频' },
-] as const
+const tabs = computed(() => {
+  const base = [
+    { id: 'manuscript', label: '文稿' },
+    { id: 'storyboard', label: '分镜' },
+    { id: 'style', label: '风格' },
+  ] as const
+  // 终审页签：准备工位三工件（新路径项目）才有——打包终审是全流程唯一人工门
+  const list: { id: TabID; label: string }[] = [...base]
+  if (props.prep?.exists) list.push({ id: 'review', label: '终审' })
+  list.push({ id: 'video', label: '视频' })
+  return list
+})
 
 function tabState(id: TabID): { cls: string[]; title: string; label: string } {
   const v = props.view
@@ -71,6 +80,14 @@ function tabState(id: TabID): { cls: string[]; title: string; label: string } {
       return {
         cls: [v.gates.style_confirmed ? 'ok' : 'wait', stale.style ? 'stale' : ''].filter(Boolean),
         title: v.gates.style_confirmed ? (stale.style ? '风格已确认（成片生成后又改过，重做才进片）' : '风格已确认') : v.gates.style_draft ? '样张已出，还没确认' : '还没有风格——选库内条目或描述方向',
+        label: '',
+      }
+    case 'review':
+      return {
+        cls: [v.gates.style_confirmed ? 'ok' : 'wait'],
+        title: props.prep?.exists
+          ? (v.gates.style_confirmed ? '打包终审已通过' : '三工件已出，等打包终审确认（全流程唯一人工门）')
+          : '这个项目没走准备工位',
         label: '',
       }
     default:
@@ -260,6 +277,11 @@ async function redoFull() {
             :project-id="videoId" :view="view" :style-samples="styleSamples"
             :video-stale="view.video_stale.style"
             @saved="emit('saved')" @confirm-style="emit('confirm-style')" @chat-sent="emit('chat-sent')"
+          />
+          <PrepPane
+            v-else-if="tab === 'review'"
+            :project-id="videoId" :prep="prep" :confirmed="!!view.gates.style_confirmed" :agent-busy="agentBusy"
+            @confirmed="emit('confirm-prep')" @chat-sent="emit('chat-sent')"
           />
           <VideoPane
             v-else

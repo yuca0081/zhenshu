@@ -224,8 +224,12 @@ type Stage struct {
 }
 
 // Stages M0 管线：固定顺序 = 依赖方向（音频先于画面、基准先于适配）。
+// prep 是准备阶段三工位（①文稿②风格③分镜，docs/prep-agents-design.md）——
+// 经 PrepFn 钩子接线（main 注入 prep.Run，防 import 环）；产物齐全即重放跳过，
+// LLM 未配置时内部降级，legacy 单发路径照常接管。
 func Stages() []Stage {
 	return []Stage{
+		{Name: "prep", Run: stagePrep},
 		{Name: "manuscript", Run: stageManuscript},
 		{Name: "storyboard", Run: stageStoryboard},
 		{Name: "style_samples", Run: stageStyleSamples},
@@ -235,6 +239,36 @@ func Stages() []Stage {
 		{Name: "render", Run: stageRender},
 		{Name: "stitch", Run: stageStitch},
 	}
+}
+
+// PrepFn 准备阶段工位钩子（main 接线 = prep.Run；nil = 未接线，prep 跳过）。
+var PrepFn func(ctx context.Context, p *Project) error
+
+// stagePrep 准备阶段：三工件（scripts/script.json、style/stylepack.json、
+// storyboards/draft.json）任一缺失才跑工位；老项目（无文字稿工件但 legacy 分镜
+// 已在）不碰——升级走显式反馈重跑，不靠管线偷偷重写。
+func stagePrep(p *Project) error {
+	if PrepFn == nil {
+		p.Manifest("prep.skipped", "准备工位未接线")
+		return nil
+	}
+	complete := true
+	for _, rel := range []string{"scripts/script.json", "style/stylepack.json", "storyboards/draft.json"} {
+		if !exists(p.Artifact(rel)) {
+			complete = false
+			break
+		}
+	}
+	if complete {
+		return nil // 重放语义：三工件齐全，翻译产物随工件在，直接进制作
+	}
+	if !exists(p.Artifact("scripts/script.json")) {
+		if _, err := os.Stat(p.Artifact("storyboards/storyboard.json")); err == nil {
+			p.Manifest("prep.skipped", "老项目（legacy 分镜已在）——不重写，升级走反馈重跑")
+			return nil
+		}
+	}
+	return PrepFn(pctx(p), p)
 }
 
 // Run 顺序执行阶段；遇 等待LLM/待实现/错误 即停（产物已落盘，重跑续上）。

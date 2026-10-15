@@ -1,0 +1,203 @@
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { NButton, NInput, useMessage } from 'naive-ui'
+import { api } from '../api'
+import type { PrepView } from '../types'
+import SampleFrame from './SampleFrame.vue'
+
+// 打包终审（全流程唯一人工门，docs/prep-agents-design.md §2）：
+// 文字稿 + 风格包 + 分镜稿 三工件一次确认，拦在昂贵的制作之前。
+// 反馈按工件路由：改文字→重①（②③级联）/ 改风格→重②③ / 改结构场景→重③——
+// 快捷按钮把要求转成对话消息，由主管 Agent 调 rerun_prep 执行。
+const props = defineProps<{
+  projectId: string
+  prep: PrepView | null
+  confirmed: boolean
+  agentBusy: boolean
+}>()
+const emit = defineEmits<{ confirmed: []; 'chat-sent': [] }>()
+
+const message = useMessage()
+const confirming = ref(false)
+
+async function confirm() {
+  if (!props.projectId || confirming.value) return
+  if (!window.confirm('确认三工件并锁定设计系统？确认后即可开工（制作阶段会按这套分镜与风格执行）。')) return
+  confirming.value = true
+  try {
+    const r = await api.confirmPrep(props.projectId)
+    message.success(`打包终审通过：${r.direction}`)
+    emit('confirmed')
+  } catch (e) {
+    message.error((e as Error).message)
+  } finally {
+    confirming.value = false
+  }
+}
+
+// ── 反馈路由：要求转对话消息，主管 Agent 据此调 rerun_prep ──
+const feedback = ref('')
+const feedbackTarget = ref<'script' | 'style' | 'storyboard'>('storyboard')
+const targets = [
+  { id: 'script', label: '改文字', hint: '重跑文稿工位（风格分镜级联重做）' },
+  { id: 'style', label: '改风格', hint: '重跑风格工位（分镜级联重做）' },
+  { id: 'storyboard', label: '改结构/场景', hint: '只重跑分镜工位' },
+] as const
+async function sendFeedback() {
+  const note = feedback.value.trim()
+  if (!note || !props.projectId || props.agentBusy) return
+  const t = targets.find(x => x.id === feedbackTarget.value)!
+  try {
+    await api.chat(props.projectId, `打包终审反馈（${t.label}）：${note}`)
+    feedback.value = ''
+    emit('chat-sent')
+  } catch (e) {
+    message.error((e as Error).message)
+  }
+}
+
+const samples = computed(() => props.prep?.design?.samples ?? [])
+const segs = computed(() => props.prep?.draft?.segments ?? [])
+const paragraphs = computed(() => props.prep?.draft?.paragraphs ?? [])
+const sentences = computed(() => props.prep?.script?.sentences ?? [])
+</script>
+
+<template>
+  <div class="prep">
+    <template v-if="prep?.exists && prep.script && prep.stylepack && prep.draft">
+      <header class="head">
+        <div class="head-main">
+          <h3>打包终审</h3>
+          <p class="sub">
+            文字稿 {{ sentences.length }} 句 · 风格「{{ prep.style_name || prep.stylepack.style_id }}」 ·
+            分镜 {{ segs.length }} 段 / 约 {{ Math.round(segs.reduce((a, s) => a + s.duration_hint, 0)) }} 秒
+          </p>
+        </div>
+        <div v-if="confirmed" class="ok-badge">✓ 已确认，可开工</div>
+        <NButton v-else type="primary" :loading="confirming" @click="confirm">确认打包，允许开工</NButton>
+      </header>
+
+      <div class="scroll">
+        <!-- ① 文字稿 -->
+        <section class="card">
+          <h4>① 文字稿<span class="meta">{{ prep.script.word_count }} 字 / 目标约 {{ Math.round(prep.script.target_seconds) }} 秒</span></h4>
+          <ol class="sentences">
+            <li v-for="s in sentences" :key="s.id"><i>{{ s.id }}</i>{{ s.text }}</li>
+          </ol>
+          <details v-if="prep.script.fact_sheet?.length" class="facts">
+            <summary>事实清单（{{ prep.script.fact_sheet.length }} 条，逐条可溯源）</summary>
+            <ul>
+              <li v-for="(f, i) in prep.script.fact_sheet" :key="i">
+                {{ f.claim }} <a v-if="f.url" :href="f.url" target="_blank" rel="noopener">来源 ↗</a>
+              </li>
+            </ul>
+          </details>
+        </section>
+
+        <!-- ② 风格包 -->
+        <section class="card">
+          <h4>② 风格包<span class="meta">{{ prep.stylepack.direction }}</span></h4>
+          <p class="desc">{{ prep.stylepack.description }}</p>
+          <div class="grammar">
+            <span>切分密度：{{ prep.stylepack.grammar.density }}</span>
+            <span>段长带：{{ prep.stylepack.grammar.band_min }}–{{ prep.stylepack.grammar.band_max }} 秒</span>
+            <span>同舞台延续：{{ prep.stylepack.grammar.continuity }}</span>
+          </div>
+          <div v-if="samples.length" class="samples">
+            <figure v-for="(s, i) in samples" :key="i" class="sample">
+              <SampleFrame :html="s.html" />
+              <figcaption>{{ s.tag }} — {{ s.desc }}</figcaption>
+            </figure>
+          </div>
+        </section>
+
+        <!-- ③ 分镜稿 -->
+        <section class="card">
+          <h4>③ 分镜稿<span v-if="paragraphs.length" class="meta">段落：{{ paragraphs.map(p => p.title).join(' → ') }}</span></h4>
+          <table class="sb">
+            <thead><tr><th style="width:44px">段</th><th style="width:120px">标题</th><th style="width:80px">旁白</th><th>场景 / 首拍 / 末拍</th><th style="width:56px">秒</th></tr></thead>
+            <tbody>
+              <tr v-for="s in segs" :key="s.id">
+                <td class="c">{{ s.idx }}</td>
+                <td>{{ s.key }}</td>
+                <td class="c refs">{{ s.narration_refs }}</td>
+                <td class="brief">
+                  <p><b>场景</b> {{ s.visual_brief.scene }}</p>
+                  <p><b>首拍</b> {{ s.visual_brief.first_frame }}</p>
+                  <p><b>末拍</b> {{ s.visual_brief.last_frame }}</p>
+                </td>
+                <td class="c">{{ Math.round(s.duration_hint) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <!-- 反馈路由 -->
+      <footer v-if="!confirmed" class="feedback">
+        <div class="fb-tabs">
+          <button
+            v-for="t in targets" :key="t.id" class="fb-tab" :class="{ on: feedbackTarget === t.id }"
+            :title="t.hint" @click="feedbackTarget = t.id"
+          >{{ t.label }}</button>
+        </div>
+        <NInput
+          v-model:value="feedback" type="text" size="small" :disabled="agentBusy"
+          placeholder="不满意的点写在这里，按工件路由重跑对应的准备工位…"
+          @keydown.enter="sendFeedback"
+        />
+        <NButton size="small" :disabled="!feedback.trim() || agentBusy" :loading="agentBusy" @click="sendFeedback">发给我改</NButton>
+      </footer>
+    </template>
+
+    <div v-else class="empty">
+      <template v-if="prep?.exists">准备工位还没跑完（缺工件）——在对话里说「继续」或等它跑完。</template>
+      <template v-else>这个项目没走准备工位（老项目/无 AI 模式）——风格在「风格」页签确认。</template>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.prep { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.head {
+  flex: none; display: flex; align-items: center; gap: 14px;
+  padding: 14px 18px; border-bottom: 1px solid #202027;
+}
+.head-main { flex: 1; min-width: 0; }
+.head h3 { font-size: 15px; color: #d9d9e0; letter-spacing: 1px; }
+.head .sub { font-size: 12px; color: #7c7c88; margin-top: 3px; }
+.ok-badge { color: #7ee2a8; font-size: 13px; font-weight: 600; }
+.scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 18px; display: flex; flex-direction: column; gap: 14px; }
+.card { background: #101016; border: 1px solid #232329; border-radius: 10px; padding: 14px 16px; }
+.card h4 { font-size: 13.5px; color: #f0c674; margin-bottom: 10px; letter-spacing: 1px; }
+.card .meta { font-size: 12px; color: #7c7c88; font-weight: 400; margin-left: 10px; }
+.sentences { margin: 0; padding-left: 0; list-style: none; font-size: 13px; line-height: 1.8; color: #c9c9d3; }
+.sentences i { font-style: normal; color: #6b6b78; font-size: 11.5px; margin-right: 8px; font-family: Consolas, monospace; }
+.facts { margin-top: 10px; font-size: 12.5px; color: #9a9aa6; }
+.facts summary { cursor: pointer; }
+.facts ul { margin: 8px 0 0; padding-left: 18px; line-height: 1.7; }
+.facts a { color: #8fc7ff; margin-left: 6px; }
+.desc { font-size: 13px; line-height: 1.8; color: #c9c9d3; margin-bottom: 10px; }
+.grammar { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12.5px; color: #9a9aa6; margin-bottom: 12px; }
+.samples { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.sample figcaption { font-size: 11.5px; color: #7c7c88; margin-top: 6px; line-height: 1.5; }
+.sb { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.sb th { text-align: left; padding: 8px 10px; color: #7c7c88; font-weight: 600; border-bottom: 1px solid #232329; }
+.sb td { padding: 8px 10px; border-bottom: 1px solid #1d1d24; vertical-align: top; color: #c9c9d3; line-height: 1.6; }
+.c { color: #7c7c88; text-align: center; }
+.refs { font-family: Consolas, monospace; font-size: 11.5px; }
+.brief b { color: #6b6b78; font-weight: 600; margin-right: 6px; font-size: 11.5px; }
+.brief p { margin: 0 0 4px; }
+.feedback {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 10px 18px; border-top: 1px solid #202027; background: #121217;
+}
+.fb-tabs { display: flex; gap: 4px; }
+.fb-tab {
+  border: 1px solid #2b2b33; background: #191920; color: #9a9aa6; font-size: 12px;
+  padding: 4px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap;
+}
+.fb-tab:hover { color: #e6e6ea; }
+.fb-tab.on { border-color: rgba(240, 198, 116, .45); color: #f0c674; background: #1e1a12; }
+.empty { flex: 1; display: flex; align-items: center; justify-content: center; color: #55555f; font-size: 13px; padding: 0 40px; text-align: center; line-height: 1.9; }
+</style>

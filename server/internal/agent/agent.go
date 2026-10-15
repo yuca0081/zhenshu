@@ -19,6 +19,7 @@ import (
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
+	"webpage-video-agent/server/internal/prep"
 	"webpage-video-agent/server/internal/produce"
 	"webpage-video-agent/server/internal/react"
 	"webpage-video-agent/server/internal/store"
@@ -87,6 +88,9 @@ type State struct {
 		Style      bool `json:"style"`
 	}
 	Producing bool
+	// Prep 准备工位三工件就绪态（scripts/script.json 在 = 项目走新路径）：
+	// 摘要注入让模型答「现在风格包/分镜稿是什么状态」不用猜，反馈路由据此选 target。
+	Prep string
 	// 当前设置（project.json 事实源）：摘要注入让模型答「现在什么音色/配乐」
 	// 不用拿 set_* 空参数当查询用；StyleID 含被选库内风格（可能尚未出样张）。
 	Voice      string // 完整音色 id（空 = 引擎默认）
@@ -119,6 +123,10 @@ func (a *Agent) State(id string) State {
 	var ss contract.StyleSamples
 	if b, err := os.ReadFile(p.Artifact("style/style_samples.json")); err == nil && json.Unmarshal(b, &ss) == nil {
 		st.HasStyle, st.StyleDirection, st.StyleConfirmed = true, ss.Direction, ss.Confirmed
+	}
+	// 准备工位三工件（新路径项目）：一行就绪态进摘要
+	if prep.HasArtifact(p, prep.StationScript) {
+		st.Prep = prep.Summary(p)
 	}
 	if info, err := os.Stat(p.Artifact("renders/main.mp4")); err == nil {
 		st.HasVideo = true
@@ -204,6 +212,11 @@ func (s State) summary() string {
 		}
 	} else {
 		add(false, "风格样张")
+	}
+	// 准备工位三工件（新路径项目）：反馈路由（改文字→script / 改风格→style /
+	// 改结构场景→storyboard）走 rerun_prep；打包终审在「终审」页签
+	if s.Prep != "" {
+		lines = append(lines, "准备工件："+s.Prep+"（反馈重跑用 rerun_prep；开工前须终审确认）")
 	}
 	// 当前设置一行带出：模型答「现在什么音色/配乐」直接照抄，不用拿 set_* 空参当查询
 	settings := []string{"音色 " + voiceDisplayName(s.Voice)}
@@ -728,6 +741,29 @@ func segStarts(p *pipeline.Project) map[int]float64 {
 	return starts
 }
 
+// bumpStyleUsage 成片就绪的使用记账（prep-agents-design #8 治理闭环）：
+// project.json style_id 指向的条目 count/passes 记一笔；未验证的衍生/自定义条目
+// 此时转正（用它产出的片通过了全部制作门禁——⑤非阻塞降级放行视同通过）。
+// 记账失败只打 manifest，绝不惊动用户。
+func (a *Agent) bumpStyleUsage(projectID string) {
+	if a.Lib == nil {
+		return
+	}
+	p := pipeline.NewProject(a.DataDir, projectID)
+	b, err := os.ReadFile(p.Artifact("project.json"))
+	if err != nil {
+		return
+	}
+	var meta struct {
+		StyleID string `json:"style_id"`
+	}
+	if json.Unmarshal(b, &meta) != nil || strings.TrimSpace(meta.StyleID) == "" {
+		return
+	}
+	a.Lib.BumpUsage(strings.TrimSpace(meta.StyleID), 0, true, true)
+	p.Manifest("style.usage", meta.StyleID+"（成片记账）")
+}
+
 func (a *Agent) finish(projectID, content, typ string) {
 	if typ == "error" {
 		_ = a.Store.SaveMsg(&store.Msg{ProjectID: projectID, Role: "agent", Type: "error", Content: content})
@@ -764,6 +800,7 @@ func (a *Agent) NotifyResult(projectID, status, detail string) {
 	switch status {
 	case "video":
 		a.setDoneStatus(projectID, "video")
+		a.bumpStyleUsage(projectID) // 使用记账 + 未验证衍生风格转正（⑤通过=出片，治理闭环）
 	case "cancelled", "failed":
 		// 回到出片前的态：有成片回 video（重做中断旧片仍在），否则回 style（三前置已齐）
 		if _, err := os.Stat(pipeline.NewProject(a.DataDir, projectID).Artifact("renders/main.mp4")); err == nil {

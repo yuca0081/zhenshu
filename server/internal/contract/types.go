@@ -52,6 +52,18 @@ type Segment struct {
 	// Beats 本段节拍表（导演定调产物，可选）：旁白锚句 → 画面预期。
 	// 生成侧照此编排元素揭示，审查侧（M2 审片）照此验收内容缺失。
 	Beats []Beat `json:"beats,omitempty"`
+	// Brief 结构化场景规划（准备工位分镜稿翻译产物，可选）：场景 + 首拍 + 末拍。
+	// ④生成注入的邻段承诺从这里取（prep-agents-design §4：邻段两行承诺白送注入，
+	// 内容=相邻 brief 的末拍/首拍）；老项目无此字段零感知。VisualBrief 文本仍是
+	// 注入主渠道（scene+首末拍拼装），Brief 是机器可读的邻段寻址层。
+	Brief *VisualBriefSpec `json:"brief,omitempty"`
+}
+
+// VisualBriefSpec 结构化首末拍（与分镜稿工件同形；缝已退役——延续/开场都写在这里）。
+type VisualBriefSpec struct {
+	Scene      string `json:"scene"`
+	FirstFrame string `json:"first_frame"`
+	LastFrame  string `json:"last_frame"`
 }
 
 // Arc 全片叙事弧线：一句话主线 + 分章张力曲线。张力 1–5 整数，审查时
@@ -323,11 +335,26 @@ type StyleSamples struct {
 	// stageStyleSamples（草稿校验通过后追加），这里只承载不校验（老文件无此字段）。
 	SignatureAbsorption []SigAbsorption `json:"signature_absorption,omitempty"`
 
+	// EntryExit 标准入场/收尾动画模板（prep-agents-design §3.2/§4）：转场的载体。
+	// 一套模板一段内生效（新场景开场走入场模板、收尾走收尾模板），禁止逐段即兴
+	// 发明；入场时长计入段长带预算。受 paused-timeline 契约约束（禁 CSS animation
+	// 等 lint 照查）。老文件无此字段，读侧一律按可选处理。
+	EntryExit *EntryExitSpec `json:"entry_exit,omitempty"`
+
 	// Post 全片统一后期质感（可选）：暗角/颗粒/色差是设计决策不是平台默认——
 	// 设计没写 post = 成片不叠任何后期。写进 project.json "post"，stitch 消费。
 	Post *PostFXSpec `json:"post,omitempty"`
 
 	Confirmed bool `json:"confirmed"` // 硬门：用户点头后才允许开工
+}
+
+// EntryExitSpec 标准入场/收尾动画模板：风格资产，写一次用一世。
+// Entry/Exit 写「画面如何显影/如何收」的机制一句话（如 水墨晕染显影 0.4s）；
+// EntryDur 是入场预算秒数，计入段长带（§7：0.3–0.5s/段）。
+type EntryExitSpec struct {
+	Entry    string  `json:"entry"`
+	Exit     string  `json:"exit"`
+	EntryDur float64 `json:"entry_dur,omitempty"` // 入场预算（秒，0.2–1.0；缺省 0.4）
 }
 
 // EffectiveSkins 新旧两种落法的统一读口：Skins 优先，退回旧 Skin 字段。
@@ -620,6 +647,13 @@ func ValidateStyleSamplesDraft(ss *StyleSamples) error {
 	if ss.Device == nil || strings.TrimSpace(ss.Device.Name) == "" ||
 		strings.TrimSpace(ss.Device.Desc) == "" || strings.TrimSpace(ss.Device.PerSeg) == "" {
 		return fmt.Errorf("缺 device（贯穿装置：名称/是什么/逐段运用方式三件齐）")
+	}
+	// 标准入场/收尾动画模板（转场载体，prep-agents-design §4）：新设计必须成文，
+	// 一套模板一段内生效——逐段即兴发明转场是退役了的缝概念还魂。
+	if ee := ss.EntryExit; ee == nil || strings.TrimSpace(ee.Entry) == "" || strings.TrimSpace(ee.Exit) == "" {
+		return fmt.Errorf("缺 entry_exit（标准入场/收尾动画模板——转场的载体，一套模板一段内生效）")
+	} else if d := ee.EntryDur; d != 0 && (d < 0.2 || d > 1.0) {
+		return fmt.Errorf("entry_exit.entry_dur=%.2f 超范围 0.2–1.0 秒（入场动画计入段长带预算）", d)
 	}
 	if len(ss.Layouts) > 0 && len(ss.Layouts) < 2 {
 		return fmt.Errorf("layouts 给了就至少 2 个（段轮换需要变化，1 个等于没给）")

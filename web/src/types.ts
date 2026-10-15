@@ -53,8 +53,58 @@ export interface ProjectView {
   last_produce?: { event: string; ts: string } | null
 }
 
-// 工作区中央页签（文稿/分镜/风格/视频四页占据中间区域）
-export type TabID = 'manuscript' | 'storyboard' | 'style' | 'video'
+// 工作区中央页签（文稿/分镜/风格/终审/视频——准备阶段三工位出齐后「终审」亮起）
+export type TabID = 'manuscript' | 'storyboard' | 'style' | 'review' | 'video'
+
+// ── 准备阶段三工件（GET /prep；docs/prep-agents-design.md）──────
+export interface PrepSentence { id: string; text: string }
+export interface PrepFact { claim: string; url: string }
+
+export interface PrepScript {
+  source_mode: string
+  text: string
+  sentences: PrepSentence[]
+  fact_sheet?: PrepFact[]
+  word_count: number
+  target_seconds: number
+}
+
+export interface PrepGrammar {
+  density: string
+  band_min: number
+  band_max: number
+  continuity: string
+}
+
+export interface PrepDraftSeg {
+  id: string
+  idx: number
+  key: string
+  narration_refs: string
+  visual_brief: { scene: string; first_frame: string; last_frame: string }
+  duration_hint: number
+}
+
+export interface PrepView {
+  exists: boolean // scripts/script.json 在 = 项目走准备工位（终审页签的显示条件）
+  confirmed: boolean // 打包终审是否已确认（=开工硬门）
+  style_name?: string
+  script?: PrepScript
+  stylepack?: {
+    style_id: string
+    description: string
+    grammar: PrepGrammar
+    sample_ids: string[]
+    direction: string
+    confirmed: boolean
+  }
+  design?: StyleSamples // 完整设计系统（样张预览用，与 style_samples.json 同源）
+  draft?: {
+    plan?: string
+    paragraphs: { title: string; segs: string[] }[]
+    segments: PrepDraftSeg[]
+  }
+}
 
 export interface Segment {
   id: string

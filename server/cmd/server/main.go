@@ -23,6 +23,7 @@ import (
 	"webpage-video-agent/server/internal/config"
 	"webpage-video-agent/server/internal/events"
 	"webpage-video-agent/server/internal/pipeline"
+	"webpage-video-agent/server/internal/prep"
 	"webpage-video-agent/server/internal/produce"
 	"webpage-video-agent/server/internal/store"
 	"webpage-video-agent/server/internal/stylelib"
@@ -82,6 +83,12 @@ func main() {
 	refs := styleref.NewStore(cfg.DataDir, root)
 	refs.Lib = lib // 参考解析打标要查风格词表/落新词（同一实例，含账本后端选型）
 	ag.Refs = refs // 参考库补线（list/analyze 参考工具用）
+	// 准备阶段三工位（①文稿②风格③分镜）接线进管线：stagePrep 经钩子调用
+	//（prep 依赖 pipeline，反向接线防 import 环）。产物齐全即重放跳过，老项目不碰。
+	prepDeps := prep.Deps{RootDir: root, Lib: lib, Emit: hub.Emit}
+	pipeline.PrepFn = func(ctx context.Context, p *pipeline.Project) error {
+		return prep.Run(ctx, p, prepDeps)
+	}
 	// 会话密钥与初始管理员：SESSION_SECRET > API_TOKEN 派生 > 随机（开放模式）。
 	// 仅鉴权启用时引导建管理员——开放模式没有登录，建了也是死数据。
 	sessionSecret, authActive := auth.DeriveSecret(os.Getenv("SESSION_SECRET"), os.Getenv("API_TOKEN"))

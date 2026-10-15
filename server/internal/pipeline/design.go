@@ -102,6 +102,12 @@ func designBrief(p *Project, sb *contract.Storyboard) string {
 - 负面清单 = 本片禁用的俗手，按本片内容挑真实风险（右半空版式/假密度/文字压图不可读……）。
 - post 全片后期质感（可选，0–1）：暗角 vignette / 胶片颗粒 grain / 轻微色差 chroma。默认全 0 = 不加后期（干净的画面是正当选择）；只有本片气质确实需要这层质感才开（怀旧/胶片感可开颗粒，干净的 UI/科技风开了反而脏）。
 
+### 7. entry_exit 标准入场/收尾动画模板（转场的载体，确认校验硬性要求）
+- entry：本风格的标准入场动画一句话机制（如「水墨晕染显影，主体自中心洇开 0.4s」）；新场景段开场走它；
+- exit：标准收尾动画一句话机制（如「整帧淡出收黑 0.3s」）；每段收尾走它；
+- entry_dur：入场预算秒数（0.2–1.0，缺省 0.4——计入段长带）；
+- 一套模板一段内生效，禁止逐段即兴发明转场手法（段间衔接的内容依据由分镜的首拍/末拍承担）。
+
 ## 样张 = 用主皮肤渲出的静态小画面（所见即所得，1–3 张）
 - 颜色/字体必须来自主皮肤槽位（色值逐字一致）——样张即皮肤预览，两处不一致会被打回；
 - 不用图片/网络资源，纯 CSS；多张样张构图版式必须明显不同，每张 desc 写明用了哪个版式；
@@ -230,6 +236,7 @@ func designJSONShape() string {
     "notes": "性格一句话：什么怎么动、禁什么动" },
   "device": { "name": "装置名（如：访客卡片）", "desc": "装置是什么、观众为什么会记住它",
               "per_seg": "seg01 首次亮相…seg02 变奏…seg03 起每章复现…" },
+  "entry_exit": { "entry": "标准入场动画机制一句话（新场景开场走它）", "exit": "标准收尾动画机制一句话", "entry_dur": 0.4 },
   "post": { "vignette": 0, "grain": 0, "chroma": 0 },
   "layouts": [ { "id": "hero-title", "name": "大字海报", "desc": "构图描述：主体位置/元素铺排/留白方向",
                  "layered": "仅叠层版式写：哪层压哪层、为何可读（衬底低对比/前景有实底）；无叠层留空不写" } ],
@@ -280,7 +287,7 @@ func designRequest(p *Project, sb *contract.Storyboard, out string) string {
 - direction/concept 非空；skins 1–2 套（双皮肤必须给 skin_rule）；samples 1–3 张且每张 html 非空
 - fonts.display/body 栈含中文字体；motion.ease/notes 非空、dur_in 0.1–1.5、dur_settle 0.05–1.0、stagger 0–0.5；
   entrances 3–5 条（name/how/use_for 三件齐、手法名互异）、rhythm/exits/camera/transition 各自非空
-- device.name/desc/per_seg 三件齐
+- device.name/desc/per_seg 三件齐；entry_exit.entry/exit 非空（entry_dur 0.2–1.0）——标准入场/收尾动画模板是转场的载体
 `, designBrief(p, sb), out, designJSONShape(), designAbsorptionNote(p))
 }
 
@@ -386,6 +393,20 @@ func DesignDocWithBrief(ss *contract.StyleSamples, segIdx int, brief *contract.S
 		if strings.TrimSpace(d.PerSeg) != "" && ss.StyleID == "" {
 			w("- 逐段运用：%s\n", d.PerSeg)
 		}
+	}
+	// 标准入场/收尾动画模板（转场载体，prep-agents-design §4）：一套模板一段内生效。
+	// 逐段即兴发明转场是退役了的缝概念还魂；段间衔接的内容依据在分镜首拍/末拍。
+	if ee := ss.EntryExit; ee != nil && strings.TrimSpace(ee.Entry) != "" {
+		w("\n### 标准入场/收尾动画模板（转场的载体——一套模板一段内生效，禁逐段即兴）\n")
+		entryDur := ee.EntryDur
+		if entryDur <= 0 {
+			entryDur = 0.4
+		}
+		w("- 入场（新场景段开场 0–%.1fs）：%s\n", entryDur, ee.Entry)
+		if strings.TrimSpace(ee.Exit) != "" {
+			w("- 收尾（每段旁白收尾前）：%s\n", ee.Exit)
+		}
+		w("- 段间衔接的内容依据（接什么/怎么接）看本段画面提示的首拍/末拍行；模板只管「怎么显影/怎么收」\n")
 	}
 	if len(ss.Layouts) > 0 {
 		w("\n### 本片版式（先定构图，再往里填元素；禁退回「标题+小卡平铺」默认网格）\n")
