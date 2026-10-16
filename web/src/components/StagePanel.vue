@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { KeepAlive, computed, ref, watch } from 'vue'
+import { KeepAlive, computed, onBeforeUnmount, ref, watch } from 'vue'
 import { NButton, NInput, NInputNumber, NSelect, NSpin, useMessage } from 'naive-ui'
 import { api, videoURL } from '../api'
 import type { ActivityEvent, AudioMeta, Manuscript, PrepView, ProjectView, Storyboard, StyleSamples, TabID } from '../types'
@@ -173,6 +173,39 @@ async function saveSb() {
 const showFeed = ref(false)
 watch(() => props.view?.producing, p => { if (p) showFeed.value = true }, { immediate: true })
 
+// 浮层收起（2026-10-15 实测 P5）：只有按钮 toggle 一个出口，点外部不收、
+// 空态 div 还挡住下方「确认打包」按钮。补：点浮层外收起；点浮层空白区
+// （标题条/空态）也收；Esc 收；内容行上的点击不收（滚动/看细节）。
+const feedBtn = ref<HTMLButtonElement | null>(null)
+const feedPop = ref<InstanceType<typeof ActivityFeed> | null>(null)
+function feedOutside(e: PointerEvent) {
+  const pop = (feedPop.value?.$el as HTMLElement | undefined) ?? null
+  const t = e.target as HTMLElement
+  if (feedBtn.value?.contains(t)) return // 按钮自己负责开/关
+  if (pop?.contains(t)) {
+    if (t.closest('.row')) return
+    showFeed.value = false
+    return
+  }
+  showFeed.value = false
+}
+function feedEsc(e: KeyboardEvent) {
+  if (e.key === 'Escape') showFeed.value = false
+}
+watch(showFeed, on => {
+  if (on) {
+    document.addEventListener('pointerdown', feedOutside, true)
+    document.addEventListener('keydown', feedEsc)
+  } else {
+    document.removeEventListener('pointerdown', feedOutside, true)
+    document.removeEventListener('keydown', feedEsc)
+  }
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', feedOutside, true)
+  document.removeEventListener('keydown', feedEsc)
+})
+
 // ── 整片过期重做（页签行右侧）：上游（文稿/分镜/风格）在成片生成后又改过 ──
 // 按钮收进页签行靠右（原视频页整行黄条太占地），悬停 title 说明具体哪几样改过。
 const message = useMessage()
@@ -227,6 +260,7 @@ async function redoFull() {
             :href="videoURL(videoId, videoRev)" :download="`${view.name}.mp4`"
           >↓ 下载成片</a>
           <button
+            ref="feedBtn"
             class="feed-btn" :class="{ on: showFeed }"
             title="制作过程事件流：每个工位用时多少、有没有被打回、整轮跑完的总时长"
             @click="showFeed = !showFeed"
@@ -235,7 +269,7 @@ async function redoFull() {
       </header>
 
       <!-- 事件流面板：锚在中间区右上角，盖在页签内容上，不挤压布局 -->
-      <ActivityFeed v-if="showFeed && view" class="feed-pop" :events="activity" :producing="!!view.producing" />
+      <ActivityFeed v-if="showFeed && view" ref="feedPop" class="feed-pop" :events="activity" :producing="!!view.producing" />
 
       <template v-if="view">
         <!-- KeepAlive 要求恰好一个子节点：内部不许放注释/多根（v-if 链整体算一个） -->
@@ -361,10 +395,11 @@ async function redoFull() {
 .feed-btn.on { border-color: rgba(240, 198, 116, .45); color: #f0c674; background: #1e1a12; }
 .feed-btn .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #8fc7ff; animation: pulse 1.2s infinite; }
 
-/* 事件流面板：锚在页签行下、右侧贴边，盖在内容上不挤压布局 */
+/* 事件流面板：锚在页签行下、右侧贴边，盖在内容上不挤压布局。
+   高度压到 62%：给下方操作按钮（确认打包等）留出可点区域（P5） */
 .feed-pop {
   position: absolute; top: 45px; right: 12px; z-index: 40;
-  width: min(440px, calc(100% - 24px)); max-height: calc(100% - 64px);
+  width: min(440px, calc(100% - 24px)); max-height: min(calc(100% - 64px), 62%);
   background: #101016; border: 1px solid #2b2b33; border-radius: 12px;
   box-shadow: 0 14px 44px rgba(0, 0, 0, .55);
 }

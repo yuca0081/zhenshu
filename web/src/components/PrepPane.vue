@@ -69,7 +69,7 @@ const sentences = computed(() => props.prep?.script?.sentences ?? [])
         <div class="head-main">
           <h3>打包终审</h3>
           <p class="sub">
-            文字稿 {{ sentences.length }} 句 · 风格「{{ prep.style_name || prep.stylepack.style_id }}」 ·
+            文字稿 {{ sentences.length }} 句 · 风格「{{ prep.stylepack.direction || prep.style_name || prep.stylepack.style_id }}」 ·
             分镜 {{ segs.length }} 段 / 约 {{ Math.round(segs.reduce((a, s) => a + s.duration_hint, 0)) }} 秒
           </p>
         </div>

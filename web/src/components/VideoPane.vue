@@ -53,6 +53,12 @@ const failedIdleBanner = computed(() =>
 const pausedWhy = computed(() =>
   props.view?.last_produce?.event.endsWith('.interrupted') ? '因服务重启被中断' : '检查未通过或出错')
 
+// 三件齐+打包终审已确认、还没开工：这是「就绪」不是「没干活」——旧空态
+// 「先填文稿」在这个时点是误导（2026-10-15 实测 P6），引导去对话栏开工
+const readyToStart = computed(() =>
+  !!props.view && !props.view.has_video && !props.view.producing && !props.stageSummary &&
+  !!props.view.gates?.style_confirmed && !lastProduceFailed(props.view))
+
 // ── 成片代次刷新：换 URL 重载并回到原播放位置（重做完立刻看新画面）──
 watch(() => props.videoRev, () => {
   const t = cur.value
@@ -74,6 +80,14 @@ watch(() => props.videoRev, () => {
       <p class="prep-hint">
         上次制作{{ pausedWhy }}，产物已保留——文稿、分镜、风格都还在。
         到下方<b>对话栏</b>看智能体的失败说明：回一句「继续」它就接着修，或直接说要改什么。
+      </p>
+    </template>
+
+    <!-- 就绪待开工（三件齐+终审已确认） -->
+    <template v-else-if="readyToStart">
+      <div class="prod-title">✓ 终审已通过，随时开工</div>
+      <p class="prep-hint">
+        文稿、风格、分镜三件已齐，打包终审也确认过了——到下方<b>对话栏</b>说「<b>开始</b>」就开工制作。
       </p>
     </template>
 
