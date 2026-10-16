@@ -168,3 +168,30 @@ func TestPreReviewManual(t *testing.T) {
 	}
 	t.Logf("ran=%v reviewAll=%v repaired=%v", res.Ran, res.ReviewAll, res.Repaired)
 }
+
+// TestRoundScope P4 收敛：round0 全量 / round1 只审被修段 / round2 升回全量兜底。
+func TestRoundScope(t *testing.T) {
+	all := []string{"seg01", "seg02", "seg03"}
+	repaired := map[string]bool{"seg02": true}
+	for _, tc := range []struct {
+		round int
+		want  []string
+	}{
+		{0, []string{"seg01", "seg02", "seg03"}},
+		{1, []string{"seg02"}},
+		{2, []string{"seg01", "seg02", "seg03"}},
+	} {
+		got := roundScope(tc.round, all, repaired)
+		if len(got) != len(tc.want) {
+			t.Fatalf("round%d scope = %v, want %v", tc.round, got, tc.want)
+		}
+		for _, id := range tc.want {
+			if !got[id] {
+				t.Fatalf("round%d scope 缺 %s: %v", tc.round, id, got)
+			}
+		}
+	}
+	if got := roundScope(1, all, map[string]bool{}); len(got) != 0 {
+		t.Fatalf("修复重出全失败时 round1 应为空范围（主循环据此按未收敛处理）: %v", got)
+	}
+}

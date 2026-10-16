@@ -4,6 +4,7 @@ package produce
 // 主组合上一次性给每段截 3 帧（开场后/中段/落定前），视觉模型按 frameQA 同款考卷
 // 判分；有 high 问题的段把 issues 回喂 sceneGen 重出场景文件（≤2 轮），全部过关才
 // 进渲染——画面问题拦在最贵的一步之前，返工不再发生在「渲完整片之后」。
+// 修复轮只复查被修段（没动的段帧没变），第 2 次修复仍挂升回全量兜底（P4 收敛）。
 //
 // 与渲后 frameQA 的分工（run() 接线）：预审干净且风格无动态特色判据 → 跳过全量
 // frameQA；预审动过的段 → 渲后只复查这些段；pre_review=false 或前置缺失 → 渲后
@@ -128,16 +129,38 @@ func (r *Runner) preReview(ctx context.Context, p *pipeline.Project) (preReviewR
 	id := p.ID
 	r.emit(id, "stage", "prereview", "running")
 	r.Manifest(p, "prereview.start", fmt.Sprintf("%d 段 × %d 时刻", segCount(t2seg), len(ats)))
-	atArg := make([]string, len(ats))
-	for i, t := range ats {
-		atArg[i] = fmt.Sprintf("%.2f", t)
-	}
-	joined := strings.Join(atArg, ",")
 	repairedSet := map[string]bool{}
+	// 审查范围（P4 收敛）：round0 全量；修复轮只审 sceneGen 成功的段——没动的
+	// 段帧一字未变，全量重审是纯浪费（实测一轮 ~2.5 分钟，预审占总时长 43% 的
+	// 主因）；第 2 次修复仍挂时升回全量——连续局部失败提示可能有系统性问题，
+	// 放行渲染前给一次全景（也是修复上限前最后一场）。
+	pending := map[string]bool{}
+	for _, seg := range sb.Segments {
+		pending[seg.ID] = true
+	}
+	prevIssues := map[string]string{} // 段 → 上轮问题清单（修复回喂带上，防修 B 破 A 又震荡回去）
 	for round := 0; ; round++ {
 		if ctx.Err() != nil {
 			return res, ctx.Err()
 		}
+		if round > 0 { // round0 起手已是全量
+			pending = roundScope(round, segIDsOf(sb), repairedSet)
+		}
+		if len(pending) == 0 { // 修复轮 sceneGen 全失败：帧没变没得重审，按未收敛处理交渲后复查
+			r.emit(id, "stage", "prereview", "error: 修复重出全部失败（上一轮问题未收敛）")
+			r.Manifest(p, "prereview.failed", "修复重出全部失败，明细见 prereview.issues")
+			res.Repaired = sortedSegIDs(repairedSet)
+			return res, nil
+		}
+		scope := sortedSegIDs(pending)
+		r.Manifest(p, "prereview.round", fmt.Sprintf("round%d 审 %d 段（%s）", round+1, len(scope), strings.Join(scope, ",")))
+		atArg := make([]string, 0, len(ats))
+		for _, t := range ats {
+			if pending[t2seg[t]] {
+				atArg = append(atArg, fmt.Sprintf("%.2f", t))
+			}
+		}
+		joined := strings.Join(atArg, ",")
 		dir := fmt.Sprintf("reports/prereview/round%d", round+1)
 		frames, serr := r.snapFrames(p, joined, dir)
 		if serr != nil {
@@ -146,7 +169,7 @@ func (r *Runner) preReview(ctx context.Context, p *pipeline.Project) (preReviewR
 			res.Repaired = sortedSegIDs(repairedSet)
 			return res, nil
 		}
-		failed, ferr := r.reviewSnapshots(ctx, p, sb, voices, groupSnapFrames(p, dir, frames, t2seg), preCrits)
+		failed, ferr := r.reviewSnapshots(ctx, p, sb, voices, groupSnapFrames(p, dir, frames, t2seg), preCrits, pending)
 		if ferr != nil {
 			if ctx.Err() != nil {
 				return res, ctx.Err()
@@ -173,9 +196,16 @@ func (r *Runner) preReview(ctx context.Context, p *pipeline.Project) (preReviewR
 			fmt.Sprintf("%d 段预审未过，重出画面（第 %d 轮）", len(failed), round+1))
 		for segID, issues := range failed {
 			r.Manifest(p, "prereview.repair", segID)
+			// 回喂带历轮问题清单：只喂本轮新问题，重出容易把上轮修好的又改回去
+			//（实测 seg02 越修问题越多的一条根因）
+			feed := issues
+			if prev := prevIssues[segID]; prev != "" && prev != issues {
+				feed += "\n上一轮的问题（已修过，重出时不得回退）：\n" + prev
+			}
+			prevIssues[segID] = issues
 			// 场景重出失败≠拦制作：旧 spec 已过 check+lint 可渲染，保留旧画面
 			// 继续走，渲后复查会再看到这段的问题（宁放过不误杀）
-			if gerr := r.sceneGen(ctx, p, "", issues, segID); gerr != nil {
+			if gerr := r.sceneGen(ctx, p, "", feed, segID); gerr != nil {
 				if ctx.Err() != nil {
 					return res, ctx.Err()
 				}
@@ -246,17 +276,18 @@ func groupSnapFrames(p *pipeline.Project, dir string, frames []string, t2seg map
 	return bySeg
 }
 
-// reviewSnapshots 按段归组的截帧 → 缩水 → 视觉模型判分。返回 未过段 → 问题回喂文本。
+// reviewSnapshots 按段归组的截帧 → 缩水 → 视觉模型判分。只审 pending 里的段
+// （修复轮范围控制）。返回 未过段 → 问题回喂文本。
 // 段间零依赖（各审各的图、verdict 独立）→ 有界并发，模式同 reviewSegments；
 // 单段审查调用失败视为审查器抖动：manifest 记账后跳过（宁可放过不误杀）。
-func (r *Runner) reviewSnapshots(ctx context.Context, p *pipeline.Project, sb *contract.Storyboard, voices map[string]voiceMeta, bySeg map[string][]string, crits []sigCriterion) (map[string]string, error) {
+func (r *Runner) reviewSnapshots(ctx context.Context, p *pipeline.Project, sb *contract.Storyboard, voices map[string]voiceMeta, bySeg map[string][]string, crits []sigCriterion, pending map[string]bool) (map[string]string, error) {
 	prov, err := llm.FromEnv(llm.RoleVisual)
 	if err != nil {
 		return nil, fmt.Errorf("预审需要 API 模式（LLM_API_KEY）: %w", err)
 	}
 	var todo []contract.Segment
 	for _, seg := range sb.Segments {
-		if len(bySeg[seg.ID]) > 0 {
+		if pending[seg.ID] && len(bySeg[seg.ID]) > 0 {
 			todo = append(todo, seg)
 		}
 	}
@@ -316,6 +347,9 @@ func (r *Runner) reviewSnapshots(ctx context.Context, p *pipeline.Project, sb *c
 		if sigFailed(vd.Signatures) {
 			feedback += sigFeedback(vd.Signatures, crits)
 		}
+		// 问题明细落账（P11）：只记个数事后无法追溯——换行拉平防账本按行解析错位
+		detail := pipeline.FirstLine(strings.ReplaceAll(strings.TrimSpace(feedback), "\n", "；"), 300)
+		r.Manifest(p, "prereview.issues", seg.ID+": "+detail)
 		failed[seg.ID] = feedback
 	}
 	for _, seg := range todo {
@@ -426,6 +460,31 @@ func staticCrits(crits []sigCriterion) []sigCriterion {
 		}
 	}
 	return out
+}
+
+// roundScope 第 round 轮的审查范围（P4 收敛）：0=全量；1=只审被修段（没动的段
+// 帧没变，重审纯浪费）；≥2=升回全量兜底——连续局部失败提示可能有系统性问题，
+// 放行渲染前给一次全景（也是修复上限前最后一场）。
+func roundScope(round int, all []string, repaired map[string]bool) map[string]bool {
+	scope := make(map[string]bool, len(all))
+	if round == 1 {
+		for id := range repaired {
+			scope[id] = true
+		}
+		return scope
+	}
+	for _, id := range all {
+		scope[id] = true
+	}
+	return scope
+}
+
+func segIDsOf(sb *contract.Storyboard) []string {
+	ids := make([]string, 0, len(sb.Segments))
+	for _, seg := range sb.Segments {
+		ids = append(ids, seg.ID)
+	}
+	return ids
 }
 
 func segCount(t2seg map[float64]string) int {
