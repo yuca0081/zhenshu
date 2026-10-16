@@ -19,10 +19,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 
+	"path/filepath"
 	"webpage-video-agent/server/internal/contract"
 )
 
@@ -564,6 +566,30 @@ func hasUnnegated(t, kw string) bool {
 			return true
 		}
 		i = start + len(kw)
+	}
+}
+
+// reFontFamilyDecl CSS font-family 声明（<style> 块与内联样式同抓）。
+var reFontFamilyDecl = regexp.MustCompile(`(?i)(font-family\s*:\s*)([^;{}"]+)`)
+
+// ClampSegmentFonts 段帧字体栈机械归一（段级流水线 written 位）：模型屡教不改的
+// 字体问题在落盘侧一次收口——目录字体的中文别名/大小写写法归一成规范 Family
+//（'站酷快乐体' → 'ZCOOL KuaiLe'，与 LockDesign 同一 clampFontStack）；渲染端
+// 没有且目录没有的字体（思源黑体/PingFang SC 等）直接剥除退到栈内后备。
+// 只动 font-family 声明值，选择器与内容不碰。幂等。
+func ClampSegmentFonts(p *Project, segID string) {
+	path := filepath.Join(p.Artifact("compositions/frames"), segID+".html")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	html := string(b)
+	fixed := reFontFamilyDecl.ReplaceAllStringFunc(html, func(m string) string {
+		loc := reFontFamilyDecl.FindStringSubmatch(m)
+		return loc[1] + clampFontStack(loc[2], nil)
+	})
+	if fixed != html {
+		_ = writeFile(path, fixed)
 	}
 }
 

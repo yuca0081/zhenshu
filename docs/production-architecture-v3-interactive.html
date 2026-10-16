@@ -145,17 +145,15 @@
 
 <header>
   <h1>五工位制作架构 v3.1 · 交互流程图</h1>
-  <p class="src">依据 <code>docs/prep-agents-design.md</code>（2026-10-15 准备阶段定稿）与 <code>docs/production-architecture-discussion.md</code>（总架构纪要）绘制。准备阶段 = 三个 ReAct agent 工件链（文稿 → 风格 → 分镜），唯一人工门移到三步之后的<b>打包终审</b>；缝概念整体退役——首末拍写进场景 brief，转场归设计系统模板。点击节点，节点信息卡显示在图上方；顶部开关逐条叠加「AI 的三条修正」（仍待拍板）。</p>
+  <p class="src">依据 <code>docs/production-stage-design.md</code>（2026-10-16 制作阶段定稿）与 <code>docs/prep-agents-design.md</code>（准备阶段定稿）绘制。准备阶段 = 三个 ReAct agent 工件链 + 打包终审门，缝概念整体退役；制作阶段 = <b>段级流水线</b>，渲染不被审核闸（实测 ~20s/段），审核合并为渲染后单场 <b>ReAct 判卷 agent</b>（考卷退役，规则+素材），全片终审已拍板兜跨段渐变跑偏。点击节点，节点信息卡显示在图上方；顶部开关是仍待拍板的修正③（降级出口）。</p>
 </header>
 
 <section class="controls">
-  <label class="switch"><input type="checkbox" id="t1"><span class="track"></span><span class="lbl"><b>修正①</b> 考卷拆两次调用</span></label>
-  <label class="switch"><input type="checkbox" id="t2"><span class="track"></span><span class="lbl"><b>修正②</b> 拼接后加全片终审</span></label>
-  <label class="switch"><input type="checkbox" id="t3"><span class="track"></span><span class="lbl"><b>修正③</b> 刹车规则写死</span></label>
+  <label class="switch"><input type="checkbox" id="t3"><span class="track"></span><span class="lbl"><b>修正③</b> 刹车规则写死（剩降级出口）</span></label>
   <div class="ctl-right">
     <button type="button" id="reset">还原定稿</button>
     <button type="button" id="all">全部采纳</button>
-    <span class="viewchip" id="view">当前视图：v3.1 定稿</span>
+    <span class="viewchip" id="view">当前视图：定稿</span>
   </div>
 </section>
 
@@ -163,7 +161,7 @@
   <aside class="detail" id="detail" aria-live="polite"></aside>
 
   <div class="diagram-wrap">
-    <svg id="flowsvg" viewBox="0 0 1180 540" role="img" aria-label="五工位 v3.1 制作流程图：准备阶段三 ReAct agent 工件链 + 打包终审门 + 制作阶段">
+    <svg id="flowsvg" viewBox="0 0 1180 540" role="img" aria-label="五工位 v3.1 制作流程图：准备阶段三 ReAct agent 工件链 + 打包终审门 + 制作阶段段级流水线 + 渲染后单场审核 + 全片终审">
       <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
@@ -174,7 +172,7 @@
       <rect class="band" x="8" y="24" width="1164" height="116"></rect>
       <text class="bandlabel" x="24" y="44">准备阶段 · 三步走 · 三个 ReAct AGENT · 工件链</text>
       <rect class="band" x="8" y="168" width="1164" height="348"></rect>
-      <text class="bandlabel" x="24" y="188">制作阶段</text>
+      <text class="bandlabel" x="24" y="188">制作阶段 · 段级流水线 · 写≤4 · 审≤4 · 渲按CPU</text>
 
       <!-- 连线 -->
       <path class="edge" d="M124,90 L168,90"></path>
@@ -186,29 +184,31 @@
       <path class="edge" d="M390,249 L432,285"></path>
       <path class="edge" d="M390,289 L432,289"></path>
       <path class="edge" d="M390,329 L432,293"></path>
-      <path class="edge" d="M558,289 L600,289"></path>
-      <path class="edge" d="M856,289 L900,289"></path>
-      <path class="edge" d="M961,321 L961,420 L149,420 L149,426"></path>
-      <path class="edge" d="M731,380 L731,400 L295,400 L295,386"></path>
+      <path class="edge" d="M558,289 L602,289"></path>
+      <path class="edge" d="M726,289 L770,289"></path>
+      <path class="edge" d="M999,380 L999,420 L149,420 L149,426"></path>
+      <path class="edge" d="M899,380 L899,400 L295,400 L295,386"></path>
       <path class="edge" d="M274,468 L316,468"></path>
       <path class="edge" d="M432,468 L474,468"></path>
       <path class="edge" d="M700,468 L742,468"></path>
 
-      <!-- 工件标签（准备阶段连线） -->
+      <!-- 工件/流水线标签 -->
       <g pointer-events="none">
         <text class="ts" x="360" y="80">文字稿</text>
         <text class="ts" x="594" y="80">风格包</text>
         <text class="ts" x="868" y="80">分镜稿</text>
+        <text class="ts" x="173" y="280">逐段</text>
+        <text class="ts" x="580" y="280">逐段</text>
       </g>
 
       <!-- 打回回环标签（修正③切换） -->
       <g id="brakeOffL" pointer-events="none">
         <rect class="subbox-w" x="368" y="390" width="290" height="20"></rect>
-        <text class="tw" x="513" y="404">打回 ≤2 轮 · 同题两现即停？ · 烧尽降级＝？</text>
+        <text class="tw" x="513" y="404">打回 ≤2 轮 · 刹车判据＝？ · 降级出口＝？</text>
       </g>
       <g id="brakeOnL" class="hidden" pointer-events="none">
         <rect x="353" y="390" width="320" height="20" rx="10" fill="var(--ok-bg)" stroke="var(--ok)"></rect>
-        <text class="to" x="513" y="404">意见挂条目ID · 同ID两轮失败＝停 · 降级＝带伤发布</text>
+        <text class="to" x="513" y="404">签名＝类别+锚点 · 同签名两轮＝停 · 降级出口待定</text>
       </g>
 
       <!-- 图例（右下空档） -->
@@ -221,8 +221,7 @@
         <g class="pill new"><rect x="916" y="470" width="40" height="18"></rect><text x="936" y="483">新增</text></g>
         <g class="pill mod"><rect x="962" y="470" width="40" height="18"></rect><text x="982" y="483">改造</text></g>
         <g class="pill has"><rect x="1008" y="470" width="40" height="18"></rect><text x="1028" y="483">已有</text></g>
-        <g class="pill rev"><rect x="1054" y="470" width="84" height="18"></rect><text x="1096" y="483">修正②复活</text></g>
-        <text class="hint" x="916" y="504">点击节点看详情 · 开关叠加待拍板修正</text>
+        <text class="hint" x="916" y="504">点击节点看详情 · 修正③降级出口待拍板</text>
       </g>
 
       <!-- 起点 -->
@@ -272,66 +271,60 @@
       <g class="fnode prog" data-k="tts" tabindex="0" role="button" aria-label="TTS 与词级对齐">
         <rect class="box" x="24" y="257" width="128" height="64"></rect>
         <text class="t" x="88" y="285">TTS + 词级对齐</text>
-        <text class="ts" x="88" y="305">程序化 · 词级对齐</text>
+        <text class="ts" x="88" y="305">程序化 · 一次 · 全局</text>
         <g class="pill has"><rect x="108" y="248" width="40" height="18"></rect><text x="128" y="261">已有</text></g>
       </g>
 
       <!-- ④ 写画面 ×N 并行（扇出容器） -->
-      <g class="fnode" data-k="gen" tabindex="0" role="button" aria-label="写画面工位，N 段并行">
+      <g class="fnode" data-k="gen" tabindex="0" role="button" aria-label="写画面工位，N 段并行，并发上限4">
         <rect class="box" x="200" y="200" width="190" height="180"></rect>
-        <text class="t" x="295" y="222">④ 写画面 ×N 并行</text>
+        <text class="t" x="295" y="222">④ 写画面 ×N 并行 ≤4</text>
         <rect class="chipbox" x="216" y="232" width="158" height="34"></rect>
         <text class="chiptx" x="295" y="253">seg01.html</text>
         <rect class="chipbox" x="216" y="272" width="158" height="34"></rect>
         <text class="chiptx" x="295" y="293">seg02.html</text>
         <rect class="chipbox" x="216" y="312" width="158" height="34"></rect>
         <text class="chiptx" x="295" y="333">seg03.html</text>
-        <text class="chiptx" x="295" y="366">…… 段 = 并行 / 修复 / 缓存单位</text>
+        <text class="chiptx" x="295" y="366">谁写完谁往下流 · 不等齐</text>
         <g class="pill mod"><rect x="346" y="191" width="40" height="18"></rect><text x="366" y="204">改造</text></g>
       </g>
 
       <!-- 程序 check -->
-      <g class="fnode prog" data-k="chk" tabindex="0" role="button" aria-label="程序 check">
+      <g class="fnode prog" data-k="chk" tabindex="0" role="button" aria-label="程序 check，逐段">
         <rect class="box" x="438" y="257" width="120" height="64"></rect>
         <text class="t" x="498" y="285">程序 check</text>
-        <text class="ts" x="498" y="305">lint + 产物不变量</text>
+        <text class="ts" x="498" y="305">逐段 · lint+不变量</text>
         <g class="pill has"><rect x="514" y="248" width="40" height="18"></rect><text x="534" y="261">已有</text></g>
-      </g>
-
-      <!-- ⑤ 审核工位 · 渲前场 -->
-      <g class="fnode" data-k="s4pre" tabindex="0" role="button" aria-label="审核工位渲染前场">
-        <rect class="box" x="606" y="200" width="250" height="180"></rect>
-        <text class="t" x="731" y="222">⑤ 审核工位 · 渲前场（静态卷）</text>
-        <g id="examOffG" pointer-events="none">
-          <rect class="subbox-w" x="622" y="234" width="218" height="54"></rect>
-          <text class="tw" x="731" y="254">单调用：写清单 → 对照</text>
-          <text class="tw" x="731" y="272" style="opacity:.85">⚠ 写清单时已看过帧——顺序救不了</text>
-        </g>
-        <g id="examOnG" class="hidden" pointer-events="none">
-          <rect class="subbox-o" x="622" y="228" width="218" height="40"></rect>
-          <text class="to" x="731" y="252">调用A 纯文本：旁白 → 冻结考卷</text>
-          <path d="M731,270 L731,292" stroke="var(--ok)" stroke-width="1.5" fill="none" marker-end="url(#arrow)"></path>
-          <rect class="subbox-o" x="622" y="296" width="218" height="40"></rect>
-          <text class="to" x="731" y="320">调用B 带帧：对照 → 打分 → 意见单</text>
-        </g>
-        <text class="ts" x="731" y="360">分数从清单算出 · 意见单带证据</text>
-        <g class="pill new"><rect x="786" y="191" width="66" height="18"></rect><text x="819" y="204">收拢新建</text></g>
       </g>
 
       <!-- 段渲染 -->
       <g class="fnode prog" data-k="render" tabindex="0" role="button" aria-label="段渲染">
-        <rect class="box" x="906" y="257" width="110" height="64"></rect>
-        <text class="t" x="961" y="285">段渲染</text>
-        <text class="ts" x="961" y="305">程序化 · 出段视频</text>
-        <g class="pill has"><rect x="972" y="248" width="40" height="18"></rect><text x="992" y="261">已有</text></g>
+        <rect class="box" x="606" y="257" width="120" height="64"></rect>
+        <text class="t" x="666" y="285">段渲染</text>
+        <text class="ts" x="666" y="305">程序化 · ~20s/段</text>
+        <g class="pill has"><rect x="682" y="248" width="40" height="18"></rect><text x="702" y="261">已有</text></g>
       </g>
 
-      <!-- ⑤ 审核工位 · 渲后场 -->
-      <g class="fnode" data-k="s4post" tabindex="0" role="button" aria-label="审核工位渲染后场">
+      <!-- ⑤ 审核工位 · 段审（ReAct） -->
+      <g class="fnode" data-k="s4pre" tabindex="0" role="button" aria-label="审核工位段审，ReAct 判卷 agent">
+        <rect class="box" x="774" y="200" width="250" height="180"></rect>
+        <text class="t" x="899" y="222">⑤ 审核工位 · 段审（ReAct）</text>
+        <rect class="chipbox" x="790" y="232" width="218" height="34"></rect>
+        <text class="chiptx" x="899" y="253">输入：锚点帧+brief+旁白+样张</text>
+        <rect class="chipbox" x="790" y="272" width="218" height="34"></rect>
+        <text class="chiptx" x="899" y="293">工具：get_frame / get_clip</text>
+        <rect class="chipbox" x="790" y="312" width="218" height="34"></rect>
+        <text class="chiptx" x="899" y="333">输出：findings · 类别+锚点签名</text>
+        <text class="chiptx" x="899" y="366">程序校验 → 打回判定 → 签名刹车</text>
+        <g class="pill new"><rect x="980" y="191" width="40" height="18"></rect><text x="1000" y="204">新增</text></g>
+      </g>
+
+      <!-- ⑤ 审核工位 · 边界审 -->
+      <g class="fnode" data-k="s4post" tabindex="0" role="button" aria-label="审核工位边界审">
         <rect class="box" x="24" y="432" width="250" height="72"></rect>
-        <text class="t" x="149" y="454">⑤ 审核工位 · 渲后场（动态卷）</text>
-        <text class="ts" x="149" y="472">边界帧对（对 brief 首末拍）+ 动效退场</text>
-        <text class="ts" x="149" y="490">机械修优先 · 段内重画 ≤1 轮</text>
+        <text class="t" x="149" y="454">⑤ 审核工位 · 边界审</text>
+        <text class="ts" x="149" y="472">邻居齐才审 · 边界短片段+末首帧对</text>
+        <text class="ts" x="149" y="490">stitch_fix 机械修 · redraw ≤1 轮</text>
         <g class="pill new"><rect x="230" y="423" width="40" height="18"></rect><text x="250" y="436">新增</text></g>
       </g>
 
@@ -339,22 +332,17 @@
       <g class="fnode prog" data-k="stitch" tabindex="0" role="button" aria-label="拼接">
         <rect class="box" x="322" y="432" width="110" height="72"></rect>
         <text class="t" x="377" y="462">拼接</text>
-        <text class="ts" x="377" y="484">程序化 · ffmpeg · 零改动</text>
+        <text class="ts" x="377" y="484">末对过审才拼 · 零改动</text>
         <g class="pill has"><rect x="388" y="423" width="40" height="18"></rect><text x="408" y="436">已有</text></g>
       </g>
 
-      <!-- 原案：拼接后零检查 / 修正②：全片终审 -->
-      <g class="fnode danger" id="gapNode" data-k="gap" tabindex="0" role="button" aria-label="拼接后零检查">
-        <rect class="box" x="480" y="432" width="220" height="72"></rect>
-        <text class="tdanger" x="590" y="460">⚠ 拼接后零检查</text>
-        <text class="ts" x="590" y="482" style="fill:var(--danger);opacity:.8">成品无人看 · 点此看风险清单</text>
-      </g>
-      <g class="fnode good hidden" id="finalNode" data-k="final" tabindex="0" role="button" aria-label="全片终审">
+      <!-- 全片终审（修正②，已拍板） -->
+      <g class="fnode good" id="finalNode" data-k="final" tabindex="0" role="button" aria-label="全片终审，已拍板采纳">
         <rect class="box" x="480" y="432" width="220" height="72"></rect>
         <text class="t" x="590" y="456">全片终审（瘦身）</text>
         <text class="ts" x="590" y="474">12–16 帧（段界 + 段落界）</text>
-        <text class="ts" x="590" y="492">查节奏 / 空转 / 拼接完整</text>
-        <g class="pill rev"><rect x="612" y="423" width="84" height="18"></rect><text x="654" y="436">修正②复活</text></g>
+        <text class="ts" x="590" y="492">查节奏 / 空转 / 拼接 / 渐变跑偏</text>
+        <g class="pill rev"><rect x="612" y="423" width="84" height="18"></rect><text x="654" y="436">已拍板采纳</text></g>
       </g>
 
       <!-- 出片 -->
@@ -370,15 +358,62 @@
   <summary>导演退役对照表：原来的两个介入点去哪了</summary>
   <table>
     <tr><th>原介入点</th><th>去向</th></tr>
-    <tr><td>M1 定调<br><span style="color:var(--muted)">分镜后补注章 / 母题 / 节拍表（f1097f2 已建）</span></td><td><b>退役。</b>节拍表的「预期考卷」职责 → 审核工位渲前场首轮清单（其生产方式由争议①决定：单调用还是两调用）；章 → 可砍 / 降可选；母题 → 可选（零母题本就合法）。代价：生成侧失去节拍注入，内容与节拍对应粗一档，记账观察。</td></tr>
-    <tr><td>M2 审片<br><span style="color:var(--muted)">组装后 24 帧连环画四查、high 打回 ≤1 轮</span></td><td><b>拆解。</b>expectation 查 → 渲前静态卷（考卷对照）；motif 查 → 随母题退役；<span style="color:var(--warn)">pacing / deadair 查 → 原案无人接手，修正②的全片终审即为此而设</span>；衔接查 → 渲后动态卷（边界帧对 brief 首末拍）。</td></tr>
+    <tr><td>M1 定调<br><span style="color:var(--muted)">分镜后补注章 / 母题 / 节拍表（f1097f2 已建）</span></td><td><b>退役。</b>节拍表的「预期考卷」职责 → 段审 agent 按 brief+旁白现场推导期望（考卷已退役）；章 → 可砍 / 降可选；母题 → 可选（零母题本就合法）。代价：生成侧失去节拍注入，内容与节拍对应粗一档，记账观察。</td></tr>
+    <tr><td>M2 审片<br><span style="color:var(--muted)">组装后 24 帧连环画四查、high 打回 ≤1 轮</span></td><td><b>拆解。</b>expectation 查 → 段审（对 brief+旁白判卷）；motif 查 → 随母题退役；pacing / deadair 查 → <b>全片终审（修正②已拍板，本图绿色节点）</b>；衔接查 → 边界审（短片段+末首帧对）。</td></tr>
   </table>
 </details>
 
+<details class="map">
+  <summary>审核工位：两个档案怎么设计（提示词与 JSON 契约已定稿）</summary>
+  <table>
+    <tr><th>档案</th><th>触发</th><th>输入（程序注入）</th><th>查项（固定，进系统提示词）</th><th>fix 枚举</th><th>回合预算</th></tr>
+    <tr>
+      <td><b>段审</b></td>
+      <td>本段渲完</td>
+      <td>锚点帧（首末帧+句末帧封顶~6）+ brief + 句编号旁白 + 样张 + 设计规则要点 + fact_sheet 条目</td>
+      <td>六维：内容一致 / 事实 / 风格 / 首末拍合规 / 装置落点 / 字幕文字（每维 pass·fail·NA）</td>
+      <td>redraw / pass</td>
+      <td>≤6</td>
+    </tr>
+    <tr>
+      <td><b>边界审</b></td>
+      <td>两侧段审都过（任一侧重画 → 相邻边界对失效重审）</td>
+      <td>两侧 brief 承诺 + 边界短片段×2（前后各 1–2s）+ 末帧×首帧对</td>
+      <td>四查：收尾播完 / 入场起步 / 接续成立 / 突变（闪帧黑帧）</td>
+      <td>stitch_fix / redraw / pass</td>
+      <td>≤4</td>
+    </tr>
+    <tr>
+      <td><b>全片终审</b></td>
+      <td>拼接后</td>
+      <td>12–16 帧（段界 + 段落界）</td>
+      <td>pacing / deadair / 拼接完整 / 渐变跑偏</td>
+      <td>按段重渲清单</td>
+      <td>单轮</td>
+    </tr>
+  </table>
+  <p style="font-size:13px;color:var(--muted);margin:10px 0 0">判卷型 ReAct：工具只读两件（<code>get_frame</code> / <code>get_clip</code>，ffmpeg+缓存）+ <code>submit_verdict</code> 唯一出口；温度 ≈0；manifest 记每次取证。意见单 findings[] 带「类别+锚点」签名，签名刹车（同签名两轮=停）由程序判定。两份系统提示词全文、JSON 载荷样例、submit 校验清单、边界对状态机见 <code>docs/production-stage-design.md</code> §5.9。</p>
+</details>
+
 <section class="undecided">
-  <h2>未决 / 缓做事项 · AI 的立场</h2>
+  <h2>未决 / 记账事项 · AI 的立场</h2>
   <table>
     <tr><th>事项</th><th>状态</th><th>立场</th><th>理由</th></tr>
+    <tr>
+      <td>修正③ 刹车降级出口</td><td>待拍板（剩此项）</td>
+      <td><span class="stance yes">建议带伤发布</span></td>
+      <td>签名刹车（类别+锚点，同签名两轮=停，停止派发+在飞排干）已设计落地；剩降级出口：倾向带伤发布+manifest 标注——整片作废的钱远超一段瑕疵。</td>
+    </tr>
+    <tr>
+      <td>修复轮新发现率</td><td>记账观察（P4 哨兵）</td>
+      <td><span class="stance defer">记账说话</span></td>
+      <td>无冻结考卷后「越修越多」的守卫：修复轮先复核既往意见、新发现须 high 才立案；复发则回退「预期先行」（同 agent 盲写预期→再看帧，考卷轻量复活）。</td>
+    </tr>
+    <tr>
+      <td>修正① 考卷拆两次调用</td><td><b>已消解</b></td>
+      <td><span class="stance defer">考卷退役</span></td>
+      <td>考卷退役后，期望源（brief / 旁白）诞生于任何帧存在之前——「写期望时偷看帧」在结构上不存在，修正失去宿主。</td>
+    </tr>
     <tr>
       <td>审片误报记账提前开张</td><td>未拍板（建议项）</td>
       <td><span class="stance yes">建议立即开张</span></td>
@@ -388,6 +423,16 @@
       <td>先配后切（TTS 前移，拿真实句级时间戳再切段）</td><td>未拍板（建议采纳）</td>
       <td><span class="stance yes">建议采纳</span></td>
       <td>停顿证据 × 话题完整 × 剪辑语法三层合一切段；③的 <code>tts_align</code> 工具已按「采纳后注册」预留，拍板即接通。</td>
+    </tr>
+    <tr>
+      <td>装置/皮肤切换与段落节拍配合度</td><td>记账观察</td>
+      <td><span class="stance defer">记账说话</span></td>
+      <td>设计系统的内容耦合件（贯穿装置 / skin_rule）在②发明时看不到分镜——量级预期小；段审固定查项含装置落点即是账本；塌了再上逃生舱②′（已预设计）。</td>
+    </tr>
+    <tr>
+      <td>渐变跑偏的全片终审捕获率</td><td>记账观察</td>
+      <td><span class="stance defer">记账说话</span></td>
+      <td>逐段审的已知盲区（段间渐变单段不可见）交给全片终审兜底；捕获率与按段重渲成本进账本。</td>
     </tr>
     <tr>
       <td>时长窗校验（原 8–20s 全局硬带）</td><td><b>已了结</b></td>
@@ -402,7 +447,7 @@
     <tr>
       <td>接缝「治」（参考图修后段）</td><td>等记账</td>
       <td><span class="stance defer">同意缓做</span></td>
-      <td>「防」（邻段承诺 + 设计系统模板）与「查」（渲后场对 brief 首末拍）均已并入；治等真伤。</td>
+      <td>「防」（邻段承诺 + 设计系统模板）与「查」（边界审对 brief 首末拍）均已并入；治等真伤。</td>
     </tr>
     <tr>
       <td>逐缝编辑例外（风格语法 override 表）</td><td>缓做（等审片数据）</td>
@@ -422,7 +467,7 @@
   </table>
 </section>
 
-<footer>生成于 2026-10-15 讨论会 · 仅供架构讨论，不随代码发布 · 准备阶段定稿见 <code>docs/prep-agents-design.md</code> · 修正①②③需人工拍板后回写纪要</footer>
+<footer>生成于 2026-10-15/16 讨论会 · 仅供架构讨论，不随代码发布 · 准备阶段定稿见 <code>docs/prep-agents-design.md</code>、制作阶段定稿见 <code>docs/production-stage-design.md</code> · 修正③降级出口需人工拍板后回写文档</footer>
 
 <script>
 (function () {
@@ -436,19 +481,17 @@
       rows: [
         ["职责", "主题模式先联网搜集资料，再把材料改写成适合朗读的口播稿。只管「说什么」——不含段落/切段等结构决策，不含任何视觉决策。"],
         ["工具", "<code>read_source</code>（材料唯一入口，含目标时长）/ <code>web_search</code> / <code>fetch_page</code> / <code>estimate_speech_duration</code>（≈4.5 字/秒，时长自检）/ <code>submit_script</code>——<em>唯一出口</em>（submit-or-die）。"],
-        ["产物", "文字稿 = 旁白正文（程序按句切分编号 N1…Nn）+ fact_sheet（断言 → 来源 URL）。硬事实逐条可溯源，随工件进指纹，供⑤「事实核查」查项。"],
-        ["防注入", "网页内容是数据不是指令——红线写进提示词；fetch_page 剥广告导航、超长截断。"],
-        ["预算", "回合预算 ①≤4，框架侧配置、不进提示词；超限 = 本步失败 + 记账 + 至多一次冷重试。"]
+        ["产物", "文字稿 = 旁白正文（程序按句切分编号 N1…Nn）+ fact_sheet（断言 → 来源 URL）。硬事实逐条可溯源，随工件进指纹，供段审「事实」查项对照。"],
+        ["防注入", "网页内容是数据不是指令——红线写进提示词；fetch_page 剥广告导航、超长截断。"]
       ]
     },
     g2: {
       type: "ReAct agent · 多模态 · v3.1 改造", cls: "", title: "② 风格工位",
       rows: [
         ["职责", "为文字稿选定视觉风格，产出可直接指导制作的风格包。对风格库拥有完整探索能力：分面检索、详情+样张图库、历史使用与审核记账、样张渲染验证、衍生登记。"],
-        ["工具", "<code>get_script</code> / <code>search_styles</code>（情绪/题材/色调/密度分面）/ <code>get_style_detail</code> / <code>get_style_usage</code>（⑤记账反馈回②，数据驱动选型）/ <code>render_sample</code> / <code>register_style</code>（衍生治理：derived_from 出处 + 「未验证」标签，过⑤审核才转正，单 run 限 1 个）/ <code>submit_style</code>。"],
         ["风格包四件", "① 风格描述（附选择理由，供③理解语境）；② 剪辑语法三字段：切分密度 / 段长带 / 同舞台延续；③ 设计系统——含<em>标准入场/收尾动画模板</em>（水墨晕染显影、羊皮纸翻页起手），转场的载体；④ 样张 id 列表。"],
-        ["纪律", "样张场景必须取自口播稿代表性内容，禁止通用示例；口播稿文本一个字不改（文字稿门后冻结）。"],
-        ["预算", "回合预算 ②≤12（框架侧）。"]
+        ["设计系统归属", "制作阶段<em>零设计作业</em>：原 style_samples 阶段（分镜后发明）退役，六件套校验器 / 样张渲染 / LockDesign 整体降级为② <code>render_sample</code> 底层。哲学转向：库内选择 + 派生治理（条目自带历史记账，选中即继承已验证设计）。"],
+        ["纪律", "样张场景必须取自口播稿代表性内容，禁止通用示例；口播稿文本一个字不改（文字稿门后冻结）。"]
       ]
     },
     g3: {
@@ -457,8 +500,7 @@
         ["职责", "<em>纯内容</em>：段落 + 切段 + 逐段场景 brief（scene / first_frame / last_frame）。不出现任何缝/转场/机制概念。"],
         ["切段三层", "话题完整（硬约束）&gt; 停顿证据（<code>tts_align</code>，先配后切采纳后注册）&gt; 剪辑语法（软约束）。全局段长钳 5–20s，入场动画计入段长。"],
         ["首拍/末拍", "brief 必写首拍（如何开场；延续上段则写明接续点）与末拍（画面收在哪里）——相邻段衔接的全部依据。想要画面连续过渡 = <em>并成一段</em>，不是设缝。"],
-        ["旁白引用", "narration_refs 只引句编号（N3-N4）不抄文本，零转抄漂移；草稿先过 <code>validate_storyboard</code> 修到零错误，再 <code>submit_storyboard</code>。段落带一句话主题，按段序铺满。"],
-        ["预算", "回合预算 ③≤10（框架侧）。"]
+        ["旁白引用", "narration_refs 只引句编号（N3-N4）不抄文本，零转抄漂移；草稿先过 <code>validate_storyboard</code> 修到零错误，再 <code>submit_storyboard</code>。段落带一句话主题，按段序铺满。"]
       ]
     },
     gate: {
@@ -473,77 +515,73 @@
     tts: {
       type: "程序化 · 已有", cls: "", title: "TTS + 词级对齐",
       rows: [
-        ["职责", "整片 TTS 配音 + 词级时间戳对齐。"],
-        ["为什么重要", "句级时间戳是句末靶向抽帧、考卷锚句校验、打回靶向的物理基础；真实时长也只有 TTS 之后才知道（估算乐观约 12%）。"]
+        ["职责", "整片 TTS 配音 + 词级时间戳对齐，制作阶段起点、一次全局。"],
+        ["为什么重要", "句级时间戳是锚点帧抽取（句末时刻）、段审帧身份（此刻刚念完 N 几）、打回靶向的物理基础；真实时长也只有 TTS 之后才知道（估算乐观约 12%）。"]
       ]
     },
     gen: {
-      type: "LLM 工位 · v3.1 改造", cls: "", title: "④ 写画面工位 ×N 段并行",
+      type: "LLM 工位 · v3.1 改造", cls: "", title: "④ 写画面工位 ×N 段并行（≤4）",
       rows: [
-        ["职责", "逐段并行生成自包含 HTML。段 = 文件 = 时间轴 = 渲染单位 = 缓存单位（四同构），画面是 t 的纯函数。"],
-        ["注入内容", "场景 brief（首拍/末拍）+ 段落主题 + 段内位置 + 词级时间戳 + 设计系统 + <em>邻段两行承诺</em>（所有段白送注入，内容取自相邻 brief 的末拍/首拍——防层，非某类缝专属）。"],
-        ["转场归属", "转场 = 设计系统的标准入场/收尾动画模板，一段内生效、计入段长预算；④不逐段即兴发明，<em>拼接层永远零改动</em>（装配由代码拥有，见确定性焊死清单）。"]
+        ["职责", "逐段并行生成自包含 HTML。段 = 文件 = 时间轴 = 渲染单位 = 缓存单位 = <em>调度单位</em>，画面是 t 的纯函数。"],
+        ["流水线", "并发 ≤4（API 上限，配置）；<em>谁写完谁往下流</em>——本段立刻进 check → 渲染 → 段审，不等其他段。写画面吃 API、渲染吃本机 CPU，流水线让两类资源同时饱和。"],
+        ["注入内容", "场景 brief（首拍/末拍）+ 段落主题 + 段内位置 + 词级时间戳 + 设计系统 + <em>邻段两行承诺</em>（所有段白送注入，内容取自相邻 brief 的末拍/首拍——防层）。"],
+        ["转场归属", "转场 = 设计系统的标准入场/收尾动画模板，一段内生效、计入段长预算；④不逐段即兴发明，<em>拼接层永远零改动</em>。"]
       ]
     },
     chk: {
-      type: "程序化 · 已有", cls: "", title: "程序 check",
+      type: "程序化 · 已有", cls: "", title: "程序 check（逐段）",
       rows: [
         ["职责", "契约 lint（唯一 paused timeline、禁页面自走时钟 / 未种子化随机 / CSS animation）+ 产物不变量（强制软件光栅、字幕完整性等）。"],
-        ["意义", "便宜门挡在贵门（多模态审核）之前；确定性、可重放。"]
-      ]
-    },
-    s4pre: {
-      type: "多模态 LLM 工位 · v3 收拢新建", cls: "", title: "⑤ 渲前场（静态卷）",
-      rows: [
-        ["职责", "句末靶向抽帧（每段封顶两三帧 + 首尾帧，帧身份标注「此刻刚念完某句」）→ 先写「该有什么」清单 → 对照打分 → 结构化意见单（位置 / 期望 / 现状 / 证据）。"],
-        ["考卷新增", "两类查项（改动清单 #11）：事实核查（对 fact_sheet 逐条抽验）、边界帧（对 brief 首末拍——brief 说延续就查接得住，说新场景就查开场对不对）。"],
-        ["v3 变化", "收拢原三处审查；考卷来源为「审核首轮清单」（落盘冻结，修复轮只销账不发明新标准）；接管导演退役后的 expectation 检查。"],
-        ["已接受代价", "审帧预算上升（约 30–40 帧 vs 现 24 帧）；Expect 质量无程序验证，误报只能记账。"],
-        ["争议", "<span class='q'>① 考卷单调用还是两调用（顶部开关可对比）；③ 刹车「同题」判定与降级出口未定义。</span>"],
-        ["打回", "≤2 轮，修复回 ④ 重画（只花一段的钱），回来销账 + 帧比对（图中橙色回环）。"]
+        ["流水线位置", "每段写完即查、只查本段（本地浏览器作业）；通过即渲。<em>渲染不设审核闸</em>——渲前场已退役，便宜门只剩这一道，挡在所有贵环节之前。"]
       ]
     },
     render: {
       type: "程序化 · 已有", cls: "", title: "段渲染",
       rows: [
-        ["职责", "逐段把 HTML 渲染成段视频：渲前场吃它的截帧，渲后场与拼接吃它的成片。"],
-        ["意义", "段是渲染原子单位——重渲只花一段的钱，这是打回循环经济性的物理基础；换转场语言 = 改设计系统模板 + 重渲受影响段（按段计价）。"]
+        ["职责", "逐段把 HTML 渲染成段视频。实测 <em>~20s/段</em>（≈3×段内容时长，2026-10-15 e2e：10 段 3:44）。"],
+        ["调度", "check 过即渲，<em>不被审核闸</em>——为 20 秒的渲染养前置审核场不值得（渲前场随之退役）；并发按本机 CPU 上限（≤2–4，配置）。重渲只花一段的钱，这是打回循环与终审兜底经济性的物理基础。"]
+      ]
+    },
+    s4pre: {
+      type: "ReAct agent · 多模态 · 本轮定稿", cls: "", title: "⑤ 审核工位 · 段审（判卷型）",
+      rows: [
+        ["形态", "ReAct 判卷 agent：程序预截锚点帧（首末帧 + 句末帧封顶 ~6），agent 用工具取证补漏；<code>submit_verdict</code> 唯一出口（submit-or-die）；回合预算 ≤6（框架侧）；温度 ≈0。"],
+        ["工具", "<code>get_frame(seg,t)</code> / <code>get_clip(seg,t1,t2)</code>——只读，ffmpeg 实现、按 (seg,t) 哈希缓存，取证时刻记 manifest。误报的全链路代价（重画+重渲+重审）远大于几秒取证。"],
+        ["输入", "锚点帧 + 分镜 brief + 句编号旁白 + 样张（风格实物基准）+ fact_sheet 相关条目；修复轮追加既往意见单。全部程序整理注入。"],
+        ["规则两层", "系统提示词 = 通用判卷法 + <em>固定六维查项</em>（内容一致/事实/风格/首末拍合规/装置落点/字幕文字），每维必须 verdict 或 N/A；本片期望由 agent 从 brief+旁白现场推导——<em>考卷退役</em>（期望源诞生于帧之前，修正①消解）。"],
+        ["输出", "findings[]：{ 类别, 锚点(N句号/时刻), severity, evidence(帧时刻+现状vs期望), fix } + 六维 verdict（NA 是三值枚举不是空缺）。分数由程序数出，模型不报总分。载荷样例与校验规则见 production-stage-design.md §5.9。"],
+        ["fix 分诊", "审片员只诊断+分诊建议，不执行：<em>redraw</em>=回④重画 / <em>pass</em>=记账；边界审多 <em>stitch_fix</em>=拼接参数机械修（字幕时序类，不打回）。一致性规则：high 必配 redraw/stitch_fix、low 必配 pass，校验器拦矛盾组合。"],
+        ["打回与刹车", "high → ④重画（只带失败条目）→ check → 重渲 → 重审（先复核既往意见，新发现须 high）；签名=类别+锚点，同签名两轮=停（修正③主体）。"],
+        ["哨兵", "无冻结考卷的实测病理是「越修越多」：守卫=复核既往+新发现须 high；记账「修复轮新发现率」，复发回退「预期先行」（盲写预期→再看帧）。"]
       ]
     },
     s4post: {
-      type: "多模态 LLM 工位 · v3 新增", cls: "", title: "⑤ 渲后场（动态卷）",
+      type: "ReAct agent · 多模态 · 第二档案", cls: "", title: "⑤ 审核工位 · 边界审",
       rows: [
-        ["职责", "段渲完、拼接前：边界帧对 + 动效 / 退场判据——查「动起来才可见」的问题（prereview 已知盲区）。"],
-        ["分诊", "机械修优先：转场 / 字幕时序在拼接层直接修，不打回；段内真动错了才重画，≤1 轮。"],
-        ["覆盖", "接缝「查」层并入：边界帧对直接<em>对 brief 查</em>——brief 说首拍延续推近终点，边界帧对比是否接得住；色量亮度跳变程序预筛。缝型词汇已退役，判据只剩 brief 首末拍。"]
+        ["调度", "同一个审核 agent 的第二调用档案：邻居都渲完才审这一对；最后一对过审才开拼接。"],
+        ["输入", "边界短片段（前后各 1–2s，覆盖入场/收尾动画预算）+ 末帧×首帧对 + 两侧 brief 的承诺原文；视频直喂优先，退路密集抽帧序列（6–8 帧/秒带时间戳）。"],
+        ["查什么", "收尾动画播完没有、入场正常起步没有、接续成立没有（对 brief 承诺：延续则末帧状态=首帧状态，新场景则干净无残影）、闪帧/黑帧/突跳。"],
+        ["分诊", "fix=stitch_fix（字幕时序类）拼接层机械修，不回④；redraw 段内重画 ≤1 轮。"]
       ]
     },
     stitch: {
       type: "程序化 · 已有", cls: "", title: "拼接",
       rows: [
-        ["职责", "段视频按序拼接 + 音轨合成（ffmpeg）。"],
-        ["注", "渲后场发现的转场 / 字幕时序问题在此机械修（既有行为，非转场机制）。v3.1 定稿：转场是段内时间线的组成部分，<em>拼接层永远零改动</em>——原「转场分层动 assemble」事项不是缓做，是不需要。"]
-      ]
-    },
-    gap: {
-      type: "⚠ 空白 · 原案", cls: "bad", title: "拼接后零检查",
-      rows: [
-        ["现状风险", "拼接后无人看成品。暴露面：段序拼错、拼接处黑帧、音画错位、全片节奏 / 空转无人查。"],
-        ["为什么会这样", "现 M2（全片 24 帧连环画，pacing / deadair 坐标系 = 章）随导演一起退役；渲后场又止步于「拼接前」。此代价纪要未显式记录——是被静默丢掉的。"],
-        ["修正②", "拼接后加<em>瘦身全片终审</em>：12–16 帧（段界 + 段落界稀疏抽帧），只查 pacing / deadair / 拼接完整，一次便宜调用——约等于 M2 砍掉 expectation / motif 两查、抽帧密度减半。若决定不要，请显式写入「接受代价 + 记账清单」。"]
+        ["职责", "段视频按序拼接 + 音轨合成（ffmpeg）；<em>最后一对边界审过审才开拼</em>。"],
+        ["注", "边界审 stitch_fix 类问题在此机械修（既有行为，非转场机制）。定稿：转场是段内时间线的组成部分，<em>拼接层永远零改动</em>。"]
       ]
     },
     final: {
-      type: "多模态 LLM 工位 · 修正②新增", cls: "good", title: "全片终审（瘦身）",
+      type: "多模态 LLM 工位 · 已拍板采纳", cls: "good", title: "全片终审（瘦身）",
       rows: [
-        ["职责", "拼接后的全片终审：12–16 帧稀疏连环画（段界 + 段落界时刻），只查三样——全片节奏（pacing）、单点空转（deadair）、拼接完整性（顺序 / 黑帧 / 音画）。"],
-        ["成本", "一次小调用，帧数约为现 M2 的一半。"],
-        ["取舍", "若判断不需要，须显式把「全片视角 QC 放弃」写入接受代价 + 记账清单，而不是静默丢失。"]
+        ["状态", "<b>已拍板采纳</b>（2026-10-16）——逐段审路线的<em>必要件</em>：渐变跑偏在逐段视角不可见，全片终审是它唯一的兜底。"],
+        ["职责", "拼接后抽 12–16 帧（段界 + 段落界），查四样——全片节奏（pacing）、单点空转（deadair）、拼接完整性（顺序 / 黑帧 / 音画）、<em>渐变跑偏</em>（段间风格渐变）。"],
+        ["动作", "发现问题 → 按段重渲（段级缓存，只花问题段的钱）→ 重拼 → 重进终审，循环到过审或触发刹车。原 M2 砍掉 expectation / motif 两查、抽帧密度减半的瘦身版。"]
       ]
     },
     out: {
       type: "终点", cls: "", title: "渲染出片",
-      rows: [["说明", "渲染出片；manifest 全程可查，循环由 Go 拥有（确定性、可重放）。"]]
+      rows: [["说明", "渲染出片；manifest 全程可查（含段级状态机迁移与每次取证），循环由 Go 拥有（确定性、可重放）。"]]
     }
   };
 
@@ -581,31 +619,19 @@
   });
 
   function apply() {
-    var t1 = document.getElementById("t1").checked;
-    var t2 = document.getElementById("t2").checked;
     var t3 = document.getElementById("t3").checked;
-    document.getElementById("examOffG").classList.toggle("hidden", t1);
-    document.getElementById("examOnG").classList.toggle("hidden", !t1);
     document.getElementById("brakeOffL").classList.toggle("hidden", t3);
     document.getElementById("brakeOnL").classList.toggle("hidden", !t3);
-    document.getElementById("gapNode").classList.toggle("hidden", t2);
-    document.getElementById("finalNode").classList.toggle("hidden", !t2);
-    if (t2 && current === "gap") select("final");
-    if (!t2 && current === "final") select("gap");
-    var on = [];
-    if (t1) on.push("①"); if (t2) on.push("②"); if (t3) on.push("③");
-    document.getElementById("view").textContent = on.length ? "当前视图：定稿 + 修正 " + on.join("、") : "当前视图：v3.1 定稿";
+    document.getElementById("view").textContent = t3 ? "当前视图：定稿 + 修正③" : "当前视图：定稿";
   }
 
-  ["t1", "t2", "t3"].forEach(function (id) {
-    document.getElementById(id).addEventListener("change", apply);
-  });
+  document.getElementById("t3").addEventListener("change", apply);
   document.getElementById("reset").addEventListener("click", function () {
-    ["t1", "t2", "t3"].forEach(function (id) { document.getElementById(id).checked = false; });
+    document.getElementById("t3").checked = false;
     apply();
   });
   document.getElementById("all").addEventListener("click", function () {
-    ["t1", "t2", "t3"].forEach(function (id) { document.getElementById(id).checked = true; });
+    document.getElementById("t3").checked = true;
     apply();
   });
 

@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"webpage-video-agent/server/internal/artifacts"
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
 )
@@ -275,11 +276,31 @@ func stagePrep(p *Project) error {
 // until 非空时执行到该阶段为止（含）。ctx 取消时在阶段边界退出（渲染中的
 // 子进程由 runCLI 经 p.Ctx 连带杀掉）。
 func Run(ctx context.Context, p *Project, until string) error {
+	return runStages(ctx, p, Stages(), until)
+}
+
+// RunFrom 从 from 阶段起顺序执行到管线末尾（含）。段级流水线在自管逐段
+// check 放行后只需要 render+stitch 的收尾能力——全阶段 Run 会把全局 check
+// 栅栏又装回来。from 未知时按全阶段跑（保守：不静默丢前置）。
+func RunFrom(ctx context.Context, p *Project, from string) error {
+	stages := Stages()
+	if from != "" {
+		for i, st := range stages {
+			if st.Name == from {
+				stages = stages[i:]
+				return runStages(ctx, p, stages, "")
+			}
+		}
+	}
+	return runStages(ctx, p, stages, "")
+}
+
+func runStages(ctx context.Context, p *Project, stages []Stage, until string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	p.Ctx = ctx
-	for _, st := range Stages() {
+	for _, st := range stages {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -840,16 +861,9 @@ func stageRender(p *Project) error {
 			p.Manifest("render.seg.cached", seg.ID)
 			continue
 		}
-		fmt.Printf("  · %s 渲染中\n", seg.ID)
-		outLog, err := runCLI(p, "npx", "hyperframes@0.8.55", "render", ".",
-			"-c", ".hf-seg/"+seg.ID+".html", "-o", "renders/segs/"+seg.ID+".mp4")
-		if err != nil {
-			return fmt.Errorf("%s 渲染失败:\n%s", seg.ID, tailLines(outLog, 30))
+		if err := RenderSeg(p, seg.ID); err != nil {
+			return err
 		}
-		if sum, err := segSrcSum(p, seg.ID); err == nil {
-			_ = os.WriteFile(out+".sum", []byte(sum), 0o644)
-		}
-		p.Manifest("render.seg", seg.ID)
 	}
 	entries, _ := os.ReadDir(segsDir)
 	for _, e := range entries { // 清理清单外残留段片（段增删后旧文件不进 concat，也不留垃圾）
@@ -866,7 +880,71 @@ func stageRender(p *Project) error {
 		return err
 	}
 	p.Manifest("render.done", "renders/main_voice.mp4")
+	syncArtifacts(artifacts.ProjectKey(p.ID, "renders")) // 母版/timeline/list.txt/段片兜底补传
 	return nil
+}
+
+// RenderSeg 渲单个段片（.hf-seg 单段工程 → renders/segs/segNN.mp4），落指纹旁车
+// 并上正本。段级流水线与 stageRender 共用：谁渲的都走同一指纹口径，后续
+// stageRender/concat 才能正确判"新鲜"跳过。要求该段的段工程已在（assemble 产物）。
+func RenderSeg(p *Project, segID string) error {
+	fmt.Printf("  · %s 渲染中\n", segID)
+	outLog, err := runCLI(p, "npx", "hyperframes@0.8.55", "render", ".",
+		"-c", ".hf-seg/"+segID+".html", "-o", "renders/segs/"+segID+".mp4")
+	if err != nil {
+		return fmt.Errorf("%s 渲染失败:\n%s", segID, tailLines(outLog, 30))
+	}
+	out := p.Artifact("renders/segs/" + segID + ".mp4")
+	if sum, err := segSrcSum(p, segID); err == nil {
+		_ = os.WriteFile(out+".sum", []byte(sum), 0o644)
+	}
+	p.Manifest("render.seg", segID)
+	// 段片是最贵的产物（分钟级渲染）：渲完立即上正本，rework/清理后免重渲
+	putArtifact(artifacts.ProjectKey(p.ID, "renders/segs/"+segID+".mp4"), out)
+	putArtifact(artifacts.ProjectKey(p.ID, "renders/segs/"+segID+".mp4.sum"), out+".sum")
+	return nil
+}
+
+// SegVideoDuration 段片实测时长（ffprobe；缺失/探不出返回 0）。帧数核对与终审
+// 抽帧的时刻轴都以此为准——与 concat 同源（writeActualTimeline 同一探测函数）。
+func SegVideoDuration(p *Project, segID string) float64 {
+	return probeDuration(p.Artifact("renders/segs/" + segID + ".mp4"))
+}
+
+// SegVideoFrames 段片实际视频帧数（快速：-count_packets 只拆包不解码）。
+// 段级流水线的 rendered 位用它与「时长×帧率」核对段片完整性。
+func SegVideoFrames(p *Project, segID string) (int, float64, error) {
+	out, err := ffprobeStream(p.Artifact("renders/segs/"+segID+".mp4"),
+		"-select_streams", "v:0", "-count_packets",
+		"-show_entries", "stream=nb_read_packets,r_frame_rate")
+	if err != nil {
+		return 0, 0, err
+	}
+	var frames int
+	var fps float64
+	for _, kv := range strings.Split(out, "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(kv), "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "nb_read_packets":
+			frames, _ = strconv.Atoi(v)
+		case "r_frame_rate":
+			if num, den, ok2 := strings.Cut(v, "/"); ok2 {
+				var n, d int
+				n, _ = strconv.Atoi(num)
+				d, _ = strconv.Atoi(den)
+				if d > 0 {
+					fps = float64(n) / float64(d)
+				}
+			}
+		}
+	}
+	if frames <= 0 || fps <= 0 {
+		return 0, 0, fmt.Errorf("段片 %s 帧数/帧率探测失败（frames=%d fps=%.2f）", segID, frames, fps)
+	}
+	return frames, fps, nil
 }
 
 // segStale 段片是否需要重渲：缺失，或该段的 帧html/音频/单段工程 内容与上次渲染时
@@ -946,14 +1024,14 @@ func concatSegs(p *Project, sb *contract.Storyboard, segsDir string) error {
 // writeActualTimeline 按段片实测时长（ffprobe）累计写 renders/timeline.json。
 // 任一段片探不出时长 → 报错（边界错位会直接污染前端时间轴映射，不能静默跳过）。
 func writeActualTimeline(p *Project, sb *contract.Storyboard, segsDir string) error {
-	tl := make([]timelineRow, len(sb.Segments))
+	tl := make([]TimelineRow, len(sb.Segments))
 	at := 0.0
 	for i, seg := range sb.Segments {
 		d := probeDuration(filepath.Join(segsDir, seg.ID+".mp4"))
 		if d <= 0 {
 			return fmt.Errorf("timeline: 段片 %s 时长探测失败", seg.ID)
 		}
-		tl[i] = timelineRow{ID: seg.ID, Start: at, End: at + d}
+		tl[i] = TimelineRow{ID: seg.ID, Start: at, End: at + d}
 		at += d
 	}
 	b, err := json.MarshalIndent(tl, "", "  ")
@@ -991,20 +1069,20 @@ func transitionFor(p *Project) string {
 	return "cut"
 }
 
-// timelineRow xfade 成片的实际段边界（sfx 布点/前端时间轴对齐的权威口径）。
-type timelineRow struct {
+// TimelineRow xfade 成片的实际段边界（sfx 布点/前端时间轴对齐的权威口径）。
+type TimelineRow struct {
 	ID    string  `json:"id"`
 	Start float64 `json:"start"`
 	End   float64 `json:"end"`
 }
 
 // LoadTimeline 读 renders/timeline.json（xfade/concat 拼接都写，段片实测边界）。
-func LoadTimeline(p *Project) []timelineRow {
+func LoadTimeline(p *Project) []TimelineRow {
 	b, err := os.ReadFile(p.Artifact("renders/timeline.json"))
 	if err != nil {
 		return nil
 	}
-	var tl []timelineRow
+	var tl []TimelineRow
 	if json.Unmarshal(b, &tl) != nil {
 		return nil
 	}
@@ -1070,13 +1148,13 @@ func xfadeConcat(p *Project, sb *contract.Storyboard, segsDir string) error {
 	if _, err := runFFmpeg(p, segsDir, "交叉叠化拼接", args...); err != nil {
 		return err
 	}
-	tl := make([]timelineRow, len(ids))
+	tl := make([]TimelineRow, len(ids))
 	for i, id := range ids {
 		end := starts[i] + durs[i]
 		if i+1 < len(starts) {
 			end = starts[i+1]
 		}
-		tl[i] = timelineRow{ID: id, Start: starts[i], End: end}
+		tl[i] = TimelineRow{ID: id, Start: starts[i], End: end}
 	}
 	if b, err := json.MarshalIndent(tl, "", "  "); err == nil {
 		// timeline 是 sfx 落点与前端字幕轨的权威边界，写失败必须留痕（否则按裸累计错位）
@@ -1150,11 +1228,16 @@ func stageStitch(p *Project) error {
 		detail += "+sfx"
 	}
 	p.Manifest("film.ready", detail)
+	putArtifact(artifacts.ProjectKey(p.ID, "renders/main.mp4"), out)
 	return nil
 }
 
 // StitchNow 只跑拼接/混音/后期（成片就绪后换 BGM 或调后期用，画面不动）。
-func StitchNow(p *Project) error { return stageStitch(p) }
+// 清理过的老项目先回源母版/段片再拼。
+func StitchNow(p *Project) error {
+	EnsureWorkspace(p)
+	return stageStitch(p)
+}
 
 // ── BGM 混音 ──────────────────────────────────────────────────────
 
@@ -1738,6 +1821,28 @@ func probeDurationUncached(path string) float64 {
 	return 0
 }
 
+// ffprobeStream ffprobe 流级字段（key=value 输出原样返回）。PATH 优先，回退
+// extraPATH（与 probeDurationUncached 同一定位口径）。
+func ffprobeStream(path string, args ...string) (string, error) {
+	full := append([]string{"-v", "error"}, append(append([]string{}, args...),
+		"-of", "default=noprint_wrappers=1", path)...)
+	if p, err := exec.LookPath("ffprobe"); err == nil {
+		out, err := exec.Command(p, full...).Output()
+		if err == nil {
+			return string(out), nil
+		}
+	}
+	if extraPATH != "" {
+		for _, cand := range []string{"ffprobe.exe", "ffprobe"} {
+			out, err := exec.Command(filepath.Join(extraPATH, cand), full...).Output()
+			if err == nil {
+				return string(out), nil
+			}
+		}
+	}
+	return "", errors.New("ffprobe 不在 PATH")
+}
+
 // copyFile 成片转正（母版保留副本，换 BGM 时可重新混音）。
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
@@ -1829,6 +1934,57 @@ func SetRootDir(dir string) { rootDir = dir }
 
 // SetDataDir 注入数据根（server/m0 启动时调用；不注入 = BGM 功能关闭）。
 func SetDataDir(dir string) { dataDir = dir }
+
+// artifactsStore 产物对象存储后端（SetArtifacts 注入）：项目产物/参考库的正本进
+// MinIO，本地目录降级为工作区+缓存（docs/storage-cloud-migration.md）。
+// nil = 未接线（m0/测试场景），全部上传与回源为无操作，行为与纯本地现状一致。
+var artifactsStore artifacts.Store
+
+// SetArtifacts 注入产物存储后端（server 启动时调用；m0 不注入 = 纯本地现状）。
+func SetArtifacts(s artifacts.Store) { artifactsStore = s }
+
+// putArtifact 检查点上传（best-effort）：失败只记日志不打断管线——本地仍是工作区，
+// 缺口由后续检查点、终态全量补传或 -storage-sync 补齐；且清理器删本地前会先验证
+// 远端正本，漏传最多暂时多占磁盘，绝不丢数据。
+func putArtifact(key, srcPath string) {
+	if artifactsStore == nil || !artifactsStore.Available() {
+		return
+	}
+	if err := artifactsStore.Put(key, srcPath); err != nil {
+		fmt.Printf("[artifacts] 上传 %s 失败: %v\n", key, err)
+	}
+}
+
+// syncArtifacts 检查点补传某前缀（幂等：远端已 Stat 到的跳过）。
+func syncArtifacts(prefix string) {
+	if artifactsStore == nil || !artifactsStore.Available() {
+		return
+	}
+	if _, err := artifacts.SyncUp(artifactsStore, dataDir, prefix); err != nil {
+		fmt.Printf("[artifacts] 补传 %s 中断: %v\n", prefix, err)
+	}
+}
+
+// EnsureWorkspace 老项目开跑前的透明回源：清理器删过本地大文件的项目，从对象存储
+// 拉回 Keeper 文件（契约 JSON/段片/配音/设计/素材）。本地齐全的项目只有一次远端
+// List 的代价（几十至几百 key，百毫秒级），新项目/未接线是 no-op。
+// 可再生成的 Discard 类（渲染壳/QA 截帧）不回源——assemble/compositions 阶段会
+// 从已回源的缓存契约（llm/comp-*.json）确定性重建。
+func EnsureWorkspace(p *Project) {
+	if artifactsStore == nil || !artifactsStore.Available() {
+		return
+	}
+	prefix := artifacts.ProjectKey(p.ID, "")
+	n, err := artifacts.Restore(artifactsStore, dataDir, prefix)
+	if err != nil {
+		fmt.Printf("[artifacts] %s 工作区回源中断（继续用本地现有文件）: %v\n", p.ID, err)
+		return
+	}
+	if n > 0 {
+		p.Manifest("workspace.restored", fmt.Sprintf("从对象存储回源 %d 个文件", n))
+		fmt.Printf("[artifacts] %s 回源 %d 个文件\n", p.ID, n)
+	}
+}
 
 // SetExtraPATH 注入额外可执行搜索路径（check/render 需要 ffmpeg）。
 func SetExtraPATH(dir string) { extraPATH = dir }
@@ -1975,7 +2131,11 @@ func SetProjectField(p *Project, key string, val any) error {
 	} else {
 		meta[key] = val
 	}
-	return WriteFileAtomic(p.Artifact("project.json"), mustJSONBytes(meta), 0o644)
+	if err := WriteFileAtomic(p.Artifact("project.json"), mustJSONBytes(meta), 0o644); err != nil {
+		return err
+	}
+	putArtifact(artifacts.ProjectKey(p.ID, "project.json"), p.Artifact("project.json"))
+	return nil
 }
 
 // ── LLM 请求模板（prompt 库 v0 · 会话模式即产物契约）─────────────

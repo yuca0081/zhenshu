@@ -10,7 +10,6 @@ import (
 	"webpage-video-agent/server/internal/pipeline"
 )
 
-
 // 样张源码注入（文字样式权威规范）：有确认样张 → 注入 HTML 源码与"样式照抄/
 // 内容按画面提示"纪律；无样张/无文件 → 静默空串。
 func TestSampleStyleNote(t *testing.T) {

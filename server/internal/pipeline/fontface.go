@@ -169,6 +169,23 @@ func titleCaseFont(lower string) string {
 	return lower
 }
 
+// FixupSegmentFrame 单段机械钳·字体声明（段级流水线 written 位）：只补该段帧与
+// 该段字幕子组合的目录字体声明。语义与 fixupFrameFonts 完全同源（同一
+// ensureFontFaces），范围收窄到一段——全量扫在段级流水线里会把没动的段白刷一遍。
+func FixupSegmentFrame(p *Project, segID string) {
+	assets := loadFontAssets(p)
+	for _, rel := range []string{"compositions/frames/" + segID + ".html", "compositions/caps/cap-" + segID + ".html"} {
+		path := p.Artifact(rel)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if fixed := ensureFontFaces(string(b), assets); fixed != string(b) {
+			_ = writeFile(path, fixed)
+		}
+	}
+}
+
 // fixupFrameFonts 对已落盘的合成物 HTML 补字体声明（幂等，内容没变不重写）。
 // 场景文件被上游缓存复用时 write 位不会执行，全量扫一遍兜住存量。
 // caps/ 与 frames/ 同待遇：字幕由 assemble.py 在 compositions 之后确定性重写，

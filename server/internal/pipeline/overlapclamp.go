@@ -56,6 +56,21 @@ func clampOverlapAttr(html string, layeredOK bool) (string, int) {
 	return html, len(locs) - maxOverlapDeclsPerFrame
 }
 
+// ClampSegmentFrame 单段机械钳·叠层声明（段级流水线 written 位）：剥该段帧上
+// 设计未声明的 data-layout-allow-overlap（字幕无叠层手法，caps 不扫）。返回剥除处数。
+func ClampSegmentFrame(p *Project, segID string) int {
+	path := filepath.Join(p.Artifact("compositions/frames"), segID+".html")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	fixed, n := clampOverlapAttr(string(b), designHasLayeredLayout(p))
+	if n > 0 {
+		_ = writeFile(path, fixed)
+	}
+	return n
+}
+
 // clampOverlapDecls 全量扫场景帧剥声明（字幕无叠层手法，不扫 caps/）。返回剥除总处数。
 func clampOverlapDecls(p *Project) int {
 	entries, err := os.ReadDir(p.Artifact("compositions/frames"))

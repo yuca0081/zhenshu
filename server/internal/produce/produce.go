@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/jpeg"
 	"image/png"
 	"log"
 	"math"
@@ -30,6 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"webpage-video-agent/server/internal/artifacts"
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/events"
 	"webpage-video-agent/server/internal/llm"
@@ -42,6 +44,7 @@ type Runner struct {
 	RootDir    string // 仓库根（ai/ 脚本所在）
 	Hub        *events.Hub
 	Store      store.Store                            // render_jobs 记账（nil = 不记账，测试场景）；manifest 仍是事实源
+	Artifacts  artifacts.Store                        // 产物正本后端（nil/本地 = 不上传，docs/storage-cloud-migration.md）
 	OnDone     func(projectID, status, detail string) // 终态回写（status: video|failed|cancelled；detail 供聊天汇报失败原因等）
 	OnNotice   func(projectID, content string)        // 非终态插话（如开机自动续跑通知），落聊天框但不改项目状态
 	AutoResume bool                                   // 启动对账时自动续跑被重启打断的整片制作（main 置 true；测试默认关，防拖起真管线）
@@ -135,6 +138,8 @@ func (r *Runner) Start(projectID string) (bool, error) {
 			mu.Unlock()
 			r.wg.Done()
 		}()
+		// 清理过的老项目先回源工作区（契约/段片/配音），新项目是廉价 no-op
+		pipeline.EnsureWorkspace(p)
 		// panic 兜底：audio_meta 等产物结构异常不该崩掉整个服务（goroutine panic 直接退进程）；
 		// 真失败自动重跑（≤2 次），重跑烧完才终态落盘+聊天汇报
 		err := r.runWithAutoRetry(ctx, p, projectID, EventProduceRetry, func() error { return r.run(ctx, p) })
@@ -273,6 +278,8 @@ func (r *Runner) Rework(projectID string, segIDs []string, instruction string) (
 			mu.Unlock()
 			r.wg.Done()
 		}()
+		// 清理过的老项目先回源工作区（重做的 sceneGen 要吃素材与设计产物）
+		pipeline.EnsureWorkspace(p)
 		err := r.runWithAutoRetry(ctx, p, projectID, EventReworkRetry, func() error { return r.runRework(ctx, p, segs, instruction) })
 		r.finishJob(p, projectID, err, jobTail{
 			evCancelled:    EventReworkCancelled,
@@ -301,6 +308,9 @@ type jobTail struct {
 // 唯一依据，下游展示出乱子（panic/断连）不许拖累它；OnDone 曾无 recover，panic
 // 会带崩整个进程并把已写一半的终态变成悬挂 start。
 func (r *Runner) finishJob(p *pipeline.Project, projectID string, err error, t jobTail) {
+	// 终态全量补传（成功/失败/取消都走）：把本轮新增的 Keeper 产物与 manifest 送上
+	// 正本后端——之后清理器才敢删本地。best-effort，缺口由 -storage-sync 兜底。
+	r.syncUp(p, "")
 	if err == nil {
 		return
 	}
@@ -575,6 +585,17 @@ func (r *Runner) emit(id, typ, stage, detail string) {
 
 func (r *Runner) Manifest(p *pipeline.Project, event, detail string) { p.Manifest(event, detail) }
 
+// syncUp 检查点补传（best-effort）：把项目内 rel 前缀下本地有而远端缺的 Keeper
+// 文件送上正本后端。失败只记日志——本地仍是工作区，清理器删前会验证远端正本。
+func (r *Runner) syncUp(p *pipeline.Project, rel string) {
+	if r.Artifacts == nil || !r.Artifacts.Available() {
+		return
+	}
+	if _, err := artifacts.SyncUp(r.Artifacts, r.DataDir, artifacts.ProjectKey(p.ID, rel)); err != nil {
+		log.Printf("[artifacts] %s 补传 %s 中断: %v", p.ID, rel, err)
+	}
+}
+
 // jobStart/jobTerminal render_jobs 记账，与同名 manifest 事件成对出现。best-effort：
 // 库不可写只打日志绝不挡制作——manifest 才是对账事实源，这里只是可查询镜像。
 func (r *Runner) jobStart(projectID, kind string) {
@@ -598,6 +619,13 @@ func (r *Runner) jobTerminal(projectID, status, outputPath, errMsg string) {
 func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 	id := p.ID
 
+	// ── 0. 路由（production-stage-design ⑭）：prep 新项目走段级流水线
+	//（写→检→渲→段审→边界审→拼接→终审，见 segpipe.go）；老项目（legacy 分镜、
+	// 无文字稿）走原栅栏管线，行为不变。
+	if IsPrepProject(p) {
+		return r.runSegmentPipeline(ctx, p)
+	}
+
 	// ── 1. TTS + 词级对齐（幂等：缺什么补什么）─────────────────
 	r.emit(id, "stage", "tts", "running")
 	r.Manifest(p, "stage.start", "tts")
@@ -611,6 +639,13 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 	// ── 1.5 双语字幕（可选，M-C）：短语级英文翻译 → audio_meta（幂等；失败不挡片）
 	if err := r.translateSubtitles(ctx, p); err != nil {
 		r.emit(id, "progress", "tts", "双语字幕翻译跳过: "+err.Error())
+	}
+	// 配音是最耗时的外部服务产物：TTS 一完成就上正本（几十 MB 级 wav × N 段）
+	r.syncUp(p, "audio")
+	if r.Artifacts != nil && r.Artifacts.Available() {
+		if err := r.Artifacts.Put(artifacts.ProjectKey(id, "audio_meta.json"), p.Artifact("audio_meta.json")); err != nil {
+			log.Printf("[artifacts] 上传 audio_meta.json 失败: %v", err)
+		}
 	}
 
 	// ── 2. 语义 spec 生成（LLM）+ 确定性渲染 + 合成物落盘 ────────
@@ -1582,13 +1617,54 @@ func skinNote(p *pipeline.Project) string {
 func styleSampleImages(p *pipeline.Project) []string {
 	var urls []string
 	for i := 0; i < 3; i++ {
-		b, err := os.ReadFile(p.Artifact(fmt.Sprintf("style/sample-%d.png", i)))
+		path := p.Artifact(fmt.Sprintf("style/sample-%d.png", i))
+		if _, err := os.Stat(path); err != nil {
+			break
+		}
+		// 缩到 640px JPEG 再注入：原始 PNG 直接 base64 曾把每次多模态调用的
+		// 载荷白抬 ~200KB；样张是风格基准，640 宽足够看构图配色质感
+		if u, err := shrinkSampleImage(path); err == nil {
+			urls = append(urls, u)
+			continue
+		}
+		b, err := os.ReadFile(path)
 		if err != nil {
 			break
 		}
 		urls = append(urls, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(b))
 	}
 	return urls
+}
+
+// shrinkSampleImage 样张 PNG → 640 宽 JPEG dataURL（读盘+缩图+编码一体）。
+func shrinkSampleImage(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	src, _, err := image.Decode(f)
+	if err != nil {
+		return "", err
+	}
+	b := src.Bounds()
+	w, h := b.Dx(), b.Dy()
+	tw, th := 640, 640*h/w
+	if tw > w {
+		tw, th = w, h
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, tw, th))
+	for y := 0; y < th; y++ {
+		sy := b.Min.Y + y*h/th
+		for x := 0; x < tw; x++ {
+			dst.Set(x, y, src.At(b.Min.X+x*w/tw, sy))
+		}
+	}
+	var out bytes.Buffer
+	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: 75}); err != nil {
+		return "", err
+	}
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(out.Bytes()), nil
 }
 
 func feedbackBlock(f string) string {
@@ -1734,10 +1810,11 @@ func applyContrastFixes(p *pipeline.Project, checkOut string) int {
 	var fixes []fix
 	for _, m := range contrastSuggRe.FindAllStringSubmatch(checkOut, -1) {
 		sel, color, src := strings.TrimSpace(m[1]), m[2], m[3]
-		if !strings.HasPrefix(src, "compositions/frames/") || !strings.HasSuffix(src, ".html") {
-			continue // 只动段帧，别处一概不碰
+		file, ok := segFrameFile(src)
+		if !ok {
+			continue // 只动段帧（caps/index 的建议色不碰——字幕配色是平台守卫的事）
 		}
-		fixes = append(fixes, fix{src, sel + "{color:" + color + "!important}"})
+		fixes = append(fixes, fix{file, sel + "{color:" + color + "!important}"})
 	}
 	if len(fixes) == 0 {
 		return 0

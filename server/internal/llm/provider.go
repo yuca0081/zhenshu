@@ -161,11 +161,17 @@ func (p *Provider) generate(ctx context.Context, system, user string, imageURLs 
 	var usage openai.Usage
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
-			// 重试退避感知取消：任务已被取消还空转重试只会白等
+			// 重试退避感知取消：任务已被取消还空转重试只会白等。
+			// 429 要按限速窗口退避（实测 2/4s 出不了窗口，三连试全烧在限速上）
+			delay := time.Duration(attempt) * 2 * time.Second
+			var se *StatusError
+			if errors.As(lastErr, &se) && se.Code == http.StatusTooManyRequests {
+				delay = time.Duration(attempt) * 15 * time.Second
+			}
 			select {
 			case <-ctx.Done():
 				return usage, ctx.Err()
-			case <-time.After(time.Duration(attempt) * 2 * time.Second):
+			case <-time.After(delay):
 			}
 		}
 		resp, err := p.chatOnce(ctx, system, mediaParts(user, imageURLs, videoURL), temperature, effort)

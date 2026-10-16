@@ -1,0 +1,490 @@
+package produce
+
+// segcheck.go —— 段级流水线的「本段 check」（production-stage-design §4.2 written→checked）：
+//
+//	hyperframes check 没有 -c 单段选择，junction 子工程顶上：.hf-check/<seg>/
+//	放该段的单段工程（.hf-seg/<seg>.html 的拷贝作 index.html），assets/audio/
+//	compositions 三个目录用 NTFS junction（Unix 用 symlink）共享回项目根——
+//	check/snapshot 在子工程上跑，诊断天然只含该段（已实测）。
+//	段内含 canvas 的段追加水回放门禁（P1-1 语义不变：两轮截帧像素一致），
+//	同样在子工程上做，时刻为段内坐标。
+//
+// 同文件放句子→时刻换算（TTS 词级时间戳是锚点帧的坐标基础，§3）。
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"webpage-video-agent/server/internal/contract"
+	"webpage-video-agent/server/internal/pipeline"
+	"webpage-video-agent/server/internal/review"
+)
+
+// segCheckDir 段级 check 子工程目录。
+func segCheckDir(p *pipeline.Project, segID string) string {
+	return p.Artifact(".hf-check/" + segID)
+}
+
+// dirLinks 子工程需要共享回项目根的目录。caps 在 compositions 里，无需单列。
+var dirLinks = []string{"assets", "audio", "compositions"}
+
+// ensureSegCheckDir 准备（或刷新）子工程：index.html 每次重拷（check 输入必须
+// 是最新段工程），junction 只在缺失时创建（绝不 RemoveAll 整个目录——Windows 上
+// RemoveAll 穿透 junction 会把正本目录删掉，只逐个 os.Remove）。
+func ensureSegCheckDir(p *pipeline.Project, segID string) error {
+	dir := segCheckDir(p, segID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	src := p.Artifact(".hf-seg/" + segID + ".html")
+	b, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("缺单段工程 %s（先跑 assemble）: %w", src, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), b, 0o644); err != nil {
+		return err
+	}
+	for _, name := range []string{"package.json", "meta.json"} {
+		if pb, err := os.ReadFile(p.Artifact(name)); err == nil {
+			_ = os.WriteFile(filepath.Join(dir, name), pb, 0o644)
+		}
+	}
+	for _, name := range dirLinks {
+		link := filepath.Join(dir, name)
+		if _, err := os.Stat(link); err == nil {
+			continue // 已通（junction 或真目录都能解析）
+		}
+		_ = os.Remove(link)
+		if err := createDirLink(link, p.Artifact(name)); err != nil {
+			return fmt.Errorf("建立 %s 链接失败: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// createDirLink 目录链接：Windows 用 junction（mklink /J 无需特权；目标给绝对
+// 路径，相对目标按 CWD 解析会链错地方——实测踩过）；Unix 用相对 symlink。
+func createDirLink(link, target string) error {
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("cmd", "/c", "mklink", "/J", link, target)
+		var buf bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &buf, &buf
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("%w: %s", err, pipeline.TailLines(buf.String(), 3))
+		}
+		return nil
+	}
+	return os.Symlink(relPathSoft(link, target), link)
+}
+
+// relPathSoft 相对路径（Unix symlink 用）；失败退绝对路径。
+func relPathSoft(link, target string) string {
+	rel, err := filepath.Rel(filepath.Dir(link), target)
+	if err != nil {
+		return target
+	}
+	return rel
+}
+
+// removeSegCheckDir 收尾清理：先逐个摘链接再删文件与目录（顺序铁律：绝不对含
+// junction 的目录用 RemoveAll——穿透删除会动到正本）。best-effort。
+func removeSegCheckDir(p *pipeline.Project, segID string) {
+	dir := segCheckDir(p, segID)
+	for _, name := range dirLinks {
+		_ = os.Remove(filepath.Join(dir, name)) // junction/symlink 摘除不动正本
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		_ = os.RemoveAll(filepath.Join(dir, e.Name())) // 剩余是普通文件
+	}
+	_ = os.Remove(dir)
+}
+
+// segCheck 单段门禁（§4.2 checked 位）：hyperframes check 于子工程，诊断只含
+// 本段；廉价机械修复先行，LLM 修复轮回喂 sceneGen（≤3 轮，与全局 checkWithRepair
+// 同构）；含 canvas 的段加两轮回放门禁。全部通过 = checked。
+func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string, dur float64) error {
+	id := p.ID
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		r.emit(id, "stage", "check", fmt.Sprintf("%s 第 %d 次（单段）", segID, attempt))
+		r.Manifest(p, "stage.start", "check/"+segID)
+		var err, blocking error
+		if err = ensureSegCheckDir(p, segID); err == nil {
+			var out string
+			out, err = pipeline.RunCLI(p, "npx", "hyperframes@0.8.55", "check", ".hf-check/"+segID, "--no-browser-gpu")
+			if err == nil {
+				// check 过了还差回放门禁（canvas 段）
+				if rerr := r.segReplayCheck(ctx, p, segID, dur); rerr != nil {
+					err, blocking = rerr, rerr
+				}
+			} else {
+				blocking = fmt.Errorf("%s", blockingCheckErrors(out))
+				if blocking.Error() == "" {
+					blocking = fmt.Errorf("%s", pipeline.TailLines(out, 12)) // 浏览器崩溃等非诊断类失败也要有回喂材料
+				}
+			}
+		}
+		if err == nil {
+			r.emit(id, "stage", "check", segID+" done")
+			r.Manifest(p, "stage.finish", "check/"+segID)
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		r.Manifest(p, "stage.finish", "check/"+segID)
+		if attempt == 3 {
+			return fmt.Errorf("%s check 三轮未过:\n%s", segID, pipeline.TailLines(blocking.Error(), 25))
+		}
+		// 廉价修复先行：checker 给了对比度建议色 / opacity 冲突就机械回填再检，
+		// 不烧 LLM 修复轮（与全局 checkWithRepair 同一经验：LLM 修这两类从不收敛）
+		fixN := applyContrastFixes(p, blocking.Error()) + applyGsapOpacityFixes(p, blocking.Error())
+		if fixN > 0 {
+			r.emit(id, "stage", "check", fmt.Sprintf("%s cheap-fix：机械回填 %d 处", segID, fixN))
+			r.Manifest(p, "check.contrast_fix", fmt.Sprintf("%s %d 处", segID, fixN))
+			if aerr := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); aerr == nil {
+				continue // 回填后重检（attempt 消耗一次，语义同全局路径）
+			}
+		}
+		feedback := "上一版画面被自动检查拒绝，报错摘要（✗ 行逐项都要修）：\n" + pipeline.TailLines(blocking.Error(), 25) +
+			"\n修复规则：\n" + checkRepairRules + "逐项修完再输出。"
+		r.emit(id, "stage", "check", fmt.Sprintf("%s repair：重生成画面", segID))
+		r.Manifest(p, "check.repair", segID+": "+pipeline.FirstLine(blocking.Error(), 160))
+		if gerr := r.sceneGen(ctx, p, "", feedback, segID); gerr != nil {
+			return gerr
+		}
+		r.clearFrames(p, segID)
+		if err := segCompositions(p, segID); err != nil {
+			return err
+		}
+		pipeline.ClampSegmentFonts(p, segID)
+		pipeline.FixupSegmentFrame(p, segID)
+		pipeline.ClampSegmentFrame(p, segID)
+		if err := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); err != nil {
+			return fmt.Errorf("组装失败: %w", err)
+		}
+	}
+	return nil
+}
+
+// segReplayCheck 段级确定性回放门禁（P1-1 语义不变，范围=本段 canvas）：子工程
+// 上 3 个段内时刻两轮截帧，像素须一致。失败信息按 ✗ 行格式（与全局门禁同款文案）。
+// 快照基础设施故障降级放行并记账（审查类故障不挡制作，哲学同 prereview）。
+func (r *Runner) segReplayCheck(ctx context.Context, p *pipeline.Project, segID string, dur float64) error {
+	if !specHasScene(p, segID) || dur <= 1 {
+		return nil
+	}
+	var ats []float64
+	for _, t := range []float64{0.5, dur / 2, dur - 0.5} {
+		if t < 0.25 {
+			continue
+		}
+		if t > dur-0.05 {
+			t = dur - 0.05
+		}
+		ats = append(ats, round2(t))
+	}
+	if len(ats) == 0 {
+		return nil
+	}
+	atArg := make([]string, len(ats))
+	for i, t := range ats {
+		atArg[i] = strconv.FormatFloat(t, 'f', 2, 64)
+	}
+	snap := func(round string) ([]string, error) {
+		dir := p.Artifact("reports/replay/" + segID + "/" + round)
+		_ = os.RemoveAll(dir) // 输出目录是我们自己的产物，无 junction 风险
+		out, err := pipeline.RunCLI(p, "npx", "hyperframes@0.8.55", "snapshot",
+			".hf-check/"+segID, "--at", strings.Join(atArg, ","), "--no-end", "--no-browser-gpu", "-o", dir)
+		if err != nil {
+			return nil, fmt.Errorf("snapshot 失败: %s", pipeline.TailLines(out, 6))
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		var names []string
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), "frame-") && strings.HasSuffix(e.Name(), ".png") {
+				names = append(names, e.Name())
+			}
+		}
+		return names, nil
+	}
+	n1, err := snap("round1")
+	if err != nil {
+		r.Manifest(p, "check.replay_degraded", segID+": "+pipeline.FirstLine(err.Error(), 120))
+		return nil
+	}
+	n2, err := snap("round2")
+	if err != nil {
+		r.Manifest(p, "check.replay_degraded", segID+": "+pipeline.FirstLine(err.Error(), 120))
+		return nil
+	}
+	if len(n1) == 0 || len(n1) != len(n2) {
+		r.Manifest(p, "check.replay_degraded", fmt.Sprintf("%s: 两轮帧数异常（%d vs %d）", segID, len(n1), len(n2)))
+		return nil
+	}
+	for i, name := range n1 {
+		ia, ib, derr := decodePngPair(
+			filepath.Join(p.Artifact("reports/replay/"+segID+"/round1"), name),
+			filepath.Join(p.Artifact("reports/replay/"+segID+"/round2"), n2[i]))
+		if derr != nil {
+			return derr
+		}
+		maxD, nD, tot := diffStatsImgs(ia, ib)
+		if maxD <= replayMaxChannelDiff && (tot == 0 || float64(nD) <= replayDiffRatioMax*float64(tot)) {
+			continue
+		}
+		bm, bp := diffPerceptualImgs(ia, ib)
+		if bm <= perceptualMeanMax && bp <= perceptualPixMax {
+			continue // 纹理相位抖动（与全局门禁同一二级判据）
+		}
+		return fmt.Errorf("%s: scene 确定性回放未过（%s 两轮差异超感知容差：块均差 %.1f、块内峰值 %.1f——code 藏了非确定性：只用注入的 rng，运动必须写成 t 的函数，禁任何自管时间/真随机路径）",
+			segID, name, bm, bp)
+	}
+	r.Manifest(p, "check.seg_replay", segID+": diff=0")
+	return nil
+}
+
+// segCompositions 单段合成物落盘（stageCompositions 的段级版，语义同源）：
+// llm/comp-<seg>.json → frames html + 元素注册表。
+func segCompositions(p *pipeline.Project, segID string) error {
+	b, err := os.ReadFile(p.LLMOutput("comp-" + segID))
+	if err != nil {
+		return fmt.Errorf("缺 %s 场景产物: %w", segID, err)
+	}
+	var payload struct {
+		HTML     string                  `json:"html"`
+		Elements []contract.NamedElement `json:"elements"`
+	}
+	if err := json.Unmarshal(b, &payload); err != nil {
+		return fmt.Errorf("%s 解析失败: %w", segID, err)
+	}
+	if payload.HTML == "" || len(payload.Elements) == 0 {
+		return fmt.Errorf("%s 场景产物缺 html/elements", segID)
+	}
+	if err := pipeline.WriteFileAtomic(p.Artifact("compositions/frames/"+segID+".html"), []byte(payload.HTML), 0o644); err != nil {
+		return err
+	}
+	reg, _ := json.MarshalIndent(contract.ElementRegistry{Elements: payload.Elements}, "", "  ")
+	return pipeline.WriteFileAtomic(p.Artifact("compositions/registry/"+segID+".json"), reg, 0o644)
+}
+
+// ── 句子 → 时刻换算（锚点帧坐标）─────────────────────────────────
+
+// sentenceEndTimes 段内每句的结束时刻（词级时间戳累积匹配：词文本拼接（去标点
+// 空白）与句文本拼接逐字对齐，句 i 的终点 = 跨过其累计长度的那个词的 end）。
+// 匹配不上的句缺时刻（锚点帧少一张，不崩）。
+func sentenceEndTimes(sents []contract.Sentence, words []wordTiming) map[string]float64 {
+	out := map[string]float64{}
+	if len(sents) == 0 || len(words) == 0 {
+		return out
+	}
+	// 累计归一长度（句侧）：归一 = 去空白与标点终符/逗号
+	norm := func(s string) string {
+		var b strings.Builder
+		for _, r := range s {
+			switch r {
+			case ' ', '\t', '\n', '\r', '，', '。', '！', '？', '；', '：', '、', '…', '—', '·', ',', '.', '!', '?', ';', ':':
+			default:
+				b.WriteRune(r)
+			}
+		}
+		return b.String()
+	}
+	walk := 0 // 词游标
+	got := 0  // 已消费的归一字符数（词侧，跨句累计）
+	want := 0 // 目标累计长度（句侧逐句累加）
+	for _, sen := range sents {
+		want += len([]rune(norm(sen.Text)))
+		if want == 0 {
+			continue
+		}
+		end := 0.0
+		matched := false
+		for walk < len(words) {
+			got += len([]rune(norm(words[walk].Text)))
+			end = words[walk].End
+			walk++ // 消费过即前移：下一句从下一个词续计（got 不回退——跨句词整词归前句）
+			if got >= want {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return out // 词流提前耗尽：后面的句无从对齐，保守止步
+		}
+		out[sen.ID] = end
+	}
+	return out
+}
+
+// anchorFrames 段审锚点帧时刻表（§6.3）：首帧 + 句末帧 + 末帧，封顶 ~6 超出均匀
+// 采样。返回（帧表, 各帧标注）。首帧/末帧永远保留（首末拍合规判据的证据）。
+// anchorFrameCap 段审锚点帧封顶（首末帧含在内，超出均匀采样）。
+const anchorFrameCap = 6
+
+func anchorFrames(sents []contract.Sentence, ends map[string]float64, dur float64) []review.AnchorFrame {
+	type cand struct {
+		t     float64
+		label string
+		pin   bool // 首末帧不参与均匀采样淘汰
+	}
+	var cands []cand
+	if len(ends) == 0 {
+		// 无句时刻（词流对齐失败）：退化成首/中/末三点
+		cands = append(cands,
+			cand{t: 0.05, label: "首帧", pin: true},
+			cand{t: dur * 0.5, label: "中段帧"},
+			cand{t: dur - 0.1, label: "末帧", pin: true},
+		)
+	} else {
+		cands = append(cands, cand{t: 0.05, label: "首帧", pin: true})
+		for _, sen := range sents {
+			if t, ok := ends[sen.ID]; ok && t > 0.1 && t < dur-0.05 {
+				text := sen.Text
+				if n := []rune(text); len(n) > 18 {
+					text = string(n[:18]) + "…"
+				}
+				cands = append(cands, cand{t: t, label: fmt.Sprintf("句末帧·此刻刚念完 %s「%s」", sen.ID, text)})
+			}
+		}
+		cands = append(cands, cand{t: dur - 0.1, label: "末帧", pin: true})
+	}
+	pinned := 0
+	for _, c := range cands {
+		if c.pin {
+			pinned++
+		}
+	}
+	if len(cands) > anchorFrameCap {
+		// 均匀采样淘汰句末帧（首末帧保留）：按序号等距保留到配额
+		keep := anchorFrameCap - pinned
+		var mids []int
+		for i, c := range cands {
+			if !c.pin {
+				mids = append(mids, i)
+			}
+		}
+		keepSet := map[int]bool{}
+		for i := 0; i < keep; i++ {
+			idx := mids[i*len(mids)/keep]
+			keepSet[idx] = true
+		}
+		var out []cand
+		for i, c := range cands {
+			if c.pin || keepSet[i] {
+				out = append(out, c)
+			}
+		}
+		cands = out
+	}
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].t < cands[j].t })
+	frames := make([]review.AnchorFrame, 0, len(cands))
+	for _, c := range cands {
+		if c.t < 0 {
+			c.t = 0
+		}
+		if c.t > dur {
+			c.t = dur - 0.05
+		}
+		frames = append(frames, review.AnchorFrame{T: round2(c.t), Label: c.label})
+	}
+	return frames
+}
+
+// segSentences 段的句编号旁白：prep 分镜稿翻译时旁白 = 句文本按序拼接（无分隔），
+// 逐句前缀匹配还原 N 编号；对不上（老分镜/手改稿）从断点截断。
+func segSentences(script *contract.Script, seg contract.Segment) []contract.Sentence {
+	if script == nil {
+		return nil
+	}
+	var out []contract.Sentence
+	rest := seg.Narration
+	for _, sen := range script.Sentences {
+		text := strings.TrimSpace(sen.Text)
+		if text == "" {
+			continue
+		}
+		if strings.HasPrefix(rest, text) {
+			out = append(out, sen)
+			rest = strings.TrimPrefix(rest, text)
+			continue
+		}
+		break
+	}
+	return out
+}
+
+// segFacts 本段相关事实清单条目（§6.3）：claim 与旁白有 ≥4 字连续交集才算相关
+// （滑窗匹配，宁缺勿滥——无关事实只会制造误报素材）。
+func segFacts(script *contract.Script, seg contract.Segment) []string {
+	if script == nil || len(script.FactSheet) == 0 {
+		return nil
+	}
+	var out []string
+	for _, f := range script.FactSheet {
+		if factRelevant(f.Claim, seg.Narration) {
+			line := f.Claim
+			if f.URL != "" {
+				line += "（来源 " + f.URL + "）"
+			}
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func factRelevant(claim, narration string) bool {
+	r := []rune(stripSpaces(claim))
+	n := stripSpaces(narration)
+	const win = 4
+	for i := 0; i+win <= len(r); i++ {
+		if strings.Contains(n, string(r[i:i+win])) {
+			return true
+		}
+	}
+	return false
+}
+
+// stripSpaces 去全部空白（与 contract.containsIgnoreSpaces 同款口径）。
+func stripSpaces(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\t', '\n', '\r':
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// reSegFrameSource 从 check 诊断的 source 路径提取段帧文件名（兼容两种形态：
+// 全局 check 的 `compositions/frames/segNN.html` 与段级子工程的绝对路径
+// `...\.hf-check\segNN\compositions\frames\segNN.html`——机械修复的落点判定两栖）。
+var reSegFrameSource = regexp.MustCompile(`compositions[/\\]frames[/\\](seg\d{2,}\.html)`)
+
+func segFrameFile(source string) (string, bool) {
+	m := reSegFrameSource.FindStringSubmatch(source)
+	if m == nil {
+		return "", false
+	}
+	return "compositions/frames/" + m[1], true
+}
