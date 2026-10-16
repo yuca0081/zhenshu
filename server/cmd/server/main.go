@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 
 	"webpage-video-agent/server/internal/agent"
 	"webpage-video-agent/server/internal/api"
+	"webpage-video-agent/server/internal/artifacts"
 	"webpage-video-agent/server/internal/auth"
 	"webpage-video-agent/server/internal/config"
 	"webpage-video-agent/server/internal/events"
@@ -31,6 +33,17 @@ import (
 )
 
 func main() {
+	// 存储维护子命令（离线跑，不占 8080）：-storage-sync 存量回填 / -storage-prune 立即清理
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "-storage-sync":
+			runStorageSync(os.Args[2:])
+			return
+		case "-storage-prune":
+			runStoragePrune(os.Args[2:])
+			return
+		}
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal(err)
@@ -66,12 +79,29 @@ func main() {
 	hub := events.NewHub()
 	lib := stylelib.NewWith(cfg.DataDir, st.DB(), media)
 	lib.Migrate() // 化石导入（PG 账本才生效）：styles.json/vocab.json → 0005 表 + 媒体上 MinIO
+
+	// 项目产物/参考库正本后端：MinIO（配了就连，连不上拒启——正本在对象存储，
+	// 静默降级本地会让人以为数据都在）或本地目录（现状行为，demo/无 MinIO 环境）。
+	// 与风格库媒体相互独立：独立桶（不开 versioning，覆写即弃旧版）、不设 PG 前置
+	//（产物层没有账，前缀即清单）。docs/storage-cloud-migration.md。
+	art := artifacts.NewLocal(cfg.DataDir)
+	if cfg.MinIO.Endpoint != "" {
+		m, err := artifacts.NewMinio(cfg.MinIO.Endpoint, cfg.MinIO.AccessKey, cfg.MinIO.SecretKey,
+			cfg.MinIO.DataBucket, cfg.MinIO.Secure, cfg.DataDir)
+		if err != nil {
+			log.Fatal(err)
+		}
+		art = m
+	}
+	pipeline.SetArtifacts(art)
+	prep.SetCloudStore(art)
+
 	producer := &produce.Runner{
-		DataDir: cfg.DataDir, RootDir: root, Hub: hub, Store: st,
+		DataDir: cfg.DataDir, RootDir: root, Hub: hub, Store: st, Artifacts: art,
 		AutoResume: true, // 启动对账时自动续跑被重启打断的整片制作，不让用户再打「继续」
 	}
 	ag := &agent.Agent{
-		DataDir: cfg.DataDir, RootDir: root, Store: st, Lib: lib, Producer: producer,
+		DataDir: cfg.DataDir, RootDir: root, Store: st, Lib: lib, Producer: producer, Artifacts: art,
 		Emit:    hub.Emit,
 		OnEvent: func(id, event, detail string) { hub.Emit(id, event, "", detail) },
 	}
@@ -81,11 +111,12 @@ func main() {
 	// 启动对账：上次进程死在制作中途的项目补写终态+聊天通知（必须先于任何新任务）
 	producer.Reconcile()
 	refs := styleref.NewStore(cfg.DataDir, root)
-	refs.Lib = lib // 参考解析打标要查风格词表/落新词（同一实例，含账本后端选型）
-	ag.Refs = refs // 参考库补线（list/analyze 参考工具用）
+	refs.Lib = lib       // 参考解析打标要查风格词表/落新词（同一实例，含账本后端选型）
+	refs.Artifacts = art // 参考库产物上正本（解析完成即整套上传）
+	ag.Refs = refs       // 参考库补线（list/analyze 参考工具用）
 	// 准备阶段三工位（①文稿②风格③分镜）接线进管线：stagePrep 经钩子调用
 	//（prep 依赖 pipeline，反向接线防 import 环）。产物齐全即重放跳过，老项目不碰。
-	prepDeps := prep.Deps{RootDir: root, Lib: lib, Emit: hub.Emit}
+	prepDeps := prep.Deps{RootDir: root, Lib: lib, Emit: hub.Emit, Artifacts: art}
 	pipeline.PrepFn = func(ctx context.Context, p *pipeline.Project) error {
 		return prep.Run(ctx, p, prepDeps)
 	}
@@ -111,10 +142,24 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+	// 磁盘清理器：完结项目/参考超保留窗口（DISK_GC_DELAY，默认 24h）后删本地大文件
+	//（正本已在 MinIO；契约小文件留本地）。运行中项目由 busy 钩子保护。
+	startStorageGC(art, cfg.DataDir, cfg.GCDelay, func(id string) bool {
+		return producer.IsRunning(id) || preps.IsRunning(id)
+	})
 	srv := &api.Server{
 		DataDir: cfg.DataDir, RootDir: root, Store: st, Hub: hub, Agent: ag, Producer: producer, Preps: preps, Lib: lib, Refs: refs,
+		Artifacts:     art,
 		APIToken:      os.Getenv("API_TOKEN"),
 		SessionSecret: sessionSecret, AuthActive: authActive,
+	}
+
+	// 开发诊断：DEBUG_PPROF=1 时挂 net/http/pprof（goroutine 转储定位段级流水线卡点用）
+	if os.Getenv("DEBUG_PPROF") == "1" {
+		go func() {
+			log.Println("pprof 监听 127.0.0.1:6060")
+			_ = http.ListenAndServe("127.0.0.1:6060", nil)
+		}()
 	}
 
 	gin.SetMode(gin.ReleaseMode)

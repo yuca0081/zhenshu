@@ -149,7 +149,9 @@ func TestLoopToolFollowUpImages(t *testing.T) {
 		Tools: []Tool{
 			{
 				Def: toolSchema("render_x", "", nil),
-				Run: func(context.Context, string) Observation { return Observation{Text: "渲染好了", Images: []string{fakeImg}} },
+				Run: func(context.Context, string) Observation {
+					return Observation{Text: "渲染好了", Images: []string{fakeImg}}
+				},
 			},
 			{
 				Def: toolSchema("submit_never", "", nil),

@@ -84,8 +84,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			// 光说不做：文本回复不落盘，提醒后继续（回合照计，烧完预算自然失败）
 			l.step(round, "text", msg.Content)
 			msgs = append(msgs, msg,
-				openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content:
-				fmt.Sprintf("文本回复不会落盘。任务完成的唯一方式是调用 %s 工具；继续。", l.Submit)})
+				openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf("文本回复不会落盘。任务完成的唯一方式是调用 %s 工具；继续。", l.Submit)})
 			continue
 		}
 		msgs = append(msgs, msg)

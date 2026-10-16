@@ -19,6 +19,7 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
+	"webpage-video-agent/server/internal/artifacts"
 	"webpage-video-agent/server/internal/pipeline"
 	"webpage-video-agent/server/internal/stylelib"
 )
@@ -29,11 +30,12 @@ func contentHash8(s string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// Deps 宿主接线：仓库根（ai/ 脚本定位）、风格库、SSE 播报。
+// Deps 宿主接线：仓库根（ai/ 脚本定位）、风格库、SSE 播报、产物正本后端。
 type Deps struct {
-	RootDir string
-	Lib     *stylelib.Library
-	Emit    func(projectID, typ, stage, detail string)
+	RootDir   string
+	Lib       *stylelib.Library
+	Emit      func(projectID, typ, stage, detail string)
+	Artifacts artifacts.Store // 准备工件上传/回源（nil/本地 = 不上云，docs/storage-cloud-migration.md）
 }
 
 func (d Deps) emit(projectID, typ, stage, detail string) {

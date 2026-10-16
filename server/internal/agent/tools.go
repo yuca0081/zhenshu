@@ -1173,6 +1173,9 @@ var tools = []tool{
 			}
 			_ = os.RemoveAll(p.Artifact("style/clips"))
 			_ = os.RemoveAll(p.Artifact(".hf-clip"))
+			a.invalidateArtifacts(p,
+				"style/style_samples.json", "style/skin.json", "style/design.md", "llm/style_samples.json",
+				"style/sample-0.png", "style/sample-1.png", "style/sample-2.png")
 			// style_id 记入 project.json：持 per-project 锁——对话轮内其他 SetProjectField
 			// 与此处并发时各基于旧快照整文件回写、后写覆盖先写
 			mu := pipeline.ProjectMu(p)

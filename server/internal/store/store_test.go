@@ -84,3 +84,27 @@ func TestMemListMsgsTail(t *testing.T) {
 		t.Fatalf("项目隔离不符: %+v", got)
 	}
 }
+
+// 项目账行加厚（0006）：upsert 后 UpdateProjectMeta 覆盖可检索字段与存储前缀；
+// 未同步的项目字段保持零值。
+func TestMemUpdateProjectMeta(t *testing.T) {
+	s := newMem()
+	if err := s.CreateProject("p1", "测试", "u1"); err != nil {
+		t.Fatal(err)
+	}
+	meta := ProjectMeta{
+		Topic: "榫卯工艺", Aspect: "9:16",
+		Status: "style", StoragePrefix: "projects/p1/",
+	}
+	if err := s.UpdateProjectMeta("p1", meta); err != nil {
+		t.Fatal(err)
+	}
+	if s.projects[0].Topic != meta.Topic || s.projects[0].Aspect != meta.Aspect ||
+		s.projects[0].StoragePrefix != meta.StoragePrefix || s.projects[0].Status != meta.Status {
+		t.Fatalf("账行未按盘上值覆盖: %+v", s.projects[0])
+	}
+	// 不存在的项目：静默 no-op（列表自愈场景下行可能还没建）
+	if err := s.UpdateProjectMeta("p-none", meta); err != nil {
+		t.Fatalf("不存在项目的 meta 同步应 no-op: %v", err)
+	}
+}

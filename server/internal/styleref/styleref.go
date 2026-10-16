@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"webpage-video-agent/server/internal/artifacts"
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
@@ -98,9 +99,10 @@ type paletteCluster struct {
 }
 
 type Store struct {
-	DataDir string // data/（引用库存 data/references/）
-	RootDir string // 仓库根（ai/ 脚本）
-	Lib     *stylelib.Library // 风格库（打标查词表/申请新词落表用；main 接线，解析前置）
+	DataDir   string            // data/（引用库存 data/references/）
+	RootDir   string            // 仓库根（ai/ 脚本）
+	Lib       *stylelib.Library // 风格库（打标查词表/申请新词落表用；main 接线，解析前置）
+	Artifacts artifacts.Store   // 参考库正本后端（nil/本地 = 不上云，docs/storage-cloud-migration.md）
 
 	mu      sync.Mutex
 	running map[string]bool
@@ -192,7 +194,16 @@ func (s *Store) saveRef(ref *Ref) error {
 	b, _ := json.MarshalIndent(ref, "", "  ")
 	// 原子写：List/Get/api 侧并发读 ref.json，裸 os.WriteFile 有撕裂窗口
 	// （读到半截 JSON 的引用会从列表里静默消失）
-	return pipeline.WriteFileAtomic(filepath.Join(s.dir(ref.ID), "ref.json"), b, 0o644)
+	path := filepath.Join(s.dir(ref.ID), "ref.json")
+	if err := pipeline.WriteFileAtomic(path, b, 0o644); err != nil {
+		return err
+	}
+	if s.Artifacts != nil && s.Artifacts.Available() {
+		if err := s.Artifacts.Put(artifacts.ReferenceKey(ref.ID, "ref.json"), path); err != nil {
+			fmt.Printf("[artifacts] 上传 ref.json(%s) 失败: %v\n", ref.ID, err)
+		}
+	}
+	return nil
 }
 
 // MarkConfirmed 入库完成标记（幂等）。
@@ -251,6 +262,14 @@ func (s *Store) Analyze(id string) (bool, error) {
 		s.sem <- struct{}{} // 批量上传多支视频同时起解析：排队限流
 		defer func() { <-s.sem }()
 		s.runAgent(context.Background(), ref)
+		// 解析产物全套上正本（原片/抽帧/剪辑/特征），之后清理器才能删本地
+		if s.Artifacts != nil && s.Artifacts.Available() {
+			if n, err := artifacts.SyncUp(s.Artifacts, s.DataDir, artifacts.ReferenceKey(id, "")); err != nil {
+				fmt.Printf("[artifacts] 参考库 %s 补传中断: %v\n", id, err)
+			} else if n > 0 {
+				fmt.Printf("[artifacts] 参考库 %s 上传 %d 个文件\n", id, n)
+			}
+		}
 	}()
 	return true, nil
 }

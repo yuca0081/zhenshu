@@ -19,14 +19,22 @@ import (
 	"strings"
 	"time"
 
+	"webpage-video-agent/server/internal/artifacts"
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/pipeline"
 )
 
+// cloudStore 产物正本后端（SetCloudStore 注入）：InvalidateFrom 作废本地工件时同步删
+// 远端正本——不删的话，清理过的老项目回源工作区会把陈旧工件带回来（旧样张复活）。
+var cloudStore artifacts.Store
+
+// SetCloudStore 注入产物存储后端（server 启动时调用；不注入 = 纯本地现状）。
+func SetCloudStore(s artifacts.Store) { cloudStore = s }
+
 // 工位名（反馈路由的寻址单位）。
 const (
-	StationScript    = "script"
-	StationStyle     = "style"
+	StationScript     = "script"
+	StationStyle      = "style"
 	StationStoryboard = "storyboard"
 )
 
@@ -135,6 +143,17 @@ func InvalidateFrom(p *pipeline.Project, station string) {
 	// legacy 分镜随 draft 作废（翻译产物，重跑后重写）
 	if station != "" {
 		_ = os.Remove(p.Artifact("storyboards/storyboard.json"))
+	}
+	// 远端正本跟着作废（best-effort）：防清理过的老项目回源时陈旧工件复活
+	if cloudStore != nil && cloudStore.Available() {
+		var keys []string
+		for _, f := range files {
+			if rel, err := filepath.Rel(p.Dir, f); err == nil && rel != ".." {
+				keys = append(keys, artifacts.ProjectKey(p.ID, filepath.ToSlash(rel)))
+			}
+		}
+		artifacts.DeleteKeys(cloudStore, keys...)
+		artifacts.DeletePrefixBestEffort(cloudStore, artifacts.ProjectKey(p.ID, "style/clips"))
 	}
 	p.Manifest("prep.invalidate", station)
 }

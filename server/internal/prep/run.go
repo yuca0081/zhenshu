@@ -11,10 +11,10 @@ package prep
 // 由 InvalidateFrom + Run 组合实现——工位内部没有「重跑」概念，失效即重放。
 
 import (
-	"strings"
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
@@ -27,7 +27,7 @@ func Available() bool {
 }
 
 // LegacyProject 老项目判定：没有文字稿工件、但 legacy 分镜已在——prep 不碰它
-//（旧项目升级靠显式反馈重跑，不靠管线偷偷重写）。
+// （旧项目升级靠显式反馈重跑，不靠管线偷偷重写）。
 func LegacyProject(p *pipeline.Project) bool {
 	if HasArtifact(p, StationScript) {
 		return false

@@ -110,7 +110,7 @@ func storyboardTools(p *pipeline.Project, d Deps, script *contract.Script, pack 
 		},
 		{
 			Def: toolSchema("validate_storyboard", "校验分镜稿草稿：段落铺满、narration_refs 存在且有序且恰好铺满全部句、id/idx 连续、段长带（入场动画预算计入）、key/场景/首末拍非空。", map[string]any{
-				"type": "object",
+				"type":       "object",
 				"properties": map[string]any{"draft": storyboardDraftParam()},
 				"required":   []string{"draft"},
 			}),
@@ -128,7 +128,7 @@ func storyboardTools(p *pipeline.Project, d Deps, script *contract.Script, pack 
 		},
 		{
 			Def: toolSchema("submit_storyboard", "提交分镜稿（唯一出口）= validate + 指纹落盘。", map[string]any{
-				"type": "object",
+				"type":       "object",
 				"properties": map[string]any{"draft": storyboardDraftParam()},
 				"required":   []string{"draft"},
 			}),
@@ -171,7 +171,7 @@ func storyboardDraftParam() map[string]any {
 		"properties": map[string]any{
 			"plan": map[string]any{"type": "string", "description": "一句话分段思路"},
 			"paragraphs": map[string]any{
-				"type": "array",
+				"type":        "array",
 				"description": "段落层：按段序连续铺满全部段。每段 {title:一句话主题, segs:[\"seg01\",\"seg02\"]}",
 				"items": map[string]any{
 					"type": "object",
@@ -183,7 +183,7 @@ func storyboardDraftParam() map[string]any {
 				},
 			},
 			"segments": map[string]any{
-				"type": "array",
+				"type":        "array",
 				"description": "段层：id 从 seg01 连续编号，idx 从 1 连续。duration_hint 落在段长带内（入场动画预算计入）。",
 				"items": map[string]any{
 					"type": "object",
@@ -192,7 +192,7 @@ func storyboardDraftParam() map[string]any {
 						"idx": map[string]any{"type": "integer"},
 						"key": map[string]any{"type": "string", "description": "段短标题"},
 						"narration_refs": map[string]any{
-							"type": "string",
+							"type":        "string",
 							"description": "本段旁白的句编号引用，如 \"N3-N4\"（区间）或 \"N3,N4\"（列表）——只引用，不抄文本；全部段合起来必须不重不漏铺满 N1..Nn",
 						},
 						"visual_brief": map[string]any{

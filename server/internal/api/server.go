@@ -22,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"webpage-video-agent/server/internal/agent"
+	"webpage-video-agent/server/internal/artifacts"
 	"webpage-video-agent/server/internal/auth"
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/events"
@@ -36,15 +37,16 @@ import (
 )
 
 type Server struct {
-	DataDir  string
-	RootDir  string
-	Store    store.Store
-	Hub      *events.Hub
-	Agent    *agent.Agent
-	Producer *produce.Runner
-	Preps    *prep.Runner // 准备阶段运行器（想法页签/对话启动三工位链；nil = 未接线）
-	Lib      *stylelib.Library
-	Refs     *styleref.Store
+	DataDir   string
+	RootDir   string
+	Store     store.Store
+	Hub       *events.Hub
+	Agent     *agent.Agent
+	Producer  *produce.Runner
+	Preps     *prep.Runner // 准备阶段运行器（想法页签/对话启动三工位链；nil = 未接线）
+	Lib       *stylelib.Library
+	Refs      *styleref.Store
+	Artifacts artifacts.Store // 产物正本后端（nil/本地 = 读路径不走对象回源）
 
 	// APIToken 非空时保留为机器通道（脚本/m0 类调用方）：X-API-Token 头（SSE 另收
 	// ?token=），等同 admin 身份。人用的浏览器一律走登录会话 cookie。
@@ -72,9 +74,9 @@ type Server struct {
 	chatSlotsOnce sync.Once
 	chatSlots     chan struct{}
 
-	// ensured projectID → struct{}{}：listProjects 的 DB 行自愈记账，每进程每项目
-	// 至多 EnsureProject 一次——列表是高频轮询接口，逐项目逐次 COUNT 是 N+1 查询。
-	// 内存 store 重启清行由本进程下一次列表自愈补回，语义不变。
+	// ensured projectID → 元数据指纹：listProjects 的账行自愈记账——首见或指纹变化
+	// 才 EnsureProject+UpdateProjectMeta，写库频率与盘上元数据变化率一致，列表高频
+	// 轮询不产生 N+1。内存 store 重启清行由本进程下一次列表自愈补回，语义不变。
 	ensured sync.Map
 }
 
@@ -572,6 +574,7 @@ func (s *Server) createProject(c *gin.Context) {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
+		s.putArtifact(artifacts.ProjectKey(id, "input/article.txt"), p.Artifact("input/article.txt"))
 	}
 	meta, _ := json.MarshalIndent(map[string]any{
 		"id": id, "name": in.Name, "status": "created", "aspect": in.Aspect,
@@ -580,9 +583,15 @@ func (s *Server) createProject(c *gin.Context) {
 		"created_at": time.Now().Format(time.RFC3339),
 	}, "", "  ")
 	_ = os.WriteFile(p.Artifact("project.json"), meta, 0o644)
+	s.putArtifact(artifacts.ProjectKey(id, "project.json"), p.Artifact("project.json"))
 	p.Manifest("project.created", fmt.Sprintf("%s（%s）", in.Name, in.Aspect))
 	uid, _ := s.currentUser(c)
 	_ = s.Store.CreateProject(id, in.Name, uid)
+	// 项目账行加厚：一行账 = 可检索元数据 + MinIO 桶内相对路径（内容不入库）
+	_ = s.Store.UpdateProjectMeta(id, store.ProjectMeta{
+		Topic: in.Topic, Aspect: in.Aspect,
+		Status: "created", StoragePrefix: artifacts.ProjectKey(id, ""),
+	})
 	s.Hub.Emit(id, "msg", "", "项目已创建："+in.Name)
 	c.JSON(200, gin.H{"id": id, "name": in.Name, "aspect": in.Aspect})
 }
@@ -600,6 +609,7 @@ func (s *Server) listProjects(c *gin.Context) {
 		CreatedAt   string `json:"created_at"`
 		HasVideo    bool   `json:"has_video"`
 		LastProduce any    `json:"last_produce"`
+		Topic       string `json:"topic,omitempty"`
 	}
 	// 预分配非 nil：空列表必须序列化成 [] 而不是 null（前端读 .length 会崩）
 	out := make([]row, 0, len(entries))
@@ -618,6 +628,8 @@ func (s *Server) listProjects(c *gin.Context) {
 			Status    string `json:"status"`
 			CreatedAt string `json:"created_at"`
 			UserID    string `json:"user_id"`
+			Topic     string `json:"topic"`
+			Aspect    string `json:"aspect"`
 		}
 		if json.Unmarshal(b, &meta) != nil || meta.Name == "" {
 			continue
@@ -625,9 +637,18 @@ func (s *Server) listProjects(c *gin.Context) {
 		if filterByOwner && meta.UserID != uid {
 			continue // 无主（旧）项目 user_id 为空 ≠ 任何普通用户的 uid，天然被滤掉
 		}
-		if _, seen := s.ensured.Load(e.Name()); !seen {
+		// 账行自愈：首见或指纹变化（盘上元数据被改/状态转移）才写库——磁盘仍是事实源，
+		// 这里只做可查询镜像；ensured 的值从占位升级为元数据指纹，写库频率与盘上
+		// 变化率一致，不引入 N+1。
+		diskStatus := meta.Status
+		fp := meta.Topic + "|" + meta.Aspect + "|" + diskStatus
+		if prev, seen := s.ensured.Load(e.Name()); !seen || prev != fp {
 			_ = s.Store.EnsureProject(e.Name(), meta.Name)
-			s.ensured.Store(e.Name(), struct{}{})
+			_ = s.Store.UpdateProjectMeta(e.Name(), store.ProjectMeta{
+				Topic: meta.Topic, Aspect: meta.Aspect, Status: diskStatus,
+				StoragePrefix: artifacts.ProjectKey(e.Name(), ""),
+			})
+			s.ensured.Store(e.Name(), fp)
 		}
 		_, videoErr := os.Stat(filepath.Join(s.DataDir, "projects", e.Name(), "renders", "main.mp4"))
 		if s.Producer.IsRunning(e.Name()) {
@@ -642,7 +663,7 @@ func (s *Server) listProjects(c *gin.Context) {
 		if ev, _, ts := produce.LastTerminal(pipeline.NewProject(s.DataDir, e.Name())); ev != "" {
 			lastProduce = gin.H{"event": ev, "ts": ts}
 		}
-		out = append(out, row{e.Name(), meta.Name, meta.Status, meta.CreatedAt, videoErr == nil, lastProduce})
+		out = append(out, row{e.Name(), meta.Name, meta.Status, meta.CreatedAt, videoErr == nil, lastProduce, meta.Topic})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
 	c.JSON(200, out)
@@ -707,7 +728,8 @@ func (s *Server) deleteProject(c *gin.Context) {
 		return
 	}
 	_ = s.Store.DeleteProject(id)
-	s.Hub.Forget(id) // 重放窗跟着项目走：不删的话删了的项目在 SSE 侧阴魂不散
+	artifacts.DeletePrefixBestEffort(s.Artifacts, artifacts.ProjectKey(id, "")) // 远端正本跟着走
+	s.Hub.Forget(id)                                                            // 重放窗跟着项目走：不删的话删了的项目在 SSE 侧阴魂不散
 	// 在跑的对话轮先取消再清账：项目目录已删，轮还握着旧句柄继续跑只会写出幽灵产物
 	if v, loaded := s.turnCancels.LoadAndDelete(id); loaded {
 		v.(context.CancelFunc)()
@@ -837,6 +859,18 @@ func (s *Server) applyStyle(c *gin.Context) {
 	}
 	_ = os.RemoveAll(p.Artifact("style/clips"))
 	_ = os.RemoveAll(p.Artifact(".hf-clip"))
+	// 远端正本跟着作废（防清理过的老项目回源时旧样张复活）
+	if s.Artifacts != nil && s.Artifacts.Available() {
+		var keys []string
+		for _, f := range []string{
+			"style/style_samples.json", "style/skin.json", "style/design.md", "llm/style_samples.json",
+			"style/sample-0.png", "style/sample-1.png", "style/sample-2.png",
+		} {
+			keys = append(keys, artifacts.ProjectKey(projID, f))
+		}
+		artifacts.DeleteKeys(s.Artifacts, keys...)
+		artifacts.DeletePrefixBestEffort(s.Artifacts, artifacts.ProjectKey(projID, "style/clips"))
+	}
 	// 选定条目记入 project.json：读-改-写全程持 per-project 锁——agent 轮内的
 	// SetProjectField 与此处并发时，双方各基于旧快照整文件回写、后写覆盖先写
 	//（style_id 被抹掉那类丢更新），单笔原子写防撕裂不防丢更新。锁必须只在
@@ -1521,12 +1555,13 @@ func (s *Server) audioMeta(c *gin.Context) {
 }
 
 func (s *Server) video(c *gin.Context) {
-	path := pipeline.NewProject(s.DataDir, c.Param("id")).Artifact("renders/main.mp4")
-	if _, err := os.Stat(path); err != nil {
+	id := c.Param("id")
+	path := pipeline.NewProject(s.DataDir, id).Artifact("renders/main.mp4")
+	if _, err := os.Stat(path); err != nil && !(s.Artifacts != nil && s.Artifacts.Stat(artifacts.ProjectKey(id, "renders/main.mp4"))) {
 		c.JSON(404, gin.H{"error": "成片未就绪"})
 		return
 	}
-	serveFile(c, path, "main.mp4", "no-store")
+	s.serveArtifact(c, artifacts.ProjectKey(id, "renders/main.mp4"), path, "main.mp4", "no-store", "成片未就绪")
 }
 
 // styleClip 迷你真段 mp4（样张动态小样）。文件名白名单 clip-<N>.mp4——
@@ -1539,12 +1574,13 @@ func (s *Server) styleClip(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "文件不存在"})
 		return
 	}
-	path := pipeline.NewProject(s.DataDir, c.Param("id")).Artifact("style/clips/" + name)
-	if _, err := os.Stat(path); err != nil {
+	id := c.Param("id")
+	path := pipeline.NewProject(s.DataDir, id).Artifact("style/clips/" + name)
+	if _, err := os.Stat(path); err != nil && !(s.Artifacts != nil && s.Artifacts.Stat(artifacts.ProjectKey(id, "style/clips/"+name))) {
 		c.JSON(404, gin.H{"error": "小样未就绪"})
 		return
 	}
-	serveFile(c, path, name, "no-store")
+	s.serveArtifact(c, artifacts.ProjectKey(id, "style/clips/"+name), path, name, "no-store", "小样未就绪")
 }
 
 // ── 风格库（起草自动 + 入库确认）─────────────────────────────
@@ -1682,6 +1718,41 @@ func serveFile(c *gin.Context, path, name, cache string) {
 	// 条件请求吃文件真实 mtime：拿 time.Now() 当 modtime，If-Modified-Since
 	// 永远不可能命中，304 短路形同虚设
 	http.ServeContent(c.Writer, c.Request, name, st.ModTime(), f)
+}
+
+// serveArtifact 产物媒体回源：本地热路径直读（零网络开销）；本地被清理器删过
+// 则从对象存储流式回源（minio.Object 自带 Seek，Range/304 照常工作）。两者皆无
+// → missing 文案的 404。前端零改动（URL 永不入库的对偶：出口永远走 /api 路由）。
+func (s *Server) serveArtifact(c *gin.Context, key, localPath, name, cache, missing string) {
+	if f, err := os.Open(localPath); err == nil {
+		st, serr := f.Stat()
+		if serr == nil && !st.IsDir() {
+			defer f.Close()
+			c.Header("Cache-Control", cache)
+			http.ServeContent(c.Writer, c.Request, name, st.ModTime(), f)
+			return
+		}
+		f.Close()
+	}
+	if s.Artifacts != nil && s.Artifacts.Available() {
+		if rc, _, modTime, err := s.Artifacts.Open(key); err == nil {
+			defer rc.Close()
+			c.Header("Cache-Control", cache)
+			http.ServeContent(c.Writer, c.Request, name, modTime, rc)
+			return
+		}
+	}
+	c.JSON(404, gin.H{"error": missing})
+}
+
+// putArtifact 检查点上传（best-effort；nil/本地后端为无操作）。
+func (s *Server) putArtifact(key, srcPath string) {
+	if s.Artifacts == nil || !s.Artifacts.Available() {
+		return
+	}
+	if err := s.Artifacts.Put(key, srcPath); err != nil {
+		log.Printf("[artifacts] 上传 %s 失败: %v", key, err)
+	}
 }
 
 // ── 参考视频解析（风格库「视频解析」）────────────────────────
@@ -1826,6 +1897,12 @@ func (s *Server) llmVideo(c *gin.Context) {
 		return
 	}
 	path, ok := s.Refs.VideoFile(id, name)
+	if !ok && s.Artifacts != nil && s.Artifacts.Available() {
+		// 本地被清理：临时拉回剪辑（视觉模型侧是整文件拉取，读穿缓存正合适）
+		if lp, err := s.Artifacts.Localize(artifacts.ReferenceKey(id, name)); err == nil {
+			path, ok = lp, true
+		}
+	}
 	if !ok {
 		c.JSON(404, gin.H{"error": "文件不存在"})
 		return
@@ -1945,7 +2022,8 @@ func scanMediaDir(dir string) (frames []string, hasVideo bool) {
 	return frames, hasVideo
 }
 
-// referenceFrames 参考视频抽帧截图清单（详情抽屉展示原片长相用）。
+// referenceFrames 参考视频抽帧截图清单（详情抽屉展示原片长相用；本地被清理后
+// 从对象存储列清单——媒体本体仍走 referenceMedia 回源）。
 func (s *Server) referenceFrames(c *gin.Context) {
 	id := c.Param("id")
 	if !isSlug(id) {
@@ -1953,16 +2031,44 @@ func (s *Server) referenceFrames(c *gin.Context) {
 		return
 	}
 	frames, hasVideo := scanMediaDir(filepath.Join(s.DataDir, "references", id))
-	if frames == nil && !hasVideo { // 目录读不了 = 引用不存在
-		if _, err := os.Stat(filepath.Join(s.DataDir, "references", id)); err != nil {
+	if frames == nil && !hasVideo { // 目录读不了 = 引用不存在（本地与远端皆无）
+		if _, err := os.Stat(filepath.Join(s.DataDir, "references", id)); err != nil &&
+			!(s.Artifacts != nil && s.Artifacts.Available() && s.hasRemoteRefMedia(id)) {
 			c.JSON(404, gin.H{"error": "引用不存在"})
 			return
 		}
+	}
+	if frames == nil && s.Artifacts != nil && s.Artifacts.Available() {
+		frames, hasVideo = s.remoteRefMedia(id)
 	}
 	if frames == nil {
 		frames = []string{}
 	}
 	c.JSON(200, gin.H{"frames": frames, "has_video": hasVideo})
+}
+
+// remoteRefMedia 对象存储侧的参考媒体清单（与 scanMediaDir 同一白名单口径）。
+func (s *Server) remoteRefMedia(id string) (frames []string, hasVideo bool) {
+	keys, err := s.Artifacts.List(artifacts.ReferenceKey(id, ""))
+	if err != nil {
+		return nil, false
+	}
+	prefix := artifacts.ReferenceKey(id, "")
+	for _, k := range keys {
+		name := strings.TrimPrefix(k, prefix)
+		switch {
+		case isPngName(name) && strings.HasPrefix(name, "frame-"):
+			frames = append(frames, name)
+		case name == "video.mp4":
+			hasVideo = true
+		}
+	}
+	return frames, hasVideo
+}
+
+func (s *Server) hasRemoteRefMedia(id string) bool {
+	f, v := s.remoteRefMedia(id)
+	return len(f) > 0 || v
 }
 
 // refMediaName 参考媒体文件名白名单：抽帧 frame-*.png / 原视频 video.mp4 /
@@ -1998,7 +2104,8 @@ func (s *Server) libraryMedia(c *gin.Context) {
 	http.ServeContent(c.Writer, c.Request, c.Param("file"), modTime, rc)
 }
 
-// referenceMedia 参考引用媒体文件（抽帧 png / 原视频 mp4，白名单文件名防目录穿越）。
+// referenceMedia 参考引用媒体文件（抽帧 png / 原视频 mp4，白名单文件名防目录穿越；
+// 本地被清理后从对象存储回源）。
 func (s *Server) referenceMedia(c *gin.Context) {
 	id, name := c.Param("id"), c.Param("file")
 	if !isSlug(id) {
@@ -2009,5 +2116,6 @@ func (s *Server) referenceMedia(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "非法文件名"})
 		return
 	}
-	serveFile(c, filepath.Join(s.DataDir, "references", id, name), name, "max-age=3600")
+	local := filepath.Join(s.DataDir, "references", id, name)
+	s.serveArtifact(c, artifacts.ReferenceKey(id, name), local, name, "max-age=3600", "文件不存在")
 }

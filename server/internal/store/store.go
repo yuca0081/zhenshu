@@ -78,9 +78,26 @@ type ProjectRow struct {
 	Status    string    `json:"status"`
 	UserID    string    `gorm:"column:user_id" json:"-"` // 归属用户（空 = 系统项目，仅管理员可见）
 	CreatedAt time.Time `gorm:"column:created_at" json:"created_at"`
+	// 0006 加厚的账行字段（可检索元数据；内容产物不入库，正本在 MinIO）。
+	// style_id/target_seconds 不入账：风格可不来自风格库（prep ② 自造时 project.json
+	// 里 style_id 为空），时长用户拍板不要——两者仍留磁盘事实源。
+	Topic         string    `gorm:"column:topic" json:"topic,omitempty"`
+	Aspect        string    `gorm:"column:aspect" json:"aspect,omitempty"`
+	StoragePrefix string    `gorm:"column:storage_prefix" json:"-"` // MinIO 桶内相对路径前缀
+	UpdatedAt     time.Time `gorm:"column:updated_at" json:"-"`
 }
 
 func (ProjectRow) TableName() string { return "projects" }
+
+// ProjectMeta 项目账行的可同步字段（磁盘 project.json 是事实源，这里是检索镜像）。
+// StoragePrefix 是 MinIO 桶内相对路径（如 projects/p20261016-115229/）——「URL 永不
+// 入库」原则不受影响：入账的是 key，不是带域名/桶名的 URL，换端点零迁移。
+type ProjectMeta struct {
+	Topic         string
+	Aspect        string
+	Status        string
+	StoragePrefix string
+}
 
 // User 用户账号（固定账号模型：管理员预建，无自助注册）。PasswordHash 不出 JSON。
 type User struct {
@@ -118,6 +135,9 @@ type Store interface {
 	CreateProject(diskID, name, userID string) error
 	EnsureProject(diskID, name string) error // 已存在则跳过
 	UpdateStatus(diskID, status string) error
+	// UpdateProjectMeta 加厚账行（topic/画幅/风格/目标时长/状态/对象路径）。
+	// 幂等覆盖写：磁盘 project.json 是事实源，调用方在读到盘上最新值后同步。
+	UpdateProjectMeta(diskID string, meta ProjectMeta) error
 	DeleteProject(diskID string) error // 行+聊天+任务镜像全删（磁盘目录由调用方删）
 	SaveMsg(m *Msg) error
 	ListMsgs(projectID string, afterID int64, limit int) ([]Msg, error)
@@ -174,6 +194,17 @@ func Open(dsn string) (Store, error) {
 	)`).Error; err != nil {
 		return nil, fmt.Errorf("建 users 表失败: %w", err)
 	}
+	// projects 账行加厚列（migrations/0006_project_meta.sql 留档；这里幂等补齐，
+	// 老库不经 deploy 也能起）
+	for _, stmt := range []string{
+		`ALTER TABLE projects ADD COLUMN IF NOT EXISTS topic TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE projects ADD COLUMN IF NOT EXISTS storage_prefix TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE projects ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`,
+	} {
+		if err := db.Exec(stmt).Error; err != nil {
+			return nil, fmt.Errorf("加厚 projects 表失败（%s）: %w", stmt, err)
+		}
+	}
 	log.Println("[store] PG 已连接")
 	return &pgStore{db: db}, nil
 }
@@ -217,6 +248,15 @@ func (s *pgStore) EnsureProject(diskID, name string) error {
 
 func (s *pgStore) UpdateStatus(diskID, status string) error {
 	return s.db.Exec(`UPDATE projects SET status = ? WHERE disk_id = ?`, status, diskID).Error
+}
+
+// UpdateProjectMeta 幂等覆盖账行。磁盘是事实源，这里照抄盘上值——包括 status
+// （自愈 UpdateStatus 可能漏掉的转移）。
+func (s *pgStore) UpdateProjectMeta(diskID string, meta ProjectMeta) error {
+	return s.db.Exec(`UPDATE projects SET
+		topic = ?, aspect = ?, status = ?, storage_prefix = ?, updated_at = now()
+		WHERE disk_id = ?`,
+		meta.Topic, meta.Aspect, meta.Status, meta.StoragePrefix, diskID).Error
 }
 
 // DeleteProject 删项目镜像：聊天、任务、行。无行不报错（磁盘才是事实源）。
@@ -396,6 +436,20 @@ func (s *memStore) UpdateStatus(diskID, status string) error {
 	for i := range s.projects {
 		if s.projects[i].ID == diskID {
 			s.projects[i].Status = status
+		}
+	}
+	return nil
+}
+
+func (s *memStore) UpdateProjectMeta(diskID string, meta ProjectMeta) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.projects {
+		if s.projects[i].ID == diskID {
+			p := &s.projects[i]
+			p.Topic, p.Aspect = meta.Topic, meta.Aspect
+			p.Status, p.StoragePrefix = meta.Status, meta.StoragePrefix
+			p.UpdatedAt = time.Now()
 		}
 	}
 	return nil

@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
@@ -270,8 +269,8 @@ func (r *scriptRun) readSource(target float64) string {
 // fact_sheet 非空且每条带 URL。通过 = 工件 A + legacy manuscript.json 落盘。
 func (r *scriptRun) submit(args string, target float64) Observation {
 	var in struct {
-		Text      string               `json:"text"`
-		FactSheet []contract.FactItem  `json:"fact_sheet"`
+		Text      string              `json:"text"`
+		FactSheet []contract.FactItem `json:"fact_sheet"`
 	}
 	if err := decodeArgs(args, &in); err != nil {
 		return Observation{Text: err.Error()}

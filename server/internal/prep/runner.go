@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"webpage-video-agent/server/internal/artifacts"
 	"webpage-video-agent/server/internal/pipeline"
 )
 
@@ -114,7 +115,20 @@ func (r *Runner) Start(id, idea string, force bool) (bool, error) {
 	go func() {
 		defer release()
 		defer cancelRun()
+		// 清理过的老项目先回源工作区；链终了全量补传（工件/样张/manifest 上正本）
+		if r.Deps.Artifacts != nil && r.Deps.Artifacts.Available() {
+			if n, err := artifacts.Restore(r.Deps.Artifacts, r.DataDir, artifacts.ProjectKey(id, "")); err != nil {
+				fmt.Printf("[artifacts] %s 准备前回源中断: %v\n", id, err)
+			} else if n > 0 {
+				fmt.Printf("[artifacts] %s 回源 %d 个文件\n", id, n)
+			}
+		}
 		err := RunStrict(runCtx, p, r.Deps)
+		if r.Deps.Artifacts != nil && r.Deps.Artifacts.Available() {
+			if n, err := artifacts.SyncUp(r.Deps.Artifacts, r.DataDir, artifacts.ProjectKey(id, "")); err == nil && n > 0 {
+				fmt.Printf("[artifacts] %s 上传 %d 个准备产物\n", id, n)
+			}
+		}
 		if err != nil && runCtx.Err() != nil {
 			p.Manifest("prep.cancelled", "用户取消或总闸超时（60 分钟）")
 			r.Deps.emit(id, "stage", "prep", "cancelled")

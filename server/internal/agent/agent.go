@@ -16,6 +16,7 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
+	"webpage-video-agent/server/internal/artifacts"
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
@@ -35,14 +36,30 @@ type Producer interface {
 }
 
 type Agent struct {
-	DataDir  string
-	RootDir  string // 仓库根（参考视频解析的脚本工作目录，与 api.Server.RootDir 同源）
-	Store    store.Store
-	Lib      *stylelib.Library
-	Refs     *styleref.Store // 参考视频库（列/解析工具用；nil = 未接线，工具如实回报）
-	Emit     func(projectID, typ, stage, detail string)
-	Producer Producer
-	OnEvent  func(projectID, event, detail string) // 状态回写钩子（storyboard/style 等里程碑）
+	DataDir   string
+	RootDir   string // 仓库根（参考视频解析的脚本工作目录，与 api.Server.RootDir 同源）
+	Store     store.Store
+	Lib       *stylelib.Library
+	Refs      *styleref.Store // 参考视频库（列/解析工具用；nil = 未接线，工具如实回报）
+	Artifacts artifacts.Store // 产物正本后端（nil/本地 = 不上云，docs/storage-cloud-migration.md）
+	Emit      func(projectID, typ, stage, detail string)
+	Producer  Producer
+	OnEvent   func(projectID, event, detail string) // 状态回写钩子（storyboard/style 等里程碑）
+}
+
+// invalidateArtifacts 本地作废产物后同步删远端正本（best-effort）——不删的话，
+// 清理过的老项目回源工作区会把旧样张/旧小样带回来。style/clips 整前缀随每次
+// 作废清空（迷你真段从属样张，无独立生命周期）。
+func (a *Agent) invalidateArtifacts(p *pipeline.Project, rels ...string) {
+	if a.Artifacts == nil || !a.Artifacts.Available() {
+		return
+	}
+	keys := make([]string, 0, len(rels)+1)
+	for _, rel := range rels {
+		keys = append(keys, artifacts.ProjectKey(p.ID, rel))
+	}
+	artifacts.DeleteKeys(a.Artifacts, keys...)
+	artifacts.DeletePrefixBestEffort(a.Artifacts, artifacts.ProjectKey(p.ID, "style/clips"))
 }
 
 // ── 轮级用户上下文（list_projects 归属过滤 / create_project 归属落盘用）──────
@@ -443,6 +460,9 @@ func (a *Agent) regenerateStyle(ctx context.Context, p *pipeline.Project, instru
 	for i := 0; i < 3; i++ { // 截图缓存一并清掉，防 produce 把旧图配新样张
 		_ = os.Remove(p.Artifact(fmt.Sprintf("style/sample-%d.png", i)))
 	}
+	a.invalidateArtifacts(p, "llm/style_samples.json",
+		"style/sample-0.png", "style/sample-1.png", "style/sample-2.png",
+		"style/style_samples.json", "style/skin.json", "style/design.md", "style/style_brief.json")
 	_ = os.RemoveAll(p.Artifact("style/clips"))         // 迷你真段随旧样张作废（片段/清单/mp4 一锅端）
 	_ = os.RemoveAll(p.Artifact(".hf-clip"))            // 小样单段工程壳同上
 	_ = os.Remove(p.Artifact("style/skin.json"))        // 旧皮肤随旧样张作废，确认新样张时重落

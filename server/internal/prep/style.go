@@ -136,20 +136,20 @@ func (r *styleRun) searchStylesTool() Tool {
 		Def: toolSchema("search_styles", "检索风格库（主入口）。空 query = 全量分页；分面给情绪/题材（关键词）/色调/密度。看中的条目用 get_style_detail 细看。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"query": map[string]any{"type": "string", "description": "关键词（风格名/题材/气质词；可空=全量）"},
-				"mood":  map[string]any{"type": "string", "description": "情绪分面（如 沉稳/明快/悬疑）"},
-				"tone":  map[string]any{"type": "string", "description": "色调分面（如 黑金/低饱和暖色/冷蓝）"},
+				"query":   map[string]any{"type": "string", "description": "关键词（风格名/题材/气质词；可空=全量）"},
+				"mood":    map[string]any{"type": "string", "description": "情绪分面（如 沉稳/明快/悬疑）"},
+				"tone":    map[string]any{"type": "string", "description": "色调分面（如 黑金/低饱和暖色/冷蓝）"},
 				"density": map[string]any{"type": "string", "description": "密度分面（如 疏朗/中密/高密）"},
-				"page":  map[string]any{"type": "integer", "description": "页码，从 1 起（默认 1，每页 10 条）"},
+				"page":    map[string]any{"type": "integer", "description": "页码，从 1 起（默认 1，每页 10 条）"},
 			},
 		}),
 		Run: func(_ context.Context, args string) Observation {
 			var in struct {
-				Query  string `json:"query"`
-				Mood   string `json:"mood"`
-				Tone   string `json:"tone"`
+				Query   string `json:"query"`
+				Mood    string `json:"mood"`
+				Tone    string `json:"tone"`
 				Density string `json:"density"`
-				Page   int    `json:"page"`
+				Page    int    `json:"page"`
 			}
 			if err := decodeArgs(args, &in); err != nil {
 				return Observation{Text: err.Error()}
@@ -514,12 +514,12 @@ func (r *styleRun) registerStyleTool() Tool {
 				tags.Main = s
 			}
 			st, err := r.d.Lib.Derive(stylelib.DeriveInput{
-				BaseID: strings.TrimSpace(in.BaseID),
-				Name:   in.Name,
-				Delta:  in.Delta,
+				BaseID:  strings.TrimSpace(in.BaseID),
+				Name:    in.Name,
+				Delta:   in.Delta,
 				Subject: in.Subject,
-				Tags:   &tags,
-				Facets: &stylelib.StyleFacets{Mood: in.Mood, Tone: in.Tone, Density: in.Density},
+				Tags:    &tags,
+				Facets:  &stylelib.StyleFacets{Mood: in.Mood, Tone: in.Tone, Density: in.Density},
 			})
 			if err != nil {
 				msg := "登记被拒：" + err.Error()
@@ -670,11 +670,11 @@ func (r *styleRun) submitStyleTool() Tool {
 				return Observation{Text: text}
 			}
 			var in struct {
-				StyleID      string               `json:"style_id"`
-				Description  string               `json:"description"`
-				Grammar      contract.EditGrammar `json:"grammar"`
+				StyleID      string                `json:"style_id"`
+				Description  string                `json:"description"`
+				Grammar      contract.EditGrammar  `json:"grammar"`
 				DesignSystem contract.StyleSamples `json:"design_system"`
-				SampleIDs    []string             `json:"sample_ids"`
+				SampleIDs    []string              `json:"sample_ids"`
 			}
 			if err := decodeArgs(normArgs, &in); err != nil {
 				return reply(err.Error())
