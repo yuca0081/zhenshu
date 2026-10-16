@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>橡皮糖小人（Gang Beasts 软体物理版）×「hello world」</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#f6efe8;font-family:"Segoe UI","Microsoft YaHei",sans-serif;}
+  #stage{position:fixed;inset:0;}
+  #vignette{position:fixed;inset:0;pointer-events:none;
+    background:radial-gradient(ellipse at 50% 42%,transparent 55%,rgba(70,40,20,.16) 100%);}
+  #fade{position:fixed;inset:0;pointer-events:none;background:#f6efe8;opacity:1;}
+  #hud{position:fixed;left:22px;top:18px;color:#6b5140;user-select:none;line-height:1.55;max-width:560px;}
+  #hud b{font-size:15px;color:#4a3423;}
+  #hud span{font-size:12px;opacity:.72;}
+  #bar{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;width:min(900px,93%);
+    background:rgba(30,22,16,.8);backdrop-filter:blur(12px);border-radius:16px;
+    padding:14px 18px 22px;color:#f3e8db;box-shadow:0 10px 30px rgba(60,30,10,.28);}
+  #row{display:flex;align-items:center;gap:14px;}
+  #play{width:40px;height:40px;border-radius:50%;border:none;background:#ff4d55;color:#fff;
+    font-size:15px;cursor:pointer;flex:none;line-height:1;}
+  #play:hover{background:#ff6b71;}
+  #scrubWrap{position:relative;flex:1;padding-top:14px;}
+  #scrub{width:100%;appearance:none;-webkit-appearance:none;height:6px;border-radius:3px;
+    background:linear-gradient(90deg,#ff4d55 var(--p,0%),rgba(255,255,255,.22) var(--p,0%));
+    outline:none;cursor:pointer;}
+  #scrub::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:16px;height:16px;border-radius:50%;
+    background:#fff;border:3px solid #ff4d55;box-shadow:0 2px 6px rgba(0,0,0,.35);}
+  .tick{position:absolute;top:12px;width:5px;height:5px;border-radius:50%;
+    background:rgba(255,255,255,.45);transform:translateX(-50%);pointer-events:none;}
+  .tick i{position:absolute;top:7px;left:50%;transform:translateX(-50%);
+    font-style:normal;font-size:10px;white-space:nowrap;opacity:.6;color:#fff;}
+  #clock{font-variant-numeric:tabular-nums;font-size:13px;opacity:.9;min-width:112px;text-align:right;flex:none;}
+  #err{position:fixed;left:12px;right:12px;bottom:110px;color:#b00020;font:12px monospace;
+    white-space:pre-wrap;pointer-events:none;z-index:9;}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="vignette"></div>
+<div id="fade"></div>
+<div id="hud">
+  <b>橡皮糖小人（Gang Beasts 软体物理版）×「hello world」</b><br>
+  <span>小人是 7 粒子软体布娃娃实时模拟：软关节 + 弱肌肉，落地瘫软、拖拽后仰、猛拽踉跄全是物理涌现。
+  拖动滑块任意 seek 时会从 t=0 固定步长重演算——物理是真的，可复现也是真的。空格播放/暂停，← → 微调。</span>
+</div>
+<div id="bar">
+  <div id="row">
+    <button id="play" title="播放/暂停（空格）">▶</button>
+    <div id="scrubWrap"><input id="scrub" type="range" min="0" max="10" step="0.001" value="0"></div>
+    <div id="clock">0.00 / 10.00 s</div>
+  </div>
+</div>
+<div id="err"></div>
+<script src="three.min.js"></script>
+<script>
+'use strict';
+const errBox=document.getElementById('err');
+try{
+
+/* ================= 工具 ================= */
+const clamp=(x,a,b)=>x<a?a:x>b?b:x;
+const lerp=(a,b,k)=>a+(b-a)*k;
+const ss=(a,b,x)=>{const k=clamp((x-a)/(b-a),0,1);return k*k*(3-2*k);};
+const pulse=(t,t0,w)=>{const d=(t-t0)/w;return Math.exp(-d*d*0.5);};
+const dmp=(t0,t,amp,om,dec)=>{const dt=t-t0;return dt<=0?0:amp*Math.exp(-dec*dt)*Math.sin(om*dt);};
+const V3=(x,y,z)=>new THREE.Vector3(x,y,z);
+
+/* ================= 渲染器 / 场景 ================= */
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.06;
+if('outputColorSpace' in renderer)renderer.outputColorSpace=THREE.SRGBColorSpace;
+document.getElementById('stage').appendChild(renderer.domElement);
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0xf6efe8);
+scene.fog=new THREE.Fog(0xf6efe8,16,38);
+const cam=new THREE.PerspectiveCamera(38,innerWidth/innerHeight,0.1,100);
+
+/* 程序化环境贴图（无外部 HDR） */
+(function(){
+  const c=document.createElement('canvas');c.width=512;c.height=256;const g=c.getContext('2d');
+  const grad=g.createLinearGradient(0,0,0,256);
+  grad.addColorStop(0,'#fffdf7');grad.addColorStop(.55,'#f7ecdb');grad.addColorStop(1,'#e7d6c0');
+  g.fillStyle=grad;g.fillRect(0,0,512,256);
+  g.filter='blur(14px)';g.fillStyle='rgba(255,255,255,.95)';
+  [[80,40,90,60],[300,26,70,80],[430,60,60,50]].forEach(r=>g.fillRect(r[0],r[1],r[2],r[3]));
+  g.fillStyle='rgba(255,236,210,.8)';g.fillRect(180,120,160,60);
+  const tex=new THREE.CanvasTexture(c);
+  tex.mapping=THREE.EquirectangularReflectionMapping;
+  const pm=new THREE.PMREMGenerator(renderer);
+  scene.environment=pm.fromEquirectangular(tex).texture;
+  tex.dispose();pm.dispose();
+})();
+
+scene.add(new THREE.HemisphereLight(0xfff6e8,0xb99f86,0.6));
+const key=new THREE.DirectionalLight(0xffffff,0.85);key.position.set(4,7,6);scene.add(key);
+const rim=new THREE.DirectionalLight(0xffe1d0,0.4);rim.position.set(-6,4,-5);scene.add(rim);
+
+/* 地面 */
+(function(){
+  const c=document.createElement('canvas');c.width=c.height=512;const g=c.getContext('2d');
+  const rad=g.createRadialGradient(256,256,40,256,256,256);
+  rad.addColorStop(0,'#f2e7d5');rad.addColorStop(.7,'#ecdfc9');rad.addColorStop(1,'#e0cdb0');
+  g.fillStyle=rad;g.fillRect(0,0,512,512);
+  const tex=new THREE.CanvasTexture(c);
+  if('colorSpace' in tex)tex.colorSpace=THREE.SRGBColorSpace;
+  const ground=new THREE.Mesh(new THREE.CircleGeometry(34,64),new THREE.MeshBasicMaterial({map:tex}));
+  ground.rotation.x=-Math.PI/2;scene.add(ground);
+})();
+
+function blobShadow(size){
+  const c=document.createElement('canvas');c.width=c.height=128;const g=c.getContext('2d');
+  const rad=g.createRadialGradient(64,64,4,64,64,64);
+  rad.addColorStop(0,'rgba(60,30,10,.9)');rad.addColorStop(1,'rgba(60,30,10,0)');
+  g.fillStyle=rad;g.fillRect(0,0,128,128);
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(size,size),
+    new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(c),transparent:true,depthWrite:false}));
+  m.rotation.x=-Math.PI/2;m.renderOrder=1;scene.add(m);return m;
+}
+const charShadow=blobShadow(3.0),txtShadow=blobShadow(6.2);
+
+/* ================= 橡皮糖材质 ================= */
+const gummy=new THREE.MeshPhysicalMaterial({
+  color:0xd4202c,transmission:.88,thickness:1.5,roughness:.16,metalness:0,
+  ior:1.38,clearcoat:1,clearcoatRoughness:.28,
+  attenuationColor:new THREE.Color(0xb3121d),attenuationDistance:1.5,
+  envMapIntensity:1.1,specularIntensity:1
+});
+const gummyText=gummy.clone();gummyText.color.set(0xe8323e);
+
+/* ================= 「hello world」管状 3D 字母（运动学道具，路径仍是 t 的函数） ================= */
+const R=0.13;
+const circ=(cx,cy,r)=>{const p=[];for(let i=0;i<26;i++){const a=i/26*2*Math.PI;
+  p.push([cx+r*Math.cos(a),cy+r*Math.sin(a)]);}return{pts:p,closed:true};};
+const GLYPH={
+  'h':{adv:.8, strokes:[[[.13,0],[.13,1.45]],[[.13,.82],[.36,1.04],[.6,.98],[.74,.72],[.74,0]]]},
+  'e':{adv:.74,strokes:[[[.06,.55],[.84,.55]],
+       [[.84,.55],[.8,.24],[.6,.06],[.32,.05],[.12,.2],[.05,.5],[.1,.78],[.3,.98],[.58,1.0],[.78,.88]]]},
+  'l':{adv:.42,strokes:[[[.26,0],[.26,1.45]]]},
+  'o':{adv:.8, strokes:[circ(.4,.52,.46)]},
+  'w':{adv:1.05,strokes:[[[.02,.98],[.26,.06],[.52,.78],[.78,.06],[1.02,.98]]]},
+  'r':{adv:.6, strokes:[[[.15,0],[.15,1.0]],[[.15,.62],[.3,.9],[.52,.97],[.7,.82]]]},
+  'd':{adv:.8, strokes:[circ(.38,.52,.44),[[.84,0],[.84,1.45]]]},
+  ' ':{adv:.42,strokes:[]}
+};
+function mergeGeos(geos){
+  let vC=0,iC=0;
+  for(const g of geos){vC+=g.attributes.position.count;iC+=g.index.count;}
+  const pos=new Float32Array(vC*3),nor=new Float32Array(vC*3),uv=new Float32Array(vC*2);
+  const idx=vC>65535?new Uint32Array(iC):new Uint16Array(iC);
+  let vo=0,io=0;
+  for(const g of geos){
+    pos.set(g.attributes.position.array,vo*3);
+    nor.set(g.attributes.normal.array,vo*3);
+    uv.set(g.attributes.uv.array,vo*2);
+    const gi=g.index.array;
+    for(let i=0;i<gi.length;i++)idx[io+i]=gi[i]+vo;
+    vo+=g.attributes.position.count;io+=gi.length;
+  }
+  const out=new THREE.BufferGeometry();
+  out.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  out.setAttribute('normal',new THREE.BufferAttribute(nor,3));
+  out.setAttribute('uv',new THREE.BufferAttribute(uv,2));
+  out.setIndex(new THREE.BufferAttribute(idx,1));
+  return out;
+}
+function tubeFor(st){
+  const v=st.pts.map(p=>V3(p[0],p[1],0));
+  const curve=new THREE.CatmullRomCurve3(v,!!st.closed,'centripetal',.5);
+  return new THREE.TubeGeometry(curve,Math.max(28,st.pts.length*6),R,10,!!st.closed);
+}
+function buildLetter(ch){
+  const gl=GLYPH[ch],parts=[];
+  for(const raw of gl.strokes){
+    const st=Array.isArray(raw)?{pts:raw}:raw;
+    parts.push(tubeFor(st));
+    if(!st.closed)for(const p of[st.pts[0],st.pts[st.pts.length-1]]){
+      const s=new THREE.SphereGeometry(R,12,12);s.translate(p[0],p[1],0);parts.push(s);
+    }
+  }
+  const geo=mergeGeos(parts);
+  geo.translate(-gl.adv/2,-0.72,0);
+  return new THREE.Mesh(geo,gummyText);
+}
+const LSC=0.62;
+const textG=new THREE.Group();scene.add(textG);
+const letters=[];
+(function(){
+  const word='hello world',spac=.07;let cursor=0;
+  for(const ch of word){
+    const gl=GLYPH[ch];
+    if(ch!==' '){const m=buildLetter(ch);m.userData.cx=cursor+gl.adv/2;letters.push(m);}
+    cursor+=gl.adv+spac;
+  }
+  const totalW=cursor-spac;window.__txtHalfW=totalW*LSC/2;
+  for(const m of letters){m.position.x=m.userData.cx-totalW/2;textG.add(m);}
+  textG.scale.setScalar(LSC);
+})();
+/* 文字（道具）的确定路径：位置/果冻波仍是 t 的函数 */
+function textState(t){
+  const walkK=ss(1.7,5.3,t);
+  const tx=lerp(7.6,1.35,walkK)+dmp(5.3,t,-0.5,8.5,3.2);
+  const ty=1.42+0.05*Math.sin(t*2.4)+Math.abs(dmp(5.3,t,0.12,9,3));
+  const rotZ=0.05-0.10*walkK+dmp(1.7,t,.05,11,3.5)+dmp(5.3,t,.16,8,2.4);
+  return{tx,ty,rotZ,walkK,anchor:V3(tx-window.__txtHalfW+0.05,ty,0)};
+}
+
+/* 糖浆绳（手↔文字，视觉层） */
+const rope=new THREE.Mesh(new THREE.CapsuleGeometry(.07,1,4,12),gummyText);
+rope.visible=false;scene.add(rope);
+function setRope(a,b,th){
+  const dir=b.clone().sub(a),len=Math.max(.001,dir.length());
+  rope.position.copy(a).addScaledVector(dir,.5);
+  rope.scale.set(th,len/1.1,th);
+  rope.quaternion.setFromUnitVectors(V3(0,1,0),dir.normalize());
+}
+
+/* ================= 软体布娃娃物理（PBD：软关节 + 弱肌肉） ================= */
+const N=7,DT=1/120,ITER=8,GRAV=-20;
+/* 粒子：0骨盆 1胸 2头 3左手 4右手 5左脚 6右脚 */
+const IDX={PELVIS:0,CHEST:1,HEAD:2,HANDL:3,HANDR:4,FOOTL:5,FOOTR:6};
+const W=[.7,.8,1.3,1,1,.9,.9];                      // 相对质量（倒数）
+const RAD=[.38,.38,.46,.14,.14,.15,.15];            // 地面碰撞半径
+const INIT=V=>[V(2.35,3.7,0),V(2.35,4.15,0),V(2.35,4.65,0),
+               V(1.8,4.0,0),V(2.9,4.0,0),V(2.09,2.85,0),V(2.61,2.85,0)];
+/* 距离约束：软 = Gang Beasts 的晃；k 为每次迭代刚度 */
+const CONS=[
+  {a:0,b:1,k:.80},{a:1,b:2,k:.45},{a:0,b:2,k:.20},   // 脊椎（可压缩）、脖子、定长撑
+  {a:1,b:3,k:.30},{a:1,b:4,k:.30},                    // 手臂
+  {a:0,b:5,k:.75},{a:0,b:6,k:.75},{a:5,b:6,k:.06}     // 腿、跨步撑
+];
+const REST=CONS.map(c=>0);                            // 由初始姿态计算
+(function(){const p0=INIT(V3);CONS.forEach((c,i)=>{REST[i]=p0[c.a].distanceTo(p0[c.b]);});})();
+
+function makeSim(){
+  const pos=INIT(V3),prev=INIT(V3);
+  let simT=0;
+  function reset(){
+    const p0=INIT(V3);
+    for(let i=0;i<N;i++){pos[i].copy(p0[i]);prev[i].copy(p0[i]);}
+    simT=0;
+  }
+  /* 肌肉调度：所有"表演意图"都是 t 的函数（确定性保留） */
+  function schedule(t){
+    const walkK=ss(1.7,5.3,t);
+    const moving=ss(1.8,2.4,t)*(1-ss(5.3,5.9,t));
+    const standK=ss(0.7,1.35,t);
+    const reachK=ss(1.15,1.7,t)*(1-ss(5.9,6.8,t));
+    const grabK=ss(1.62,1.78,t);
+    const px=lerp(2.35,-2.7,walkK);
+    const hop=Math.sin(clamp((t-6.3)/0.5,0,1)*Math.PI)*ss(6.25,6.45,t)*(1-ss(6.95,7.4,t));
+    const py=0.72+0.10*Math.abs(Math.sin((t-1.8)*8.5))*moving+hop*0.65+0.012*Math.sin(t*5)*ss(5.9,6.5,t);
+    const lean=0.12*moving;                            // 蓄力后仰（远离文字一侧）
+    const liftL=Math.max(0,Math.sin((t-1.8)*8.5))*0.22*moving;
+    const liftR=Math.max(0,-Math.sin((t-1.8)*8.5))*0.22*moving;
+    const anchor=textState(t).anchor;
+    return{
+      grabK,anchor,
+      M:[ // [粒子, 目标, 肌肉刚度]
+        [0,V3(px,py,0),                     .10*standK],
+        [1,V3(px-lean,py+.45,0),            .05*standK],
+        [2,V3(px-lean*.6,py+.85,0),         .022*standK],
+        [3,V3(px-.45,py+.50+.08*Math.sin((t-1.8)*8.5)*moving,.02),.03*standK],
+        [4,V3(lerp(px+.45,anchor.x,reachK),lerp(py+.50,anchor.y,reachK),lerp(.02,0,reachK)),.05*standK*(1-grabK)],
+        [5,V3(px-.30,liftL,.05),            .07*standK],
+        [6,V3(px+.30,liftR,.05),            .07*standK]
+      ]
+    };
+  }
+  function step(sched){
+    /* 积分 */
+    for(let i=0;i<N;i++){
+      const vx=(pos[i].x-prev[i].x)*.99,vy=(pos[i].y-prev[i].y)*.99,vz=(pos[i].z-prev[i].z)*.99;
+      prev[i].copy(pos[i]);
+      pos[i].x+=vx;pos[i].y+=vy+GRAV*DT*DT;pos[i].z+=vz;
+    }
+    /* 约束迭代：距离软约束 + 肌肉 + 抓握 + 地面 */
+    for(let it=0;it<ITER;it++){
+      for(let ci=0;ci<CONS.length;ci++){
+        const c=CONS[ci],a=pos[c.a],b=pos[c.b];
+        const dx=a.x-b.x,dy=a.y-b.y,dz=a.z-b.z;
+        const d=Math.sqrt(dx*dx+dy*dy+dz*dz)||1e-6;
+        const diff=(d-REST[ci])/d*c.k;
+        const wA=W[c.a],wB=W[c.b],ws=wA+wB;
+        a.x-=dx*diff*(wA/ws);a.y-=dy*diff*(wA/ws);a.z-=dz*diff*(wA/ws);
+        b.x+=dx*diff*(wB/ws);b.y+=dy*diff*(wB/ws);b.z+=dz*diff*(wB/ws);
+      }
+      for(const m of sched.M){
+        const p=pos[m[0]];
+        p.x+=(m[1].x-p.x)*m[2];p.y+=(m[1].y-p.y)*m[2];p.z+=(m[1].z-p.z)*m[2];
+      }
+      if(sched.grabK>0){ /* 抓握：手被钉到文字左端（软，才有拉伸感） */
+        const p=pos[IDX.HANDR],k=.45*sched.grabK;
+        p.x+=(sched.anchor.x-p.x)*k;p.y+=(sched.anchor.y-p.y)*k;p.z+=(sched.anchor.z-p.z)*k;
+      }
+      for(let i=0;i<N;i++){ /* 地面：冲击回弹（橡皮糖落地要弹）+ 摩擦 */
+        if(pos[i].y<RAD[i]){
+          const vy=pos[i].y-prev[i].y;
+          const rest=vy<-0.012?0.35:0;
+          pos[i].y=RAD[i]+(RAD[i]-pos[i].y)*rest;
+          pos[i].x=prev[i].x+(pos[i].x-prev[i].x)*.35;
+          pos[i].z=prev[i].z+(pos[i].z-prev[i].z)*.35;
+        }
+      }
+    }
+    simT+=DT;
+  }
+  return{
+    pos,prev,
+    get simT(){return simT;},
+    ensure(t){ /* 顺放增量推进；回退/大跳则从 t=0 重演算（确定性 seek） */
+      if(t<simT-1e-4||t-simT>0.25){reset();}
+      while(simT+DT<=t)step(schedule(simT+DT));
+    }
+  };
+}
+const sim=makeSim();
+
+/* ================= 角色视觉件（由粒子驱动） ================= */
+const headG=new THREE.Group();scene.add(headG);       // 头+耳+吻+眼嘴（随头粒子晃）
+const eyeMat=new THREE.MeshStandardMaterial({color:0x40100e,roughness:.3});
+(function(){
+  const parts=[];
+  const add=(geo,x,y,z,sx,sy,sz)=>{geo.scale(sx||1,sy||1,sz||1);geo.translate(x,y,z);parts.push(geo);};
+  add(new THREE.SphereGeometry(.5,32,24),0,0,0);                       // 头
+  add(new THREE.SphereGeometry(.19,20,16),-.35,.42,0);                 // 耳
+  add(new THREE.SphereGeometry(.19,20,16),.35,.42,0);
+  add(new THREE.SphereGeometry(.17,20,16),0,-.12,.44,1,.85,.9);        // 吻
+  headG.add(new THREE.Mesh(mergeGeos(parts),gummy));
+  const eyeL=new THREE.Mesh(new THREE.SphereGeometry(.055,14,12),eyeMat);eyeL.position.set(-.17,.06,.45);
+  const eyeR=eyeL.clone();eyeR.position.x=.17;
+  const mouth=new THREE.Mesh(new THREE.SphereGeometry(.045,12,10),eyeMat);
+  mouth.scale.set(1.7,.55,.6);mouth.position.set(0,-.22,.55);
+  headG.add(eyeL,eyeR,mouth);
+})();
+function makeLimb(r){ // 总高恰好 1 的胶囊（scale.y=距离 即精确到达粒子）
+  const g=new THREE.CapsuleGeometry(r,Math.max(.05,1-2*r),6,16);g.translate(0,-.5,0);
+  const m=new THREE.Mesh(g,gummy);scene.add(m);return m;
+}
+const torso=makeLimb(.52),armL=makeLimb(.13),armR=makeLimb(.13),legL=makeLimb(.19),legR=makeLimb(.19);
+const footL=new THREE.Mesh(new THREE.SphereGeometry(.2,20,16),gummy);footL.scale.set(1.15,.75,1.3);
+const footR=footL.clone();scene.add(footL,footR);
+const UP=V3(0,1,0),_m=new THREE.Matrix4(),_q=new THREE.Quaternion();
+function stretchLimb(mesh,a,b,minLen){ // a→b 拉伸胶囊
+  const dir=b.clone().sub(a),len=Math.max(minLen,dir.length());
+  mesh.position.copy(a);
+  mesh.scale.set(1,len,1);
+  mesh.quaternion.setFromUnitVectors(UP,dir.normalize());
+}
+const _lookM=new THREE.Matrix4();
+function syncVisual(t){
+  const P=sim.pos,pv=sim.prev;
+  const pelvis=P[0],chest=P[1],head=P[2],handL=P[3],handR=P[4],footA=P[5],footB=P[6];
+  /* 躯干：胸↔骨盆，压缩/拉伸直接可视化（落地挤压是真实的脊椎压缩） */
+  stretchLimb(torso,pelvis,chest,.35);
+  const spine=chest.distanceTo(pelvis)/.45;
+  torso.scale.x=torso.scale.z=clamp(1/Math.sqrt(spine),.72,1.5);
+  /* 四肢 */
+  const shL=chest.clone().add(V3(-.42,.05,0)),shR=chest.clone().add(V3(.42,.05,0));
+  stretchLimb(armL,shL,handL,.2);stretchLimb(armR,shR,handR,.2);
+  const hipL=pelvis.clone().add(V3(-.24,-.15,0)),hipR=pelvis.clone().add(V3(.24,-.15,0));
+  stretchLimb(legL,hipL,footA,.25);stretchLimb(legR,hipR,footB,.25);
+  footL.position.set(footA.x,Math.max(.14,footA.y-.06),footA.z+.08);
+  footR.position.set(footB.x,Math.max(.14,footB.y-.06),footB.z+.08);
+  /* 头：up=脊椎方向，保持朝前 → 天然晃头 */
+  headG.position.copy(head);
+  const up=chest.clone().sub(head).normalize().negate();
+  _lookM.lookAt(V3(0,0,0),V3(0,0,-1),up);
+  headG.quaternion.setFromRotationMatrix(_lookM);
+  /* 眨眼（保留一点演出） */
+  const blink=Math.max(pulse(t,0.95,.04),pulse(t,4.25,.04),pulse(t,7.7,.04));
+  headG.children[1].scale.y=headG.children[2].scale.y=1-0.92*blink;
+  /* 影子 */
+  charShadow.position.set(pelvis.x,0.012,0);
+  const h=clamp(pelvis.y,0,3);
+  charShadow.scale.setScalar(1+0.5*h/3);
+  charShadow.material.opacity=.36/(1+h*.9);
+}
+
+/* ================= 主循环：文字（函数）+ 小人（物理）+ 相机 ================= */
+function updatePropsAndCamera(t){
+  const ts=textState(t);
+  textG.position.set(ts.tx,ts.ty,0);
+  textG.rotation.z=ts.rotZ;
+  for(let i=0;i<letters.length;i++){
+    const ph=i*0.045,L=letters[i];
+    L.rotation.z=dmp(1.7,t-ph,.06,10,3.2)+dmp(5.3,t-ph,.13,7.5,2.2);
+    L.rotation.x=0.05*Math.sin(t*2.1+i*.7);
+    L.position.y=0.03*Math.sin(t*2.6+i*.5);
+  }
+  const grabK=ss(1.62,1.78,t);
+  rope.visible=grabK>0.02;
+  if(rope.visible){
+    const hand=sim.pos[IDX.HANDR];
+    const gap=hand.distanceTo(ts.anchor);
+    setRope(hand,ts.anchor,clamp(gap*.22,.25,1)); // 绳粗细随手↔文字距离（拉伸变细）
+  }
+  txtShadow.position.set(ts.tx,0.014,0);
+  txtShadow.material.opacity=.2/(1+Math.abs(ts.ty-1.42)*3);
+  txtShadow.scale.setScalar(1+0.04*Math.sin(t*2.4));
+  const mid=lerp(1.7,-0.6,ss(0.5,6,t));
+  cam.position.set(mid+0.06*Math.sin(t*.6),2.1+0.02*Math.sin(t*1.1),9.3-1.05*ss(0,9.5,t));
+  cam.lookAt(mid*.72,1.5,0);
+  document.getElementById('fade').style.opacity=1-ss(0,.6,t);
+}
+
+/* ================= 时间轴 UI ================= */
+const TOTAL=10;
+const slider=document.getElementById('scrub'),clockEl=document.getElementById('clock'),btn=document.getElementById('play');
+let t=0,playing=true,last=performance.now();
+[[0.52,'落地'],[1.7,'抓住'],[5.3,'猛拽'],[6.35,'起跳']].forEach(tt=>{
+  const d=document.createElement('div');d.className='tick';
+  d.style.left=(tt[0]/TOTAL*100)+'%';
+  const i=document.createElement('i');i.textContent=tt[1];d.appendChild(i);
+  document.getElementById('scrubWrap').appendChild(d);
+});
+function paint(){
+  clockEl.textContent=t.toFixed(2)+' / '+TOTAL.toFixed(2)+' s';
+  slider.style.setProperty('--p',(t/TOTAL*100)+'%');
+}
+function setT(v){t=clamp(v,0,TOTAL);slider.value=t;paint();}
+slider.addEventListener('input',()=>{playing=false;btn.textContent='▶';setT(parseFloat(slider.value));});
+btn.addEventListener('click',()=>{
+  if(!playing&&t>=TOTAL-0.001){t=0;sim.ensure(0);}
+  playing=!playing;btn.textContent=playing?'❚❚':'▶';
+});
+addEventListener('keydown',e=>{
+  if(e.code==='Space'){e.preventDefault();btn.click();}
+  else if(e.key==='ArrowRight')setT(t+0.05);
+  else if(e.key==='ArrowLeft')setT(t-0.05);
+});
+addEventListener('resize',()=>{
+  cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+window.__demo={setT,sim,
+  pause(){playing=false;btn.textContent='▶';},
+  frame(t){setT(t);sim.ensure(t);syncVisual(t);updatePropsAndCamera(t);renderer.render(scene,cam);}};
+function loop(now){
+  const dt=Math.min(0.05,(now-last)/1000);last=now;
+  if(playing){t+=dt;if(t>=TOTAL){t=TOTAL;playing=false;btn.textContent='▶';}}
+  sim.ensure(t);            // 顺放增量 / seek 重演算
+  paint();
+  syncVisual(t);
+  updatePropsAndCamera(t);
+  renderer.render(scene,cam);
+  requestAnimationFrame(loop);
+}
+paint();btn.textContent='❚❚';requestAnimationFrame(loop);
+
+}catch(e){errBox.textContent=e&&e.stack?e.stack:String(e);}
+</script>
+</body>
+</html>
