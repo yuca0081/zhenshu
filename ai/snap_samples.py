@@ -4,7 +4,8 @@
 spec 生成（produce.genSpecs）把这些 PNG 附给多模态模型——看着真图写画面，
 替代纯文字风格注入（glm-5.3-flash 图片输入已实测支持）。
 
-用 Edge 无头截图（Windows 自带，零新依赖；样张是 960×540 自包含 HTML）。
+用 Edge 无头截图（Windows 自带，零新依赖；样张是画幅同尺寸的自包含 HTML，
+窗口跟 project.json aspect 走——竖版项目的版式必须在竖版画布上验证）。
 字体：截图前对样张做目录字体声明纠错+补齐（style/font_assets.json 的真字体
 woff2）——渲染端没装的目录字体 local() 必回退雅黑，"所见"就不再是设计确认的
 那个样子（2026-10-13 齐马蓝：样张与正片双双回退，样张承诺失真）。
@@ -26,6 +27,15 @@ BROWSERS = [
     r'C:\Program Files\Google\Chrome\Application\chrome.exe',
 ]
 MAX_SAMPLES = 3  # 与 genSpecs 的 styleSampleImages 上限一致
+
+
+def canvas_size(proj: pathlib.Path):
+    """截图窗口=项目画幅（与渲染端 CanvasFor 同口径：9:16→1080×1920，缺省 16:9）。"""
+    try:
+        aspect = json.loads((proj / 'project.json').read_text(encoding='utf-8')).get('aspect')
+    except Exception:
+        aspect = None
+    return (1080, 1920) if aspect == '9:16' else (1920, 1080)
 
 
 def main(proj_dir: str) -> int:
@@ -57,6 +67,7 @@ def main(proj_dir: str) -> int:
     if not browser:
         print('未找到 Edge/Chrome，跳过样张截图（spec 生成退回纯文本风格）')
         return 0
+    win_w, win_h = canvas_size(proj)
 
     resolved = load_font_assets(proj)
     for i, out in enumerate(outs):
@@ -72,7 +83,7 @@ def main(proj_dir: str) -> int:
                 subprocess.run(
                     [browser, '--headless', '--disable-gpu', '--no-first-run',
                      f'--user-data-dir={ud}', '--hide-scrollbars',
-                     f'--screenshot={out.resolve()}', '--window-size=960,540',
+                     f'--screenshot={out.resolve()}', f'--window-size={win_w},{win_h}',
                      '--virtual-time-budget=3000', tmp.resolve().as_uri()],
                     check=True, timeout=30, capture_output=True)
         except Exception as e:

@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -155,10 +156,59 @@ func compactJSON(args string) string {
 	return args
 }
 
-// decodeArgs 工具参数解析（失败返回可回喂的人话错误）。
+// decodeArgs 工具参数解析（失败返回可回喂的人话错误）。Go 原生 unmarshal 文案
+// 模型难自查——实测 submit_style 连败 4 轮烧掉 4 个回合的教训：类型错报「字段
+// 路径+期望类型+收到什么」，语法错明说去看引号逗号。
 func decodeArgs(args string, out any) error {
-	if err := json.Unmarshal([]byte(args), out); err != nil {
-		return fmt.Errorf("参数解析失败: %w", err)
+	err := json.Unmarshal([]byte(args), out)
+	if err == nil {
+		return nil
 	}
-	return nil
+	var te *json.UnmarshalTypeError
+	if errors.As(err, &te) {
+		where := te.Field
+		if where == "" {
+			where = "顶层参数"
+		}
+		return fmt.Errorf("参数类型不对：字段 %s 需要%s，实际收到的是%s——按类型改好后重交", where, humanJSONType(te.Type), humanJSONVal(te.Value))
+	}
+	return fmt.Errorf("参数不是合法 JSON（多半是引号/逗号/括号问题）：%v", err)
+}
+
+// humanJSONVal JSON 侧收到的值类型名（UnmarshalTypeError.Value）→ 人话。
+func humanJSONVal(v string) string {
+	switch v {
+	case "number":
+		return "数字"
+	case "string":
+		return "字符串"
+	case "boolean":
+		return "布尔 true/false"
+	case "array":
+		return "数组"
+	case "object":
+		return "对象"
+	case "null":
+		return "null"
+	}
+	return v
+}
+
+// humanJSONType reflect 类型 → 人话类型名（回喂模型用）。
+func humanJSONType(t reflect.Type) string {
+	switch t.Kind() {
+	case reflect.String:
+		return "字符串"
+	case reflect.Bool:
+		return "布尔 true/false"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return "数字"
+	case reflect.Slice, reflect.Array:
+		return "数组"
+	case reflect.Struct, reflect.Map:
+		return "对象"
+	}
+	return t.String()
 }

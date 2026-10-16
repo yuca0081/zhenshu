@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"webpage-video-agent/server/internal/contract"
@@ -60,7 +61,9 @@ func runStyleStation(ctx context.Context, p *pipeline.Project, d Deps) error {
 }
 
 func styleKickoff(p *pipeline.Project) string {
-	k := "开工。用 get_script 读取口播稿，然后开始探索风格库。"
+	cv := pipeline.ProjectCanvas(p)
+	k := fmt.Sprintf("开工。本片画幅 %s（%d×%d）——样张与版式从第一笔起就按这个画幅设计。用 get_script 读取口播稿，然后开始探索风格库。",
+		cv.Aspect, int(cv.W), int(cv.H))
 	if idea := noteFile(p, IdeaFile); idea != "" {
 		k += "\n用户的想法（导演意图参考——风格气质可以从中取材，与口播稿冲突时以稿为准）：" + idea
 	}
@@ -161,7 +164,10 @@ func (r *styleRun) searchStylesTool() Tool {
 				return Observation{Text: "风格库读取失败：" + err.Error()}
 			}
 			if len(items) == 0 {
-				return Observation{Text: fmt.Sprintf("没有命中（库内共 %d 条）。放宽分面或换关键词再试。", total)}
+				if in.Query == "" && in.Mood == "" && in.Tone == "" && in.Density == "" {
+					return Observation{Text: "风格库是空的（共 0 条）。用 register_style 从最接近的方向衍生登记，或完全自定义。"}
+				}
+				return Observation{Text: r.facetMissHint(in.Query, in.Mood, in.Tone, in.Density)}
 			}
 			vocab := r.d.Lib.VocabList()
 			tagName := func(id string) string {
@@ -206,6 +212,53 @@ func (r *styleRun) searchStylesTool() Tool {
 			return Observation{Text: b.String()}
 		},
 	}
+}
+
+// facetMissHint 分面/关键词 0 命中 ≠ 库空。Search 返回的 total 是过滤后计数，
+// 直接打「库内共 0 条」会把模型骗去自造风格（2026-10-15 实测 P3）——这里报真实
+// 库容，并把库内现有取值列出来，模型下一轮就能换对标签直接命中。
+func (r *styleRun) facetMissHint(query, mood, tone, density string) string {
+	libTotal, moods, tones, densities := 0, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	if all, err := r.d.Lib.List(); err == nil {
+		libTotal = len(all)
+		for _, st := range all {
+			if st.Facets.Mood != "" {
+				moods[st.Facets.Mood] = true
+			}
+			if st.Facets.Tone != "" {
+				tones[st.Facets.Tone] = true
+			}
+			if st.Facets.Density != "" {
+				densities[st.Facets.Density] = true
+			}
+		}
+	}
+	joinVals := func(set map[string]bool) string {
+		if len(set) == 0 {
+			return "（库里这个分面暂无取值）"
+		}
+		vals := make([]string, 0, len(set))
+		for v := range set {
+			vals = append(vals, v)
+		}
+		return strings.Join(vals, "、")
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "没有命中（库内共 %d 条——库不是空的，是筛选没对上）。", libTotal)
+	if query != "" {
+		fmt.Fprintf(&b, "关键词「%s」无匹配；", query)
+	}
+	if mood != "" {
+		fmt.Fprintf(&b, "情绪=%s 库内没有（现有取值：%s）；", mood, joinVals(moods))
+	}
+	if tone != "" {
+		fmt.Fprintf(&b, "色调=%s 库内没有（现有取值：%s）；", tone, joinVals(tones))
+	}
+	if density != "" {
+		fmt.Fprintf(&b, "密度=%s 库内没有（现有取值：%s）；", density, joinVals(densities))
+	}
+	b.WriteString("换用以上取值，或去掉部分筛选再看全量。")
+	return b.String()
 }
 
 // getStyleDetailTool get_style_detail：完整描述 + 特色 + 样张图库（帧清单）。
@@ -319,12 +372,14 @@ func (r *styleRun) getStyleUsageTool() Tool {
 // renderSampleTool render_sample：样张渲染（现有渲染壳 + 同参数哈希缓存）。
 // 样张 HTML 由模型现写（与设计系统同一套皮肤色值），截图回喂多模态自检。
 func (r *styleRun) renderSampleTool(snapLeft *int) Tool {
+	cv := pipeline.ProjectCanvas(r.p) // 画幅跟项目走：横版样张上验竖版版式=无效验证（2026-10-15 实测 P1）
+	w, h := int(cv.W), int(cv.H)
 	return Tool{
-		Def: toolSchema("render_sample", "渲染一张样张验证落地效果：scene_brief=场景简述（必须取自口播稿代表性内容）；html=960×540 自包含样张页面（颜色/字体必须与本片设计系统皮肤槽位逐字一致，纯 CSS 无图片无外链，画布 html,body{width:960px;height:540px;overflow:hidden}，≤2000 字符）。渲染结果截图回喂给你检查；最多 3 张，构图版式必须明显不同。", map[string]any{
+		Def: toolSchema("render_sample", fmt.Sprintf("渲染一张样张验证落地效果：scene_brief=场景简述（必须取自口播稿代表性内容）；html=%d×%d 自包含样张页面（画幅必须与本项目一致，颜色/字体必须与本片设计系统皮肤槽位逐字一致，纯 CSS 无图片无外链，画布 html,body{width:%dpx;height:%dpx;overflow:hidden}，≤2000 字符）。渲染结果截图回喂给你检查；最多 3 张，构图版式必须明显不同。", w, h, w, h), map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"scene_brief": map[string]any{"type": "string", "description": "场景简述（一句话：这张样张画口播稿的哪个代表性内容）"},
-				"html":        map[string]any{"type": "string", "description": "样张 HTML（完整自包含文档，960×540）"},
+				"html":        map[string]any{"type": "string", "description": fmt.Sprintf("样张 HTML（完整自包含文档，画布 %d×%d）", w, h)},
 			},
 			"required": []string{"scene_brief", "html"},
 		}),
@@ -378,7 +433,7 @@ func (r *styleRun) renderSampleTool(snapLeft *int) Tool {
 			note := fmt.Sprintf("样张 %d 已渲染并截图（style/sample-%d.png）：", idx+1, idx)
 			if dataURL, err := shrinkFrame(png); err == nil {
 				images = append(images, dataURL)
-				note += "附图见下。检查：构图是否成立、配色是否与皮肤一致、文字是否可读、有无溢出画布。不满意就调整后重新渲染这一张（重新调用会替换当前张）。"
+				note += "附图见下。检查：构图是否成立、配色是否与皮肤一致、文字是否可读、有无溢出画布、高亮条/色块不得压住文字（压到字下半也不行）。不满意就调整后重新渲染这一张（重新调用会替换当前张）。"
 			} else {
 				note += "截图缩略失败，凭代码自查。"
 			}
@@ -487,6 +542,89 @@ func (r *styleRun) registerStyleTool() Tool {
 	}
 }
 
+// normalizeStyleArgs 提交参数的宽容归一（P2 兜底层）：schema 写了示例模型仍会
+// 漏看，数字字重/布尔叠层/"12px" 圆角这类一笔之差直接拒太贵（实测连败 4 轮烧掉
+// 2 分钟+4 个回合）。已知反直觉字段就地转换并生成归一说明回喂，帮模型下次给对。
+// 解析不动的原样返回（让 decodeArgs 的类型报错去接）。
+func normalizeStyleArgs(args string) (string, []string) {
+	var m map[string]any
+	if json.Unmarshal([]byte(args), &m) != nil {
+		return args, nil
+	}
+	ds, _ := m["design_system"].(map[string]any)
+	if ds == nil {
+		return args, nil
+	}
+	var notes []string
+	if fonts, _ := ds["fonts"].(map[string]any); fonts != nil {
+		for _, role := range []string{"display", "body", "data"} {
+			fr, _ := fonts[role].(map[string]any)
+			if fr == nil {
+				continue
+			}
+			if n, ok := fr["weight"].(float64); ok {
+				s := strconv.FormatFloat(n, 'f', -1, 64)
+				fr["weight"] = s
+				notes = append(notes, fmt.Sprintf("fonts.%s.weight %v→%q（数字→字符串）", role, n, s))
+			}
+		}
+	}
+	if layouts, _ := ds["layouts"].([]any); layouts != nil {
+		for i, lv := range layouts {
+			l, _ := lv.(map[string]any)
+			if l == nil {
+				continue
+			}
+			switch b := l["layered"].(type) {
+			case bool:
+				if b {
+					l["layered"] = "yes"
+					notes = append(notes, fmt.Sprintf("layouts[%d].layered true→\"yes\"（布尔→字符串；叠层要写明哪层压哪层，下次直接写说明）", i))
+				} else {
+					delete(l, "layered")
+					notes = append(notes, fmt.Sprintf("layouts[%d].layered false→已删除（无叠层不传该字段）", i))
+				}
+			case float64:
+				delete(l, "layered")
+				notes = append(notes, fmt.Sprintf("layouts[%d].layered 数字→已删除（该字段是叠层说明文字，不是数值）", i))
+			}
+		}
+	}
+	fixSlots := func(where string, s map[string]any) {
+		slots, _ := s["slots"].(map[string]any)
+		if slots == nil {
+			return
+		}
+		for _, key := range []string{"radius", "border_w"} {
+			v, ok := slots[key].(string)
+			if !ok {
+				continue
+			}
+			if n, err := strconv.Atoi(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(v), "px"))); err == nil {
+				slots[key] = n
+				notes = append(notes, fmt.Sprintf("%s.slots.%s %q→%d（\"Npx\"→数字）", where, key, v, n))
+			}
+		}
+	}
+	if skins, _ := ds["skins"].([]any); skins != nil {
+		for i, sv := range skins {
+			if s, _ := sv.(map[string]any); s != nil {
+				fixSlots(fmt.Sprintf("skins[%d]", i), s)
+			}
+		}
+	}
+	if s, _ := ds["skin"].(map[string]any); s != nil {
+		fixSlots("skin", s)
+	}
+	if len(notes) == 0 {
+		return args, nil
+	}
+	if b, err := json.Marshal(m); err == nil {
+		return string(b), notes
+	}
+	return args, nil
+}
+
 // submitStyleTool submit_style：唯一出口。校验通过 = 风格包 + legacy style_samples.json 落盘。
 func (r *styleRun) submitStyleTool() Tool {
 	return Tool{
@@ -508,11 +646,12 @@ func (r *styleRun) submitStyleTool() Tool {
 				"design_system": map[string]any{
 					"type": "object",
 					"description": "本片设计系统。字段（全部必填除非注明）：direction 方向名；concept 概念一句话（为什么配这部片）；" +
-						"skins:[{name,slots:{bg,txt,accent,font,mute?,surface?,panel_txt?,radius?,border_w?},css≤4000字符}] 1–2 套，色值 #RRGGBB、txt 对 bg 对比度 ≥4.5:1、font 含中文字体，双皮肤必须另给 skin_rule；" +
-						"fonts:{display:{stack,weight?,tracking?},body:{...},data?{...}} 三角色分工、每栈含中文字体；" +
+						"skins:[{name,slots:{bg,txt,accent,font,mute?,surface?,panel_txt?,radius?,border_w?},css≤4000字符}] 1–2 套，色值 #RRGGBB、txt 对 bg 对比度 ≥4.5:1、font 含中文字体、radius/border_w 是数字 px（如 12、2，不是 \"12px\" 字符串），双皮肤必须另给 skin_rule；" +
+						"fonts:{display:{stack,weight?,tracking?},body:{...},data?{...}} 三角色分工、每栈含中文字体、weight 是字符串（如 \"700\"，不是数字 700）；" +
 						"motion:{ease,dur_in(0.1-1.5),dur_settle(0.05-1.0),stagger(0-0.5),entrances:[{name,how,use_for}] 3-5条互异,rhythm,exits,camera,transition,notes}；" +
 						"device:{name,desc,per_seg} 贯穿装置；entry_exit:{entry,exit,entry_dur(0.2-1.0)} 标准入场/收尾动画模板（转场载体，一套模板一段内生效）；" +
-						"layouts:[{id,name,desc,layered?}] 0 个或 ≥2 个；anti_patterns ≤8 条；post:{vignette,grain,chroma} 各 0-1",
+						"layouts:[{id,name,desc,layered?}] 0 个或 ≥2 个、layered 是字符串（有叠层写「哪层压哪层、为何可读」，无叠层不传——不是布尔）；" +
+						"anti_patterns ≤8 条；post:{vignette,grain,chroma} 各 0-1",
 				},
 				"sample_ids": map[string]any{
 					"type": "array", "items": map[string]any{"type": "string"},
@@ -522,29 +661,37 @@ func (r *styleRun) submitStyleTool() Tool {
 			"required": []string{"style_id", "description", "grammar", "design_system"},
 		}),
 		Run: func(_ context.Context, args string) Observation {
+			normArgs, notes := normalizeStyleArgs(args)
+			// 归一说明附在每次回喂头部：这次放行不等于下次也放——模型得学会给对
+			reply := func(text string) Observation {
+				if len(notes) > 0 {
+					text = "（已自动归一：" + strings.Join(notes, "；") + "——下次按 schema 标注的类型直接给对）\n" + text
+				}
+				return Observation{Text: text}
+			}
 			var in struct {
-				StyleID      string          `json:"style_id"`
-				Description  string          `json:"description"`
+				StyleID      string               `json:"style_id"`
+				Description  string               `json:"description"`
 				Grammar      contract.EditGrammar `json:"grammar"`
 				DesignSystem contract.StyleSamples `json:"design_system"`
-				SampleIDs    []string        `json:"sample_ids"`
+				SampleIDs    []string             `json:"sample_ids"`
 			}
-			if err := decodeArgs(args, &in); err != nil {
-				return Observation{Text: err.Error()}
+			if err := decodeArgs(normArgs, &in); err != nil {
+				return reply(err.Error())
 			}
 			// style_id 已存在（库内含未入库草稿，或本次登记）
 			sid := strings.TrimSpace(in.StyleID)
 			if r.d.Lib != nil {
 				if _, ok := r.d.Lib.Get(sid); !ok && sid != r.registered {
-					return Observation{Text: fmt.Sprintf("被拒：style_id %s 不在库内也不是本次登记的条目（本次登记：%s）", sid, r.registered)}
+					return reply(fmt.Sprintf("被拒：style_id %s 不在库内也不是本次登记的条目（本次登记：%s）", sid, r.registered))
 				}
 			}
 			if sid == "" {
-				return Observation{Text: "被拒：style_id 为空"}
+				return reply("被拒：style_id 为空")
 			}
 			draft := r.loadDraft()
 			if len(draft.Samples) < 1 {
-				return Observation{Text: "被拒：还没有样张——先 render_sample 至少 1 张（场景取自口播稿代表性内容）"}
+				return reply("被拒：还没有样张——先 render_sample 至少 1 张（场景取自口播稿代表性内容）")
 			}
 			ids := in.SampleIDs
 			if len(ids) == 0 {
@@ -558,25 +705,24 @@ func (r *styleRun) submitStyleTool() Tool {
 			ds.Confirmed = false // 打包终审硬门：确认前禁止开工
 			sp := contract.NewStylePack(sid, in.Description, in.Grammar, &ds, ids)
 			if err := contract.ValidateStylePack(sp); err != nil {
-				return Observation{Text: "被拒：" + err.Error()}
+				return reply("被拒：" + err.Error())
 			}
 			if err := writeJSONFile(stylePackPath(r.p), sp); err != nil {
-				return Observation{Text: "落盘失败：" + err.Error()}
+				return reply("落盘失败：" + err.Error())
 			}
 			// legacy 兼容：设计系统整包写 style_samples.json（未确认态——
 			// 现有确认门/样张页/produce 的读法全部不变）
 			if err := writeJSONFile(r.p.Artifact("style/style_samples.json"), &ds); err != nil {
-				return Observation{Text: "设计系统落盘失败：" + err.Error()}
+				return reply("设计系统落盘失败：" + err.Error())
 			}
 			_ = pipeline.SetProjectField(r.p, "style_id", sid)
 			_ = os.Remove(styleDraftPath(r.p))
 			r.d.emit(r.p.ID, "stage", "prep/style", fmt.Sprintf("done：%s「%s」语法[%s %.0f-%.0fs] 样张×%d",
 				sid, ds.Direction, in.Grammar.Density, in.Grammar.BandMin, in.Grammar.BandMax, len(draft.Samples)))
-			return Observation{
-				Text: fmt.Sprintf("风格包已提交：%s（%s）；剪辑语法 %s / %.0f–%.0f 秒 / %s；样张 %d 张；设计系统含入场/收尾模板。样张未经用户终审确认前禁止开工。",
-					sid, ds.Direction, in.Grammar.Density, in.Grammar.BandMin, in.Grammar.BandMax, in.Grammar.Continuity, len(draft.Samples)),
-				Done: true,
-			}
+			done := reply(fmt.Sprintf("风格包已提交：%s（%s）；剪辑语法 %s / %.0f–%.0f 秒 / %s；样张 %d 张；设计系统含入场/收尾模板。样张未经用户终审确认前禁止开工。",
+				sid, ds.Direction, in.Grammar.Density, in.Grammar.BandMin, in.Grammar.BandMax, in.Grammar.Continuity, len(draft.Samples)))
+			done.Done = true
+			return done
 		},
 	}
 }

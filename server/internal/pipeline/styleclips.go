@@ -75,7 +75,7 @@ func EnsureSampleClips(p *Project, ss *contract.StyleSamples, sb *contract.Story
 	if sb == nil {
 		sb, _ = p.LoadStoryboard() // 无分镜时字幕带没文案种子——小样仍可出（旁白留空）
 	}
-	cv := projectCanvas(p)
+	cv := ProjectCanvas(p)
 	p.Manifest("style.clips.start", fmt.Sprintf("%d 条 × %.1fs @%s", len(need), clipDuration, cv.Aspect))
 	var drafts clipDrafts
 	if _, err := prov.GenerateJSONNoThink(pctx(p), clipSystemPrompt(ss), clipUserPrompt(ss, sb, need, cv), &drafts); err != nil {
@@ -311,9 +311,9 @@ func clipSegment(sb *contract.Storyboard, sampleIdx int) *contract.Segment {
 	return &sb.Segments[i]
 }
 
-// projectCanvas 项目画幅几何（与 produce.canvasFor 同一口径：project.json aspect，
-// 缺省 16:9）。
-func projectCanvas(p *Project) contract.Canvas {
+// ProjectCanvas 项目画幅几何（与 produce.canvasFor 同一口径：project.json aspect，
+// 缺省 16:9）。小样几何与风格工位的样张画布共用。
+func ProjectCanvas(p *Project) contract.Canvas {
 	aspect := "16:9"
 	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil {
 		var meta struct {

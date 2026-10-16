@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -184,3 +185,59 @@ func (m *captureProv) Chat(_ context.Context, msgs []openai.ChatCompletionMessag
 
 var _ react.ChatClient = (*mockProv)(nil)
 var _ = filepath.Join // 占位引用（测试文件统一 import 面）
+
+// TestNormalizeStyleArgs P2 宽容归一：数字字重/布尔叠层/"Npx" 圆角就地转换并出说明。
+func TestNormalizeStyleArgs(t *testing.T) {
+	in := `{"design_system":{"fonts":{"display":{"stack":"x","weight":700},"body":{"stack":"y","weight":"400"}},
+"layouts":[{"id":"l1","layered":true},{"id":"l2","layered":false}],
+"skins":[{"name":"s","slots":{"bg":"#111111","txt":"#eeeeee","accent":"#888888","font":"雅黑","radius":"12px","border_w":"2px"}}]}}`
+	out, notes := normalizeStyleArgs(in)
+	if len(notes) != 5 { // display.weight + 两处 layered + radius + border_w
+		t.Fatalf("应归一 5 处，实得 %d：%v", len(notes), notes)
+	}
+	var m struct {
+		DesignSystem struct {
+			Fonts struct {
+				Display struct {
+					Weight string `json:"weight"`
+				} `json:"display"`
+			} `json:"fonts"`
+			Layouts []struct {
+				ID      string `json:"id"`
+				Layered string `json:"layered"`
+			} `json:"layouts"`
+			Skins []struct {
+				Slots struct {
+					Radius  int `json:"radius"`
+					BorderW int `json:"border_w"`
+				} `json:"slots"`
+			} `json:"skins"`
+		} `json:"design_system"`
+	}
+	if err := decodeArgs(out, &m); err != nil {
+		t.Fatalf("归一后应可解析: %v", err)
+	}
+	if m.DesignSystem.Fonts.Display.Weight != "700" {
+		t.Fatalf("weight 应转字符串 \"700\"，实得 %q", m.DesignSystem.Fonts.Display.Weight)
+	}
+	if m.DesignSystem.Layouts[0].Layered != "yes" || m.DesignSystem.Layouts[1].Layered != "" {
+		t.Fatalf("layered 应为 \"yes\"/空，实得 %q / %q", m.DesignSystem.Layouts[0].Layered, m.DesignSystem.Layouts[1].Layered)
+	}
+	if m.DesignSystem.Skins[0].Slots.Radius != 12 || m.DesignSystem.Skins[0].Slots.BorderW != 2 {
+		t.Fatalf("radius/border_w 应转数字，实得 %d / %d", m.DesignSystem.Skins[0].Slots.Radius, m.DesignSystem.Skins[0].Slots.BorderW)
+	}
+	if _, changed := normalizeStyleArgs(`{"design_system":{"direction":"干净"}}`); changed != nil {
+		t.Fatalf("无需归一应原样返回，实得说明 %v", changed)
+	}
+}
+
+// TestDecodeArgsTypeMessage P2 报错人话：字段路径+期望类型+收到什么。
+func TestDecodeArgsTypeMessage(t *testing.T) {
+	var in struct {
+		Weight string `json:"weight"`
+	}
+	err := decodeArgs(`{"weight":700}`, &in)
+	if err == nil || !strings.Contains(err.Error(), "weight") || !strings.Contains(err.Error(), "字符串") || !strings.Contains(err.Error(), "数字") {
+		t.Fatalf("类型错应报字段+期望+实收，实得: %v", err)
+	}
+}

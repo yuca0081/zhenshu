@@ -68,13 +68,13 @@ func TestClipNarration(t *testing.T) {
 func TestProjectCanvas(t *testing.T) {
 	dir := t.TempDir()
 	p := &Project{ID: "t", Dir: dir}
-	if cv := projectCanvas(p); cv.Aspect != "16:9" || cv.W != 1920 {
+	if cv := ProjectCanvas(p); cv.Aspect != "16:9" || cv.W != 1920 {
 		t.Fatalf("缺省应为 16:9: %+v", cv)
 	}
 	if err := os.WriteFile(p.Artifact("project.json"), []byte(`{"aspect":"9:16"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if cv := projectCanvas(p); cv.Aspect != "9:16" || cv.H != 1920 {
+	if cv := ProjectCanvas(p); cv.Aspect != "9:16" || cv.H != 1920 {
 		t.Fatalf("9:16 应解析: %+v", cv)
 	}
 }
