@@ -3,7 +3,7 @@ package review
 // agent.go —— 判卷型审核 agent 的三个调用档案（§6.1/附录 A）：
 //
 //	AuditSegment  段审：锚点帧开场注入 + 六维判卷（回合预算 ≤6）
-//	AuditBoundary 边界审：边界短片段 + 末首帧对 + 四查（回合预算 ≤4）
+//	AuditBoundary 边界审：边界短片段 + 末首帧对 + 四查（回合预算 ≤6）
 //	AuditFinal    全片终审：12–16 帧格 + 四查项（单轮、无工具）
 //
 // 系统提示词 = 附录 A 定稿全文；本片期望不预先生成，agent 从 brief+旁白现场推导
@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"webpage-video-agent/server/internal/agentlog"
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
@@ -24,10 +25,11 @@ import (
 
 // 审核温度 ≈0（判卷要可复现）；回合预算（§6.1）。
 const (
-	auditTemp         = 0.1
-	segmentBudget     = 6
-	boundaryBudget    = 4
-	finalBudget       = 2   // 单轮判卷；给 1 轮 nudge 余量防光说不做烧死
+	auditTemp      = 0.1
+	segmentBudget  = 6
+	boundaryBudget = 6 // 2026-10-17 实测：4 回合下"回合预算耗尽"反复出现（b04/b05 连续两轮），提一档降降级率
+	finalBudget    = 2 // 单轮判卷；给 1 轮 nudge 余量防光说不做烧死
+
 	boundaryWindowMin = 1.5 // 边界短片段窗口下限（秒）
 )
 
@@ -97,7 +99,8 @@ func auditProvider() (ChatClient, error) {
 }
 
 // runAudit Loop 组装 + 取证留痕的共用尾。verdict 由各档案的 submit 工具在
-// 校验通过后闭包捕获返回。
+// 校验通过后闭包捕获返回。TaskID 非空时统一挂「过程」页任务账（对话留痕 +
+// agent.start/done + token 用量）。
 func (s *Service) runAudit(ctx context.Context, prov ChatClient, loop Loop, prof profile, prior *Verdict) (Verdict, error) {
 	var verdict Verdict
 	loop.Prov = prov
@@ -125,8 +128,17 @@ func (s *Service) runAudit(ctx context.Context, prov ChatClient, loop Loop, prof
 		_ = os.MkdirAll(filepath.Dir(loop.LogPath), 0o755)
 		loop.OnTool = toolLogger(loop.LogPath)
 	}
-	if err := loop.Run(ctx); err != nil {
-		return Verdict{}, err
+	var runErr error
+	if loop.TaskID != "" {
+		at := agentlog.Begin(s.P, loop.TaskID, loop.TaskLabel)
+		loop.Rec = at.Rec()
+		defer func() {
+			at.Total(loop.Usage, loop.Calls)
+			at.Done(runErr)
+		}()
+	}
+	if runErr = loop.Run(ctx); runErr != nil {
+		return Verdict{}, runErr
 	}
 	return verdict, nil
 }
@@ -340,6 +352,8 @@ func (s *Service) AuditSegment(ctx context.Context, in SegInput) (Verdict, error
 		Tools:     []Tool{s.getFrameTool(fs, targets), s.getClipTool(fs, targets)},
 		MaxRounds: segmentBudget,
 		LogPath:   in.LogPath,
+		TaskID:    fmt.Sprintf("seg.audit.%s.r%d", in.Seg.ID, in.Round),
+		TaskLabel: fmt.Sprintf("段审 %s（第 %d 轮）", in.Seg.ID, in.Round),
 	}
 	s.emit(s.P.ID, "progress", "review", fmt.Sprintf("段审 %s（第 %d 轮）开工", in.Seg.ID, in.Round))
 	v, err := s.runAudit(ctx, prov, loop, profSegment, in.Prior)
@@ -464,6 +478,8 @@ func (s *Service) AuditBoundary(ctx context.Context, in BndInput) (Verdict, erro
 		Tools:     []Tool{s.getFrameTool(fs, targets), s.getClipTool(fs, targets)},
 		MaxRounds: boundaryBudget,
 		LogPath:   in.LogPath,
+		TaskID:    fmt.Sprintf("seg.boundary.%s", in.ID),
+		TaskLabel: fmt.Sprintf("边界审 %s", in.ID),
 	}
 	s.emit(s.P.ID, "progress", "review", fmt.Sprintf("边界审 %s（第 %d 轮）开工", in.ID, in.Round))
 	return s.runAudit(ctx, prov, loop, profBoundary, in.Prior)
@@ -553,6 +569,8 @@ func (s *Service) AuditFinal(ctx context.Context, in FinalInput) (Verdict, error
 		KickoffIm: imgs,
 		MaxRounds: finalBudget,
 		LogPath:   in.LogPath,
+		TaskID:    fmt.Sprintf("final.audit.r%d", in.Round),
+		TaskLabel: fmt.Sprintf("全片终审（第 %d 轮）", in.Round),
 	}
 	s.emit(s.P.ID, "progress", "review", "全片终审开工")
 	return s.runAudit(ctx, prov, loop, profFinal, nil)

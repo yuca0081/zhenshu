@@ -48,7 +48,7 @@ func runStoryboardStation(ctx context.Context, p *pipeline.Project, d Deps) erro
 		OnStep:    manifestStep(p, StationStoryboard, log),
 	}
 	d.emit(p.ID, "stage", "prep/storyboard", "running")
-	if err := loop.Run(ctx); err != nil {
+	if err := runTracked(ctx, p, "prep.storyboard", "准备③分镜", loop); err != nil {
 		p.Manifest("prep.storyboard_error", pipeline.FirstLine(err.Error(), 200))
 		return fmt.Errorf("分镜工位: %w", err)
 	}

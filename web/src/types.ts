@@ -53,8 +53,8 @@ export interface ProjectView {
   last_produce?: { event: string; ts: string } | null
 }
 
-// 工作区中央页签（想法/文稿/分镜/风格/终审/视频——「想法」是准备工位的启动页）
-export type TabID = 'idea' | 'manuscript' | 'storyboard' | 'style' | 'review' | 'video'
+// 工作区中央页签（想法/文稿/分镜/风格/终审/视频/过程——「想法」是准备工位的启动页）
+export type TabID = 'idea' | 'manuscript' | 'storyboard' | 'style' | 'review' | 'video' | 'activity'
 
 // ── 准备阶段三工件（GET /prep；docs/prep-agents-design.md）──────
 export interface PrepSentence { id: string; text: string }
@@ -239,12 +239,31 @@ export interface ChatRef {
 }
 
 // 制作活动流（GET /activity，manifest.jsonl 原样事件，时间正序）：
-// 每步用时由 stage.start/finish 的毫秒差算出；老条目无 ms 时前端按 ts 解析兜底
+// 每步用时由 stage.start/finish 的毫秒差算出；老条目无 ms 时前端按 ts 解析兜底。
+// task 系字段由 agent.start/agent.done 携带（「过程」页按它聚合智能体任务卡片）
 export interface ActivityEvent {
   ts: string
   ms?: number
   event: string
   detail: string
+  task?: string
+  label?: string
+  state?: string
+  prompt_tokens?: number
+  completion_tokens?: number
+  calls?: number
+  transcript?: string
+}
+
+// 智能体任务对话留痕（GET /transcript?task=，llm/transcripts/<task>.jsonl 每行一条）。
+// 后端写入时已减脂：超长截断、图片换 [图片×N] 占位
+export interface TranscriptMsg {
+  role: string // system | user | assistant | tool | note
+  content?: string
+  name?: string // tool 消息的工具名
+  tool_call_id?: string
+  tool_calls?: { id: string; name: string; args: string }[]
+  ts?: string
 }
 
 // ── 参考视频解析（风格库页）：一视频 = 一条目 ────────────────

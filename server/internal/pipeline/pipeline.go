@@ -82,12 +82,22 @@ func (p *Project) LoadStoryboard() (*contract.Storyboard, error) {
 // 终态汇报的唯一依据，终态一行丢失=对账全盲，写失败重试一次再放弃（仍只打 stderr
 // 不上抛——记账失败不该挡制作主链路）。
 func (p *Project) Manifest(event, detail string) {
+	p.ManifestFields(event, detail, nil)
+}
+
+// ManifestFields 带额外结构化字段的账行（agent.start/done 的任务号/token 载荷）。
+// extra 并入顶层 JSON；老账行与读取方不受影响（多余字段向后兼容）。
+func (p *Project) ManifestFields(event, detail string, extra map[string]any) {
 	f := p.Artifact("manifest.jsonl")
 	now := time.Now()
 	// ms（unix 毫秒）与 ts 同刻双写：ts 是秒级给人看的，活动流算每步用时吃毫秒差
-	line, _ := json.Marshal(map[string]any{
+	m := map[string]any{
 		"ts": now.Format(time.RFC3339), "ms": now.UnixMilli(), "event": event, "detail": detail,
-	})
+	}
+	for k, v := range extra {
+		m[k] = v
+	}
+	line, _ := json.Marshal(m)
 	line = append(line, '\n')
 	p.manifestMu.Lock()
 	defer p.manifestMu.Unlock()

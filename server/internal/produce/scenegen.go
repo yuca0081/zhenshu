@@ -24,6 +24,7 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
+	"webpage-video-agent/server/internal/agentlog"
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
@@ -109,11 +110,30 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	}
 	// NoThink：画面是结构化 HTML 作业，开思考单段 5-13 分钟；关思考配合段间并发
 	// 把全片压进分钟级（v1 spec 路径同款取舍）。
-	gen := func(imgs []string, user string, out any) (openai.Usage, error) {
-		if len(imgs) > 0 {
-			return prov.GenerateJSONVisionNoThink(ctx, sceneSystemFor(p), user, imgs, 0.7, out)
+	// segUsage 单段写画面的用量账（首稿→素材二段式→修复轮全算任务总量，不再只记最后一次）。
+	type segUsage struct {
+		rec           *llm.Transcript
+		prompt, compl int
+		calls         int
+	}
+	gen := func(acc *segUsage, imgs []string, user string, out any) (openai.Usage, error) {
+		if acc.rec != nil {
+			acc.rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: user})
 		}
-		return prov.GenerateJSONNoThink(ctx, sceneSystemFor(p), user, out)
+		var u openai.Usage
+		var err error
+		if len(imgs) > 0 {
+			u, err = prov.GenerateJSONVisionNoThink(ctx, sceneSystemFor(p), user, imgs, 0.7, out)
+		} else {
+			u, err = prov.GenerateJSONNoThink(ctx, sceneSystemFor(p), user, out)
+		}
+		acc.prompt += u.PromptTokens
+		acc.compl += u.CompletionTokens
+		acc.calls++
+		if err != nil && acc.rec != nil {
+			acc.rec.Note("模型调用失败: %v", err)
+		}
+		return u, err
 	}
 	// 样张源码（文字样式规范）全段同一份：循环外读一次盘
 	sampleSrc := sampleStyleNote(p)
@@ -155,6 +175,13 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		errMu.Unlock()
 	}
 	work := func(seg contract.Segment) {
+		at := agentlog.Begin(p, "seg.write."+seg.ID, "写画面 "+seg.ID)
+		acc := &segUsage{rec: at.Rec()}
+		var werr error
+		defer func() {
+			at.Total(openai.Usage{PromptTokens: acc.prompt, CompletionTokens: acc.compl}, acc.calls)
+			at.Done(werr)
+		}()
 		v := voices[seg.ID]
 		sceneM, compM := methodsFor(r.RootDir, seg)
 		// 附图顺序 = 样张 → 真迹关键帧 → 本段素材真图（按需申请制，无素材不带图）
@@ -173,9 +200,10 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			Elements      []contract.NamedElement `json:"elements"`
 			ImageRequests []materialRequest       `json:"image_requests,omitempty"`
 		}
-		u1, gerr := gen(imgs, user, &payload)
+		_, gerr := gen(acc, imgs, user, &payload)
 		if gerr != nil {
-			fail(fmt.Errorf("%s 场景生成失败: %w", seg.ID, gerr))
+			werr = fmt.Errorf("%s 场景生成失败: %w", seg.ID, gerr)
+			fail(werr)
 			return
 		}
 		// 素材申请单（两段式）：第一段式模型交了申请 → 检索公版图 → 带图出终稿。
@@ -185,12 +213,12 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 				segMats = mats
 				imgs = append(imgs, materialDataURLs(p, segMats)...)
 				style += materialNote(len(segMats)) + materialsNote(segMats)
-				u2, err2 := gen(imgs, sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, false), &payload)
+				_, err2 := gen(acc, imgs, sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, false), &payload)
 				if err2 != nil {
-					fail(fmt.Errorf("%s 带素材终稿生成失败: %w", seg.ID, err2))
+					werr = fmt.Errorf("%s 带素材终稿生成失败: %w", seg.ID, err2)
+					fail(werr)
 					return
 				}
-				u1 = u2
 			}
 		}
 		errs := sceneValidate(r, ctx, p, payload.HTML, seg.ID)
@@ -200,36 +228,40 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 				HTML     string                  `json:"html"`
 				Elements []contract.NamedElement `json:"elements"`
 			}
-			u2, err2 := gen(imgs, sceneUserPrompt(seg, v, "", fb, cv, style, golden, sceneM, compM, false), &fixed)
+			_, err2 := gen(acc, imgs, sceneUserPrompt(seg, v, "", fb, cv, style, golden, sceneM, compM, false), &fixed)
 			if err2 != nil {
-				fail(fmt.Errorf("%s 场景修复失败: %w", seg.ID, err2))
+				werr = fmt.Errorf("%s 场景修复失败: %w", seg.ID, err2)
+				fail(werr)
 				return
 			}
-			u1, payload.HTML, payload.Elements = u2, fixed.HTML, fixed.Elements
+			payload.HTML, payload.Elements = fixed.HTML, fixed.Elements
 			errs = sceneValidate(r, ctx, p, payload.HTML, seg.ID)
 		}
 		if len(errs) > 0 {
 			if only == "" && instruction == "" && feedback == "" && r.fallbackOldScene(p, seg.ID, "重生成契约检查三轮未过") {
 				return
 			}
-			fail(fmt.Errorf("%s 契约检查三轮未过：\n- %s", seg.ID, strings.Join(errs, "\n- ")))
+			werr = fmt.Errorf("%s 契约检查三轮未过：\n- %s", seg.ID, strings.Join(errs, "\n- "))
+			fail(werr)
 			return
 		}
 		if len(payload.Elements) < 3 {
 			if only == "" && instruction == "" && feedback == "" && r.fallbackOldScene(p, seg.ID, "重生成的元素注册表不足 3 条") {
 				return
 			}
-			fail(fmt.Errorf("%s 元素注册表不足 3 条（元素级指认依赖它）", seg.ID))
+			werr = fmt.Errorf("%s 元素注册表不足 3 条（元素级指认依赖它）", seg.ID)
+			fail(werr)
 			return
 		}
 		b, _ := json.MarshalIndent(payload, "", "  ")
 		if err := pipeline.WriteFileAtomic(p.Artifact("llm/comp-"+seg.ID+".json"), b, 0o644); err != nil {
+			werr = err
 			fail(err)
 			return
 		}
 		// 指纹旁车紧随产物落盘（写失败按过期处理：下次重生成，宁重复不陈旧）。
 		_ = os.WriteFile(sceneSidecarPath(p, seg.ID), []byte(sceneSidecarFingerprint(p, sb, seg)), 0o644)
-		p.Manifest("llm.usage", fmt.Sprintf("scene %s prompt=%d completion=%d tokens", seg.ID, u1.PromptTokens, u1.CompletionTokens))
+		p.Manifest("llm.usage", fmt.Sprintf("scene %s prompt=%d completion=%d tokens", seg.ID, acc.prompt, acc.compl))
 		r.emit(p.ID, "progress", "compositions", fmt.Sprintf("%s 场景文件 ✓（%d 元素）", seg.ID, len(payload.Elements)))
 	}
 	for _, seg := range todo {

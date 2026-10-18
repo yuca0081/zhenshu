@@ -82,6 +82,10 @@ func Classify(rel string) Class {
 	}
 	// LLM 诊断日志：请求报文与会话过程记录，排查用，不参与缓存/恢复契约
 	if strings.HasPrefix(rel, "llm/") {
+		// 智能体对话留痕（「过程」页要回看）随正本走：上传且算 Keeper 小文件
+		if strings.HasPrefix(rel, "llm/transcripts/") {
+			return Keeper
+		}
 		if strings.HasSuffix(base, ".request.md") {
 			return Discard
 		}

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strings"
 
+	"webpage-video-agent/server/internal/agentlog"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
 )
@@ -79,6 +80,18 @@ func run(ctx context.Context, p *pipeline.Project, d Deps, strict bool) error {
 	p.Manifest("prep.done", "三工件就绪，等待打包终审")
 	d.emit(p.ID, "stage", "prep", "done")
 	return nil
+}
+
+// runTracked 工位循环的统一收口（「过程」页数据源）：对话留痕 + token 用量 +
+// manifest agent.start/done。冷重试复用同一任务号——重试的对话接在同一留痕文件
+// 后面，账上第二次 agent.start 开新组。
+func runTracked(ctx context.Context, p *pipeline.Project, task, label string, loop *Loop) error {
+	at := agentlog.Begin(p, task, label)
+	loop.Rec = at.Rec()
+	err := loop.Run(ctx)
+	at.Total(loop.Usage, loop.Calls)
+	at.Done(err)
+	return err
 }
 
 // runWithColdRetry 预算耗尽/模型失败 → 记账 + 至多一次冷重试（§5.2）。

@@ -100,19 +100,30 @@ func TestSegFrameFileJunctionPath(t *testing.T) {
 }
 
 func TestBrakeTracker(t *testing.T) {
-	b := newBrakeTracker()
+	// 新语义（2026-10-17 实测后收紧）：跨轨道阈值 = max(3, 段数/4)，
+	// 且过审轨道 clear 后撤销记账——随机性的单发 high 不再滚成整片死刑。
+	b := newBrakeTracker(8)
 	if r := b.check("seg01", []string{"fact@N3"}); r != "" {
 		t.Fatalf("首轮不应刹车: %s", r)
 	}
 	if r := b.check("seg02", []string{"style@t=3.0"}); r != "" {
 		t.Fatalf("不同类别不同段不应刹车: %s", r)
 	}
-	// 系统性：第二个段出现同类别 high
-	if r := b.check("seg03", []string{"fact@N5"}); r == "" {
-		t.Fatal("两段同类别 high 应触发系统性刹车")
+	// 跨轮累计不再致命：另一段稍后出现同类别 high（第 2 个轨道 < 阈值 3）
+	if r := b.check("seg03", []string{"fact@N5"}); r != "" {
+		t.Fatalf("两段跨轮同类别 high 不应再触发系统性刹车（阈值 3）: %s", r)
+	}
+	// seg01 修复过审 → clear → 它不再算系统性证据
+	b.clear("seg01")
+	if r := b.check("seg04", []string{"fact@N7"}); r != "" {
+		t.Fatalf("过审清除后剩余轨道数不应刹车: %s", r)
+	}
+	// 同轮/连续累计到阈值才刹车（第 3、4 个轨道）
+	if r := b.check("seg05", []string{"fact@N9"}); r == "" {
+		t.Fatal("达到阈值（max(3, 段数/4)）个轨道同类别 high 应触发系统性刹车")
 	}
 	// 同签名两轮（新 tracker）
-	b2 := newBrakeTracker()
+	b2 := newBrakeTracker(8)
 	_ = b2.check("seg01", []string{"fact@N3"})
 	if r := b2.check("seg01", []string{"fact@N3", "style@t=1"}); r == "" {
 		t.Fatal("同签名连续两轮 high 应触发签名刹车")

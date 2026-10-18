@@ -119,6 +119,7 @@ func (s *Server) Router() *gin.Engine {
 	api.GET("/projects/:id/messages", s.messages)
 	api.GET("/projects/:id/events", s.sse)
 	api.GET("/projects/:id/activity", s.activity)
+	api.GET("/projects/:id/transcript", s.transcript)
 	api.POST("/projects/:id/produce", s.startProduce)
 	api.POST("/projects/:id/rework", s.startRework)
 	api.GET("/projects/:id/rework/last", s.reworkLast)
@@ -1120,11 +1121,10 @@ func (s *Server) prepView(c *gin.Context) {
 		out[k] = v
 	}
 	if sp, err := prep.LoadStylePack(p); err == nil {
-		confirmed := sp.Confirmed
-		var ss contract.StyleSamples
-		if b, rerr := os.ReadFile(p.Artifact("style/style_samples.json")); rerr == nil && json.Unmarshal(b, &ss) == nil {
-			confirmed = confirmed && ss.Confirmed
-		}
+		// 确认态与制作硬门（segpipe 读 stylepack.Confirmed）同源。曾经以
+		// style_samples.json 为准——风格页老确认只写样张不写包，徽章亮了门不开，
+		// 「已确认可开工」却开不了工的死局（2026-10-17 彩虹项目实测）
+		out["confirmed"] = sp.Confirmed
 		direction := ""
 		if sp.DesignSystem != nil {
 			direction = sp.DesignSystem.Direction
@@ -1146,11 +1146,6 @@ func (s *Server) prepView(c *gin.Context) {
 		}
 	}
 	out["style_name"] = styleName
-	// 确认态以 style_samples.json（硬门消费方）为准
-	var ss contract.StyleSamples
-	if b, rerr := os.ReadFile(p.Artifact("style/style_samples.json")); rerr == nil && json.Unmarshal(b, &ss) == nil {
-		out["confirmed"] = ss.Confirmed
-	}
 	out["script"] = script
 	out["storyboard_ready"] = func() bool {
 		_, err := p.LoadStoryboard()
@@ -1191,6 +1186,12 @@ func (s *Server) confirmPrep(c *gin.Context) {
 	dr, err := prep.LoadDraft(p)
 	if err != nil {
 		c.JSON(400, gin.H{"error": "分镜稿未出，先让 Agent 跑完准备工位"})
+		return
+	}
+	// 换风格过期侦测：简报与包不一致/样张被清 = ②过期，打包不许带病放行
+	//（否则按旧风格包开工，用户刚选的新风格被静默丢弃——2026-10-17 彩虹项目实测）
+	if stale, why := prep.StyleStale(p); stale {
+		c.JSON(409, gin.H{"error": "风格已换选但样张没重出：" + why + "。先回「风格」页签重新出样张，再回来打包"})
 		return
 	}
 	var script *contract.Script

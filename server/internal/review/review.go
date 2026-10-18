@@ -45,6 +45,12 @@ type ChatClient interface {
 	ChatTemp(ctx context.Context, msgs []openai.ChatCompletionMessage, tools []openai.Tool, temp float64) (openai.ChatCompletionMessage, openai.Usage, error)
 }
 
+// Sink 对话留痕接收端（*llm.Transcript 隐式满足）。可空：nil 照跑不留痕。
+type Sink interface {
+	Message(msg openai.ChatCompletionMessage)
+	Note(format string, a ...any)
+}
+
 // Loop 单次审核会话。与 prep.Loop 同款 submit-or-die：无 ToolCalls 的文本回复
 // 不落盘、nudge 后继续（回合照计）。
 type Loop struct {
@@ -60,6 +66,13 @@ type Loop struct {
 	// OnStep 每步记账（kind: action|observation|text）；OnTool 取证留痕（工具+参数+结果指纹由调用方算）。
 	OnStep func(round int, kind, detail string)
 	OnTool func(name, args, result string)
+	// Rec 对话留痕（可空）；Usage/Calls 本轮累计（Run 返回后宿主读）。
+	Rec Sink
+	// TaskID/TaskLabel 非空时由宿主侧统一记账（runAudit 负责 agent.start/done）。
+	TaskID    string
+	TaskLabel string
+	Usage     openai.Usage
+	Calls     int
 }
 
 // Run 跑到 submit 校验通过，或预算耗尽 / 模型调用失败。
@@ -81,6 +94,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		{Role: openai.ChatMessageRoleSystem, Content: l.System},
 		kick,
 	}
+	l.record(msgs...)
 	schemas := make([]openai.Tool, 0, len(l.Tools))
 	byName := map[string]int{}
 	for _, t := range l.Tools {
@@ -92,8 +106,12 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 	}
 	for round := 1; round <= l.MaxRounds; round++ {
-		msg, _, err := l.Prov.ChatTemp(ctx, msgs, schemas, l.Temp)
+		msg, u, err := l.Prov.ChatTemp(ctx, msgs, schemas, l.Temp)
+		l.Usage.PromptTokens += u.PromptTokens
+		l.Usage.CompletionTokens += u.CompletionTokens
+		l.Calls++
 		if err != nil {
+			l.recNote("模型调用失败（第 %d 回合）: %v", round, err)
 			return err
 		}
 		if ctx.Err() != nil {
@@ -101,10 +119,12 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 		if len(msg.ToolCalls) == 0 {
 			l.step(round, "text", msg.Content)
-			msgs = append(msgs, msg,
-				openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf("文本回复不会落盘。任务完成的唯一方式是调用 %s 工具；继续。", l.Submit)})
+			nudge := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf("文本回复不会落盘。任务完成的唯一方式是调用 %s 工具；继续。", l.Submit)}
+			l.record(msg, nudge)
+			msgs = append(msgs, msg, nudge)
 			continue
 		}
+		l.record(msg)
 		msgs = append(msgs, msg)
 		for _, call := range msg.ToolCalls {
 			l.step(round, "action", call.Function.Name+" "+compactJSON(call.Function.Arguments))
@@ -113,12 +133,16 @@ func (l *Loop) Run(ctx context.Context) error {
 			if l.OnTool != nil {
 				l.OnTool(call.Function.Name, call.Function.Arguments, obs.Text)
 			}
-			msgs = append(msgs, openai.ChatCompletionMessage{
+			tool := openai.ChatCompletionMessage{
 				Role: openai.ChatMessageRoleTool, Content: obs.Text,
 				ToolCallID: call.ID, Name: call.Function.Name,
-			})
+			}
+			msgs = append(msgs, tool)
+			l.record(tool)
 			if len(obs.Images) > 0 {
-				msgs = append(msgs, imageFollowUp(obs.Images))
+				im := imageFollowUp(obs.Images)
+				msgs = append(msgs, im)
+				l.record(im)
 			}
 			if call.Function.Name == l.Submit && obs.Done {
 				return nil
@@ -126,6 +150,21 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 	}
 	return ErrBudgetExhausted
+}
+
+func (l *Loop) record(ms ...openai.ChatCompletionMessage) {
+	if l.Rec == nil {
+		return
+	}
+	for _, m := range ms {
+		l.Rec.Message(m)
+	}
+}
+
+func (l *Loop) recNote(format string, a ...any) {
+	if l.Rec != nil {
+		l.Rec.Note(format, a...)
+	}
 }
 
 func (l *Loop) exec(ctx context.Context, name, args string) Observation {

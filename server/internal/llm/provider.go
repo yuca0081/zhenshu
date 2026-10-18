@@ -9,13 +9,29 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 )
+
+// llmGate 账户级并发闸（2026-10-17 限流事故）：套餐对并发请求极敏感，实测 3 路
+// 10k-token 大调用即撞 429，而调用方路径多（段写/段审/检查修复轮/对话）——任何
+// 一处漏限流就是惊群。所有 chat 调用在 generate 里集中过这道闸；上层并发旋钮
+// （PRODUCE_WRITE_CONCURRENCY 等）因此可以只管调度，不必各自保证限流。
+var llmGate = func() chan struct{} {
+	n := 2
+	if v := os.Getenv("LLM_MAX_CONCURRENCY"); v != "" {
+		if n2, err := strconv.Atoi(v); err == nil && n2 >= 1 && n2 <= 16 {
+			n = n2
+		}
+	}
+	return make(chan struct{}, n)
+}()
 
 type Role string
 
@@ -162,11 +178,13 @@ func (p *Provider) generate(ctx context.Context, system, user string, imageURLs 
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			// 重试退避感知取消：任务已被取消还空转重试只会白等。
-			// 429 要按限速窗口退避（实测 2/4s 出不了窗口，三连试全烧在限速上）
+			// 429 要按限速窗口退避（实测 2/4s 出不了窗口，三连试全烧在限速上）；
+			// 再叠随机抖动——多路调用方同步退避会一起醒来再撞一次（惊群，
+			// 2026-10-17 实测：8 个 worker 全在同一秒重试全灭）。
 			delay := time.Duration(attempt) * 2 * time.Second
 			var se *StatusError
 			if errors.As(lastErr, &se) && se.Code == http.StatusTooManyRequests {
-				delay = time.Duration(attempt) * 15 * time.Second
+				delay = time.Duration(attempt)*15*time.Second + time.Duration(rand.Int63n(int64(6*time.Second)))
 			}
 			select {
 			case <-ctx.Done():
@@ -174,7 +192,16 @@ func (p *Provider) generate(ctx context.Context, system, user string, imageURLs 
 			case <-time.After(delay):
 			}
 		}
-		resp, err := p.chatOnce(ctx, system, mediaParts(user, imageURLs, videoURL), temperature, effort)
+		// 账户级并发闸：过闸后才发请求（闸在重试等待之外，睡着的调用不占坑）
+		select {
+		case <-ctx.Done():
+			return usage, ctx.Err()
+		case llmGate <- struct{}{}:
+		}
+		resp, err := func() (r openai.ChatCompletionResponse, e error) {
+			defer func() { <-llmGate }()
+			return p.chatOnce(ctx, system, mediaParts(user, imageURLs, videoURL), temperature, effort)
+		}()
 		if err != nil {
 			if ctx.Err() != nil { // 取消/超时不是可重试错误
 				return usage, ctx.Err()

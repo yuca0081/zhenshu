@@ -52,7 +52,7 @@ func runStyleStation(ctx context.Context, p *pipeline.Project, d Deps) error {
 		OnStep:    manifestStep(p, StationStyle, log),
 	}
 	d.emit(p.ID, "stage", "prep/style", "running")
-	if err := loop.Run(ctx); err != nil {
+	if err := runTracked(ctx, p, "prep.style", "准备②风格", loop); err != nil {
 		p.Manifest("prep.style_error", pipeline.FirstLine(err.Error(), 200))
 		return fmt.Errorf("风格工位: %w", err)
 	}

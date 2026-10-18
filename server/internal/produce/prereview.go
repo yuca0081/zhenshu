@@ -36,6 +36,9 @@ import (
 	"sync"
 	"time"
 
+	openai "github.com/sashabaranov/go-openai"
+
+	"webpage-video-agent/server/internal/agentlog"
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
@@ -323,14 +326,27 @@ func (r *Runner) reviewSnapshots(ctx context.Context, p *pipeline.Project, sb *c
 		}
 		imgs = append(imgs, samples...)
 		imgs = append(imgs, keyImgs...)
-		_, rerr := prov.GenerateJSONVisionEffort(ctx,
-			"你是视频的画面质检员，只输出 JSON。",
-			preReviewPrompt(p, seg, voices[seg.ID], len(samples), len(keyImgs), crits),
-			imgs, 0.2, &vd, llm.EffortHigh)
+		// 单发任务也走统一记账（「过程」页）：极简留痕 = 请求 + 响应各一条。
+		sys := "你是视频的画面质检员，只输出 JSON。"
+		prompt := preReviewPrompt(p, seg, voices[seg.ID], len(samples), len(keyImgs), crits)
+		at := agentlog.Begin(p, "prereview."+seg.ID, "画面预审 "+seg.ID)
+		if rec := at.Rec(); rec != nil {
+			rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: sys})
+			rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt})
+		}
+		u, rerr := prov.GenerateJSONVisionEffort(ctx, sys, prompt, imgs, 0.2, &vd, llm.EffortHigh)
+		at.Add(u)
 		if rerr != nil {
+			at.Done(rerr)
 			r.Manifest(p, "prereview.review_error", seg.ID+": "+rerr.Error())
 			return
 		}
+		if rec := at.Rec(); rec != nil {
+			if b, merr := json.Marshal(vd); merr == nil {
+				rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: string(b)})
+			}
+		}
+		at.Done(nil)
 		mu.Lock()
 		defer mu.Unlock()
 		for _, sv := range vd.Signatures {

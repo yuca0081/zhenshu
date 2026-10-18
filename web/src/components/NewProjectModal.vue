@@ -34,6 +34,7 @@ async function create() {
   error.value = ''
   try {
     const r = await api.createProject(name.value.trim(), topic.value.trim(), aspect.value)
+    show.value = false // 创建成功即关：留着极易误点再建一个重复项目（2026-10-16/17 两轮实测踩过）
     emit('created', r.id)
   } catch (e) {
     error.value = errMsg(e)

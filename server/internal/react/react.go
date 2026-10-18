@@ -37,13 +37,25 @@ type Hooks struct {
 	OnFinish func(name, args, result string, rejected bool)
 }
 
+// Sink 对话留痕接收端（*llm.Transcript 隐式满足；测试用 mock 顶上）。可空：
+// nil 时循环照跑，只是不留痕。
+type Sink interface {
+	Message(msg openai.ChatCompletionMessage)
+	Note(format string, a ...any)
+}
+
 // Core 一轮 ReAct 循环的骨架。每次对话轮新建一个（工具闭包按当前上下文注入）。
 type Core struct {
 	Prov     ChatClient
 	MaxSteps int
 	Hooks    Hooks
+	Rec      Sink // 对话留痕（可空）：开场消息与每轮模型消息/工具观察逐条追加
 	tools    []Tool
 	byName   map[string]int
+
+	// Usage/Calls 本轮累计 token 用量与模型调用次数（Run 返回后宿主读）。
+	Usage openai.Usage
+	Calls int
 }
 
 // DefaultMaxSteps 宿主未指定时的步数上限。
@@ -70,26 +82,49 @@ func New(prov ChatClient, toolList []Tool, maxSteps int, hooks Hooks) *Core {
 // Run 跑一轮 ReAct：msgs 由宿主组装好（system/历史/最新 user 消息）传入。
 // 返回模型的最终文本回复；步数用尽仍未给文本时返回空串，兜底话术由宿主定。
 func (c *Core) Run(ctx context.Context, msgs []openai.ChatCompletionMessage) (string, error) {
+	c.record(msgs...)
 	for step := 0; step < c.MaxSteps; step++ {
-		msg, _, err := c.Prov.Chat(ctx, msgs, c.schemas())
+		msg, u, err := c.Prov.Chat(ctx, msgs, c.schemas())
+		c.Usage.PromptTokens += u.PromptTokens
+		c.Usage.CompletionTokens += u.CompletionTokens
+		c.Calls++
 		if err != nil {
+			c.recNote("模型调用失败（第 %d 步）: %v", step+1, err)
 			return "", err
 		}
+		c.record(msg)
 		if len(msg.ToolCalls) == 0 {
 			return msg.Content, nil
 		}
 		msgs = append(msgs, msg)
 		for _, call := range msg.ToolCalls {
 			obs := c.exec(ctx, call.Function.Name, call.Function.Arguments)
-			msgs = append(msgs, openai.ChatCompletionMessage{
+			tool := openai.ChatCompletionMessage{
 				Role:       openai.ChatMessageRoleTool,
 				Content:    obs,
 				ToolCallID: call.ID,
 				Name:       call.Function.Name,
-			})
+			}
+			msgs = append(msgs, tool)
+			c.record(tool)
 		}
 	}
 	return "", nil
+}
+
+func (c *Core) record(ms ...openai.ChatCompletionMessage) {
+	if c.Rec == nil {
+		return
+	}
+	for _, m := range ms {
+		c.Rec.Message(m)
+	}
+}
+
+func (c *Core) recNote(format string, a ...any) {
+	if c.Rec != nil {
+		c.Rec.Note(format, a...)
+	}
 }
 
 func (c *Core) schemas() []openai.Tool {

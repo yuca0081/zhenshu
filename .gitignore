@@ -49,6 +49,8 @@ demo/selfvideo-frames/
 server/server.exe
 server/server.exe*
 server/server-test.exe~
+server/zcode-server.exe
+server/zcode-server.exe*
 
 # scene 原型闸媒体产物（GATE.md 有复现命令，可再生）
 demo/scene-prototype/*.mp4
@@ -89,3 +91,6 @@ web/public/_*.mp4
 
 # 双实例本地数据目录（第二实例 8081 的 data/，运行时数据不入库）
 data2/
+
+# 实测证据截图/日志不入库：docs/test-result/ 只提交 md 纪要（惯例自 bbfe0f4）
+docs/test-result/*/

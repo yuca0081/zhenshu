@@ -98,7 +98,7 @@ async function cancel() {
     <div class="wrap">
       <template v-if="running">
         <h3 class="live-title"><span class="live-dot" />准备阶段进行中</h3>
-        <p class="sub">AI 正按链跑三个工位，一般几分钟；每步的详细动作在右侧「事件流」有账。</p>
+        <p class="sub">AI 正按链跑三个工位，一般 15~25 分钟（出样张的轮次多时更久）；每步的详细动作都在本页工位卡片上，制作阶段的账在「视频」页签的事件流里。</p>
         <ol class="stations">
           <li v-for="s in stations" :key="s.key" :class="s.state || 'pending'">
             <span class="mark">{{ s.state === 'done' ? '✓' : s.state === 'error' ? '✗' : '◐' }}</span>

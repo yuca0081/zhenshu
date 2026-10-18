@@ -158,6 +158,36 @@ func InvalidateFrom(p *pipeline.Project, station string) {
 	p.Manifest("prep.invalidate", station)
 }
 
+// StyleStale 风格包是否已落后于用户最新选定/样张现状。applyStyle 家族（agent 工具
+// 与 REST 同清单）换条目时：重写选定简报（style_brief.json）+清样张，但不动
+// stylepack.json——包就挂在了旧条目上；「出样张」和「确认打包」两头若都只查包
+// 在不在，就会拿旧设计放行（2026-10-17 彩虹项目实测：两次出样张无声短路）。
+// 判定两条：①选定简报的条目 ≠ 包的 style_id（用户换选了）；②样张全没（②交卷
+// 后至少 1 张，render_sample 固定落 style/sample-N.png）。没有风格包 = ②未完成，
+// 不算过期——调用方各自走「未出」路径。
+func StyleStale(p *pipeline.Project) (bool, string) {
+	sp, err := LoadStylePack(p)
+	if err != nil {
+		return false, ""
+	}
+	if b := pipeline.LoadStyleBrief(p); b != nil && b.EntryID != sp.StyleID {
+		name := b.EntryName
+		if name == "" {
+			name = b.EntryID
+		}
+		return true, fmt.Sprintf("用户已把风格换选为库内条目「%s」（%s），现有风格包还挂在旧条目 %s 上——必须按新选定条目重出风格包与样张（style_id 用 %s）",
+			name, b.EntryID, sp.StyleID, b.EntryID)
+	}
+	if _, err := os.Stat(p.Artifact("style/sample-0.png")); err != nil {
+		if _, err := os.Stat(p.Artifact("style/sample-1.png")); err != nil {
+			if _, err := os.Stat(p.Artifact("style/sample-2.png")); err != nil {
+				return true, "样张已作废（换选风格或清产物）但风格包还在——按现选定风格重出风格包与样张"
+			}
+		}
+	}
+	return false, ""
+}
+
 // targetSeconds 目标时长（project.json target_seconds；缺省 120s ≈ 540 字）。
 func targetSeconds(p *pipeline.Project) float64 {
 	b, err := os.ReadFile(p.Artifact("project.json"))

@@ -12,11 +12,13 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
 	"webpage-video-agent/server/internal/produce"
 	"webpage-video-agent/server/internal/store"
@@ -27,6 +29,14 @@ type manifestEvent struct {
 	MS     int64  `json:"ms,omitempty"` // unix 毫秒（前端算每步用时；老条目缺省时按 ts 兜底解析）
 	Event  string `json:"event"`
 	Detail string `json:"detail,omitempty"`
+	// agent.start / agent.done 的任务载荷（ManifestFields 写入的额外字段）。
+	Task             string `json:"task,omitempty"`
+	Label            string `json:"label,omitempty"`
+	State            string `json:"state,omitempty"`
+	PromptTokens     int    `json:"prompt_tokens,omitempty"`
+	CompletionTokens int    `json:"completion_tokens,omitempty"`
+	Calls            int    `json:"calls,omitempty"`
+	Transcript       string `json:"transcript,omitempty"`
 }
 
 type lastRun struct {
@@ -251,17 +261,48 @@ func tailManifest(path string, n int) []manifestEvent {
 }
 
 // activity 制作活动流：GET /projects/:id/activity —— manifest.jsonl 原样事件
-// （尾部 500 条，时间正序）。前端中间区右上角事件流面板的数据源：每步用时由
-// stage.start/finish 的毫秒差算出，打回（check.repair / prereview / frameqa）
-// 与终态事件原样给前端翻译。轻量只读（不像 overview 全树扫产物），供制作中轮询。
-// 无 manifest（新建项目没开过工）回 [] 而不是 404/null：前端 .length/.map 直吃。
+// （尾部 n 条默认 500，「过程」页传 limit 最多 2000，时间正序）。前端事件流
+// 面板/过程页的数据源：每步用时由 stage.start/finish 的毫秒差算出，打回
+// （check.repair / prereview / frameqa）与终态事件原样给前端翻译。轻量只读
+// （不像 overview 全树扫产物），供制作中轮询。无 manifest（新建项目没开过工）
+// 回 [] 而不是 404/null：前端 .length/.map 直吃。
 func (s *Server) activity(c *gin.Context) {
 	p, ok := s.project(c)
 	if !ok {
 		return
 	}
+	limit := 500
+	if n, err := strconv.Atoi(c.Query("limit")); err == nil && n >= 1 && n <= 2000 {
+		limit = n
+	}
 	// 无 manifest（新建项目没开过工）回 [] 而不是 404/null：前端 .length/.map 直吃
-	c.JSON(200, tailManifest(p.Artifact("manifest.jsonl"), 500))
+	c.JSON(200, tailManifest(p.Artifact("manifest.jsonl"), limit))
+}
+
+// transcript 智能体任务对话留痕：GET /projects/:id/transcript?task=seg.audit.seg03.r1
+// —— llm/transcripts/<task>.jsonl 逐行解析（写入侧已减脂：截断+图片占位）。
+// 无留痕回 []（纪律同 activity）；task 名过 llm.ValidTask 校验防目录穿越。
+func (s *Server) transcript(c *gin.Context) {
+	p, ok := s.project(c)
+	if !ok {
+		return
+	}
+	task := c.Query("task")
+	if !llm.ValidTask(task) {
+		c.JSON(400, gin.H{"error": "task 名不合法"})
+		return
+	}
+	b, err := os.ReadFile(p.Artifact("llm/transcripts/" + task + ".jsonl"))
+	out := make([]map[string]any, 0, 64)
+	if err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			var m map[string]any
+			if json.Unmarshal([]byte(line), &m) == nil && m["role"] != nil {
+				out = append(out, m)
+			}
+		}
+	}
+	c.JSON(200, out)
 }
 
 func (s *Server) overview(c *gin.Context) {

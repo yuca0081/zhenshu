@@ -329,8 +329,17 @@ var tools = []tool{
 			// 新路径：风格包是②的产物——带要求=反馈重跑（②③级联），不带=等终审
 			if prep.HasArtifact(p, prep.StationScript) {
 				if prep.HasArtifact(p, prep.StationStyle) {
+					// 换风格过期侦测：applyStyle 只重写选定简报+清样张，不动 stylepack，
+					// 包就挂在了旧条目上——简报与包不一致/样张被清 = ②过期，级联重跑，
+					// 不许回「已出」（2026-10-17 实测：两次短路回「已出」，模型还谎报样张已生成）
+					if stale, why := prep.StyleStale(p); stale {
+						if strings.TrimSpace(in.Instruction) == "" {
+							in.Instruction = why
+						}
+						return a.rerunPrep(ctx, p, prep.StationStyle, in.Instruction)
+					}
 					if strings.TrimSpace(in.Instruction) == "" {
-						return "风格包已出（准备工位产物），等用户在「终审」页签打包确认；要改风格方向，把要求带在 instruction 里我走反馈重跑"
+						return "风格包已出（准备工位产物），本次调用没有重新出样张——向用户汇报时不得说「样张已生成/已重新生成」。等用户在「终审」页签打包确认；要改风格方向，把要求带在 instruction 里我走反馈重跑"
 					}
 					return a.rerunPrep(ctx, p, prep.StationStyle, in.Instruction)
 				}

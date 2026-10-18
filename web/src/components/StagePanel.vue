@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { KeepAlive, computed, onBeforeUnmount, ref, watch } from 'vue'
+import { KeepAlive, computed, ref, watch } from 'vue'
 import { NButton, NInput, NInputNumber, NSelect, NSpin, useMessage } from 'naive-ui'
 import { api, videoURL } from '../api'
 import type { ActivityEvent, AudioMeta, Manuscript, PrepView, ProjectView, Storyboard, StyleSamples, TabID } from '../types'
@@ -8,12 +8,13 @@ import StylePane from './StylePane.vue'
 import PrepPane from './PrepPane.vue'
 import IdeaPane from './IdeaPane.vue'
 import VideoPane from './VideoPane.vue'
-import ActivityFeed from './ActivityFeed.vue'
+import ActivityPane from './ActivityPane.vue'
 
-// 舞台页签宿主（弹窗体系退役）：文稿/分镜/风格/终审/视频五页占据中间区域。
+// 舞台页签宿主（弹窗体系退役）：文稿/分镜/风格/终审/视频/过程页占据中间区域。
 // 页签常亮 + 红绿灯（门过没过）+ 过期点（成片落后上游）——App 持有 activeTab
 // （未手动选择时按管线进度自动落页）。KeepAlive 缓存组件页签：切页不丢
-// 文稿编辑态/风格开关态/视频播放位置。右上角常驻 下载成片 + 事件流开关。
+// 文稿编辑态/风格开关态/视频播放位置。右上角常驻「下载成片」；过程页签替代
+// 旧事件流弹窗（2026-10-18：升级为整页，可展开智能体对话与 token 账）。
 const props = defineProps<{
   tab: TabID
   view: ProjectView | null
@@ -57,7 +58,7 @@ const tabs = computed(() => {
   if (showIdea.value) list.push({ id: 'idea', label: '想法' })
   list.push({ id: 'manuscript', label: '文稿' }, { id: 'storyboard', label: '分镜' }, { id: 'style', label: '风格' })
   if (props.prep?.exists) list.push({ id: 'review', label: '终审' })
-  list.push({ id: 'video', label: '视频' })
+  list.push({ id: 'video', label: '视频' }, { id: 'activity', label: '过程' })
   return list
 })
 
@@ -98,6 +99,14 @@ function tabState(id: TabID): { cls: string[]; title: string; label: string } {
         title: props.prep?.exists
           ? (v.gates.style_confirmed ? '打包终审已通过' : '三工件已出，等打包终审确认（全流程唯一人工门）')
           : '这个项目没走准备工位',
+        label: '',
+      }
+    case 'activity':
+      return {
+        cls: [v.producing ? 'run' : props.activity.length ? 'ok' : ''].filter(Boolean),
+        title: v.producing
+          ? '制作进行中——每个智能体正在干什么、说了什么，点开卡片能看实时对话'
+          : props.activity.length ? '制作过程回看：工位用时、智能体对话、token 消耗' : '还没有制作记录——开工后这里逐步记录',
         label: '',
       }
     default:
@@ -167,45 +176,6 @@ async function saveSb() {
   }
 }
 
-// ── 右上角：下载成片 + 制作事件流 ──────────────────────────────
-// 事件流面板默认展开条件：开工（producing 翻真）或进页面时已在制作中；
-// 收起后不再抢戏，完成/失败不自动展开（终态行留在面板里，用户点开能看全程账）。
-const showFeed = ref(false)
-watch(() => props.view?.producing, p => { if (p) showFeed.value = true }, { immediate: true })
-
-// 浮层收起（2026-10-15 实测 P5）：只有按钮 toggle 一个出口，点外部不收、
-// 空态 div 还挡住下方「确认打包」按钮。补：点浮层外收起；点浮层空白区
-// （标题条/空态）也收；Esc 收；内容行上的点击不收（滚动/看细节）。
-const feedBtn = ref<HTMLButtonElement | null>(null)
-const feedPop = ref<InstanceType<typeof ActivityFeed> | null>(null)
-function feedOutside(e: PointerEvent) {
-  const pop = (feedPop.value?.$el as HTMLElement | undefined) ?? null
-  const t = e.target as HTMLElement
-  if (feedBtn.value?.contains(t)) return // 按钮自己负责开/关
-  if (pop?.contains(t)) {
-    if (t.closest('.row')) return
-    showFeed.value = false
-    return
-  }
-  showFeed.value = false
-}
-function feedEsc(e: KeyboardEvent) {
-  if (e.key === 'Escape') showFeed.value = false
-}
-watch(showFeed, on => {
-  if (on) {
-    document.addEventListener('pointerdown', feedOutside, true)
-    document.addEventListener('keydown', feedEsc)
-  } else {
-    document.removeEventListener('pointerdown', feedOutside, true)
-    document.removeEventListener('keydown', feedEsc)
-  }
-})
-onBeforeUnmount(() => {
-  document.removeEventListener('pointerdown', feedOutside, true)
-  document.removeEventListener('keydown', feedEsc)
-})
-
 // ── 整片过期重做（页签行右侧）：上游（文稿/分镜/风格）在成片生成后又改过 ──
 // 按钮收进页签行靠右（原视频页整行黄条太占地），悬停 title 说明具体哪几样改过。
 const message = useMessage()
@@ -239,7 +209,7 @@ async function redoFull() {
 <template>
   <section class="stage">
     <div class="pane">
-      <!-- 页签行：四页 + 状态灯（红绿灯/过期点）+ 右上角 下载成片/事件流 -->
+      <!-- 页签行：六页 + 状态灯（红绿灯/过期点）+ 右上角 下载成片 -->
       <header v-if="view" class="tabs">
         <button
           v-for="t in tabs" :key="t.id" class="tab" :class="[tabState(t.id).cls, { on: tab === t.id }]"
@@ -254,22 +224,13 @@ async function redoFull() {
             :title="`${redoNames.join('、')}在成片生成后又改过——成片还是旧版。点此按最新内容重做：没变的产物会复用，只重做出入的部分。`"
             @click="redoFull"
           >按最新内容重做</NButton>
-          <!-- 下载成片（从视频画面左上角浮层挪来，与事件流同排） -->
+          <!-- 下载成片（过程回看走「过程」页签，事件流弹窗已退役） -->
           <a
             v-if="view.has_video" class="dl-btn"
             :href="videoURL(videoId, videoRev)" :download="`${view.name}.mp4`"
           >↓ 下载成片</a>
-          <button
-            ref="feedBtn"
-            class="feed-btn" :class="{ on: showFeed }"
-            title="制作过程事件流：每个工位用时多少、有没有被打回、整轮跑完的总时长"
-            @click="showFeed = !showFeed"
-          ><span v-if="view.producing" class="live-dot" />事件流</button>
         </div>
       </header>
-
-      <!-- 事件流面板：锚在中间区右上角，盖在页签内容上，不挤压布局 -->
-      <ActivityFeed v-if="showFeed && view" ref="feedPop" class="feed-pop" :events="activity" :producing="!!view.producing" />
 
       <template v-if="view">
         <!-- KeepAlive 要求恰好一个子节点：内部不许放注释/多根（v-if 链整体算一个） -->
@@ -333,12 +294,16 @@ async function redoFull() {
             @confirmed="emit('confirm-prep')" @chat-sent="emit('chat-sent')"
           />
           <VideoPane
-            v-else
+            v-else-if="tab === 'video'"
             :view="view" :storyboard="storyboard" :audio-meta="audioMeta" :picked-idx="pickedIdx"
             :video-id="videoId" :video-rev="videoRev" :progress-line="progressLine" :stage-summary="stageSummary"
             @seg="(i, k) => emit('seg', i, k)" @pick-time="t => emit('pick-time', t)"
             @cancel="emit('cancel')" @rework-started="emit('rework-started')"
             @go-tab="t => emit('go-tab', t)"
+          />
+          <ActivityPane
+            v-else-if="tab === 'activity'"
+            :project-id="videoId" :events="activity" :producing="!!view.producing"
           />
         </KeepAlive>
       </template>
@@ -382,27 +347,15 @@ async function redoFull() {
 .tab.on.stale { border-bottom-color: #f0c674; }
 @keyframes pulse { 50% { opacity: .35; } }
 
-/* ── 页签行右上角：重做/下载/事件流 ── */
+/* ── 页签行右上角：重做/下载（过程回看走「过程」页签）── */
 .head-right { margin-left: auto; display: flex; align-items: center; gap: 8px; padding: 0 2px 6px; }
 .redo-btn { margin-bottom: 0; }
-.dl-btn, .feed-btn {
+.dl-btn {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
   border: 1px solid #2b2b33; background: #191920; color: #c9c9d3;
   font-size: 12px; padding: 4px 12px; border-radius: 999px; text-decoration: none;
 }
 .dl-btn:hover { border-color: rgba(240, 198, 116, .45); color: #f0c674; background: #1e1a12; }
-.feed-btn:hover { border-color: #3a3a45; color: #e6e6ea; }
-.feed-btn.on { border-color: rgba(240, 198, 116, .45); color: #f0c674; background: #1e1a12; }
-.feed-btn .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #8fc7ff; animation: pulse 1.2s infinite; }
-
-/* 事件流面板：锚在页签行下、右侧贴边，盖在内容上不挤压布局。
-   高度压到 62%：给下方操作按钮（确认打包等）留出可点区域（P5） */
-.feed-pop {
-  position: absolute; top: 45px; right: 12px; z-index: 40;
-  width: min(440px, calc(100% - 24px)); max-height: min(calc(100% - 64px), 62%);
-  background: #101016; border: 1px solid #2b2b33; border-radius: 12px;
-  box-shadow: 0 14px 44px rgba(0, 0, 0, .55);
-}
 
 .empty { flex: 1; display: flex; align-items: center; justify-content: center; }
 .none { color: #55555f; }

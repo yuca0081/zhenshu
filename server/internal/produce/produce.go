@@ -31,6 +31,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	openai "github.com/sashabaranov/go-openai"
+
+	"webpage-video-agent/server/internal/agentlog"
 	"webpage-video-agent/server/internal/artifacts"
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/events"
@@ -47,7 +50,7 @@ type Runner struct {
 	Artifacts  artifacts.Store                        // 产物正本后端（nil/本地 = 不上传，docs/storage-cloud-migration.md）
 	OnDone     func(projectID, status, detail string) // 终态回写（status: video|failed|cancelled；detail 供聊天汇报失败原因等）
 	OnNotice   func(projectID, content string)        // 非终态插话（如开机自动续跑通知），落聊天框但不改项目状态
-	AutoResume bool                                   // 启动对账时自动续跑被重启打断的整片制作（main 置 true；测试默认关，防拖起真管线）
+	AutoResume bool                                   // 启动对账时是否自动续跑被重启打断的整片制作（main 现置 false：只补账通知，不自动起任务；测试默认关，防拖起真管线）
 
 	wg       sync.WaitGroup // 在跑的制作/重做 goroutine（优雅停机等待终态落盘）
 	stopping atomic.Bool    // 停机中：取消语义从「用户取消」改「服务停机中断」，并拒绝新任务
@@ -108,12 +111,56 @@ func LastTerminal(p *pipeline.Project) (event, detail, ts string) {
 }
 
 var (
-	mu      sync.Mutex
-	running = map[string]context.CancelFunc{}
+	mu       sync.Mutex
+	running  = map[string]context.CancelFunc{}
+	runGen   = map[string]uint64{} // 运行代际票：强制收尾凭票动手，防延时兜底误杀接手的新运行
+	genSeq   uint64                // 代际发号器（mu 内自增）
+	finished = map[string]bool{}          // 终态落账认领（防泄漏 goroutine 与强制终局双写）
+	orphaned = map[string]chan struct{}{} // 强制终局后仍在收尾的泄漏任务（Start 拒新，防双管线互踩）
 )
+
+// claimRun 登记运行并签发代际票（mu 临界区内调用）。
+func claimRun(projectID string, cancel context.CancelFunc) uint64 {
+	genSeq++
+	running[projectID] = cancel
+	runGen[projectID] = genSeq
+	return genSeq
+}
+
+// releaseRun 摘除运行登记（mu 临界区内调用；gen>0 时校验代际，换主则不动）。
+func releaseRun(projectID string, gen uint64) {
+	if gen != 0 && runGen[projectID] != gen {
+		return
+	}
+	delete(running, projectID)
+	delete(runGen, projectID)
+}
+
+// claimFinish 终态落账认领：同一任务的终态只允许写一次。强制终局（Cancel 兜底）
+// 与原 goroutine 的自然收尾赛跑时，后到者放弃。
+func claimFinish(projectID string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	if finished[projectID] {
+		return false
+	}
+	finished[projectID] = true
+	return true
+}
 
 // Start 启动制作（同项目幂等：已在跑则返回 false）。
 func (r *Runner) Start(projectID string) (bool, error) {
+	mu.Lock()
+	done := orphaned[projectID]
+	mu.Unlock()
+	if done != nil {
+		// 强制终局后的收尾窗口：等老 goroutine 退出（正常几秒；若被死锁卡死则
+		// 等 3 分钟放行——死锁者不再写任何产物，双开实际无害，别把用户锁在外面）。
+		select {
+		case <-done:
+		case <-time.After(3 * time.Minute):
+		}
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if r.stopping.Load() {
@@ -127,15 +174,21 @@ func (r *Runner) Start(projectID string) (bool, error) {
 		return false, fmt.Errorf("项目不存在: %w", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	running[projectID] = cancel
+	gen := claimRun(projectID, cancel)
+	delete(finished, projectID)       // 新一轮重置终态认领（已在 mu 临界区内）
 	p.Manifest(EventProduceStart, "") // 启动对账依据：有 start 无终态 = 进程死在中途（Reconcile 补写）
 	r.jobStart(projectID, "produce")
 	r.wg.Add(1)
 	go func() {
 		defer func() {
 			mu.Lock()
-			delete(running, projectID)
+			releaseRun(projectID, gen)
+			done := orphaned[projectID] // 强制终局留下的收尾标记：本 goroutine 退出即解除
+			delete(orphaned, projectID)
 			mu.Unlock()
+			if done != nil {
+				close(done)
+			}
 			r.wg.Done()
 		}()
 		// 清理过的老项目先回源工作区（契约/段片/配音），新项目是廉价 no-op
@@ -214,17 +267,105 @@ func (r *Runner) runWithAutoRetry(ctx context.Context, p *pipeline.Project, proj
 	return err
 }
 
+// cancelGrace 强制终局的优雅宽限：ctx 取消后给在途调用（LLM 传输超时 ≤10min、
+// python 子进程等）收尾的机会；超时即强制落终态，泄漏 goroutine 不绑架状态机。
+const cancelGrace = 60 * time.Second
+
 // Cancel 请求取消进行中的制作/重做（协作式：杀子进程 + 阶段边界退出）。
+// 2026-10-17 实测教训：楔死的管线对 ctx 取消可能无动于衷（收尾 Wait 被泄漏
+// goroutine 卡死），用户点「停止」后 UI 永远"运行中"——取消信号发出后挂一个
+// 兜底计时器，宽限期满仍活着就强制落 cancelled 终态并摘除在册标记。
 // 返回 false = 该项目没有在跑的任务。
 func (r *Runner) Cancel(projectID string) bool {
 	mu.Lock()
 	cancel, live := running[projectID]
+	gen := runGen[projectID]
 	mu.Unlock()
 	if !live {
 		return false
 	}
 	cancel()
+	go func() {
+		r.awaitGraceThen(projectID, gen, cancelGrace, func(p *pipeline.Project) {
+			detail := "制作卡住未响应取消，已强制终止（产物已保留，重跑会按段复用）"
+			r.forceTerminal(p, EventProduceCancelled, detail, "cancelled", "")
+		})
+	}()
 	return true
+}
+
+// forceFinishStall 看门狗升级兜底：刹车已 trip 但管线仍收不回来（如持锁死锁）
+// 时，强制落失败终态把 UI 解放掉。原 goroutine 若事后醒来，其 finishJob 被
+// claimFinish 挡住不会双写。grace 传 0 = 立即落账（刹车已给过收尾窗口）。
+// selfGen = 触发看门狗的那个运行的代际票：延时开火期间若运行表已换主（自动
+// 重跑/用户重开接手），票对不上就放手，绝不误杀新运行（2026-10-18 实测：
+// 旧运行的 2 分钟兜底把 10 秒后接手的新重跑整个终结）。
+func (r *Runner) forceFinishStall(projectID, reason string, selfGen uint64) {
+	r.awaitGraceThen(projectID, selfGen, 0, func(p *pipeline.Project) {
+		detail := "制作长时间无进展且无法收尾，已强制终止（" + pipeline.FirstLine(reason, 120) + "）——产物已按段保留，回「继续」可按段复用重跑"
+		r.forceTerminal(p, EventProduceError, detail, "failed", detail)
+	})
+}
+
+// runningGen 运行表里该项目当前的代际票。不在跑返回 0。
+func (r *Runner) runningGen(projectID string) uint64 {
+	mu.Lock()
+	defer mu.Unlock()
+	return runGen[projectID]
+}
+
+// awaitGraceThen 等待宽限期满（期间任务自然收尾则直接返回），期满把任务从
+// running 摘除并登记 orphaned（Start 拒新防双管线互踩，老 goroutine 退出或
+// TTL 到期解除），再调 write 执行落账。selfGen 非 0 时校验运行代际：运行表
+// 已换主（票对不上）则视为新运行接手，直接放手不摘除不落账。
+func (r *Runner) awaitGraceThen(projectID string, selfGen uint64, grace time.Duration, write func(*pipeline.Project)) {
+	deadline := time.Now().Add(grace)
+	for {
+		time.Sleep(time.Second)
+		mu.Lock()
+		_, live := running[projectID]
+		gen := runGen[projectID]
+		mu.Unlock()
+		if !live {
+			return // 已自然收尾
+		}
+		if selfGen != 0 && gen != selfGen {
+			return // 代际易主：运行表里已是别的运行（如自动重跑接手），别碰它
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+	}
+	mu.Lock()
+	gen, still := runGen[projectID], false
+	if _, ok := running[projectID]; ok {
+		still = true
+	}
+	if selfGen != 0 && gen != selfGen {
+		mu.Unlock()
+		return // 双检：等锁期间换了代，落账会让新运行被误判死亡
+	}
+	releaseRun(projectID, selfGen) // IsRunning 立即转假：UI 先行解放
+	if still {
+		if done := orphaned[projectID]; done == nil {
+			orphaned[projectID] = make(chan struct{})
+		}
+	}
+	mu.Unlock()
+	if !still || !claimFinish(projectID) {
+		return
+	}
+	write(pipeline.NewProject(r.DataDir, projectID))
+}
+
+// forceTerminal 强制终态落账（manifest + render_jobs + 事件 + 聊天汇报）。
+func (r *Runner) forceTerminal(p *pipeline.Project, ev, detail, status, errMsg string) {
+	log.Printf("[produce] %s %s", p.ID, detail)
+	r.Manifest(p, ev, detail)
+	r.jobTerminal(p.ID, status, "", errMsg)
+	r.emit(p.ID, "stage", "pipeline", "error: "+detail)
+	r.emit(p.ID, "error", "", detail)
+	r.notifyOnDone(p.ID, status, detail)
 }
 
 // Rework 段级重做（plan.md §3.5：修改单元可到元素，重做单元=段）。
@@ -246,14 +387,14 @@ func (r *Runner) Rework(projectID string, segIDs []string, instruction string) (
 		cancel()
 		return false, nil
 	}
-	running[projectID] = cancel
+	gen := claimRun(projectID, cancel)
 	mu.Unlock()
 	p := pipeline.NewProject(r.DataDir, projectID)
 	sb, err := p.LoadStoryboard()
 	if err != nil {
 		cancel()
 		mu.Lock()
-		delete(running, projectID)
+		releaseRun(projectID, gen)
 		mu.Unlock()
 		return false, fmt.Errorf("分镜未生成: %w", err)
 	}
@@ -263,7 +404,7 @@ func (r *Runner) Rework(projectID string, segIDs []string, instruction string) (
 		if !found {
 			cancel()
 			mu.Lock()
-			delete(running, projectID)
+			releaseRun(projectID, gen)
 			mu.Unlock()
 			return false, fmt.Errorf("分镜里没有段 %s", id)
 		}
@@ -274,7 +415,7 @@ func (r *Runner) Rework(projectID string, segIDs []string, instruction string) (
 	go func() {
 		defer func() {
 			mu.Lock()
-			delete(running, projectID)
+			releaseRun(projectID, gen)
 			mu.Unlock()
 			r.wg.Done()
 		}()
@@ -312,6 +453,12 @@ func (r *Runner) finishJob(p *pipeline.Project, projectID string, err error, t j
 	// 正本后端——之后清理器才敢删本地。best-effort，缺口由 -storage-sync 兜底。
 	r.syncUp(p, "")
 	if err == nil {
+		return
+	}
+	// 终态认领：强制终局（Cancel 兜底）可能已抢先落账——泄漏 goroutine 迟到的
+	// 收尾不得覆盖用户已经看到的终态。
+	if !claimFinish(projectID) {
+		log.Printf("[produce] %s 迟到收尾跳过（终态已由强制终局落账）", projectID)
 		return
 	}
 	swallow := func(what string) func() {
@@ -1405,10 +1552,23 @@ func (r *Runner) translateSubtitles(ctx context.Context, p *pipeline.Project) er
 	system := "你是视频字幕翻译器，只输出 JSON。把中文字幕短语翻成英文短句：字幕风格（短、口语、不逐字）、专有名词准确、每条独立成句不加引号。"
 	user := "把下面每段的中文字幕短语翻译成英文，输出同构 JSON：[{\"id\":\"segXX\",\"phrases\":[\"英文短语\", …]}]，段顺序与短语顺序必须与输入完全一致。\n\n" + pipeline.MustJSON(jobs)
 	var out []segJob
+	// 单发任务统一记账（「过程」页）：翻译一次调用，留痕 = 请求 + 响应各一条。
+	at := agentlog.Begin(p, "translate", "双语字幕翻译")
+	if rec := at.Rec(); rec != nil {
+		rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: system})
+		rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: user})
+	}
 	// low：机械翻译不吃深思考，跟随端点默认（max）是白烧 reasoning token
-	if _, err := prov.GenerateJSONEffort(ctx, system, user, &out, llm.EffortLow); err != nil {
+	u, err := prov.GenerateJSONEffort(ctx, system, user, &out, llm.EffortLow)
+	at.Add(u)
+	if err != nil {
+		at.Done(err)
 		return err
 	}
+	if rec := at.Rec(); rec != nil {
+		rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: pipeline.MustJSON(out)})
+	}
+	at.Done(nil)
 	got := map[string][]string{}
 	for _, o := range out {
 		if o.ID != "" && len(o.Phrases) > 0 {

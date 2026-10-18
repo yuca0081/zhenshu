@@ -496,11 +496,22 @@ def main(proj_dir: str) -> int:
         if f.stem not in scene:
             f.unlink()
     for sid in ids:
+        # 源内容指纹嵌进页面：单段工程只是壳（场景以 data-composition-src 引用，
+        # 不内嵌内容），场景/字幕修复后壳本身一字不变——三层缓存（本处内容比对、
+        # Go 侧 segStale 的单段工程指纹、渲染器按页面内容的分块缓存）全部误判
+        # "没变化"，继续吐旧画面（2026-10-17 seg07 鬼影闪帧事故）。把被引用文件的
+        # 内容哈希写进页面，内容一变壳就变，缓存层全部失效重渲。
+        src_fp = hashlib.sha1()
+        for ref in (proj / 'compositions' / 'frames' / f'{sid}.html',
+                    proj / 'compositions' / 'caps' / f'cap-{sid}.html'):
+            if ref.exists():
+                src_fp.update(ref.read_bytes())
         seg_html = project_html(W, H, scene[sid],
                                 scenes_html([(sid, 0, scene[sid], durs[sid])]),
                                 *overlay_block(chapters.get(sid, ''), scene[sid], starts[sid]),
                                 *subtitle_blocks([(sid, 0, scene[sid], durs[sid])], meta['voices'], slots, proj, W, H),
                                 xfade=xfade)
+        seg_html += f'\n<!-- src-fp:{src_fp.hexdigest()[:16]} -->\n'
         out = segdir / f'{sid}.html'
         # 内容没变就保住 mtime：段级重渲缓存按"段片旧于段工程"判旧（pipeline segStale），
         # 修复轮回滚会把全部段源原样重写一遍，无脑覆盖 mtime 会把缓存打穿成全片重渲

@@ -48,8 +48,11 @@ func hash8(s string) string {
 
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
 
-// extractFrame 抽指定时刻单帧（ffmpeg，缓存键 seg+t 两位小数）。返回 JPEG dataURL。
+// extractFrame 抽指定时刻单帧（ffmpeg，缓存键 seg+t+源文件尺寸/mtime 两位小数）。返回 JPEG dataURL。
 // 越界（负值或超段长 0.05s 容差）报错回流，由模型改参数重取。
+// 缓存键必须带源文件的 Size+mtime：成片/段片重渲后同刻同名，旧缓存会把上一版
+// 画面（甚至上次失败渲染的黑帧）原样端给审核——2026-10-17/18 终审"全片纯黑"
+// 两次误判皆因此（真成片有画面，判卷官吃的是隔夜缓存帧）。
 func (fs *serviceFS) extractFrame(ctx context.Context, segID string, t float64, dur float64) (string, error) {
 	if dur > 0 && (t < 0 || t > dur+0.05) {
 		return "", fmt.Errorf("t=%.2f 越界（%s 段长 %.2fs）——改到 [0, %.2f] 内重取", t, segID, dur, dur)
@@ -57,14 +60,18 @@ func (fs *serviceFS) extractFrame(ctx context.Context, segID string, t float64, 
 	if t < 0 {
 		t = 0
 	}
-	key := fmt.Sprintf("%s-t%.2f", segID, round2(t))
-	dst := filepath.Join(fs.cacheDir, "frames", key+".jpg")
-	if b, err := os.ReadFile(dst); err == nil && len(b) > 0 {
-		return jpegDataURL(b), nil
-	}
 	src := fs.segVideo(segID)
 	if src == "" {
 		return "", fmt.Errorf("段片 %s 不存在（该段尚未渲染？）", segID)
+	}
+	fi, err := os.Stat(src)
+	if err != nil {
+		return "", fmt.Errorf("段片 %s 不可读: %w", segID, err)
+	}
+	key := fmt.Sprintf("%s-t%.2f-%d-%d", segID, round2(t), fi.Size(), fi.ModTime().UnixNano())
+	dst := filepath.Join(fs.cacheDir, "frames", key+".jpg")
+	if b, err := os.ReadFile(dst); err == nil && len(b) > 0 {
+		return jpegDataURL(b), nil
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return "", err
@@ -105,14 +112,20 @@ func (fs *serviceFS) extractClip(ctx context.Context, segID string, t1, t2, dur 
 		t2 = t1 + clipMaxSpan
 		note = fmt.Sprintf("（跨度超 %.1fs 上限，已截断到 t=%.2f——要看更晚的画面再取一次）", clipMaxSpan, t2)
 	}
-	key := fmt.Sprintf("%s-c%.2f-%.2f", segID, round2(t1), round2(t2))
+	// 缓存键带源文件 Size+mtime：段片重渲后同刻同名，不失效会把旧画面端给审核
+	//（与 extractFrame 同病同修，2026-10-18）。
+	src := fs.segVideo(segID)
+	if src == "" {
+		return "", nil, fmt.Errorf("段片 %s 不存在（该段尚未渲染？）", segID)
+	}
+	sfi, err := os.Stat(src)
+	if err != nil {
+		return "", nil, fmt.Errorf("段片 %s 不可读: %w", segID, err)
+	}
+	key := fmt.Sprintf("%s-c%.2f-%.2f-%d-%d", segID, round2(t1), round2(t2), sfi.Size(), sfi.ModTime().UnixNano())
 	mp4 := filepath.Join(fs.cacheDir, "clips", key+".mp4")
 	_ = os.MkdirAll(filepath.Dir(mp4), 0o755)
 	if _, err := os.Stat(mp4); err != nil {
-		src := fs.segVideo(segID)
-		if src == "" {
-			return "", nil, fmt.Errorf("段片 %s 不存在（该段尚未渲染？）", segID)
-		}
 		ff, err := pipeline.FFmpegPath()
 		if err != nil {
 			return "", nil, err

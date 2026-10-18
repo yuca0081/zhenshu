@@ -98,7 +98,9 @@ func main() {
 
 	producer := &produce.Runner{
 		DataDir: cfg.DataDir, RootDir: root, Hub: hub, Store: st, Artifacts: art,
-		AutoResume: true, // 启动对账时自动续跑被重启打断的整片制作，不让用户再打「继续」
+		// 自动续跑不开（用户要求 2026-10-17）：启动对账只补「中断」账+聊天通知，
+		// 要不要重跑由用户自己在界面上点，服务重启不再自动起任务。
+		AutoResume: false,
 	}
 	ag := &agent.Agent{
 		DataDir: cfg.DataDir, RootDir: root, Store: st, Lib: lib, Producer: producer, Artifacts: art,
@@ -154,11 +156,18 @@ func main() {
 		SessionSecret: sessionSecret, AuthActive: authActive,
 	}
 
-	// 开发诊断：DEBUG_PPROF=1 时挂 net/http/pprof（goroutine 转储定位段级流水线卡点用）
+	// 开发诊断：DEBUG_PPROF=1 时挂 net/http/pprof（goroutine 转储定位段级流水线卡点用）。
+	// 端口可用 DEBUG_PPROF_ADDR 改（默认 6060；被占时 ListenAndServe 失败只打日志不拒启）。
 	if os.Getenv("DEBUG_PPROF") == "1" {
+		addr := os.Getenv("DEBUG_PPROF_ADDR")
+		if addr == "" {
+			addr = "127.0.0.1:6060"
+		}
 		go func() {
-			log.Println("pprof 监听 127.0.0.1:6060")
-			_ = http.ListenAndServe("127.0.0.1:6060", nil)
+			log.Println("pprof 监听 " + addr)
+			if err := http.ListenAndServe(addr, nil); err != nil {
+				log.Println("⚠ pprof 没起来（端口被占？换 DEBUG_PPROF_ADDR）: " + err.Error())
+			}
 		}()
 	}
 

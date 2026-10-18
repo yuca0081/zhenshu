@@ -44,6 +44,12 @@ type Tool struct {
 // ErrBudgetExhausted 回合预算耗尽仍未提交（调用方记账 + 至多一次冷重试）。
 var ErrBudgetExhausted = errors.New("回合预算耗尽仍未提交")
 
+// Sink 对话留痕接收端（*llm.Transcript 隐式满足）。可空：nil 照跑不留痕。
+type Sink interface {
+	Message(msg openai.ChatCompletionMessage)
+	Note(format string, a ...any)
+}
+
 // Loop 单工位一轮 ReAct 会话。每次 run 新建（工具闭包状态、消息序列都是会话私有）。
 type Loop struct {
 	Prov      react.ChatClient
@@ -54,6 +60,11 @@ type Loop struct {
 	MaxRounds int    // 回合预算（一次模型调用 = 一回合；nudge 也占回合，防无限光说不做）
 	// OnStep 每步记账钩子（kind: action|observation|text|note）。nil = 只跑不记。
 	OnStep func(round int, kind, detail string)
+	// Rec 对话留痕（可空）：开场消息与每轮模型消息/工具观察逐条追加。
+	Rec Sink
+	// Usage/Calls 本轮累计 token 用量与模型调用次数（Run 返回后宿主读）。
+	Usage openai.Usage
+	Calls int
 }
 
 // Run 跑到 submit 落盘成功，或预算耗尽 / 模型调用失败。
@@ -62,6 +73,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		{Role: openai.ChatMessageRoleSystem, Content: l.System},
 		{Role: openai.ChatMessageRoleUser, Content: l.Kickoff},
 	}
+	l.record(msgs...)
 	schemas := make([]openai.Tool, 0, len(l.Tools))
 	byName := map[string]int{}
 	for _, t := range l.Tools {
@@ -73,8 +85,12 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 	}
 	for round := 1; round <= l.MaxRounds; round++ {
-		msg, _, err := l.Prov.Chat(ctx, msgs, schemas)
+		msg, u, err := l.Prov.Chat(ctx, msgs, schemas)
+		l.Usage.PromptTokens += u.PromptTokens
+		l.Usage.CompletionTokens += u.CompletionTokens
+		l.Calls++
 		if err != nil {
+			l.recNote("模型调用失败（第 %d 回合）: %v", round, err)
 			return err
 		}
 		if ctx.Err() != nil {
@@ -83,21 +99,27 @@ func (l *Loop) Run(ctx context.Context) error {
 		if len(msg.ToolCalls) == 0 {
 			// 光说不做：文本回复不落盘，提醒后继续（回合照计，烧完预算自然失败）
 			l.step(round, "text", msg.Content)
-			msgs = append(msgs, msg,
-				openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf("文本回复不会落盘。任务完成的唯一方式是调用 %s 工具；继续。", l.Submit)})
+			nudge := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf("文本回复不会落盘。任务完成的唯一方式是调用 %s 工具；继续。", l.Submit)}
+			l.record(msg, nudge)
+			msgs = append(msgs, msg, nudge)
 			continue
 		}
+		l.record(msg)
 		msgs = append(msgs, msg)
 		for _, call := range msg.ToolCalls {
 			l.step(round, "action", call.Function.Name+" "+compactJSON(call.Function.Arguments))
 			obs := l.exec(ctx, call.Function.Name, call.Function.Arguments)
 			l.step(round, "observation", obs.Text)
-			msgs = append(msgs, openai.ChatCompletionMessage{
+			tool := openai.ChatCompletionMessage{
 				Role: openai.ChatMessageRoleTool, Content: obs.Text,
 				ToolCallID: call.ID, Name: call.Function.Name,
-			})
+			}
+			msgs = append(msgs, tool)
+			l.record(tool)
 			if len(obs.Images) > 0 {
-				msgs = append(msgs, imageFollowUp(obs.Images))
+				im := imageFollowUp(obs.Images)
+				msgs = append(msgs, im)
+				l.record(im)
 			}
 			if call.Function.Name == l.Submit && obs.Done {
 				return nil
@@ -105,6 +127,21 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 	}
 	return ErrBudgetExhausted
+}
+
+func (l *Loop) record(ms ...openai.ChatCompletionMessage) {
+	if l.Rec == nil {
+		return
+	}
+	for _, m := range ms {
+		l.Rec.Message(m)
+	}
+}
+
+func (l *Loop) recNote(format string, a ...any) {
+	if l.Rec != nil {
+		l.Rec.Note(format, a...)
+	}
 }
 
 // exec 未知工具回喂人话（不记钩子——乱点名不污染案卷，与 react.Core 同口径）。

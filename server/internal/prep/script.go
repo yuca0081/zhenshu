@@ -58,7 +58,7 @@ func runScriptStation(ctx context.Context, p *pipeline.Project, d Deps) error {
 		OnStep:    manifestStep(p, StationScript, log),
 	}
 	d.emit(p.ID, "stage", "prep/script", "running")
-	err := loop.Run(ctx)
+	err := runTracked(ctx, p, "prep.script", "准备①文稿", loop)
 	if err != nil {
 		p.Manifest("prep.script_error", pipeline.FirstLine(err.Error(), 200))
 		return fmt.Errorf("文稿工位: %w", err)

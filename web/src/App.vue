@@ -91,7 +91,7 @@ const turnActive = ref(false)
 const library = ref<Style[]>([])
 const videoRev = ref(0) // 成片代次：done 后递增 → video 换 URL 强制重载（重做完立刻看到新画面）
 const progressLine = ref('') // 制作/重做细粒度进度（SSE progress，瞬时态不入聊天史）
-const activity = ref<ActivityEvent[]>([]) // 制作事件流（manifest 原样事件，右上角面板数据源）
+const activity = ref<ActivityEvent[]>([]) // 制作事件流（manifest 原样事件，「过程」页数据源）
 
 // naive-ui 全局主色对齐页面金色（创建按钮/单选/焦点等不再出现默认绿）
 const themeOverrides = {
@@ -198,7 +198,7 @@ async function loadActivity() {
   if (inflight.get(key) === seq) return
   inflight.set(key, seq)
   try {
-    const rows = await api.activity(id).catch(() => null)
+    const rows = await api.activity(id, 2000).catch(() => null) // 过程页整页回看，尾部窗口放大
     if (rows === null || seq !== reqSeq || id !== current.value) return
     activity.value = rows
   } finally {
@@ -498,12 +498,14 @@ const prepProgress = computed(() => ({
   storyboard: stageState.value['prep/storyboard'] ?? '',
 }))
 
-// 确认风格（唯一必须用户拍板的门）：失败弹错但仍然刷新——把服务端的真实状态拉回来，
-// 不能让前端停在「已确认」的假象里
+// 确认风格（唯一必须用户拍板的门）＝打包确认：与制作硬门同账本（stylepack.Confirmed），
+// 防两套确认位劈叉（2026-10-17 彩虹项目实测死局）。老项目兼容已弃（2026-10-17 用户拍板：
+// 只保新架构，老项目数据清除）。
+// 失败弹错但仍然刷新——把服务端的真实状态拉回来，不能让前端停在「已确认」的假象里
 async function confirmStyle() {
   if (!current.value) return
   try {
-    await api.confirmStyle(current.value)
+    await api.confirmPrep(current.value)
   } catch (e) {
     topMsg.error(`风格确认失败：${errMsg(e)}`)
   }

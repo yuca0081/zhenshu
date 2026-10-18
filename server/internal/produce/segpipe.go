@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"webpage-video-agent/server/internal/artifacts"
@@ -137,17 +138,38 @@ func saveVerdict(p *pipeline.Project, kind, id string, round int, v *review.Verd
 
 // ── 签名刹车（§4.5）──────────────────────────────────────────────
 
-// brakeTracker 签名 = 类别@锚点。同签名连续两轮 high → 刹车；≥2 个不同段出现
-// 同类别 high → 刹车（系统性早停）。check 返回非空刹车理由。
+// brakeTracker 签名 = 类别@锚点。同签名连续两轮 high → 刹车；≥N 个不同段出现
+// 同类别 high → 刹车（系统性早停），N = max(3, 段数/4)。2026-10-17 实测教训：
+// 旧版阈值 2 且跨轮累计、过审不清除——审查意见本就带随机性（同一渲染物逐轮
+// 意见漂移），两段在不同轮各出一次同类别 high 就处死整片，一晚 9 轮执行全灭。
+// 过审轨道调 clear 撤销记账：修好了就不该继续记仇。check 返回非空刹车理由。
 type brakeTracker struct {
 	mu       sync.Mutex
+	segCount int
 	prevSigs map[string]map[string]bool // 轨道名（段 id / bnd:b01 / final）→ 上一轮 high 签名集
 	catSegs  map[string]map[string]bool // category → 出现过 high 的轨道
 	tripped  string
 }
 
-func newBrakeTracker() *brakeTracker {
-	return &brakeTracker{prevSigs: map[string]map[string]bool{}, catSegs: map[string]map[string]bool{}}
+func newBrakeTracker(segCount int) *brakeTracker {
+	return &brakeTracker{
+		segCount: segCount,
+		prevSigs: map[string]map[string]bool{},
+		catSegs:  map[string]map[string]bool{},
+	}
+}
+
+// clear 轨道过审：撤销它在各类别里的刹车记账。
+func (b *brakeTracker) clear(track string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.prevSigs, track)
+	for cat, tracks := range b.catSegs {
+		delete(tracks, track)
+		if len(tracks) == 0 {
+			delete(b.catSegs, cat)
+		}
+	}
 }
 
 func (b *brakeTracker) check(track string, sigs []string) string {
@@ -165,12 +187,16 @@ func (b *brakeTracker) check(track string, sigs []string) string {
 			return b.tripped
 		}
 	}
+	limit := b.segCount / 4
+	if limit < 3 {
+		limit = 3
+	}
 	for cat := range cats {
 		if b.catSegs[cat] == nil {
 			b.catSegs[cat] = map[string]bool{}
 		}
 		b.catSegs[cat][track] = true
-		if len(b.catSegs[cat]) >= 2 {
+		if len(b.catSegs[cat]) >= limit {
 			b.tripped = fmt.Sprintf("系统性刹车：%d 个不同轨道出现同类别 %q high", len(b.catSegs[cat]), cat)
 			return b.tripped
 		}
@@ -276,6 +302,10 @@ type segCtx struct {
 	// workerStarted 该段是否有 chain worker（过审后 worker 停在 feedCh 等打回——
 	// 终审打回直接唤醒它；恢复进场的已过段没有 worker，打回时现起一个）。
 	workerStarted bool
+	// pendingFeedback 现起 worker 时携带的首笔打回反馈（spawnWorker 写、
+	// chainWorker 取；没有它，恢复进场的已过段被边界审打回后反馈无人消费，
+	// 段永不重写、waitAllPassed 永等——2026-10-17 楔死事故根因）。
+	pendingFeedback string
 }
 
 type auditReq struct {
@@ -319,13 +349,20 @@ type coordinator struct {
 
 	samplesOnce sync.Once
 	sampleImgs  []string
+
+	// cctx/chainWg 供审核路径现起 worker 用（spawnWorker 提为方法后需要；
+	// cctx 由 run 写定后才起任何 goroutine，无数据竞争）。
+	cctx    context.Context
+	chainWg sync.WaitGroup
+	// progressAt 最近一次进展时刻（emit/log 都算）；看门狗据此升级全管线静默。
+	progressAt atomic.Int64
 }
 
 func newCoordinator(r *Runner, p *pipeline.Project, svc *review.Service, sb *contract.Storyboard,
 	script *contract.Script, sp *contract.StylePack, voices map[string]voiceMeta) *coordinator {
 	c := &coordinator{
 		r: r, p: p, svc: svc, sb: sb, script: script, sp: sp, voices: voices,
-		brakes:     newBrakeTracker(),
+		brakes:     newBrakeTracker(len(sb.Segments)),
 		journal:    loadJournal(p),
 		writeSem:   make(chan struct{}, writeConcurrency()),
 		auditSem:   make(chan struct{}, auditConcurrency()),
@@ -345,7 +382,13 @@ func newCoordinator(r *Runner, p *pipeline.Project, svc *review.Service, sb *con
 	return c
 }
 
-func (c *coordinator) emit(typ, stage, detail string) { c.r.emit(c.p.ID, typ, stage, detail) }
+// touch 记录一次进展（emit/log 都算进展）。看门狗据此判断全管线静默。
+func (c *coordinator) touch() { c.progressAt.Store(time.Now().UnixNano()) }
+
+func (c *coordinator) emit(typ, stage, detail string) {
+	c.touch()
+	c.r.emit(c.p.ID, typ, stage, detail)
+}
 
 func (c *coordinator) seg(id string) *segCtx {
 	for _, s := range c.segs {
@@ -366,6 +409,7 @@ func (c *coordinator) log(e journalLine) {
 		f.Write(append(b, '\n'))
 		f.Close()
 	}
+	c.touch()
 	c.mu.Lock()
 	defer c.mu.Unlock() // panic 也不许把锁带走：锁被带走的瞬间全协调器冻结成化石
 	if c.journal == nil {
@@ -397,6 +441,9 @@ func (c *coordinator) segEntry(id string) journalLine {
 func (c *coordinator) run(ctx context.Context) error {
 	cctx, ccancel := context.WithCancel(ctx)
 	defer ccancel() // 管线终了（含刹车/失败路径）排干全部 worker
+	c.cctx = cctx
+	c.touch()
+	go c.watchdog(cctx) // 全管线静默超限 → 刹车（见 watchdog 注释）
 
 	c.emit("stage", "segpipe", fmt.Sprintf("running（%d 段；写≤%d 审≤%d 渲≤%d）",
 		len(c.segs), writeConcurrency(), auditConcurrency(), renderConcurrency()))
@@ -418,26 +465,11 @@ func (c *coordinator) run(ctx context.Context) error {
 		}
 	}
 
-	var chainWg sync.WaitGroup
-	spawnWorker := func(s *segCtx) {
-		c.mu.Lock()
-		if s.workerStarted {
-			c.mu.Unlock()
-			return
-		}
-		s.workerStarted = true
-		c.mu.Unlock()
-		chainWg.Add(1)
-		go func(s *segCtx) {
-			defer chainWg.Done()
-			c.chainWorker(cctx, s)
-		}(s)
-	}
 	for _, s := range c.segs {
 		if c.segEntry(s.seg.ID).State == stAudited {
-			continue // 已过段：不重做（worker 也不起——打回时现起）
+			continue // 已过段：不重做（worker 也不起——打回时由 dispatchRewrite 现起并携带反馈）
 		}
-		spawnWorker(s)
+		c.spawnWorker(s, "")
 	}
 	// 审核 dispatcher（段审/边界审同队列，写优先闸 + 池限流）
 	var auditWg sync.WaitGroup // 在飞审核（排干后再收尾）
@@ -471,26 +503,77 @@ func (c *coordinator) run(ctx context.Context) error {
 			break // 终审全过 → 出片
 		}
 		// 打回段走原 worker 链（重写→检→渲→段审），边界随代际失效自动重审；
-		// 全部重新通过后回 loop 重拼+重审。过审段的 worker 停在 feedCh 等打回，
-		// 直接唤醒；恢复进场的已过段没有 worker，现起一个。
+		// 全部重新通过后回 loop 重拼+重审。dispatchRewrite 自带接收者保证：
+		// 过审段唤醒停在 feedCh 的 worker，恢复进场的已过段现起并携带反馈。
 		for _, segID := range rewrite {
 			c.segState(segID, stRewriting, 0, 0, "终审打回重写")
 			if s := c.seg(segID); s != nil {
-				spawnWorker(s)
-				c.dispatchRewrite(s, finalFeedback(c, segID, round))
+				c.dispatchRewrite(cctx, s, finalFeedback(c, segID, round))
 			}
 		}
 	}
 	ccancel() // 终局：停派发 + 排干在飞（刹车动作语义，§4.5）
-	chainWg.Wait()
+	// 排干顺序：dispatcher → 在飞审核（其间可能现起 worker，chainWg.Add）→ 工人 → 跟踪。
+	// 审核必须在工人前收：审核 goroutine 的 dispatchRewrite 会现起 worker，
+	// 先收工人会漏算后 Add 的计数（WaitGroup Add-after-Wait 竞态）。
 	dispatchWg.Wait()
 	auditWg.Wait()
+	c.chainWg.Wait()
 	trackerWg.Wait()
 	c.cleanup()
 	if reason := c.brakes.reason(); reason != "" && finalErr == nil {
 		finalErr = errors.New(reason)
 	}
 	return finalErr
+}
+
+// watchdog 全管线静默升级（P0-2，2026-10-17 实测教训）：LLM 挂死最长可静默
+// 10min×3 重试，审查反馈投给无人消费的轨道能让 waitAllPassed 永等——旧版对
+// 这两类静默都不设防，UI 永远"运行中"、无失败落账。超过阈值的全体沉默一律
+// 刹车转成可重跑失败；单工位慢而其余在动的场景不算静默（emit/log 都刷新计时）。
+// 只 trip 刹车不 cancel ctx：卡在 HTTP 里的调用由传输超时自己退（≤10min），
+// 保持"看门狗失败可自动重跑、不与用户取消混淆"的语义。
+func (c *coordinator) watchdog(ctx context.Context) {
+	interval := produceStallTimeout()
+	tick := time.NewTicker(30 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			last := c.progressAt.Load()
+			if last > 0 && time.Since(time.Unix(0, last)) > interval {
+				c.brakes.trip(fmt.Sprintf("管线静默超过 %s 无进展，看门狗终止（可重跑，产物已按段保留）", interval))
+				c.emit("stage", "segpipe", "error: "+c.brakes.reason())
+				c.r.Manifest(c.p, "segpipe.watchdog", c.brakes.reason())
+				// 二级兜底：刹车后若管线仍卡着收不回来（比如某处还有持锁死锁），
+				// 2 分钟后强制落终态把 UI 解放掉——泄漏 goroutine 不绑架状态机。
+				// selfGen = 触发时刻的本运行代际票：2 分钟里若自动重跑/用户重开
+				// 接手了运行表，票对不上就放手，绝不开火误杀新运行（2026-10-18）。
+				selfGen := c.r.runningGen(c.p.ID)
+				go func(id, reason string, selfGen uint64) {
+					time.Sleep(2 * time.Minute)
+					c.r.forceFinishStall(id, "看门狗升级："+reason, selfGen)
+				}(c.p.ID, c.brakes.reason(), selfGen)
+				return
+			}
+		}
+	}
+}
+
+// produceStallTimeout 全管线静默升级阈值（PRODUCE_STALL_TIMEOUT，默认 32m）。
+// 必须大于审查工位两 journal 落账间的合法静默：多轮判卷每轮一次 LLM 调用
+//（单次传输超时 10min），2-3 轮不落账=20-30 分钟静默是常态——15m 阈值实测
+// 反复误杀健康的边界审（2026-10-18，每误杀一次重跑损失 45min+）。
+// 超过此值也会被升级——如实失败可重跑好过无声悬挂。
+func produceStallTimeout() time.Duration {
+	if v := os.Getenv("PRODUCE_STALL_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > time.Minute {
+			return d
+		}
+	}
+	return 32 * time.Minute
 }
 
 func (c *coordinator) bndEntry(id string) journalLine {
@@ -569,6 +652,14 @@ func (c *coordinator) cleanup() {
 func (c *coordinator) chainWorker(ctx context.Context, s *segCtx) {
 	defer c.guardWorker("段链 " + s.seg.ID)
 	feedback := ""
+	// 现起 worker 携带的首笔打回反馈（恢复进场的已过段场景）——起手就消费，
+	// 不然段按无反馈重写一遍后再吃反馈又重写一遍，白烧一轮。
+	c.mu.Lock()
+	if s.pendingFeedback != "" {
+		feedback = s.pendingFeedback
+		s.pendingFeedback = ""
+	}
+	c.mu.Unlock()
 	for {
 		if reason := c.brakes.reason(); reason != "" {
 			return // 刹车：停止派发新作业
@@ -611,8 +702,15 @@ func (c *coordinator) chainWorker(ctx context.Context, s *segCtx) {
 	}
 }
 
-// writeSegment ④写画面（并发 ≤4）：sceneGen 单段 → 合成物落盘 → 机械钳 → assemble。
+// writeSegment ④写画面（并发 ≤PRODUCE_WRITE_CONCURRENCY）：sceneGen 单段 → 合成物落盘 → 机械钳 → assemble。
+// 写信号量在这里真正落闸（2026-10-17 429 风暴教训：writeSem 建了没接，15 段齐发打爆限流）。
 func (c *coordinator) writeSegment(ctx context.Context, s *segCtx, feedback string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case c.writeSem <- struct{}{}:
+	}
+	defer func() { <-c.writeSem }()
 	c.writeGate(true)
 	defer c.writeGate(false)
 	c.emit("progress", "compositions", fmt.Sprintf("%s 写画面中", s.seg.ID))
@@ -623,7 +721,7 @@ func (c *coordinator) writeSegment(ctx context.Context, s *segCtx, feedback stri
 	if err := segCompositions(c.p, s.seg.ID); err != nil {
 		return err
 	}
-	pipeline.ClampSegmentFonts(c.p, s.seg.ID)  // 机械钳：字体栈归一（别名→规范 Family，剥未知字体）
+	pipeline.ClampSegmentFonts(c.p, s.seg.ID) // 机械钳：字体栈归一（别名→规范 Family，剥未知字体）
 	pipeline.FixupSegmentFrame(c.p, s.seg.ID) // 机械钳：字体声明补齐（目录字体接 url()）
 	pipeline.ClampSegmentFrame(c.p, s.seg.ID) // 机械钳：叠层声明
 	if err := c.r.python(ctx, "ai/assemble.py", c.p.Dir, 2*time.Minute); err != nil {
@@ -812,6 +910,7 @@ func (c *coordinator) auditSegment(ctx context.Context, req auditReq) {
 	high := v.HighFindings()
 	detail := fmt.Sprintf("%d 条意见（%d high）", len(v.Findings), len(high))
 	if len(high) == 0 {
+		c.brakes.clear(s.seg.ID) // 过审撤销刹车记账：修好了就不记仇
 		c.segState(s.seg.ID, stAudited, round, gen, detail)
 		c.emit("progress", "review", fmt.Sprintf("段审 %s 通过（第 %d 轮）", s.seg.ID, round))
 		return
@@ -831,15 +930,52 @@ func (c *coordinator) auditSegment(ctx context.Context, req auditReq) {
 	}
 	c.r.Manifest(c.p, "review.rework", fmt.Sprintf("%s r%d: %s", s.seg.ID, round, detail))
 	c.emit("progress", "review", fmt.Sprintf("段审 %s %d 条 high，打回重写（第 %d 轮）", s.seg.ID, len(high), round))
-	c.dispatchRewrite(s, redrawFeedback(high))
+	c.dispatchRewrite(ctx, s, redrawFeedback(high))
 }
 
-// dispatchRewrite 打回重写：往该段 feedCh 投回喂（worker 渲完必在等）。
-func (c *coordinator) dispatchRewrite(s *segCtx, feedback string) {
+// spawnWorker 起该段的链 worker（幂等）。feedback 非空 = 恢复进场的已过段
+// 被打回时现起，反馈作为首笔作业（chainWorker 起手取 pendingFeedback）。
+func (c *coordinator) spawnWorker(s *segCtx, feedback string) {
+	c.mu.Lock()
+	if s.workerStarted {
+		c.mu.Unlock()
+		return
+	}
+	s.workerStarted = true
+	s.pendingFeedback = feedback
+	c.mu.Unlock()
+	c.chainWg.Add(1)
+	go func() {
+		defer c.chainWg.Done()
+		c.chainWorker(c.cctx, s)
+	}()
+}
+
+// dispatchRewrite 打回重写投递。两条硬保证（P0-1，2026-10-17 楔死教训）：
+//  1. 投递前必有接收者——恢复进场的已过段没有 worker，直接 spawn 并把反馈
+//     作为首笔作业；旧版把反馈投进无主缓冲，段永不重写、waitAllPassed 永等。
+//  2. 已有 worker 时投递限时 30s——worker 渲完必停在 feedCh 等，超时未取即
+//     worker 异常，刹车转成可见失败而不是无限悬置。
+func (c *coordinator) dispatchRewrite(ctx context.Context, s *segCtx, feedback string) {
 	if s == nil {
 		return
 	}
-	s.feedCh <- feedback
+	c.mu.Lock()
+	started := s.workerStarted
+	c.mu.Unlock()
+	if !started {
+		c.spawnWorker(s, feedback)
+		return
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(30 * time.Second):
+		reason := fmt.Sprintf("%s 打回投递 30s 无人接收（worker 异常）", s.seg.ID)
+		c.brakes.trip(reason)
+		c.emit("stage", "review", "error: "+reason)
+		c.r.Manifest(c.p, "review.brake", reason)
+	case s.feedCh <- feedback:
+	}
 }
 
 // ── 边界跟踪（§4.3 第 4 条）───────────────────────────────────────
@@ -925,9 +1061,11 @@ func (c *coordinator) auditBoundary(ctx context.Context, req auditReq) {
 			return
 		}
 		c.r.Manifest(c.p, "review.bnd_error", b.id+": "+pipeline.FirstLine(err.Error(), 140))
-		// 审查器故障：按当前代际通过记账（防打转），明细交用户
+		// 审查器故障：按当前代际通过记账（防打转），明细交用户。
+		// 已持 c.mu，直接读 gen 字段——调 segGen 会二次加锁自锁（2026-10-17
+		// 转储实锤：这里死锁的 goroutine 变成永久持锁者，全管线冻结成化石）。
 		c.mu.Lock()
-		b.genP, b.genN = c.segGen(s), c.segGen(n)
+		b.genP, b.genN = s.gen, n.gen
 		c.mu.Unlock()
 		c.log(journalLine{Kind: "bnd", ID: b.id, State: stAudited, GenP: b.genP, GenN: b.genN, Detail: "审查器故障降级"})
 		return
@@ -936,9 +1074,10 @@ func (c *coordinator) auditBoundary(ctx context.Context, req auditReq) {
 	high := v.HighFindings()
 	if len(high) == 0 {
 		c.mu.Lock()
-		b.genP, b.genN = c.segGen(s), c.segGen(n)
+		b.genP, b.genN = s.gen, n.gen // 同上：持锁期间禁调 segGen
 		gp, gn := b.genP, b.genN
 		c.mu.Unlock()
+		c.brakes.clear("bnd:" + b.id) // 过审撤销刹车记账
 		c.log(journalLine{Kind: "bnd", ID: b.id, State: stAudited, GenP: gp, GenN: gn,
 			Detail: fmt.Sprintf("%d 条意见", len(v.Findings))})
 		c.emit("progress", "review", fmt.Sprintf("边界 %s 通过", b.id))
@@ -967,7 +1106,7 @@ func (c *coordinator) auditBoundary(ctx context.Context, req auditReq) {
 	}
 	c.r.Manifest(c.p, "review.rework", fmt.Sprintf("%s → %s（%s）", b.id, target.seg.ID, dirWhy))
 	c.emit("progress", "review", fmt.Sprintf("边界 %s %d 条 high，打回 %s 重画", b.id, len(high), target.seg.ID))
-	c.dispatchRewrite(target, redrawFeedback(high))
+	c.dispatchRewrite(ctx, target, redrawFeedback(high))
 }
 
 // bndAnchorT 解析边界 anchor 的相对时刻（b02|t=-0.2 → -0.2, true）。

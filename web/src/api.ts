@@ -1,4 +1,4 @@
-import type { ActivityEvent, AudioMeta, AuthStatus, ChatRef, Manuscript, Msg, PrepView, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, UserInfo, UserRow, VocabEntry } from './types'
+import type { ActivityEvent, AudioMeta, TranscriptMsg, AuthStatus, ChatRef, Manuscript, Msg, PrepView, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, UserInfo, UserRow, VocabEntry } from './types'
 
 // ── 会话认证（cookie 会话，HttpOnly，浏览器自动携带）──────────
 // 凭据不进 JS：localStorage 存 token / ?token= 进 URL 的旧方案已废。
@@ -118,8 +118,13 @@ export const api = {
 
   cancel: (id: string) => post<{ ok: boolean }>(`/api/projects/${id}/cancel`),
 
-  // 制作活动流（manifest 原样事件，尾部 500 条正序；事件流面板数据源）
-  activity: (id: string) => req<ActivityEvent[]>(`/api/projects/${id}/activity`),
+  // 制作活动流（manifest 原样事件，尾部正序；「过程」页数据源，默认 500 条、可到 2000）
+  activity: (id: string, limit?: number) =>
+    req<ActivityEvent[]>(`/api/projects/${id}/activity${limit ? `?limit=${limit}` : ''}`),
+
+  // 智能体任务对话留痕（llm/transcripts/<task>.jsonl，写入侧已减脂）
+  transcript: (id: string, task: string) =>
+    req<TranscriptMsg[]>(`/api/projects/${id}/transcript?task=${encodeURIComponent(task)}`),
 
   listLibrary: () => req<Style[]>('/api/library'),
 

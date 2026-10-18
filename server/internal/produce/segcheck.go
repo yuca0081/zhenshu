@@ -37,7 +37,10 @@ func segCheckDir(p *pipeline.Project, segID string) string {
 }
 
 // dirLinks 子工程需要共享回项目根的目录。caps 在 compositions 里，无需单列。
-var dirLinks = []string{"assets", "audio", "compositions"}
+// compositions 不在此列（2026-10-17 事故）：checker 会扫尽整棵共享目录，别的段的
+// error 级违规让本段 check 连坐失败，修复轮各自修一个不在自己文件里的错——永不
+// 收敛。本段只带它引用的两个文件（见 ensureSegCheckDir）。
+var dirLinks = []string{"assets", "audio"}
 
 // ensureSegCheckDir 准备（或刷新）子工程：index.html 每次重拷（check 输入必须
 // 是最新段工程），junction 只在缺失时创建（绝不 RemoveAll 整个目录——Windows 上
@@ -70,6 +73,24 @@ func ensureSegCheckDir(p *pipeline.Project, segID string) error {
 			return fmt.Errorf("建立 %s 链接失败: %w", name, err)
 		}
 	}
+	// compositions 只带本段被引用的两个文件（帧 + 字幕 cap），每次检查前重拷：
+	// 隔离别的段（见 dirLinks 注释），同时拷贝件天然跟随源刷新。老版本留下的
+	// junction 在这里摘链接（os.Remove 对 junction 只摘链接不动正本）。
+	compDir := filepath.Join(dir, "compositions")
+	_ = os.Remove(compDir)
+	for _, rel := range []string{filepath.Join("frames", segID+".html"), filepath.Join("caps", "cap-"+segID+".html")} {
+		b, err := os.ReadFile(p.Artifact(filepath.Join("compositions", rel)))
+		if err != nil {
+			continue // 无字幕段没有 cap；index 没引用到就不需要
+		}
+		dst := filepath.Join(compDir, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dst, b, 0o644); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -98,18 +119,20 @@ func relPathSoft(link, target string) string {
 }
 
 // removeSegCheckDir 收尾清理：先逐个摘链接再删文件与目录（顺序铁律：绝不对含
-// junction 的目录用 RemoveAll——穿透删除会动到正本）。best-effort。
+// junction 的目录用 RemoveAll——穿透删除会动到正本）。compositions 可能是老版本
+// junction（先摘链接）或本版本真目录（拷贝件，RemoveAll 安全）。best-effort。
 func removeSegCheckDir(p *pipeline.Project, segID string) {
 	dir := segCheckDir(p, segID)
 	for _, name := range dirLinks {
 		_ = os.Remove(filepath.Join(dir, name)) // junction/symlink 摘除不动正本
 	}
+	_ = os.Remove(filepath.Join(dir, "compositions")) // junction：只摘链接；真目录：非空删不掉，交给下面
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 	for _, e := range entries {
-		_ = os.RemoveAll(filepath.Join(dir, e.Name())) // 剩余是普通文件
+		_ = os.RemoveAll(filepath.Join(dir, e.Name())) // 剩余是普通文件与本段拷贝目录
 	}
 	_ = os.Remove(dir)
 }
