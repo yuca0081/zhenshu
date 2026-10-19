@@ -116,14 +116,18 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		prompt, compl int
 		calls         int
 	}
-	gen := func(acc *segUsage, imgs []string, user string, out any) (openai.Usage, error) {
+	gen := func(acc *segUsage, imgs []visImg, user string, out any) (openai.Usage, error) {
 		if acc.rec != nil {
-			acc.rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: user})
+			if acc.calls == 0 { // 系统提示（设计系统/皮肤笼子）每任务记一次：留痕里看得见注入了什么约束
+				acc.rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: sceneSystemFor(p)})
+			}
+			// 图片载荷不落盘（data URL 太肥），记项目内路径清单——「过程」页渲染缩略图可点开
+			acc.rec.MessageImgs(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: user}, visRefs(imgs))
 		}
 		var u openai.Usage
 		var err error
 		if len(imgs) > 0 {
-			u, err = prov.GenerateJSONVisionNoThink(ctx, sceneSystemFor(p), user, imgs, 0.7, out)
+			u, err = prov.GenerateJSONVisionNoThink(ctx, sceneSystemFor(p), user, visURLs(imgs), 0.7, out)
 		} else {
 			u, err = prov.GenerateJSONNoThink(ctx, sceneSystemFor(p), user, out)
 		}
@@ -132,6 +136,11 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		acc.calls++
 		if err != nil && acc.rec != nil {
 			acc.rec.Note("模型调用失败: %v", err)
+		}
+		if err == nil && acc.rec != nil { // 模型回复落留痕（场景 JSON；超长由留痕侧截断）
+			if b, merr := json.Marshal(out); merr == nil {
+				acc.rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: string(b)})
+			}
 		}
 		return u, err
 	}
@@ -185,22 +194,22 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		v := voices[seg.ID]
 		sceneM, compM := methodsFor(r.RootDir, seg)
 		// 附图顺序 = 样张 → 真迹关键帧 → 本段素材真图（按需申请制，无素材不带图）
-		imgs := append([]string{}, sampleImgs...)
+		vis := append([]visImg{}, sampleImgs...)
 		// 导演统筹块（弧线定位/母题任务/邻段衔接/本段节拍）在最前：先知道本段
 		// 在全片中的角色，再进设计系统约束——无导演字段时空串零占位。
 		style := directorNoteFor(sb, seg) + designNoteFor(p, seg.Idx) + sampleSrc + keyframeNote(len(keyImgs))
 		segMats := materialsForSeg(p, seg.ID)
 		if len(segMats) > 0 {
-			imgs = append(imgs, materialDataURLs(p, segMats)...)
+			vis = append(vis, materialVisImgs(p, segMats)...)
 			style += materialNote(len(segMats)) + materialsNote(segMats)
 		}
-		user := sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, len(segMats) == 0)
+		user := sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, len(segMats) == 0, prevSceneHTML(p, seg.ID))
 		var payload struct {
 			HTML          string                  `json:"html"`
 			Elements      []contract.NamedElement `json:"elements"`
 			ImageRequests []materialRequest       `json:"image_requests,omitempty"`
 		}
-		_, gerr := gen(acc, imgs, user, &payload)
+		_, gerr := gen(acc, vis, user, &payload)
 		if gerr != nil {
 			werr = fmt.Errorf("%s 场景生成失败: %w", seg.ID, gerr)
 			fail(werr)
@@ -211,9 +220,9 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		if len(segMats) == 0 && len(payload.ImageRequests) > 0 {
 			if mats := r.fulfillRequests(ctx, p, seg.ID, cleanRequests(payload.ImageRequests)); len(mats) > 0 {
 				segMats = mats
-				imgs = append(imgs, materialDataURLs(p, segMats)...)
+				vis = append(vis, materialVisImgs(p, segMats)...)
 				style += materialNote(len(segMats)) + materialsNote(segMats)
-				_, err2 := gen(acc, imgs, sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, false), &payload)
+				_, err2 := gen(acc, vis, sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, false, ""), &payload)
 				if err2 != nil {
 					werr = fmt.Errorf("%s 带素材终稿生成失败: %w", seg.ID, err2)
 					fail(werr)
@@ -228,7 +237,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 				HTML     string                  `json:"html"`
 				Elements []contract.NamedElement `json:"elements"`
 			}
-			_, err2 := gen(acc, imgs, sceneUserPrompt(seg, v, "", fb, cv, style, golden, sceneM, compM, false), &fixed)
+			_, err2 := gen(acc, vis, sceneUserPrompt(seg, v, "", fb, cv, style, golden, sceneM, compM, false, payload.HTML), &fixed)
 			if err2 != nil {
 				werr = fmt.Errorf("%s 场景修复失败: %w", seg.ID, err2)
 				fail(werr)
@@ -491,7 +500,8 @@ func (r *Runner) sceneLintWithVend(ctx context.Context, html string) []string {
 
 // sceneUserPrompt 场景生成作业正文：契约摘要 + 段信息 + 风格/方法注入 + 词序表。
 // allowAsk=本段尚无素材，开放真图申请单（image_requests）；已有素材带图生成时关闭。
-func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback string, cv contract.Canvas, style, golden, sceneTpl, compMethods string, allowAsk bool) string {
+// prevHTML=上一版场景文件（修复轮回喂底稿，首稿为空）。
+func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback string, cv contract.Canvas, style, golden, sceneTpl, compMethods string, allowAsk bool, prevHTML string) string {
 	var wb strings.Builder
 	for i, w := range v.Words {
 		if i > 0 && i%10 == 0 {
@@ -563,6 +573,10 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
 %s
 - 每屏至少一个可辨认的视觉重心（它是什么、多大、放哪由你按本段画面决定）；
   禁止全屏无差别小元素平铺；段落适合铺氛围时优先写背景层（渐变/纹理/程序化画布），别停在纯色底
+- 样张/参考图里的场记标注文字（「N2 · 字锚点亮 + 梦尘粒子」「样张 A」「图N = …」这类制作注记）
+  是打样批注，不是画面内容——严禁把它们写进场景；场景里的每一条可见文字都必须是观众该读的内容
+- 字卡/标题类大字不得逐字重复本段旁白句——旁白原文由底部字幕承载，字卡再放一遍等于观众读两遍同句话；
+  字卡只提炼关键词/短语（如旁白「它开始放一场只有你能看的电影，这就是梦」→ 字卡「梦」或「只为你放映」）
 
 ## 动效手感（防呆板——节奏与编排的硬要求，手法本身自由）
 - 入场手法从设计系统「入场手法菜单」取用并轮换：同一段至少两种手法、相邻段主手法不重复；全片只用一种「淡入+浮入」=PPT，打回
@@ -582,5 +596,20 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
 ## 输出（只输出一个 JSON 对象：第一个字符必须是 {、最后一个字符必须是 }，前后不许有任何字、标签、围栏或解释）
 {"note":"画面思路一句话",%s"html":"<template>…整段场景文件…</template>","elements":[{"id":"元素DOM id","name":"人话名（与 data-hf-name 一致）"}]}
 `, seg.ID, int(cv.W), int(cv.H), seg.ID, v.DurationS+contract.SegTail, seg.Key, len(v.Words), v.DurationS, seg.Narration, briefLabel, seg.VisualBrief,
-		instrBlock, style, goldenBlock, sceneTpl, wb.String(), rules, compMethods, askBlock, feedbackBlock(feedback), reqField)
+		instrBlock, style, goldenBlock, sceneTpl, wb.String(), rules, compMethods, askBlock, feedbackBlock(feedback, prevHTML), reqField)
+}
+
+// prevSceneHTML 上一版场景文件（修复轮回喂底稿——模型看得见旧稿才谈得上定点
+// 修改）。超长保头尾截中段（保护 prompt 预算，截断处注明）。读不到（首稿）空串。
+func prevSceneHTML(p *pipeline.Project, segID string) string {
+	b, err := os.ReadFile(p.Artifact("compositions/frames/" + segID + ".html"))
+	if err != nil {
+		return ""
+	}
+	s := string(b)
+	const half = 24000
+	if len(s) > half*2 {
+		s = s[:half] + "\n<!-- …（中段过长截断；尾部结构如下） … -->\n" + s[len(s)-half:]
+	}
+	return s
 }

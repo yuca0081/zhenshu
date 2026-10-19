@@ -19,10 +19,23 @@ const emit = defineEmits<{ confirmed: []; 'chat-sent': [] }>()
 
 const message = useMessage()
 const confirming = ref(false)
-
+// 页内两段式确认（替代 window.confirm）：原生弹窗在部分浏览器/自动化环境被拦
+// 成静默假死（2026-10-16 死按钮、10-18 实测 Playwright 点按 30s 超时同源）。
+const armed = ref(false)
+let armTimer: number | null = null
+function disarm() {
+  armed.value = false
+  if (armTimer != null) { clearTimeout(armTimer); armTimer = null }
+}
 async function confirm() {
   if (!props.projectId || confirming.value) return
-  if (!window.confirm('确认三工件并锁定设计系统？确认后即可开工（制作阶段会按这套分镜与风格执行）。')) return
+  if (!armed.value) {
+    armed.value = true
+    if (armTimer != null) clearTimeout(armTimer)
+    armTimer = window.setTimeout(disarm, 3000)
+    return
+  }
+  disarm()
   confirming.value = true
   try {
     const r = await api.confirmPrep(props.projectId)
@@ -74,7 +87,10 @@ const sentences = computed(() => props.prep?.script?.sentences ?? [])
           </p>
         </div>
         <div v-if="confirmed" class="ok-badge">✓ 已确认，可开工</div>
-        <NButton v-else type="primary" :loading="confirming" @click="confirm">确认打包，允许开工</NButton>
+        <NButton
+          v-else :type="armed ? 'warning' : 'primary'" :loading="confirming" @click="confirm"
+          :title="armed ? '再点一次即锁定设计系统并允许开工' : '点击后需再确认一次（防误触）'"
+        >{{ armed ? '再点一次，确认开工' : '确认打包，允许开工' }}</NButton>
       </header>
 
       <div class="scroll">

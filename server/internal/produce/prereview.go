@@ -315,24 +315,25 @@ func (r *Runner) reviewSnapshots(ctx context.Context, p *pipeline.Project, sb *c
 		}
 		var vd frameVerdict
 		// 图1..图N = 该段截帧（时间正序）；样张/真迹附在其后（风格一致性同场评审）
-		imgs := make([]string, 0, len(bySeg[seg.ID])+len(samples)+len(keyImgs))
+		vis := make([]visImg, 0, len(bySeg[seg.ID])+len(samples)+len(keyImgs))
 		for _, png := range bySeg[seg.ID] {
 			jpg, serr := shrinkFrame(ctx, png)
 			if serr != nil {
 				r.Manifest(p, "prereview.review_error", seg.ID+": "+serr.Error())
 				return
 			}
-			imgs = append(imgs, dataURL(jpg))
+			vis = append(vis, visImg{URL: dataURL(jpg), Path: projRel(p, jpg), Label: "预审截帧 " + filepath.Base(jpg)})
 		}
-		imgs = append(imgs, samples...)
-		imgs = append(imgs, keyImgs...)
-		// 单发任务也走统一记账（「过程」页）：极简留痕 = 请求 + 响应各一条。
+		vis = append(vis, samples...)
+		vis = append(vis, keyImgs...)
+		imgs := visURLs(vis)
+		// 单发任务也走统一记账（「过程」页）：请求（带图清单）+ 响应各一条。
 		sys := "你是视频的画面质检员，只输出 JSON。"
 		prompt := preReviewPrompt(p, seg, voices[seg.ID], len(samples), len(keyImgs), crits)
 		at := agentlog.Begin(p, "prereview."+seg.ID, "画面预审 "+seg.ID)
 		if rec := at.Rec(); rec != nil {
 			rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: sys})
-			rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt})
+			rec.MessageImgs(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt}, visRefs(vis))
 		}
 		u, rerr := prov.GenerateJSONVisionEffort(ctx, sys, prompt, imgs, 0.2, &vd, llm.EffortHigh)
 		at.Add(u)

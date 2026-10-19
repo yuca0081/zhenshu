@@ -182,7 +182,7 @@ func TestMaterialsNoteAndWhitelist(t *testing.T) {
 		t.Fatalf("清单外引用应被拒: %v", errs)
 	}
 	// 视觉注入：素材图文件缺失时静默跳过，不炸
-	if imgs := materialDataURLs(p, mats); imgs != nil {
+	if imgs := materialVisImgs(p, mats); imgs != nil {
 		t.Fatalf("文件缺失应返回 nil: %v", imgs)
 	}
 }

@@ -113,8 +113,8 @@ func LastTerminal(p *pipeline.Project) (event, detail, ts string) {
 var (
 	mu       sync.Mutex
 	running  = map[string]context.CancelFunc{}
-	runGen   = map[string]uint64{} // 运行代际票：强制收尾凭票动手，防延时兜底误杀接手的新运行
-	genSeq   uint64                // 代际发号器（mu 内自增）
+	runGen   = map[string]uint64{}        // 运行代际票：强制收尾凭票动手，防延时兜底误杀接手的新运行
+	genSeq   uint64                       // 代际发号器（mu 内自增）
 	finished = map[string]bool{}          // 终态落账认领（防泄漏 goroutine 与强制终局双写）
 	orphaned = map[string]chan struct{}{} // 强制终局后仍在收尾的泄漏任务（Start 拒新，防双管线互踩）
 )
@@ -897,6 +897,9 @@ const checkRepairRules = `
 - 文字叠压 ✗（content_overlap）：默认＝重排拉开或给上层块加实底衬，与上一条同法。唯一例外＝` +
 	"本段版式在 design.md「本片版式」一节标了「声明叠层」（有意叠字手法）——此时给上层元素加属性 " +
 	"data-layout-allow-overlap 即合规放行。版式没声明叠层就贴这个属性＝作弊：渲染端会把声明剥掉重检，白修。\n" +
+	`  打字机/逐字点亮/字锚高亮类效果的重叠高发区——别用两块文字同位叠放实现：光标做成独立细竖线元素
+  在锚字旁侧位移；逐字点亮用同一元素换色/变辉光，不要在锚字上再叠一个同字副本；强调大字与锚字行错位排布。
+  两块文字元素一旦 DOM 位置相互覆盖就会被判重叠，调 z-index 没用。` + "\n" +
 	"- 对比度 ✗：文字色与它实际压着的背景太接近。从本片设计系统的色板里重新配一对前景/背景：" +
 	"办法你定（加深/提亮、换色、给文字加底衬），方向是一步把差距拉开、别在达标线附近试探——" +
 	"灰色地带横跳正是历轮修不收敛的根因。检查器的建议色不可信（实测往往不达标），不要照抄；" +
@@ -1772,28 +1775,60 @@ func skinNote(p *pipeline.Project) string {
 	return note
 }
 
-// styleSampleImages 已截图的风格样张（style/sample-N.png，ai/snap_samples.py 产物）→ data URL。
+// visImg 一张注入多模态模型的图：URL 给模型（data URL），Path/Label 给「过程」页
+// 对话留痕——前端按项目内路径渲染缩略图，点击放大看原文件。
+type visImg struct {
+	URL   string
+	Path  string // 项目内相对路径（正斜杠）
+	Label string
+}
+
+// visURLs 批量取 data URL（喂模型用）。
+func visURLs(vis []visImg) []string {
+	urls := make([]string, 0, len(vis))
+	for _, v := range vis {
+		urls = append(urls, v.URL)
+	}
+	return urls
+}
+
+// visRefs 批量转留痕图片引用。
+func visRefs(vis []visImg) []llm.ImgRef {
+	refs := make([]llm.ImgRef, 0, len(vis))
+	for _, v := range vis {
+		refs = append(refs, llm.ImgRef{Path: v.Path, Label: v.Label})
+	}
+	return refs
+}
+
+// projRel 项目内绝对路径 → 正斜杠相对路径（留痕图片引用用；前缀不符原样返回）。
+func projRel(p *pipeline.Project, abs string) string {
+	return strings.TrimPrefix(filepath.ToSlash(abs), filepath.ToSlash(p.Dir)+"/")
+}
+
+// styleSampleImages 已截图的风格样张（style/sample-N.png，ai/snap_samples.py 产物）→ 多模态注入图。
 // spec 生成时附给多模态模型：看真图选 kind/配色/调性，替代纯文字风格注入。最多 3 张，缺文件返回 nil。
-func styleSampleImages(p *pipeline.Project) []string {
-	var urls []string
+func styleSampleImages(p *pipeline.Project) []visImg {
+	var vis []visImg
 	for i := 0; i < 3; i++ {
-		path := p.Artifact(fmt.Sprintf("style/sample-%d.png", i))
+		rel := fmt.Sprintf("style/sample-%d.png", i)
+		path := p.Artifact(rel)
 		if _, err := os.Stat(path); err != nil {
 			break
 		}
 		// 缩到 640px JPEG 再注入：原始 PNG 直接 base64 曾把每次多模态调用的
 		// 载荷白抬 ~200KB；样张是风格基准，640 宽足够看构图配色质感
+		url := ""
 		if u, err := shrinkSampleImage(path); err == nil {
-			urls = append(urls, u)
-			continue
-		}
-		b, err := os.ReadFile(path)
-		if err != nil {
+			url = u
+		} else if b, err := os.ReadFile(path); err == nil {
+			url = "data:image/png;base64," + base64.StdEncoding.EncodeToString(b)
+		} else {
 			break
 		}
-		urls = append(urls, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(b))
+		vis = append(vis, visImg{URL: url, Path: rel, Label: fmt.Sprintf("风格样张 %d", i+1)})
 	}
-	return urls
+	return vis
 }
 
 // shrinkSampleImage 样张 PNG → 640 宽 JPEG dataURL（读盘+缩图+编码一体）。
@@ -1827,11 +1862,18 @@ func shrinkSampleImage(path string) (string, error) {
 	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(out.Bytes()), nil
 }
 
-func feedbackBlock(f string) string {
+// feedbackBlock 回喂块：意见清单 + 上一版场景文件。prevHTML 非空时模型才看得见
+// 旧稿——"定点修改"的前提是给它原稿（2026-10-18 实测：修复轮看不到旧版=每轮
+// 推倒重来，修好旧毛病随机带出新毛病，判卷逐轮漂移永不收敛）。
+func feedbackBlock(f, prevHTML string) string {
 	if f == "" {
 		return ""
 	}
-	return "\n## 必须修正\n" + f + "\n"
+	b := "\n## 必须修正\n" + f + "\n"
+	if prevHTML != "" {
+		b += "\n## 上一版场景文件（修复底稿：只动「必须修正」点名的元素，其余逐字保留）\n```html\n" + prevHTML + "\n```\n"
+	}
+	return b
 }
 
 // ── 子进程与工具 ─────────────────────────────────────────────

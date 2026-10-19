@@ -140,6 +140,11 @@ func (s *Server) Router() *gin.Engine {
 	api.POST("/references/:id/analyze", s.analyzeReference)
 	api.POST("/references/:id/confirm", s.confirmReference)
 	api.PUT("/references/:id/draft", s.updateReferenceDraft)
+	// 留痕图片取件走通配路径（style/xxx、reports/prereview/round1/xxx 多级目录），
+	// 进不了 secureParams（它禁参数里的斜杠）——单开一组，鉴权/项目归属照旧，
+	// 穿越防线由 handler 侧路径清洗 + 目录/扩展名白名单承担。
+	fileG := r.Group("/api", s.requireUser(), s.bodyGuard(), s.projectGuard())
+	fileG.GET("/projects/:id/file/*path", s.projectFile)
 	// 临时视频接口不进 tokened 组（大模型不会带 X-API-Token）：防线是 HMAC 签名 +
 	// 有效期 + clip-*.mp4 白名单（styleref.VerifyVideo/VideoFile），只暴露解析剪辑。
 	r.GET("/api/llm-video/:id/:name", s.llmVideo)
@@ -695,6 +700,7 @@ func (s *Server) projectView(c *gin.Context) {
 	if ev, _, ts := produce.LastTerminal(p); ev != "" {
 		lastProduce = gin.H{"event": ev, "ts": ts}
 	}
+	pt, ct, ncalls := agentTokenTotals(p.Artifact("manifest.jsonl"))
 	c.JSON(200, gin.H{
 		"id": id, "name": st.Name, "aspect": aspect, "topic": topic,
 		"gates": gin.H{
@@ -708,7 +714,71 @@ func (s *Server) projectView(c *gin.Context) {
 		},
 		// 最近一轮制作终态（与 agent 摘要同一事实源 produce.LastTerminal），前端标"上次制作失败"
 		"last_produce": lastProduce,
+		// 全程 token 消耗（manifest 全量 agent.done 累计，「过程」页头部展示）
+		"tokens": gin.H{"prompt": pt, "completion": ct, "calls": ncalls},
 	})
+}
+
+// agentTokenTotals manifest 全量扫 agent.done，累计整个项目所有智能体任务的 token
+// 用量与调用次数（「过程」页「全程」合计；活动流接口只回尾部窗口，算不了全程）。
+// 无 manifest / 空项目返回零值，不报错。
+func agentTokenTotals(path string) (prompt, completion, calls int) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, 0, 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		var ev struct {
+			Event            string `json:"event"`
+			PromptTokens     int    `json:"prompt_tokens"`
+			CompletionTokens int    `json:"completion_tokens"`
+			Calls            int    `json:"calls"`
+		}
+		if json.Unmarshal([]byte(line), &ev) != nil || ev.Event != "agent.done" {
+			continue
+		}
+		prompt += ev.PromptTokens
+		completion += ev.CompletionTokens
+		calls += ev.Calls
+	}
+	return prompt, completion, calls
+}
+
+// 留痕图片取件白名单：目录前缀 + 扩展名双闸——「过程」页对话里的缩略图/放大图
+// 只可能落在这些目录（样张/真迹/素材/审查截帧）。清单外一律 403，路径清洗防穿越。
+var transcriptFileDirs = []string{"style/", "assets/img/", "reports/frameqa/", "reports/prereview/"}
+var transcriptFileExts = map[string]bool{".png": true, ".jpg": true, ".jpeg": true}
+
+// projectFile 项目内媒体取件：GET /projects/:id/file/style/sample-0.png。
+// 「过程」页对话留痕里的注入图（llm/transcripts 的 images 字段）靠它渲染缩略图
+// 与点击放大。鉴权走 /api 组中间件；读不到 404。
+func (s *Server) projectFile(c *gin.Context) {
+	p, ok := s.project(c)
+	if !ok {
+		return
+	}
+	rel := strings.TrimPrefix(c.Param("path"), "/")
+	if rel == "" || filepath.ToSlash(filepath.Clean(rel)) != rel {
+		c.JSON(400, gin.H{"error": "路径不合法"})
+		return
+	}
+	allowed := false
+	for _, d := range transcriptFileDirs {
+		if strings.HasPrefix(rel, d) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed || !transcriptFileExts[strings.ToLower(filepath.Ext(rel))] {
+		c.JSON(403, gin.H{"error": "文件不在取件白名单"})
+		return
+	}
+	abs := p.Artifact(filepath.FromSlash(rel))
+	if _, err := os.Stat(abs); err != nil {
+		c.JSON(404, gin.H{"error": "文件不存在"})
+		return
+	}
+	c.File(abs)
 }
 
 // deleteProject 删除项目：磁盘目录 + DB 镜像（行/聊天/任务）。

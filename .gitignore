@@ -94,3 +94,6 @@ data2/
 
 # 实测证据截图/日志不入库：docs/test-result/ 只提交 md 纪要（惯例自 bbfe0f4）
 docs/test-result/*/
+
+# TypeScript 增量构建缓存（vue-tsc 产物，可再生）
+web/*.tsbuildinfo

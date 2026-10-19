@@ -163,6 +163,8 @@ export const api = {
 
 // rev = 成片代次（重做完成后递增）：同 URL 会被 <video> 惰性复用，重做完必须换 URL 才能看到新画面
 export const videoURL = (id: string, rev = 0) => `/api/projects/${id}/video/main.mp4${rev ? `?v=${rev}` : ''}`
+// 项目内白名单文件（style/样张真迹、assets/img/素材、reports/ 审查截帧；过程页对话缩略图用）
+export const artifactFileURL = (id: string, path: string) => `/api/projects/${id}/file/${path}`
 // 参考引用媒体（抽帧 frame-*.png / 原视频 video.mp4；详情抽屉用）
 export const referenceMediaURL = (id: string, file: string) => `/api/references/${id}/media/${file}`
 // 风格库媒体（入库快照；详情抽屉用）

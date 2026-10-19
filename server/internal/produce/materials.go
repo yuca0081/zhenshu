@@ -253,17 +253,22 @@ func materialNote(n int) string {
 	return fmt.Sprintf("\n- 附图最后 %d 张是本段素材真图（公版，清单见素材块）：看清内容再决定用不用、怎么用\n", n)
 }
 
-// materialDataURLs 素材图 → data URL（注入场景生成的视觉上下文，让模型看着真图定摆位）。
-func materialDataURLs(p *pipeline.Project, mats []Material) []string {
-	var urls []string
+// materialVisImgs 素材图 → 多模态注入图（URL 给模型看着真图定摆位；路径+标签给
+// 「过程」页留痕缩略图）。
+func materialVisImgs(p *pipeline.Project, mats []Material) []visImg {
+	var vis []visImg
 	for _, m := range mats {
 		b, err := os.ReadFile(p.Artifact(filepath.FromSlash(m.File)))
 		if err != nil {
 			continue
 		}
-		urls = append(urls, "data:image/jpeg;base64,"+base64.StdEncoding.EncodeToString(b))
+		vis = append(vis, visImg{
+			URL:   "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(b),
+			Path:  m.File,
+			Label: "素材真图 " + filepath.Base(m.File),
+		})
 	}
-	return urls
+	return vis
 }
 
 // assetsImgSrcRe 场景 HTML 的图片引用（包级预编译：sceneValidate 每段×每修复轮都跑）。

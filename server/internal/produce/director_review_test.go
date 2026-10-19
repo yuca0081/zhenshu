@@ -284,7 +284,7 @@ func TestDirectorReviewPromptAndFeedback(t *testing.T) {
 func TestReviewPromptBeats(t *testing.T) {
 	p := &pipeline.Project{ID: "t", Dir: t.TempDir(), Ctx: context.Background()}
 	seg := anchorSeg()
-	s := reviewPrompt(p, seg, anchorVoices(), nil, 0, nil, 0)
+	s := reviewPrompt(p, seg, anchorVoices(), 0, 0, nil, 0)
 	for _, want := range []string{
 		"本段节拍（导演定的逐拍画面预期）",
 		"「你此刻的念头」→ 粒子汇聚",
@@ -296,7 +296,7 @@ func TestReviewPromptBeats(t *testing.T) {
 	}
 	plain := seg
 	plain.Beats = nil
-	if s2 := reviewPrompt(p, plain, anchorVoices(), nil, 0, nil, 0); strings.Contains(s2, "本段节拍") {
+	if s2 := reviewPrompt(p, plain, anchorVoices(), 0, 0, nil, 0); strings.Contains(s2, "本段节拍") {
 		t.Fatal("无节拍不该出现节拍块")
 	}
 }

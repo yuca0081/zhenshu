@@ -27,12 +27,20 @@ var taskNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,79}$`)
 // ValidTask 任务名是否合法。
 func ValidTask(task string) bool { return taskNameRe.MatchString(task) }
 
-// 单条留痕的截断上限（rune 数）：正文 12k 兜住 fetch_page 这类大观察，
+// 单条留痕的截断上限（rune 数）：正文 20k 兜住 fetch_page/场景考卷这类大注入
+// （12k 时场景提示的段信息被截在金样例之后，恰恰是排查时最想看的部分），
 // 工具参数 4k——参数是模型手写的 JSON，超长必是跑偏。
 const (
-	maxContentRunes = 12000
+	maxContentRunes = 20000
 	maxArgsRunes    = 4000
 )
+
+// ImgRef 留痕里引用的一张项目内图片：给「过程」页渲染缩略图、点击放大用。
+// 图片载荷本身（data URL）不落盘——那是给模型的，落盘只记项目内路径。
+type ImgRef struct {
+	Path  string `json:"path"`            // 项目内相对路径（正斜杠），走 /projects/:id/file/ 取件
+	Label string `json:"label,omitempty"` // 这张图是什么（风格样张/真迹/素材/截帧）
+}
 
 // Transcript 单个智能体任务的对话留痕文件。并发安全（内部互斥；跨任务各写各文件）。
 type Transcript struct {
@@ -65,6 +73,24 @@ func (t *Transcript) Message(msg openai.ChatCompletionMessage) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	line, _ := json.Marshal(transcriptMsg(msg))
+	t.f.Write(append(line, '\n'))
+}
+
+// MessageImgs 追加一条带图片注入清单的消息：多模态调用把图片喂给模型的同时，
+// 把项目内路径清单记进留痕——「过程」页据此渲染缩略图，点击放大看原文件。
+func (t *Transcript) MessageImgs(msg openai.ChatCompletionMessage, imgs []ImgRef) {
+	if t == nil || t.f == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := transcriptMsg(msg)
+	if len(imgs) > 0 {
+		refs := make([]ImgRef, 0, len(imgs))
+		refs = append(refs, imgs...)
+		out["images"] = refs
+	}
+	line, _ := json.Marshal(out)
 	t.f.Write(append(line, '\n'))
 }
 

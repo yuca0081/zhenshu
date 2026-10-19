@@ -113,7 +113,7 @@ var boundaryFrameTimes = []struct {
 
 // extractBoundaryFrames 段边界前后帧序列（transition 判据的考核证据，§4.6 第三层
 // 帧通道实现：边界前后各 3 帧覆盖 ±3s）。首段无上边界返回 nil；抽帧失败容忍缺张。
-func extractBoundaryFrames(ctx context.Context, p *pipeline.Project, segIdx int) []string {
+func extractBoundaryFrames(ctx context.Context, p *pipeline.Project, segIdx int) []visImg {
 	if segIdx < 2 {
 		return nil
 	}
@@ -132,7 +132,7 @@ func extractBoundaryFrames(ctx context.Context, p *pipeline.Project, segIdx int)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil
 	}
-	var urls []string
+	var vis []visImg
 	for i, bt := range boundaryFrameTimes {
 		mp4, out := curMP4, filepath.Join(dir, fmt.Sprintf("%s.b%d.jpg", curID, i))
 		var seek []string
@@ -143,10 +143,10 @@ func extractBoundaryFrames(ctx context.Context, p *pipeline.Project, segIdx int)
 			seek = []string{"-ss", bt.off}
 		}
 		if u := grabJPEG(ctx, ff, mp4, out, seek); u != "" {
-			urls = append(urls, u)
+			vis = append(vis, visImg{URL: u, Path: projRel(p, out), Label: "段边界帧（" + filepath.Base(out) + "）"})
 		}
 	}
-	return urls
+	return vis
 }
 
 // grabJPEG 抽一帧成 1280 宽 JPEG 并返回 data URL（失败返回 ""）。

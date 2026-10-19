@@ -205,23 +205,28 @@ func (r *Runner) reviewSegments(ctx context.Context, p *pipeline.Project, only s
 		// high：逐段审查调用量大，max 的深思考成本×段数不划算；max 留给 storyboard 这类每片一次的深规划。
 		// 样张/真迹附在四帧之后（图5+）：风格一致性同场评审——笼子二的回路（plan-v2 §4 Tier1 报告项）。
 		// 段边界前后帧序列（transition 判据的考核证据）附在最后。
-		imgs := []string{dataURL(sf.first), dataURL(sf.open), dataURL(sf.last), dataURL(sf.final)}
-		if len(samples) > 0 {
-			imgs = append(imgs, samples...)
+		frameVis := []visImg{
+			{URL: dataURL(sf.first), Path: projRel(p, sf.first), Label: "首帧（0s）"},
+			{URL: dataURL(sf.open), Path: projRel(p, sf.open), Label: "开场帧（约0.8s）"},
+			{URL: dataURL(sf.last), Path: projRel(p, sf.last), Label: "落定帧（段尾稍前）"},
+			{URL: dataURL(sf.final), Path: projRel(p, sf.final), Label: "尾帧"},
 		}
-		imgs = append(imgs, keyImgs...)
-		var boundary []string
+		vis := append([]visImg{}, frameVis...)
+		vis = append(vis, samples...)
+		vis = append(vis, keyImgs...)
+		var boundary []visImg
 		if dynamic {
 			boundary = extractBoundaryFrames(ctx, p, seg.Idx)
-			imgs = append(imgs, boundary...)
+			vis = append(vis, boundary...)
 		}
-		// 单发任务也走统一记账（「过程」页）：极简留痕 = 请求 + 响应各一条。
+		imgs := visURLs(vis)
+		// 单发任务也走统一记账（「过程」页）：请求（带图清单）+ 响应各一条。
 		sys := "你是视频的画面质检员，只输出 JSON。"
-		prompt := reviewPrompt(p, seg, voices[seg.ID], keyImgs, len(samples), crits, len(boundary))
+		prompt := reviewPrompt(p, seg, voices[seg.ID], len(keyImgs), len(samples), crits, len(boundary))
 		at := agentlog.Begin(p, "frameqa."+seg.ID, "画面审查 "+seg.ID)
 		if rec := at.Rec(); rec != nil {
 			rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: sys})
-			rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt})
+			rec.MessageImgs(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: prompt}, visRefs(vis))
 		}
 		u, rerr := prov.GenerateJSONVisionEffort(ctx, sys, prompt, imgs, 0.2, &vd, llm.EffortHigh)
 		at.Add(u)
@@ -370,17 +375,17 @@ func specHasScene(p *pipeline.Project, segID string) bool {
 // 出现，落定帧查布局全项，尾帧查退场残留。图片按 图1=首帧、图2=开场帧、
 // 图3=落定帧、图4=尾帧 顺序附在消息里；样张/原片真迹跟在图5+（笼子二回路）；
 // 段边界前后帧序列（transition 判据的考核证据）附在最末。crits 是特色判据清单（§4.6）。
-func reviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta, keys []string, samplesN int, crits []sigCriterion, boundaryN int) string {
-	styleBlock := styleCheckBlock(designOf(p), samplesN, len(keys), 4)
+func reviewPrompt(p *pipeline.Project, seg contract.Segment, v voiceMeta, keysN, samplesN int, crits []sigCriterion, boundaryN int) string {
+	styleBlock := styleCheckBlock(designOf(p), samplesN, keysN, 4)
 	var b strings.Builder
 	header := "这是同一段视频的四帧渲染画面（底部字幕带是画面一部分，字幕文字不算元素）。"
 	switch {
-	case samplesN > 0 && len(keys) > 0:
-		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张已确认的风格样张 + %d 张本风格来源视频的原片真迹（底部字幕带是画面一部分，字幕文字不算元素）。", samplesN, len(keys))
+	case samplesN > 0 && keysN > 0:
+		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张已确认的风格样张 + %d 张本风格来源视频的原片真迹（底部字幕带是画面一部分，字幕文字不算元素）。", samplesN, keysN)
 	case samplesN > 0:
 		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张已确认的风格样张（底部字幕带是画面一部分，字幕文字不算元素）。", samplesN)
-	case len(keys) > 0:
-		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张本风格来源视频的原片真迹（底部字幕带是画面一部分，字幕文字不算元素）。", len(keys))
+	case keysN > 0:
+		header = fmt.Sprintf("这是同一段视频的四帧渲染画面 + %d 张本风格来源视频的原片真迹（底部字幕带是画面一部分，字幕文字不算元素）。", keysN)
 	}
 	if boundaryN > 0 {
 		header += fmt.Sprintf("另附 %d 张段边界前后帧序列（转场判据的证据）。", boundaryN)

@@ -17,6 +17,8 @@ package produce
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,6 +87,16 @@ func renderConcurrency() int {
 func IsPrepProject(p *pipeline.Project) bool {
 	_, err := os.Stat(p.Artifact("scripts/script.json"))
 	return err == nil
+}
+
+// narrationFingerprint 全片旁白指纹（段 id+旁白逐段哈希）：TTS 幂等复用的依据。
+// 文稿/分镜改动（旁白或段集变化）→ 指纹变 → TTS 重跑；一致 → 复用现有配音。
+func narrationFingerprint(sb *contract.Storyboard) string {
+	h := sha256.New()
+	for _, seg := range sb.Segments {
+		h.Write([]byte(seg.ID + "\x00" + seg.Narration + "\x00"))
+	}
+	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
 // ── 日志与恢复（§4.4：追加只写，恢复不重做已完成段）─────────────────
@@ -242,14 +254,30 @@ func (r *Runner) runSegmentPipeline(ctx context.Context, p *pipeline.Project) er
 		return fmt.Errorf("分镜缺失: %w", err)
 	}
 
-	// TTS + 词级对齐（一次，全局，幂等——设计文档 §2）
-	r.emit(id, "stage", "tts", "running")
-	r.Manifest(p, "stage.start", "tts")
-	if err := r.python(ctx, "ai/tts_align.py", p.Dir, 30*time.Minute); err != nil {
-		return fmt.Errorf("TTS/对齐失败: %w", err)
+	// TTS + 词级对齐（一次，全局，幂等——设计文档 §2）。旁白指纹（段集+逐段旁白）
+	// 未变且配音在 → 复用不重跑不记账：重跑轮逐字复跑 TTS 只会产生「配音(第N轮)
+	// <1秒」的吓人账行（2026-10-18 实测）；指纹变（文稿/分镜改旁白）自动过期重跑。
+	fp := narrationFingerprint(sb)
+	reuseTTS := false
+	if b, err := os.ReadFile(p.Artifact("audio_meta.fp")); err == nil && string(b) == fp {
+		if _, err := loadAudioMeta(p); err == nil {
+			reuseTTS = true
+		}
 	}
-	r.emit(id, "stage", "tts", "done")
-	r.Manifest(p, "stage.finish", "tts")
+	if reuseTTS {
+		r.Manifest(p, "produce.tts", "reused")
+	} else {
+		r.emit(id, "stage", "tts", "running")
+		r.Manifest(p, "stage.start", "tts")
+		if err := r.python(ctx, "ai/tts_align.py", p.Dir, 30*time.Minute); err != nil {
+			return fmt.Errorf("TTS/对齐失败: %w", err)
+		}
+		r.emit(id, "stage", "tts", "done")
+		r.Manifest(p, "stage.finish", "tts")
+		if err := pipeline.WriteFileAtomic(p.Artifact("audio_meta.fp"), []byte(fp), 0o644); err != nil {
+			log.Printf("[produce] 写配音指纹失败: %v", err)
+		}
+	}
 	r.Manifest(p, "produce.tts", "done")
 	if err := r.translateSubtitles(ctx, p); err != nil {
 		r.emit(id, "progress", "tts", "双语字幕翻译跳过: "+err.Error())
@@ -348,7 +376,7 @@ type coordinator struct {
 	passNotify chan string // 段过审通知（边界跟踪的唤醒信号）
 
 	samplesOnce sync.Once
-	sampleImgs  []string
+	sampleVis   []visImg
 
 	// cctx/chainWg 供审核路径现起 worker 用（spawnWorker 提为方法后需要；
 	// cctx 由 run 写定后才起任何 goroutine，无数据竞争）。
@@ -564,7 +592,7 @@ func (c *coordinator) watchdog(ctx context.Context) {
 
 // produceStallTimeout 全管线静默升级阈值（PRODUCE_STALL_TIMEOUT，默认 32m）。
 // 必须大于审查工位两 journal 落账间的合法静默：多轮判卷每轮一次 LLM 调用
-//（单次传输超时 10min），2-3 轮不落账=20-30 分钟静默是常态——15m 阈值实测
+// （单次传输超时 10min），2-3 轮不落账=20-30 分钟静默是常态——15m 阈值实测
 // 反复误杀健康的边界审（2026-10-18，每误杀一次重跑损失 45min+）。
 // 超过此值也会被升级——如实失败可重跑好过无声悬挂。
 func produceStallTimeout() time.Duration {
@@ -922,10 +950,16 @@ func (c *coordinator) auditSegment(ctx context.Context, req auditReq) {
 		return
 	}
 	if round > maxSegRework {
-		reason := fmt.Sprintf("%s 打回超限（%d 轮仍未过）", s.seg.ID, maxSegRework)
-		c.brakes.trip(reason)
-		c.emit("stage", "review", "error: "+reason)
-		c.r.Manifest(c.p, "review.brake", reason)
+		// 打回超限不再杀整片（2026-10-18 实测：seg06/seg02 两个顽固段各把整条
+		// 制作拖死一波，三次尝试全折在"打回超限"）。改降级放行：意见单已落盘
+		// reviews/ 可查，带伤记账明示——宁出带伤成片不出零成片；哲学同审查器
+		// 故障放行。真系统性问题仍有签名刹车兜底（同签名连续两轮/跨段同类别），
+		// 那才是该停机的信号；单个段反复修不动多半是 LLM 写不出满足判卷的实现，
+		// 继续死磕只是烧钱。
+		c.brakes.clear(s.seg.ID)
+		c.segState(s.seg.ID, stAudited, round, gen, detail+"（打回超限，带伤放行）")
+		c.emit("progress", "review", fmt.Sprintf("段审 %s %d 轮仍未过，带伤放行（意见单在 reviews/ 可查）", s.seg.ID, round))
+		c.r.Manifest(c.p, "review.seg_pass_degraded", fmt.Sprintf("%s r%d: %s", s.seg.ID, round, detail))
 		return
 	}
 	c.r.Manifest(c.p, "review.rework", fmt.Sprintf("%s r%d: %s", s.seg.ID, round, detail))
@@ -1326,8 +1360,8 @@ func (c *coordinator) anchorFramesFor(s *segCtx, ends map[string]float64) []revi
 
 // sampleImages 样张 dataURL（每次审核同一套，算一次缓存）。
 func (c *coordinator) sampleImages() []string {
-	c.samplesOnce.Do(func() { c.sampleImgs = styleSampleImages(c.p) })
-	return c.sampleImgs
+	c.samplesOnce.Do(func() { c.sampleVis = styleSampleImages(c.p) })
+	return visURLs(c.sampleVis)
 }
 
 func (c *coordinator) loadVerdictFile(kind, id string, round int) *review.Verdict {
@@ -1370,13 +1404,16 @@ func designRulesDigest(sp *contract.StylePack) string {
 }
 
 // redrawFeedback high 意见 → ④修复回喂（只带失败条目+证据+期望，§6.6）。
+// 2026-10-18 实测教训：旧版"重写整个场景文件"等于每轮推倒重来——修好旧毛病的
+// 同时随机带出新毛病，判卷逐轮漂移永不收敛（seg06 三轮换三种死法、seg02 四轮
+// 不收敛）。改为外科手术式修改：只动点名的元素，其余逐字保留。
 func redrawFeedback(high []review.Finding) string {
 	var b strings.Builder
-	b.WriteString("上一版画面被审核工位打回，以下问题逐条修正（重写整个场景文件，其余画面保持原样）：\n")
+	b.WriteString("上一版画面被审核工位打回。在上一版场景文件的基础上做定点修改——只有下面点名的元素允许动，其余 HTML 结构、文案、CSS、动效全部逐字保留，禁止推倒重写、禁止顺手改构图/配色/动效：\n")
 	for _, f := range high {
 		fmt.Fprintf(&b, "- [%s][%s] %s\n", f.Category, f.Anchor, f.Evidence)
 	}
-	b.WriteString("\n修正要求：问题指向的画面元素按 evidence 里的期望改；anchor 是 N 几的以该句旁白承载的画面为准，t=几秒的以该时刻画面为准。\n")
+	b.WriteString("\n修正要求：问题指向的画面元素按 evidence 里的期望改；anchor 是 N 几的以该句旁白承载的画面为准，t=几秒的以该时刻画面为准。上一版没被点名的问题说明已达标，改掉反而会引入新意见。\n")
 	return b.String()
 }
 

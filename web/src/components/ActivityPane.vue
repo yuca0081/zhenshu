@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { ActivityEvent, TranscriptMsg } from '../types'
-import { api } from '../api'
+import { api, artifactFileURL } from '../api'
 import { stageLabel } from '../format'
 
 // 「过程」页（2026-10-18 替代旧事件流弹窗）：manifest 事件 → 两条线——
@@ -9,8 +9,15 @@ import { stageLabel } from '../format'
 // ② 智能体任务卡（agent.start/agent.done 聚合）：标题+用时+token 账，
 //    点开懒加载对话留痕（GET /transcript），运行中的卡片每 5 秒刷新看它干活。
 // 卡片身份键 = task#第几次开工：重跑/冷重试同任务号会开新卡片，展开态不串卡。
+// 头部两本账：「全程」= 项目里所有智能体任务累计（projectView 的 tokens，
+// manifest 全量扫描，不受活动流尾部窗口限制）；「本轮」= 最近一次开工以来。
 
-const props = defineProps<{ projectId: string; events: ActivityEvent[]; producing: boolean }>()
+const props = defineProps<{
+  projectId: string
+  events: ActivityEvent[]
+  producing: boolean
+  totals?: { prompt: number; completion: number; calls: number } | null
+}>()
 
 const evMs = (e: ActivityEvent) => e.ms ?? Date.parse(e.ts)
 const knownStage = (s: string) => stageLabel(s) !== s
@@ -256,7 +263,7 @@ const items = computed<Item[]>(() => {
 const itemsReversed = computed(() => [...items.value].reverse())
 
 // ── 本轮合计：最近一次开工（produce/rework）之后的全部 agent.done ──
-const totals = computed(() => {
+const roundTotals = computed(() => {
   let start = -1
   props.events.forEach((ev, i) => {
     if (ev.event === 'produce.start' || ev.event === 'rework.start') start = i
@@ -327,6 +334,12 @@ const roleLabel = (m: TranscriptMsg) => {
   return `工具·${m.name || m.tool_call_id || ''}`
 }
 const clampText = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '…' : s)
+
+// ── 注入图缩略图 + 点击放大（灯箱）：images = 留痕里记的项目内路径清单 ──
+const lightbox = ref<{ src: string; label: string } | null>(null)
+const openLightbox = (path: string, label?: string) => {
+  lightbox.value = { src: artifactFileURL(props.projectId, path), label: label || path }
+}
 </script>
 
 <template>
@@ -334,8 +347,11 @@ const clampText = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '…
     <div class="ap-head">
       制作过程
       <span v-if="producing" class="ap-live"><i class="live-dot" />制作中</span>
-      <span v-if="totals.n" class="ap-totals" title="最近一次开工以来全部智能体任务的 token 消耗合计">
-        本轮模型消耗：输入 {{ fmtTok(totals.p) }} · 输出 {{ fmtTok(totals.c) }} tokens · {{ totals.n }} 次调用
+      <span v-if="totals?.calls" class="ap-totals ap-total-all" title="这个项目全部智能体任务的 token 消耗累计（manifest 全量累计，含此前每一轮）">
+        全程：输入 {{ fmtTok(totals.prompt) }} · 输出 {{ fmtTok(totals.completion) }} tokens · {{ totals.calls }} 次调用
+      </span>
+      <span v-if="roundTotals.n" class="ap-totals" :class="{ 'ap-totals-push': totals?.calls }" title="最近一次开工以来全部智能体任务的 token 消耗合计">
+        本轮：输入 {{ fmtTok(roundTotals.p) }} · 输出 {{ fmtTok(roundTotals.c) }} tokens · {{ roundTotals.n }} 次调用
       </span>
     </div>
     <div v-if="itemsReversed.length" class="ap-scroll">
@@ -377,6 +393,16 @@ const clampText = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '…
                   @click.stop="toggleKey(`${it.key}:${mi}`, false)"
                 >{{ isOpenKey(`${it.key}:${mi}`, false) ? '收起' : '展开' }}</button>
               </div>
+              <!-- 注入图缩略图：点击放大看原文件 -->
+              <div v-if="m.images?.length" class="msg-imgs">
+                <figure
+                  v-for="(im, ii) in m.images" :key="ii" class="msg-img"
+                  :title="`${im.label || im.path}——点击放大`" @click.stop="openLightbox(im.path, im.label)"
+                >
+                  <img :src="artifactFileURL(projectId, im.path)" :alt="im.label || im.path" loading="lazy" />
+                  <figcaption>{{ im.label || im.path }}</figcaption>
+                </figure>
+              </div>
               <template v-for="(tc, ci) in m.tool_calls || []" :key="ci">
                 <div class="toolcall">
                   <div class="toolcall-head">
@@ -402,6 +428,12 @@ const clampText = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '…
       </template>
     </div>
     <div v-else class="ap-empty">还没有制作记录——开工后这里会逐步记下每个工位的用时、智能体的对话和 token 消耗。</div>
+    <!-- 灯箱：点击任意处关闭 -->
+    <div v-if="lightbox" class="lightbox" @click="lightbox = null">
+      <img :src="lightbox.src" :alt="lightbox.label" />
+      <div class="lightbox-label">{{ lightbox.label }}</div>
+      <div class="lightbox-hint">点击任意处关闭</div>
+    </div>
   </div>
 </template>
 
@@ -415,9 +447,12 @@ const clampText = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '…
 .ap-live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 400; color: #8fc7ff; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #8fc7ff; animation: pulse 1.2s infinite; }
 .ap-totals {
-  margin-left: auto; font-size: 12px; font-weight: 400; color: #9a9aa8;
+  font-size: 12px; font-weight: 400; color: #9a9aa8;
   font-variant-numeric: tabular-nums;
 }
+/* 全程账永远最右（它是主账）；本轮账随其后；只有本轮时本轮自己推到右边 */
+.ap-total-all { margin-left: auto; color: #c9c9d3; }
+.ap-totals-push { margin-left: auto; }
 .ap-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 10px 16px; }
 .ap-empty { padding: 18px; color: #55555f; font-size: 12.5px; line-height: 1.8; }
 
@@ -504,5 +539,27 @@ const clampText = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '…
 .toolcall { border: 1px solid #232331; border-radius: 8px; margin: 4px 0; padding: 6px 8px; background: #15121d; }
 .toolcall-head { display: flex; align-items: center; gap: 8px; }
 .toolcall-name { font-size: 11.5px; color: #c3a6ff; font-weight: 600; }
+
+/* 注入图缩略图条 + 灯箱 */
+.msg-imgs { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+.msg-img {
+  width: 96px; margin: 0; cursor: zoom-in; border: 1px solid #26262e;
+  border-radius: 6px; overflow: hidden; background: #0d0d12;
+}
+.msg-img:hover { border-color: rgba(240, 198, 116, .5); }
+.msg-img img { display: block; width: 100%; height: 54px; object-fit: cover; }
+.msg-img figcaption {
+  font-size: 9.5px; color: #7c7c88; padding: 2px 4px; line-height: 1.3;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lightbox {
+  position: fixed; inset: 0; z-index: 300; cursor: zoom-out;
+  background: rgba(8, 8, 12, .88); backdrop-filter: blur(4px);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  padding: 32px;
+}
+.lightbox img { max-width: 92vw; max-height: 82vh; object-fit: contain; border-radius: 8px; box-shadow: 0 8px 48px rgba(0, 0, 0, .6); }
+.lightbox-label { color: #d9d9e0; font-size: 13px; }
+.lightbox-hint { color: #55555f; font-size: 11px; }
 @keyframes pulse { 50% { opacity: .35; } }
 </style>

@@ -51,6 +51,8 @@ export interface ProjectView {
   video_stale: { manuscript: boolean; storyboard: boolean; style: boolean }
   // 最近一轮制作终态（error/interrupted = 失败/中断，与列表 last_produce 同源）
   last_produce?: { event: string; ts: string } | null
+  // 全程 token 消耗（manifest 全量 agent.done 累计；「过程」页头部展示）
+  tokens?: { prompt: number; completion: number; calls: number }
 }
 
 // 工作区中央页签（想法/文稿/分镜/风格/终审/视频/过程——「想法」是准备工位的启动页）
@@ -256,13 +258,14 @@ export interface ActivityEvent {
 }
 
 // 智能体任务对话留痕（GET /transcript?task=，llm/transcripts/<task>.jsonl 每行一条）。
-// 后端写入时已减脂：超长截断、图片换 [图片×N] 占位
+// 后端写入时已减脂：超长截断；图片不落数据载荷，只记项目内路径清单（images）
 export interface TranscriptMsg {
   role: string // system | user | assistant | tool | note
   content?: string
   name?: string // tool 消息的工具名
   tool_call_id?: string
   tool_calls?: { id: string; name: string; args: string }[]
+  images?: { path: string; label?: string }[] // 注入模型的项目内图片（缩略图可点开原文件）
   ts?: string
 }
 

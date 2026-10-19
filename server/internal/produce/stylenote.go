@@ -85,11 +85,11 @@ func styleNoteFor(p *pipeline.Project) string {
 	return note
 }
 
-// styleKeyframeImages 简报证据帧（v3：原片真迹）→ data URL（≤6 张）。
+// styleKeyframeImages 简报证据帧（v3：原片真迹）→ 多模态注入图（≤6 张）。
 // 证据来自项目 style/style_brief.json 的 evidence（绝对路径，style_media 快照），
 // 每张先经 ffmpeg 压成 1280 宽 JPEG 缓存进项目 style/（key-<条目id>-<帧名>.jpg，
 // 与段渲染抽帧同规格），压图/读图失败单张跳过——真迹是加分项，缺失不挡出片。
-func styleKeyframeImages(ctx context.Context, p *pipeline.Project) []string {
+func styleKeyframeImages(ctx context.Context, p *pipeline.Project) []visImg {
 	brief := pipeline.LoadStyleBrief(p)
 	if brief == nil || len(brief.Evidence) == 0 {
 		return nil
@@ -98,7 +98,7 @@ func styleKeyframeImages(ctx context.Context, p *pipeline.Project) []string {
 	if err != nil {
 		return nil
 	}
-	var urls []string
+	var vis []visImg
 	const maxKeyframes = 6 // 与素材真图上限同口径：真迹是对照物不是正文，多塞白烧 token
 	for i, src := range brief.Evidence {
 		if i >= maxKeyframes {
@@ -117,9 +117,13 @@ func styleKeyframeImages(ctx context.Context, p *pipeline.Project) []string {
 		if err != nil {
 			continue
 		}
-		urls = append(urls, "data:image/jpeg;base64,"+base64.StdEncoding.EncodeToString(b))
+		vis = append(vis, visImg{
+			URL:   "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(b),
+			Path:  projRel(p, dst),
+			Label: "风格真迹（原片帧）",
+		})
 	}
-	return urls
+	return vis
 }
 
 // keyframeNote 场景生成提示里的真迹说明（真迹紧随样张截图；素材真图在真迹之后）。

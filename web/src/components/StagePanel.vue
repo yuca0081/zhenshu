@@ -58,7 +58,8 @@ const tabs = computed(() => {
   if (showIdea.value) list.push({ id: 'idea', label: '想法' })
   list.push({ id: 'manuscript', label: '文稿' }, { id: 'storyboard', label: '分镜' }, { id: 'style', label: '风格' })
   if (props.prep?.exists) list.push({ id: 'review', label: '终审' })
-  list.push({ id: 'video', label: '视频' }, { id: 'activity', label: '过程' })
+  // 「过程」不进页签列——独立按钮放在页签行右侧（head-right），点击切到整页过程内容
+  list.push({ id: 'video', label: '视频' })
   return list
 })
 
@@ -119,6 +120,22 @@ function tabState(id: TabID): { cls: string[]; title: string; label: string } {
       }
   }
 }
+
+// ── 失败未读红点 ──────────────────────────────────────────────────
+// 最近一次制作以失败/中断收场（非手动取消）而用户还没打开过「过程」页 →
+// 胶囊按钮亮红点；进入过程页即视为已读。制作中不亮（有呼吸灯表达活着）。
+const FAIL_EVENTS = new Set(['produce.error', 'rework.error', 'produce.interrupted', 'rework.interrupted'])
+const lastFailAt = computed(() => {
+  let t = 0
+  for (const e of props.activity) {
+    if (FAIL_EVENTS.has(e.event)) t = e.ms ?? (Date.parse(e.ts) || 0)
+  }
+  return t
+})
+const seenFailAt = ref(0)
+watch(() => props.tab, t => { if (t === 'activity') seenFailAt.value = lastFailAt.value })
+watch(lastFailAt, t => { if (props.tab === 'activity') seenFailAt.value = t })
+const failUnseen = computed(() => !props.view?.producing && props.tab !== 'activity' && lastFailAt.value > seenFailAt.value)
 
 // ── 分镜目标时长（时长概念归分镜：这里定总时长，AI 按它重排各段）──
 const targetMin = ref(1)
@@ -209,7 +226,7 @@ async function redoFull() {
 <template>
   <section class="stage">
     <div class="pane">
-      <!-- 页签行：六页 + 状态灯（红绿灯/过期点）+ 右上角 下载成片 -->
+      <!-- 页签行：五页 + 状态灯（红绿灯/过期点）+ 右上角 下载成片/过程 -->
       <header v-if="view" class="tabs">
         <button
           v-for="t in tabs" :key="t.id" class="tab" :class="[tabState(t.id).cls, { on: tab === t.id }]"
@@ -224,11 +241,17 @@ async function redoFull() {
             :title="`${redoNames.join('、')}在成片生成后又改过——成片还是旧版。点此按最新内容重做：没变的产物会复用，只重做出入的部分。`"
             @click="redoFull"
           >按最新内容重做</NButton>
-          <!-- 下载成片（过程回看走「过程」页签，事件流弹窗已退役） -->
+          <!-- 下载成片 -->
           <a
             v-if="view.has_video" class="dl-btn"
             :href="videoURL(videoId, videoRev)" :download="`${view.name}.mp4`"
           >↓ 下载成片</a>
+          <!-- 过程回看：独立胶囊按钮（原事件流按钮样式），点击切到整页「过程」内容 -->
+          <button
+            class="feed-btn" :class="{ on: tab === 'activity' }"
+            :title="tabState('activity').title"
+            @click="emit('tab', tab === 'activity' ? 'video' : 'activity')"
+          ><span v-if="view.producing" class="live-dot" /><span v-else-if="failUnseen" class="fail-dot" />过程</button>
         </div>
       </header>
 
@@ -303,7 +326,7 @@ async function redoFull() {
           />
           <ActivityPane
             v-else-if="tab === 'activity'"
-            :project-id="videoId" :events="activity" :producing="!!view.producing"
+            :project-id="videoId" :events="activity" :producing="!!view.producing" :totals="view.tokens"
           />
         </KeepAlive>
       </template>
@@ -356,6 +379,17 @@ async function redoFull() {
   font-size: 12px; padding: 4px 12px; border-radius: 999px; text-decoration: none;
 }
 .dl-btn:hover { border-color: rgba(240, 198, 116, .45); color: #f0c674; background: #1e1a12; }
+/* 过程回看按钮：原「事件流」胶囊样式；on=当前正看过程页，live-dot=制作中呼吸灯 */
+.feed-btn {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  border: 1px solid #2b2b33; background: #191920; color: #c9c9d3;
+  font-size: 12px; padding: 4px 12px; border-radius: 999px;
+}
+.feed-btn:hover { border-color: #3a3a45; color: #e6e6ea; }
+.feed-btn.on { border-color: rgba(240, 198, 116, .45); color: #f0c674; background: #1e1a12; }
+.feed-btn .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #8fc7ff; animation: pulse 1.2s infinite; }
+/* 失败未读红点：最近一次制作失败/中断后还没看过过程页 */
+.feed-btn .fail-dot { width: 7px; height: 7px; border-radius: 50%; background: #ff6b6b; box-shadow: 0 0 6px rgba(255, 107, 107, .8); }
 
 .empty { flex: 1; display: flex; align-items: center; justify-content: center; }
 .none { color: #55555f; }

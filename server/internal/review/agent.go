@@ -267,7 +267,7 @@ const segmentSystem = `你是成片审片员，对本段成片判卷，产出结
 每条 fail 写一条 finding：
 - category：六维之一（content / fact / style / first_last / device / subtitle）
 - anchor：句号（N 几）或帧时刻（t=秒）
-- severity：high = 观众能直接察觉（错字、数字错、缺承诺元素、明显出戏）；low = 挑剔级瑕疵。只有 high 会触发打回，标 high 先过这条门槛。
+- severity：high = 观众直接察觉的硬伤——错字、数字/专名错、承诺元素缺失或画错、文字不可读、字幕错配。low = 挑剔级瑕疵：元素已出现且方向正确，仅位置/大小/配色/数量/幅度与 brief 有出入，或动画细节与 brief 文字描述不完全一致（brief 的首拍/末拍是意图描述不是像素规格）——一律 low。只有 high 会触发打回；每次误标 high 都可能让整条制作多烧一轮重写，标 high 先过这条门槛。
 - evidence：帧时刻 + 现状 vs 期望，一句话。
 - fix：redraw（需重画）/ pass（记录不修）。
 
