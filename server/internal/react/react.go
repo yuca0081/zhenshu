@@ -12,6 +12,8 @@ import (
 	"context"
 
 	openai "github.com/sashabaranov/go-openai"
+
+	"webpage-video-agent/server/internal/llm"
 )
 
 // ChatClient 循环对模型的全部依赖。*llm.Provider 隐式满足；测试用 mock 顶上。
@@ -85,8 +87,7 @@ func (c *Core) Run(ctx context.Context, msgs []openai.ChatCompletionMessage) (st
 	c.record(msgs...)
 	for step := 0; step < c.MaxSteps; step++ {
 		msg, u, err := c.Prov.Chat(ctx, msgs, c.schemas())
-		c.Usage.PromptTokens += u.PromptTokens
-		c.Usage.CompletionTokens += u.CompletionTokens
+		llm.AccumulateUsage(&c.Usage, u)
 		c.Calls++
 		if err != nil {
 			c.recNote("模型调用失败（第 %d 步）: %v", step+1, err)

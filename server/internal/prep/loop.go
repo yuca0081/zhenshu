@@ -22,6 +22,8 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
+	"webpage-video-agent/server/internal/llm"
+
 	"webpage-video-agent/server/internal/react"
 )
 
@@ -86,8 +88,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	}
 	for round := 1; round <= l.MaxRounds; round++ {
 		msg, u, err := l.Prov.Chat(ctx, msgs, schemas)
-		l.Usage.PromptTokens += u.PromptTokens
-		l.Usage.CompletionTokens += u.CompletionTokens
+		llm.AccumulateUsage(&l.Usage, u)
 		l.Calls++
 		if err != nil {
 			l.recNote("模型调用失败（第 %d 回合）: %v", round, err)

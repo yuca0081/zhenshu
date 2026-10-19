@@ -16,7 +16,7 @@ const props = defineProps<{
   projectId: string
   events: ActivityEvent[]
   producing: boolean
-  totals?: { prompt: number; completion: number; calls: number } | null
+  totals?: { prompt: number; completion: number; calls: number; cached?: number } | null
 }>()
 
 const evMs = (e: ActivityEvent) => e.ms ?? Date.parse(e.ts)
@@ -64,6 +64,8 @@ const fmtClock = (ms: number) => {
 const shortTime = (ts?: string) => (ts ? fmtClock(Date.parse(ts) || 0) : '')
 const firstLine = (s: string) => (s || '').split('\n', 1)[0].trim()
 const fmtTok = (n: number) => (n >= 10000 ? (n / 10000).toFixed(1).replace(/\.0$/, '') + '万' : n.toLocaleString())
+// 缓存命中率：cached 是 prompt 的一部分（平台前缀缓存）；p=0 时不出百分号
+const pct = (cached: number, prompt: number) => (prompt > 0 ? Math.round((cached / prompt) * 100) + '%' : '—')
 
 const items = computed<Item[]>(() => {
   const out: Item[] = []
@@ -270,18 +272,20 @@ const items = computed<Item[]>(() => {
 const itemsReversed = computed(() => [...items.value].reverse())
 
 // ── 本轮合计：最近一次开工（produce/rework）之后的全部 agent.done ──
+// cd = 平台前缀缓存命中合计（agent.done 的 cached_tokens；旧账目无此字段=0）
 const roundTotals = computed(() => {
   let start = -1
   props.events.forEach((ev, i) => {
     if (ev.event === 'produce.start' || ev.event === 'rework.start') start = i
   })
-  const t = { p: 0, c: 0, n: 0 }
+  const t = { p: 0, c: 0, n: 0, cd: 0 }
   for (let i = start + 1; i < props.events.length; i++) {
     const ev = props.events[i]
     if (ev.event === 'agent.done') {
       t.p += ev.prompt_tokens || 0
       t.c += ev.completion_tokens || 0
       t.n += ev.calls || 0
+      t.cd += ev.cached_tokens || 0
     }
   }
   return t
@@ -366,10 +370,10 @@ const openLightbox = (path: string, label?: string) => {
       制作过程
       <span v-if="producing" class="ap-live"><i class="live-dot" />制作中</span>
       <span v-if="totals?.calls" class="ap-totals ap-total-all" title="这个项目全部智能体任务的 token 消耗累计（manifest 全量累计，含此前每一轮）">
-        全程：输入 {{ fmtTok(totals.prompt) }} · 输出 {{ fmtTok(totals.completion) }} tokens · {{ totals.calls }} 次调用
+        全程：输入 {{ fmtTok(totals.prompt) }} · 输出 {{ fmtTok(totals.completion) }} tokens · {{ totals.calls }} 次调用<template v-if="totals.cached"> · 缓存命中 {{ pct(totals.cached, totals.prompt) }}</template>
       </span>
       <span v-if="roundTotals.n" class="ap-totals" :class="{ 'ap-totals-push': totals?.calls }" title="最近一次开工以来全部智能体任务的 token 消耗合计">
-        本轮：输入 {{ fmtTok(roundTotals.p) }} · 输出 {{ fmtTok(roundTotals.c) }} tokens · {{ roundTotals.n }} 次调用
+        本轮：输入 {{ fmtTok(roundTotals.p) }} · 输出 {{ fmtTok(roundTotals.c) }} tokens · {{ roundTotals.n }} 次调用<template v-if="roundTotals.cd"> · 缓存命中 {{ pct(roundTotals.cd, roundTotals.p) }}</template>
       </span>
     </div>
     <div v-if="itemsReversed.length" class="ap-scroll">

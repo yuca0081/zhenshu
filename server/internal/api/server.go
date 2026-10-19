@@ -716,7 +716,7 @@ func (s *Server) projectView(c *gin.Context) {
 	if ev, _, ts := produce.LastTerminal(p); ev != "" {
 		lastProduce = gin.H{"event": ev, "ts": ts}
 	}
-	pt, ct, ncalls := agentTokenTotals(p.Artifact("manifest.jsonl"))
+	pt, ct, ncalls, ncached := agentTokenTotals(p.Artifact("manifest.jsonl"))
 	c.JSON(200, gin.H{
 		"id": id, "name": st.Name, "aspect": aspect, "topic": topic,
 		"gates": gin.H{
@@ -731,7 +731,7 @@ func (s *Server) projectView(c *gin.Context) {
 		// 最近一轮制作终态（与 agent 摘要同一事实源 produce.LastTerminal），前端标"上次制作失败"
 		"last_produce": lastProduce,
 		// 全程 token 消耗（manifest 全量 agent.done 累计，「过程」页头部展示）
-		"tokens": gin.H{"prompt": pt, "completion": ct, "calls": ncalls},
+		"tokens": gin.H{"prompt": pt, "completion": ct, "calls": ncalls, "cached": ncached},
 	})
 }
 
@@ -743,30 +743,30 @@ func (s *Server) projectView(c *gin.Context) {
 // overview 注释与 activity 的 ReadJSONLTail 同一教训，不能开倒车）。
 type tokenTotalsEntry struct {
 	size, modNS int64
-	p, c, n     int
+	p, c, n, cd int
 }
 
 var tokenTotalsCache sync.Map // path → tokenTotalsEntry
 
-func agentTokenTotals(path string) (prompt, completion, calls int) {
+func agentTokenTotals(path string) (prompt, completion, calls, cached int) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
 	if v, ok := tokenTotalsCache.Load(path); ok {
 		if e := v.(tokenTotalsEntry); e.size == info.Size() && e.modNS == info.ModTime().UnixNano() {
-			return e.p, e.c, e.n
+			return e.p, e.c, e.n, e.cd
 		}
 	}
-	prompt, completion, calls = scanAgentTokenTotals(path)
-	tokenTotalsCache.Store(path, tokenTotalsEntry{info.Size(), info.ModTime().UnixNano(), prompt, completion, calls})
-	return prompt, completion, calls
+	prompt, completion, calls, cached = scanAgentTokenTotals(path)
+	tokenTotalsCache.Store(path, tokenTotalsEntry{info.Size(), info.ModTime().UnixNano(), prompt, completion, calls, cached})
+	return prompt, completion, calls, cached
 }
 
-func scanAgentTokenTotals(path string) (prompt, completion, calls int) {
+func scanAgentTokenTotals(path string) (prompt, completion, calls, cached int) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
 	for _, line := range strings.Split(string(b), "\n") {
 		var ev struct {
@@ -774,6 +774,7 @@ func scanAgentTokenTotals(path string) (prompt, completion, calls int) {
 			PromptTokens     int    `json:"prompt_tokens"`
 			CompletionTokens int    `json:"completion_tokens"`
 			Calls            int    `json:"calls"`
+			CachedTokens     int    `json:"cached_tokens"`
 		}
 		if json.Unmarshal([]byte(line), &ev) != nil || ev.Event != "agent.done" {
 			continue
@@ -781,8 +782,9 @@ func scanAgentTokenTotals(path string) (prompt, completion, calls int) {
 		prompt += ev.PromptTokens
 		completion += ev.CompletionTokens
 		calls += ev.Calls
+		cached += ev.CachedTokens
 	}
-	return prompt, completion, calls
+	return prompt, completion, calls, cached
 }
 
 // 留痕图片取件白名单：目录前缀 + 扩展名双闸——「过程」页对话里的缩略图/放大图

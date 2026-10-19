@@ -362,3 +362,17 @@ func stripFence(s string) string {
 	}
 	return s
 }
+
+// AccumulateUsage 把一次调用的用量累进总量（ReAct/判卷/准备循环的记账收口）。
+// prompt/completion/calls 之外把 cached_tokens（平台前缀缓存命中）也带上——
+// 5 小时额度账要能看出缓存命中率，2026-10-19 起 agent.done 落 cached_tokens。
+func AccumulateUsage(dst *openai.Usage, src openai.Usage) {
+	dst.PromptTokens += src.PromptTokens
+	dst.CompletionTokens += src.CompletionTokens
+	if src.PromptTokensDetails != nil {
+		if dst.PromptTokensDetails == nil {
+			dst.PromptTokensDetails = &openai.PromptTokensDetails{}
+		}
+		dst.PromptTokensDetails.CachedTokens += src.PromptTokensDetails.CachedTokens
+	}
+}

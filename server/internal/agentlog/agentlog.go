@@ -26,6 +26,7 @@ type Task struct {
 	rec    *llm.Transcript
 	prompt int
 	compl  int
+	cached int
 	calls  int
 }
 
@@ -51,7 +52,17 @@ func (t *Task) Rec() *llm.Transcript { return t.rec }
 func (t *Task) Add(u openai.Usage) {
 	t.prompt += u.PromptTokens
 	t.compl += u.CompletionTokens
+	t.cached += cachedOf(u)
 	t.calls++
+}
+
+// cachedOf 平台前缀缓存命中（GLM usage.prompt_tokens_details.cached_tokens；
+// 端点不回该字段时为 0——账上见 0 即「未上报」，别当「零命中」解读）。
+func cachedOf(u openai.Usage) int {
+	if u.PromptTokensDetails != nil {
+		return u.PromptTokensDetails.CachedTokens
+	}
+	return 0
 }
 
 // Done 收尾：manifest 记 agent.done（状态 + token 总量 + 留痕路径）并关留痕文件。
@@ -64,6 +75,7 @@ func (t *Task) Done(err error) {
 	extra := map[string]any{
 		"task": t.task, "state": state,
 		"prompt_tokens": t.prompt, "completion_tokens": t.compl, "calls": t.calls,
+		"cached_tokens": t.cached,
 	}
 	if t.rec != nil {
 		extra["transcript"] = t.rec.Rel
@@ -76,5 +88,6 @@ func (t *Task) Done(err error) {
 func (t *Task) Total(u openai.Usage, calls int) {
 	t.prompt += u.PromptTokens
 	t.compl += u.CompletionTokens
+	t.cached += cachedOf(u)
 	t.calls += calls
 }

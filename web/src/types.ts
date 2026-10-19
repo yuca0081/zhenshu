@@ -254,6 +254,7 @@ export interface ActivityEvent {
   prompt_tokens?: number
   completion_tokens?: number
   calls?: number
+  cached_tokens?: number // 平台前缀缓存命中（2026-10-19 起记账；旧账目无此字段）
   transcript?: string
 }
 
