@@ -155,7 +155,11 @@ func mcpPost(ctx context.Context, endpoint, key, sid string, body []byte) ([]byt
 	return b, httpResp.Header, nil
 }
 
-// decodeMCPMessage 响应有两种形态：SSE 帧（"data: {...}" 行）或纯 JSON。取第一条带 result/error 的消息。
+// decodeMCPMessage 响应有两种形态：SSE 帧（"data: {...}" 行）或纯 JSON。取第一条
+// 带 result/error 键的消息——MCP streamable HTTP 常在结果帧前夹 ping/notifications
+// 帧（{"jsonrpc":"2.0","method":"notifications/…"}），任何 JSON 对象都能 Unmarshal
+// 进全可选字段的结构体，不验键会把通知帧当答案（2026-10-19 中-25：下游报
+// 「搜索执行失败：」空错误）。
 func decodeMCPMessage(b []byte, out any) error {
 	for _, line := range strings.Split(string(b), "\n") {
 		line = strings.TrimSpace(line)
@@ -166,9 +170,24 @@ func decodeMCPMessage(b []byte, out any) error {
 		if payload == "" || payload == "[DONE]" {
 			continue
 		}
-		if err := json.Unmarshal([]byte(payload), out); err == nil {
-			return nil
+		if mcpHasResult(payload) {
+			return json.Unmarshal([]byte(payload), out)
 		}
 	}
-	return json.Unmarshal(b, out)
+	if mcpHasResult(string(b)) {
+		return json.Unmarshal(b, out)
+	}
+	// 整包都没有 result/error：按解析失败上抛（而非把通知帧解进零值结构体）
+	return fmt.Errorf("MCP 响应无 result/error 帧: %.200s", strings.TrimSpace(string(b)))
+}
+
+// mcpHasResult 顶层含 result 或 error 键才是应答帧（ping/notifications 不是）。
+func mcpHasResult(payload string) bool {
+	var probe map[string]json.RawMessage
+	if json.Unmarshal([]byte(payload), &probe) != nil {
+		return false
+	}
+	_, hasResult := probe["result"]
+	_, hasError := probe["error"]
+	return hasResult || hasError
 }

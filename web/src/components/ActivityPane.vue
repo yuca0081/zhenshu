@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue'
 import type { ActivityEvent, TranscriptMsg } from '../types'
 import { api, artifactFileURL } from '../api'
 import { stageLabel } from '../format'
@@ -67,11 +67,18 @@ const fmtTok = (n: number) => (n >= 10000 ? (n / 10000).toFixed(1).replace(/\.0$
 
 const items = computed<Item[]>(() => {
   const out: Item[] = []
-  let pk = 0
   const occ: Record<string, number> = {}
   const openTasks: TaskGroup[] = []
+  // 稳定 key（中-L5）：按行自身内容（timeText+title）定位；同刻同名重复加序号。
+  // 旧版自增序号做 key，manifest 超 2000 条后尾窗一滑动、每轮轮询全量 key 平移
+  // → 2000 行全量重 patch。task 组的 key 本就带 task 号，不受影响。
+  const stableKey = (base: string) => {
+    const n = occ[base] ?? 0
+    occ[base] = n + 1
+    return n ? `${base}#${n}` : base
+  }
   const add = (r: Omit<PlainRow, 'kind' | 'key'>) => {
-    out.push({ kind: 'plain', key: `p${pk++}`, ...r })
+    out.push({ kind: 'plain', key: stableKey(`t-${r.timeText}-${r.title}`), ...r })
   }
   const rounds: Record<string, number> = {}
   const open: Record<string, { ms: number }> = {}
@@ -189,7 +196,7 @@ const items = computed<Item[]>(() => {
         delete open[ev.detail]
         const n = rounds[ev.detail]
         const row: PlainRow = {
-          kind: 'plain', key: `p${pk++}`, state: 'ok',
+          kind: 'plain', key: stableKey(`t-${t}-${stageLabel(ev.detail)}${n > 1 ? `#${n}` : ''}`), state: 'ok',
           title: stageLabel(ev.detail) + (n > 1 ? `（第${n}轮）` : ''),
           timeText: t, durText: fmtDur(Math.max(0, ms - st.ms)),
         }
@@ -313,10 +320,21 @@ function onTick() {
 }
 
 watch(() => props.producing, on => {
-  if (on && timer == null) timer = window.setInterval(onTick, 5000)
-  if (!on && timer != null) { clearInterval(timer); timer = null }
+  if (on) startTimer()
+  if (!on) stopTimer()
 }, { immediate: true })
-onBeforeUnmount(() => { if (timer != null) clearInterval(timer) })
+function startTimer() {
+  if (timer == null) timer = window.setInterval(onTick, 5000)
+}
+function stopTimer() {
+  if (timer != null) { clearInterval(timer); timer = null }
+}
+onBeforeUnmount(stopTimer)
+// KeepAlive 页签切走只是 deactivate（中-42）：展开中任务的 5s transcript 轮询
+// 不该在用户不看「过程」页时空转——切走暂停、切回恢复
+let wantedTimer = false
+onDeactivated(() => { wantedTimer = timer != null; stopTimer() })
+onActivated(() => { if (wantedTimer && props.producing) startTimer() })
 
 // ── 消息渲染：超长内容默认折叠成预览（600 字），短内容直接全显不给按钮 ──
 const closedMap = ref<Record<string, boolean>>({})

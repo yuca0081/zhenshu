@@ -28,12 +28,12 @@ import (
 
 // runAgent 解析编排（Analyze 的 goroutine 体）。
 func (s *Store) runAgent(ctx context.Context, ref *Ref) {
+	// 状态回写走 mutateRef 字段合并（2026-10-19 中-26）：confirm/草稿编辑可能在
+	// 解析期间落盘，整体回写旧副本会把它们抹掉——解析只拥有 Status/Error/Style。
 	fail := func(err error) {
-		ref.Status, ref.Error = "error", err.Error()
-		_ = s.saveRef(ref)
+		_ = s.mutateRef(ref.ID, func(r *Ref) error { r.Status, r.Error = "error", err.Error(); return nil })
 	}
-	ref.Status, ref.Error = "running", ""
-	_ = s.saveRef(ref)
+	_ = s.mutateRef(ref.ID, func(r *Ref) error { r.Status, r.Error = "running", ""; return nil })
 
 	// 1. 找视频
 	var videos []string
@@ -87,10 +87,12 @@ func (s *Store) runAgent(ctx context.Context, ref *Ref) {
 		fail(err)
 		return
 	}
-	ref.Style = style
-
-	ref.Status = "done"
-	if err := s.saveRef(ref); err != nil {
+	if err := s.mutateRef(ref.ID, func(r *Ref) error {
+		r.Style = style
+		r.Status = "done"
+		r.Error = ""
+		return nil
+	}); err != nil {
 		fail(err)
 	}
 }

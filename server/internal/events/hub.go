@@ -7,9 +7,11 @@ import (
 	"time"
 )
 
-// Type 取值：
+// Type 取值（清单只列常见的——新增事件种类不强制同步这里，别把清单当白名单）：
 //
-//	msg / agent_msg / tool_call / tool_result / stage / style_confirmed / error / done
+//	msg / agent_msg / tool_call / tool_result / stage / progress / error / done /
+//	cancelled / style_confirmed / style_applied / prep_confirmed / prep_updated /
+//	rework-started 类业务里程碑
 type Event struct {
 	Type   string `json:"type"`
 	Stage  string `json:"stage,omitempty"`  // stage 事件：tts|compositions|assemble|check|render

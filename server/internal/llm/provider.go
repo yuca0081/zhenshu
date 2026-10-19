@@ -21,7 +21,8 @@ import (
 
 // llmGate 账户级并发闸（2026-10-17 限流事故）：套餐对并发请求极敏感，实测 3 路
 // 10k-token 大调用即撞 429，而调用方路径多（段写/段审/检查修复轮/对话）——任何
-// 一处漏限流就是惊群。所有 chat 调用在 generate 里集中过这道闸；上层并发旋钮
+// 一处漏限流就是惊群。generate 与 Chat/ChatTemp（chatTemp）两条路都过这道闸
+// （2026-10-19 高-8：Chat 路原先绕闸直发，是最后一个口子）；上层并发旋钮
 // （PRODUCE_WRITE_CONCURRENCY 等）因此可以只管调度，不必各自保证限流。
 var llmGate = func() chan struct{} {
 	n := 2

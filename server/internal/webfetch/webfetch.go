@@ -55,6 +55,33 @@ var lookupIP = func(ctx context.Context, host string) ([]net.IP, error) {
 	return net.LookupIP(host)
 }
 
+// fetchClient 包级复用（2026-10-19 中-28）：Agent 的 fetch_url 一篇文章连环抓
+// 十几个页面，函数体内新建 client = 每次全新 TCP+TLS 握手、idle conns 全丢——
+// 与 llm 侧包级 client 的既有纪律对齐；ssrfGuard 双层防线不受影响。
+var fetchClient = &http.Client{
+	Timeout: 20 * time.Second,
+	// 拨号层复验（防 DNS 重绑定，见 guardedDial）；Proxy/HTTP2 与默认 Transport 同口径
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           guardedDial,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+	// 逐跳校验重定向目标：默认客户端会跟满 10 跳且不复查，公网 302 → 127.0.0.1 即绕过
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return fmt.Errorf("重定向过多")
+		}
+		if ssrfGuard(req.URL.Hostname()) {
+			return fmt.Errorf("重定向到不允许的地址")
+		}
+		return nil
+	},
+}
+
 // Article 抓取 rawURL 并抽取正文。
 func Fetch(ctx context.Context, rawURL string) (*Article, error) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
@@ -64,36 +91,13 @@ func Fetch(ctx context.Context, rawURL string) (*Article, error) {
 	if ssrfGuard(u.Hostname()) {
 		return nil, fail(ErrBadURL, "不允许的地址")
 	}
-	client := &http.Client{
-		Timeout: 20 * time.Second,
-		// 拨号层复验（防 DNS 重绑定，见 guardedDial）；Proxy/HTTP2 与默认 Transport 同口径
-		Transport: &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			DialContext:           guardedDial,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-		},
-		// 逐跳校验重定向目标：默认客户端会跟满 10 跳且不复查，公网 302 → 127.0.0.1 即绕过
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 3 {
-				return fmt.Errorf("重定向过多")
-			}
-			if ssrfGuard(req.URL.Hostname()) {
-				return fmt.Errorf("重定向到不允许的地址")
-			}
-			return nil
-		},
-	}
 	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 	if err != nil {
 		return nil, fail(ErrBadURL, "%v", err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ZhenshuBot/1.0; +link-import)")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
-	resp, err := client.Do(req)
+	resp, err := fetchClient.Do(req)
 	if err != nil {
 		return nil, fail(nil, "抓取失败：%v", err)
 	}

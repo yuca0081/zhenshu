@@ -430,6 +430,7 @@ func (s *Server) listUsers(c *gin.Context) {
 
 // failWindow 失败计数窗口：达到上限且未到期 = 拒绝。到期后首笔失败重开窗口。
 type failWindow struct {
+	mu    sync.Mutex // sync.Map 只护 map 本身，值对象字段并发读写是数据竞争（2026-10-19 中-33）
 	n     int
 	until time.Time
 }
@@ -446,6 +447,8 @@ func (s *Server) allowLoginAttempt(ip, username string) bool {
 		return true
 	}
 	f := v.(*failWindow)
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return time.Now().After(f.until) || f.n < loginMaxFails
 }
 
@@ -454,10 +457,12 @@ func (s *Server) recordLoginFail(ip, username string) {
 	now := time.Now()
 	if v, ok := s.loginFails.Load(k); ok {
 		f := v.(*failWindow)
+		f.mu.Lock()
 		if now.After(f.until) {
 			f.n, f.until = 0, now.Add(loginWindow)
 		}
 		f.n++
+		f.mu.Unlock()
 		return
 	}
 	s.loginFails.LoadOrStore(k, &failWindow{n: 1, until: now.Add(loginWindow)})
@@ -656,10 +661,10 @@ func (s *Server) listProjects(c *gin.Context) {
 			})
 			s.ensured.Store(e.Name(), fp)
 		}
-		_, videoErr := os.Stat(filepath.Join(s.DataDir, "projects", e.Name(), "renders", "main.mp4"))
+		hasVideo := s.hasFinalVideo(e.Name())
 		if s.Producer.IsRunning(e.Name()) {
 			meta.Status = "producing"
-		} else if videoErr == nil {
+		} else if hasVideo {
 			meta.Status = "video"
 		}
 		// last_produce：最近一轮制作终态（与 agent 状态摘要同一读法 produce.LastTerminal）。
@@ -669,10 +674,21 @@ func (s *Server) listProjects(c *gin.Context) {
 		if ev, _, ts := produce.LastTerminal(pipeline.NewProject(s.DataDir, e.Name())); ev != "" {
 			lastProduce = gin.H{"event": ev, "ts": ts}
 		}
-		out = append(out, row{e.Name(), meta.Name, meta.Status, meta.CreatedAt, videoErr == nil, lastProduce, meta.Topic})
+		out = append(out, row{e.Name(), meta.Name, meta.Status, meta.CreatedAt, hasVideo, lastProduce, meta.Topic})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
 	c.JSON(200, out)
+}
+
+// hasFinalVideo 成片在否的统一口径：本地 miss 回退远端正本 Stat（与 video handler
+// 同源）——GC 清理后的成片只在云端，只查本地会把能正常播放的片子报成「无片」，
+// 段级重做入口也被误拒（2026-10-19 高-3）。listProjects/projectView/overview/
+// startRework（经 agent.State）四处都必须走这一口径。
+func (s *Server) hasFinalVideo(id string) bool {
+	if _, err := os.Stat(filepath.Join(s.DataDir, "projects", id, "renders", "main.mp4")); err == nil {
+		return true
+	}
+	return s.Artifacts != nil && s.Artifacts.Stat(artifacts.ProjectKey(id, "renders/main.mp4"))
 }
 
 func (s *Server) projectView(c *gin.Context) {
@@ -721,8 +737,33 @@ func (s *Server) projectView(c *gin.Context) {
 
 // agentTokenTotals manifest 全量扫 agent.done，累计整个项目所有智能体任务的 token
 // 用量与调用次数（「过程」页「全程」合计；活动流接口只回尾部窗口，算不了全程）。
-// 无 manifest / 空项目返回零值，不报错。
+// 无 manifest / 空项目返回零值，不报错。projectView 每次轮询都调——按
+// (size,mtime) 记忆化：manifest 追加一行必然改变二者之一，缓存随之失效，
+// 结果与全量重算等价，却把 I/O 从「随历史线性」压回常数（2026-10-19 中-31；
+// overview 注释与 activity 的 ReadJSONLTail 同一教训，不能开倒车）。
+type tokenTotalsEntry struct {
+	size, modNS int64
+	p, c, n     int
+}
+
+var tokenTotalsCache sync.Map // path → tokenTotalsEntry
+
 func agentTokenTotals(path string) (prompt, completion, calls int) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, 0, 0
+	}
+	if v, ok := tokenTotalsCache.Load(path); ok {
+		if e := v.(tokenTotalsEntry); e.size == info.Size() && e.modNS == info.ModTime().UnixNano() {
+			return e.p, e.c, e.n
+		}
+	}
+	prompt, completion, calls = scanAgentTokenTotals(path)
+	tokenTotalsCache.Store(path, tokenTotalsEntry{info.Size(), info.ModTime().UnixNano(), prompt, completion, calls})
+	return prompt, completion, calls
+}
+
+func scanAgentTokenTotals(path string) (prompt, completion, calls int) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return 0, 0, 0
@@ -745,8 +786,9 @@ func agentTokenTotals(path string) (prompt, completion, calls int) {
 }
 
 // 留痕图片取件白名单：目录前缀 + 扩展名双闸——「过程」页对话里的缩略图/放大图
-// 只可能落在这些目录（样张/真迹/素材/审查截帧）。清单外一律 403，路径清洗防穿越。
-var transcriptFileDirs = []string{"style/", "assets/img/", "reports/frameqa/", "reports/prereview/"}
+// 只可能落在这些目录（样张/真迹/素材；段审锚点帧/边界末首帧/终审帧格缓存于
+// reports/audit/frames）。清单外一律 403，路径清洗防穿越。
+var transcriptFileDirs = []string{"style/", "assets/img/", "reports/audit/", "reports/frameqa/", "reports/prereview/"}
 var transcriptFileExts = map[string]bool{".png": true, ".jpg": true, ".jpeg": true}
 
 // projectFile 项目内媒体取件：GET /projects/:id/file/style/sample-0.png。
@@ -782,12 +824,21 @@ func (s *Server) projectFile(c *gin.Context) {
 }
 
 // deleteProject 删除项目：磁盘目录 + DB 镜像（行/聊天/任务）。
-// 制作中拒绝——管线还在写目录，RemoveAll 会与写方竞速留半删残骸。
+// 制作中/准备链运行中拒绝——后台链还在写目录，RemoveAll 会与写方竞速留半删
+// 残骸，prep 收尾 SyncUp 还会把已删项目的产物重新传回云端（留尸）。
 func (s *Server) deleteProject(c *gin.Context) {
 	id := c.Param("id")
 	if s.Producer != nil && s.Producer.IsRunning(id) {
 		c.JSON(409, gin.H{"error": "制作/重做进行中，先停止再删除"})
 		return
+	}
+	// prep 链同口径（2026-10-19 高-4）：先请后台链收手（协作式取消），仍在跑就拒绝
+	if s.Preps != nil {
+		if s.Preps.IsRunning(id) {
+			c.JSON(409, gin.H{"error": "准备阶段运行中，先停止再删除"})
+			return
+		}
+		s.Preps.Cancel(id)
 	}
 	p := pipeline.NewProject(s.DataDir, id)
 	if _, err := os.Stat(p.Dir); err != nil {
@@ -857,17 +908,17 @@ func (s *Server) saveManuscript(c *gin.Context) {
 		c.JSON(409, gin.H{"error": "制作/重做进行中，先等本条完成再改稿"})
 		return
 	}
-	id := p.ID
-	if err := os.WriteFile(p.Artifact("input/article.txt"), []byte(content), 0o644); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+	// prep 链运行中同拒（2026-10-19 中-30）：改稿级联作废与后台链的工件写入互踩
+	if s.Preps != nil && s.Preps.IsRunning(p.ID) {
+		c.JSON(409, gin.H{"error": "准备阶段运行中，先等完成再改稿"})
 		return
 	}
-	_ = os.Remove(p.Artifact("manuscripts/manuscript.json"))
-	// 新路径（准备工件在）：改文字 → ①②③ 级联作废（与 agent saveManuscriptContent 同语义）
-	prepInvalidated := false
-	if _, serr := os.Stat(p.Artifact("scripts/script.json")); serr == nil {
-		prep.InvalidateFrom(p, prep.StationScript)
-		prepInvalidated = true
+	id := p.ID
+	// 落盘+级联作废走统一语义（2026-10-19 中-34，与 agent saveManuscriptContent 同源）
+	prepInvalidated, err := prep.ReplaceManuscript(p, content)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
 	}
 	_, sbErr := os.Stat(p.Artifact("storyboards/storyboard.json"))
 	s.updateStatus(id, "manuscript")
@@ -1104,8 +1155,9 @@ func (s *Server) confirmStyle(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true, "direction": ss.Direction})
 }
 
-// runPrep 启动三工位链（想法页签「自动完成」按钮 / 对话入口同路）：
-// 异步后台跑，进度走 SSE（stage prep/*），完成/失败经 OnDone 落聊天框。
+// runPrep 启动三工位链（想法页签「自动完成」按钮）：异步后台跑，进度走 SSE
+// （stage prep/*），完成/失败经 OnDone 落聊天框。对话侧重跑不经过这里——走
+// agent 工具的同步执行路径，与 Preps.running 同一把互斥（2026-10-19 高-6 收口）。
 func (s *Server) runPrep(c *gin.Context) {
 	id := c.Param("id")
 	if s.Preps == nil {
@@ -1119,6 +1171,18 @@ func (s *Server) runPrep(c *gin.Context) {
 	if s.Producer != nil && s.Producer.IsRunning(id) {
 		c.JSON(409, gin.H{"error": "制作运行中，先等本条完成再跑准备工位"})
 		return
+	}
+	// 对话轮互斥探测（2026-10-19 高-6）：对话里的 rerun_prep/draft_* 是同步重跑
+	// （分钟级），不登记 Preps.running——不探这一下，这里能开出第二条链与对话侧
+	// 互踩工件。锁只用于探测「此刻有无对话轮在跑」，TryLock 成功立即放（链本身
+	// 由 Preps.running 互斥，不长期占着对话轮的锁）。
+	if mu, ok := s.turnMu.Load(id); ok {
+		m := mu.(*sync.Mutex)
+		if !m.TryLock() {
+			c.JSON(409, gin.H{"error": "该项目有对话正在进行，等回复完再启动准备阶段"})
+			return
+		}
+		m.Unlock()
 	}
 	var in struct {
 		Idea  string `json:"idea"`
@@ -1190,6 +1254,8 @@ func (s *Server) prepView(c *gin.Context) {
 	for k, v := range state {
 		out[k] = v
 	}
+	// stylepack 只读一次盘（中-L1：旧版同请求 LoadStylePack×2，两次读+解析 JSON）
+	var styleName string
 	if sp, err := prep.LoadStylePack(p); err == nil {
 		// 确认态与制作硬门（segpipe 读 stylepack.Confirmed）同源。曾经以
 		// style_samples.json 为准——风格页老确认只写样张不写包，徽章亮了门不开，
@@ -1205,15 +1271,12 @@ func (s *Server) prepView(c *gin.Context) {
 			"direction": direction, "confirmed": sp.Confirmed,
 		}
 		out["design"] = sp.DesignSystem
-	}
-	if dr, err := prep.LoadDraft(p); err == nil {
-		out["draft"] = dr
-	}
-	var styleName string
-	if sp, err := prep.LoadStylePack(p); err == nil {
 		if st, ok := s.Lib.Get(sp.StyleID); ok {
 			styleName = st.Name
 		}
+	}
+	if dr, err := prep.LoadDraft(p); err == nil {
+		out["draft"] = dr
 	}
 	out["style_name"] = styleName
 	out["script"] = script
@@ -1474,6 +1537,12 @@ func (s *Server) startProduce(c *gin.Context) {
 	st := s.Agent.State(id)
 	if !st.HasManuscript || !st.HasStoryboard || !st.StyleConfirmed {
 		c.JSON(400, gin.H{"error": "三前置未齐（文稿/分镜/风格确认），硬门不放行"})
+		return
+	}
+	// prep 链运行中拒绝（2026-10-19 中-30）：重跑链开头会 InvalidateFrom 作废
+	// 三工件，期间开制作可能读到半作废的 stylepack/storyboard
+	if s.Preps != nil && s.Preps.IsRunning(id) {
+		c.JSON(409, gin.H{"error": "准备阶段重跑中，先等完成再开制作"})
 		return
 	}
 	ok, err := s.Producer.Start(id)

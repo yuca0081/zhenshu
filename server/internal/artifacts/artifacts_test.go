@@ -101,7 +101,9 @@ func write(t *testing.T, path, content string) {
 
 func TestSyncUpRestorePrune(t *testing.T) {
 	root := t.TempDir()
-	prefix := "projects/p1"
+	// 带尾斜杠 = 生产调用形态（ProjectKey(id,"")）——2026-10-19 高-2 的测试盲区：
+	// 旧用例不带斜杠，掩盖了 TrimPrefix 双斜杠永不匹配、三分类整体失效的 bug。
+	prefix := "projects/p1/"
 	j := filepath.Join
 	write(t, j(root, prefix, "project.json"), "{}")
 	write(t, j(root, prefix, "renders/main.mp4"), "VIDEO")

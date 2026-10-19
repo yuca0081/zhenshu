@@ -30,8 +30,9 @@ export function errMsg(e: unknown): string {
   try { return JSON.stringify(e) ?? 'unknown' } catch { return 'unknown' } // 循环引用等序列化失败兜底
 }
 
-// 制作管线阶段 key → 中文名（此前 ActivityFeed/VideoPane 各抄一份且互有缺漏，
-// 这里是并集；未收录的 key 回退原样——ActivityFeed 靠"回退=原样"判未知工位不上屏）
+// 制作管线阶段 key → 中文名（历史上 ActivityFeed/VideoPane 各抄一份且互有缺漏，
+// 这里是并集；未收录的 key 回退原样——过程页 ActivityPane.knownStage 靠
+// "回退=原样"判未知工位不上屏）
 const stageNames: Record<string, string> = {
   tts: '配音', materials: '素材', compositions: '画面', assemble: '组装',
   check: '质量检查', render: '渲染', frameqa: '画面审查',

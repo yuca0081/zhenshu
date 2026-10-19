@@ -71,9 +71,11 @@ export const api = {
 
   manuscript: (id: string) => req<Manuscript>(`/api/projects/${id}/manuscript`),
 
-  // 文稿弹窗保存（article.txt 为真源；storyboard_stale=分镜基于旧稿需重新生成）
+  // 文稿保存（article.txt 为真源；storyboard_stale=分镜基于旧稿需重新生成；
+  // prep_invalidated=准备工件已级联作废需重跑重审——类型如实声明，调用方不许
+  // 再 cast 嗅探，2026-10-19 中-41）
   saveManuscript: (id: string, content: string) =>
-    req<{ ok: boolean; word_count: number; storyboard_stale: boolean }>(`/api/projects/${id}/manuscript`, {
+    req<{ ok: boolean; word_count: number; storyboard_stale: boolean; prep_invalidated: boolean }>(`/api/projects/${id}/manuscript`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
@@ -85,8 +87,6 @@ export const api = {
     post<{ ok: boolean; name: string; signatures: number }>(`/api/projects/${id}/style/apply`, { style_id: styleId, disabled }),
 
   style: (id: string) => req<StyleSamples>(`/api/projects/${id}/style`),
-
-  confirmStyle: (id: string) => post<{ ok: boolean }>(`/api/projects/${id}/style/confirm`),
 
   // 准备阶段三工件打包视图（终审页签；exists=false = 非新路径项目）
   prep: (id: string) => req<PrepView>(`/api/projects/${id}/prep`),
@@ -104,15 +104,6 @@ export const api = {
 
   // 中断当前项目正在执行的对话轮（服务端取消其上下文；ok=false=没有在跑的轮）
   cancelChat: (id: string) => post<{ ok: boolean }>(`/api/projects/${id}/chat/cancel`),
-
-  // AI 起草文稿：按目标字数直驱（分钟换算在 UI 侧）。signal 供取消按钮掐断请求，
-  // 服务端随连接断开中止生成
-  draftManuscript: (topic: string, words = 500, signal?: AbortSignal) =>
-    post<{ content: string }>('/api/draft/manuscript', { topic, words }, signal),
-
-  // 链接导入（readability 正文提取，文稿弹窗用）
-  extractLink: (url: string) =>
-    post<{ title: string; content: string; words: number }>('/api/extract_link', { url }),
 
   messages: (id: string, after = 0) => req<Msg[]>(`/api/projects/${id}/messages?after=${after}`),
 

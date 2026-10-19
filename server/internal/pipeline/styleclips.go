@@ -138,7 +138,7 @@ func EnsureSampleClips(p *Project, ss *contract.StyleSamples, sb *contract.Story
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			out := "style/clips/" + j.id + ".mp4"
-			outLog, err := runCLI(p, "npx", "hyperframes@0.8.55", "render", ".",
+			outLog, err := runCLI(p, "npx", HyperframesPkg, "render", ".",
 				"-c", ".hf-clip/"+j.id+".html", "-o", out, "--no-browser-gpu")
 			if err != nil {
 				if pctx(p).Err() != nil { // 被取消：不算小样失败，下次续渲补上

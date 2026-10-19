@@ -25,13 +25,18 @@ def write_wav(path, L, R, sr):
 
 
 def ffmpeg_encode(wav_path, mp3_path, bitrate):
-    """wav → mp3（libmp3lame）。ffmpeg 缺失或编码失败回 False。"""
+    """wav → mp3（libmp3lame）。ffmpeg 缺失或编码失败回 False；失败回显 stderr
+    尾行——只回 bool 的话调用方只知「失败」不知「为何」，排障两眼一抹黑。"""
     ff = shutil.which('ffmpeg')
     if not ff:
+        print('  ffmpeg_encode: ffmpeg 不在 PATH')
         return False
     # 显式 utf-8 解码：中文 Windows 默认 cp936 严格解码，ffmpeg 报错回显 UTF-8
     # 内容时会抛 UnicodeDecodeError，把可降级的失败炸成崩溃
     r = subprocess.run([ff, '-y', '-v', 'error', '-i', str(wav_path),
                         '-codec:a', 'libmp3lame', '-b:a', bitrate, str(mp3_path)],
                        capture_output=True, text=True, encoding='utf-8', errors='replace')
-    return r.returncode == 0
+    if r.returncode != 0:
+        print('  ffmpeg_encode FAIL: %s' % (r.stderr or '')[-200:])
+        return False
+    return True

@@ -107,10 +107,60 @@ type Store struct {
 	mu      sync.Mutex
 	running map[string]bool
 	sem     chan struct{} // 解析并发上限（批量上传排队，防 LLM/ffmpeg 抢资源）
+
+	// refMu ref.json 读-改-写互斥（2026-10-19 中-26）：confirm 的拷贝/上传是
+	// 秒~分钟级慢窗口，期间「重新解析」用启动时的旧副本整体回写会把 Confirmed
+	// 标记/草稿编辑静默抹掉——所有变异走 mutateRef 串行合并。
+	refMu sync.Mutex
+	// rootCtx 解析 goroutine 的根 ctx：随进程取消（优雅停机时不再用 Background
+	// 硬跑到完，2026-10-19 中-27）
+	rootCtx    context.Context
+	cancelRoot context.CancelFunc
 }
 
 func NewStore(dataDir, rootDir string) *Store {
-	return &Store{DataDir: dataDir, RootDir: rootDir, running: map[string]bool{}, sem: make(chan struct{}, 2)}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Store{DataDir: dataDir, RootDir: rootDir, running: map[string]bool{},
+		sem: make(chan struct{}, 2), rootCtx: ctx, cancelRoot: cancel}
+}
+
+// mutateRef ref.json 的串行读-改-写：fn 在锁内改字段，整体落盘——并发变异
+// （confirm / 草稿编辑 / 解析回写）互相合并而不是整体覆盖。
+func (s *Store) mutateRef(id string, fn func(ref *Ref) error) error {
+	s.refMu.Lock()
+	defer s.refMu.Unlock()
+	ref, err := s.loadRef(id)
+	if err != nil {
+		return err
+	}
+	if err := fn(ref); err != nil {
+		return err
+	}
+	return s.saveRef(ref)
+}
+
+// Reconcile 启动对账：进程重启后内存 running 已清空，ref.json 停在 running 的
+// 引用会永远显示「解析中」（UI 与 agent 工具同读此状态，除非用户记得手动重
+// 触发）——扫一遍改写成 error（2026-10-19 中-27，与 produce.Reconcile 同职责）。
+func (s *Store) Reconcile() {
+	entries, err := os.ReadDir(filepath.Join(s.DataDir, "references"))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		ref, lerr := s.loadRef(e.Name())
+		if lerr != nil || ref.Status != "running" {
+			continue
+		}
+		_ = s.mutateRef(ref.ID, func(r *Ref) error {
+			r.Status, r.Error = "error", "进程重启中断——请重新触发解析"
+			return nil
+		})
+		fmt.Printf("[styleref] %s 卡在 running（进程重启中断），已改写为 error\n", ref.ID)
+	}
 }
 
 func (s *Store) dir(id string) string { return filepath.Join(s.DataDir, "references", id) }
@@ -208,28 +258,24 @@ func (s *Store) saveRef(ref *Ref) error {
 
 // MarkConfirmed 入库完成标记（幂等）。
 func (s *Store) MarkConfirmed(id string) error {
-	ref, err := s.loadRef(id)
-	if err != nil {
-		return err
-	}
-	ref.Confirmed = true
-	return s.saveRef(ref)
+	return s.mutateRef(id, func(ref *Ref) error {
+		ref.Confirmed = true
+		return nil
+	})
 }
 
 // UpdateDraft 确认页编辑草稿（§4.4：入库前可增删改特色）。
 func (s *Store) UpdateDraft(id string, d *StyleDraft) error {
-	ref, err := s.loadRef(id)
-	if err != nil {
-		return err
-	}
-	if ref.Status != "done" {
-		return fmt.Errorf("解析未完成，不能编辑草稿")
-	}
-	if ref.Style == nil {
-		return fmt.Errorf("该引用没有解析草稿")
-	}
-	ref.Style = d
-	return s.saveRef(ref)
+	return s.mutateRef(id, func(ref *Ref) error {
+		if ref.Status != "done" {
+			return fmt.Errorf("解析未完成，不能编辑草稿")
+		}
+		if ref.Style == nil {
+			return fmt.Errorf("该引用没有解析草稿")
+		}
+		ref.Style = d
+		return nil
+	})
 }
 
 // Analyze 异步解析（同引用幂等：跑着就不重复起）。结果写 ref.json。
@@ -255,13 +301,15 @@ func (s *Store) Analyze(id string) (bool, error) {
 		// 解析链涉及 JSON 解码与 LLM 响应，必须自带兜底并把失败落进 ref.json
 		defer func() {
 			if r := recover(); r != nil {
-				ref.Status, ref.Error = "error", fmt.Sprintf("解析内部错误: %v", r)
-				_ = s.saveRef(ref)
+				_ = s.mutateRef(ref.ID, func(rr *Ref) error {
+					rr.Status, rr.Error = "error", fmt.Sprintf("解析内部错误: %v", r)
+					return nil
+				})
 			}
 		}()
 		s.sem <- struct{}{} // 批量上传多支视频同时起解析：排队限流
 		defer func() { <-s.sem }()
-		s.runAgent(context.Background(), ref)
+		s.runAgent(s.rootCtx, ref)
 		// 解析产物全套上正本（原片/抽帧/剪辑/特征），之后清理器才能删本地
 		if s.Artifacts != nil && s.Artifacts.Available() {
 			if n, err := artifacts.SyncUp(s.Artifacts, s.DataDir, artifacts.ReferenceKey(id, "")); err != nil {

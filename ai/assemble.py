@@ -5,6 +5,7 @@
 """
 import hashlib
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -13,6 +14,16 @@ import sys
 # gsap 资产固定来源：ai/assets（随仓库分发）。
 AI_DIR = pathlib.Path(__file__).resolve().parent
 GSAP_SRC = AI_DIR / 'assets' / 'gsap.min.js'
+
+
+def write_atomic(path: pathlib.Path, text: str):
+    """tmp+os.replace 原子写（2026-10-19 中-15）：Go 写池 ≤4 worker 并发全量跑
+    本脚本，裸 write_text 的 truncate 窗口会让并发读者（另一 worker 的
+    ensureSegCheckDir 恰在拷同一文件）读到半截 → check 幻影失败白烧修复轮；
+    Go 侧另有进程内互斥（Runner.assemble），这里是第二道保险。"""
+    tmp = path.with_name(path.name + '.tmp')
+    tmp.write_text(text, encoding='utf-8')
+    os.replace(tmp, path)
 
 
 def load_overlay(proj):
@@ -296,7 +307,7 @@ def subtitle_blocks(scenes, meta_voices, slots, proj, w=1080, h=1920):
         fp = hashlib.md5(cap_html.encode('utf-8')).hexdigest()[:8]
         out = capdir / f'{cap_id}.html'
         if not out.exists() or out.read_text(encoding='utf-8') != cap_html:
-            out.write_text(cap_html, encoding='utf-8')
+            write_atomic(out, cap_html)
         html_parts.append(
             f'<div id="{cap_id}" class="scene clip" data-composition-id="{cap_id}" '
             f'data-composition-src="compositions/caps/{cap_id}.html" '
@@ -482,11 +493,10 @@ def main(proj_dir: str) -> int:
     # index 与字幕带共用同一段表，只构造一次
     seg_scenes = [(sid, starts[sid], scene[sid], durs[sid]) for sid in ids]
     cap_body, cap_js = subtitle_blocks(seg_scenes, meta['voices'], slots, proj, W, H)
-    (proj / 'index.html').write_text(
-        project_html(W, H, total,
-                     scenes_html(seg_scenes),
-                     *overlay_block(first_chapter, total, 0.0), cap_body, cap_js, xfade=xfade),
-        encoding='utf-8')
+    write_atomic(proj / 'index.html',
+                 project_html(W, H, total,
+                              scenes_html(seg_scenes),
+                              *overlay_block(first_chapter, total, 0.0), cap_body, cap_js, xfade=xfade))
 
     # 单段工程（段级局部重渲）：.hf-seg/segNN.html = 只含该段的 index，
     # hyperframes render -c 出带音轨段片，段间 concat 出成片（见 pipeline stageRender）。
@@ -517,7 +527,7 @@ def main(proj_dir: str) -> int:
         # 修复轮回滚会把全部段源原样重写一遍，无脑覆盖 mtime 会把缓存打穿成全片重渲
         if out.exists() and out.read_text(encoding='utf-8') == seg_html:
             continue
-        out.write_text(seg_html, encoding='utf-8')
+        write_atomic(out, seg_html)
 
     # 字幕子组合清仓：段没了/段没声了，旧 cap 文件不留（挂载 404 = 渲染必炸）
     capdir = proj / 'compositions' / 'caps'
@@ -531,20 +541,23 @@ def main(proj_dir: str) -> int:
     (proj / 'assets').mkdir(exist_ok=True)
     if not (proj / 'assets' / 'gsap.min.js').exists():
         shutil.copy(GSAP_SRC, proj / 'assets' / 'gsap.min.js')
-    # hf.js 守卫层随仓库升级：无条件覆盖（gsap 是三方固定版本，策略不同）
+    # hf.js 守卫层随仓库升级：无条件覆盖（gsap 是三方固定版本，策略不同）。
+    # 原子替换：裸 copyfile 的 truncate 窗口同 write_text（见 write_atomic 注释）
     HF_SRC = AI_DIR / 'assets' / 'hf.js'
     if HF_SRC.exists():
-        shutil.copyfile(HF_SRC, proj / 'assets' / 'hf.js')
+        hf_tmp = proj / 'assets' / 'hf.js.tmp'
+        shutil.copyfile(HF_SRC, hf_tmp)
+        os.replace(hf_tmp, proj / 'assets' / 'hf.js')
     katex_src = AI_DIR / 'assets' / 'katex'
     if katex_src.exists() and not (proj / 'assets' / 'katex').exists():
         shutil.copytree(katex_src, proj / 'assets' / 'katex')
     if not (proj / 'package.json').exists():
-        (proj / 'package.json').write_text(json.dumps({
+        write_atomic(proj / 'package.json', json.dumps({
             'name': proj.name.replace(' ', '-'), 'private': True, 'type': 'module',
-        }, ensure_ascii=False, indent=2), encoding='utf-8')
+        }, ensure_ascii=False, indent=2))
     if not (proj / 'meta.json').exists():
-        (proj / 'meta.json').write_text(json.dumps(
-            {'id': proj.name, 'name': name}, ensure_ascii=False), encoding='utf-8')
+        write_atomic(proj / 'meta.json', json.dumps(
+            {'id': proj.name, 'name': name}, ensure_ascii=False))
     print(f'index.html ✓ 总时长 {total}s，{len(ids)} 段（含 .hf-seg 单段工程）')
     return 0
 

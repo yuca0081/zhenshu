@@ -24,7 +24,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/pipeline"
@@ -151,7 +150,7 @@ func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string
 		var err, blocking error
 		if err = ensureSegCheckDir(p, segID); err == nil {
 			var out string
-			out, err = pipeline.RunCLI(p, "npx", "hyperframes@0.8.55", "check", ".hf-check/"+segID, "--no-browser-gpu")
+			out, err = pipeline.RunCLI(p, "npx", pipeline.HyperframesPkg, "check", ".hf-check/"+segID, "--no-browser-gpu")
 			if err == nil {
 				// check 过了还差回放门禁（canvas 段）
 				if rerr := r.segReplayCheck(ctx, p, segID, dur); rerr != nil {
@@ -174,7 +173,17 @@ func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string
 		}
 		r.Manifest(p, "stage.finish", "check/"+segID)
 		if attempt == 3 {
-			return fmt.Errorf("%s check 三轮未过:\n%s", segID, pipeline.TailLines(blocking.Error(), 25))
+			// 三轮全死在 ensureSegCheckDir（缺段工程/assemble 未跑等）时 blocking
+			// 为 nil——裸 blocking.Error() 会 panic，真因被吞成空指针崩溃（中-12）
+			if blocking != nil {
+				return fmt.Errorf("%s check 三轮未过:\n%s", segID, pipeline.TailLines(blocking.Error(), 25))
+			}
+			return fmt.Errorf("%s check 三轮未过（环境类失败，无诊断输出——查 ensureSegCheckDir）: %w", segID, err)
+		}
+		if blocking == nil {
+			// 环境类失败（ensure 死在 attempt 1/2）：没有可回喂的诊断，机械修复与
+			// LLM 修复轮都无从下手，直接如实上抛（下方 blocking.Error() 会 panic）
+			return fmt.Errorf("%s check 环境类失败: %w", segID, err)
 		}
 		// 廉价修复先行：checker 给了对比度建议色 / opacity 冲突就机械回填再检，
 		// 不烧 LLM 修复轮（与全局 checkWithRepair 同一经验：LLM 修这两类从不收敛）
@@ -182,7 +191,7 @@ func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string
 		if fixN > 0 {
 			r.emit(id, "stage", "check", fmt.Sprintf("%s cheap-fix：机械回填 %d 处", segID, fixN))
 			r.Manifest(p, "check.contrast_fix", fmt.Sprintf("%s %d 处", segID, fixN))
-			if aerr := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); aerr == nil {
+			if aerr := r.assemble(ctx, p); aerr == nil {
 				continue // 回填后重检（attempt 消耗一次，语义同全局路径）
 			}
 		}
@@ -200,7 +209,7 @@ func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string
 		pipeline.ClampSegmentFonts(p, segID)
 		pipeline.FixupSegmentFrame(p, segID)
 		pipeline.ClampSegmentFrame(p, segID)
-		if err := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); err != nil {
+		if err := r.assemble(ctx, p); err != nil {
 			return fmt.Errorf("组装失败: %w", err)
 		}
 	}
@@ -234,7 +243,7 @@ func (r *Runner) segReplayCheck(ctx context.Context, p *pipeline.Project, segID 
 	snap := func(round string) ([]string, error) {
 		dir := p.Artifact("reports/replay/" + segID + "/" + round)
 		_ = os.RemoveAll(dir) // 输出目录是我们自己的产物，无 junction 风险
-		out, err := pipeline.RunCLI(p, "npx", "hyperframes@0.8.55", "snapshot",
+		out, err := pipeline.RunCLI(p, "npx", pipeline.HyperframesPkg, "snapshot",
 			".hf-check/"+segID, "--at", strings.Join(atArg, ","), "--no-end", "--no-browser-gpu", "-o", dir)
 		if err != nil {
 			return nil, fmt.Errorf("snapshot 失败: %s", pipeline.TailLines(out, 6))

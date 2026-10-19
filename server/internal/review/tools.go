@@ -13,8 +13,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"image"
-	"image/jpeg"
 	_ "image/png"
 	"math"
 	"os"
@@ -38,7 +36,8 @@ const clipFallbackFPS = 6
 // Files 取证目标：段片与缓存根。Service 持有。
 type serviceFS struct {
 	segVideo func(segID string) string // 段片路径（缺失返回 ""）
-	cacheDir string                    // reports/audit
+	cacheDir string                    // reports/audit（绝对）
+	relBase  string                    // cacheDir 的项目内相对路径（"reports/audit"），注入图引用用
 }
 
 func hash8(s string) string {
@@ -48,37 +47,40 @@ func hash8(s string) string {
 
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
 
-// extractFrame 抽指定时刻单帧（ffmpeg，缓存键 seg+t+源文件尺寸/mtime 两位小数）。返回 JPEG dataURL。
-// 越界（负值或超段长 0.05s 容差）报错回流，由模型改参数重取。
+// extractFrame 抽指定时刻单帧（ffmpeg，缓存键 seg+t+源文件尺寸/mtime 两位小数）。
+// 返回（JPEG dataURL, 项目内相对路径）。路径给「过程」页对话留痕的注入图引用
+// （缩略图/点击放大走 /projects/:id/file/ 白名单取件）；越界（负值或超段长 0.05s
+// 容差）报错回流，由模型改参数重取。
 // 缓存键必须带源文件的 Size+mtime：成片/段片重渲后同刻同名，旧缓存会把上一版
 // 画面（甚至上次失败渲染的黑帧）原样端给审核——2026-10-17/18 终审"全片纯黑"
 // 两次误判皆因此（真成片有画面，判卷官吃的是隔夜缓存帧）。
-func (fs *serviceFS) extractFrame(ctx context.Context, segID string, t float64, dur float64) (string, error) {
+func (fs *serviceFS) extractFrame(ctx context.Context, segID string, t float64, dur float64) (string, string, error) {
 	if dur > 0 && (t < 0 || t > dur+0.05) {
-		return "", fmt.Errorf("t=%.2f 越界（%s 段长 %.2fs）——改到 [0, %.2f] 内重取", t, segID, dur, dur)
+		return "", "", fmt.Errorf("t=%.2f 越界（%s 段长 %.2fs）——改到 [0, %.2f] 内重取", t, segID, dur, dur)
 	}
 	if t < 0 {
 		t = 0
 	}
 	src := fs.segVideo(segID)
 	if src == "" {
-		return "", fmt.Errorf("段片 %s 不存在（该段尚未渲染？）", segID)
+		return "", "", fmt.Errorf("段片 %s 不存在（该段尚未渲染？）", segID)
 	}
 	fi, err := os.Stat(src)
 	if err != nil {
-		return "", fmt.Errorf("段片 %s 不可读: %w", segID, err)
+		return "", "", fmt.Errorf("段片 %s 不可读: %w", segID, err)
 	}
 	key := fmt.Sprintf("%s-t%.2f-%d-%d", segID, round2(t), fi.Size(), fi.ModTime().UnixNano())
+	rel := fs.relBase + "/frames/" + key + ".jpg"
 	dst := filepath.Join(fs.cacheDir, "frames", key+".jpg")
 	if b, err := os.ReadFile(dst); err == nil && len(b) > 0 {
-		return jpegDataURL(b), nil
+		return jpegDataURL(b), rel, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return "", err
+		return "", "", err
 	}
 	ff, err := pipeline.FFmpegPath()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	cmd := exec.CommandContext(ctx, ff, "-y", "-v", "error", "-ss", strconv.FormatFloat(t, 'f', 3, 64),
 		"-i", src, "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", dst)
@@ -86,13 +88,13 @@ func (fs *serviceFS) extractFrame(ctx context.Context, segID string, t float64, 
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	if err := cmd.Run(); err != nil {
 		_ = os.Remove(dst)
-		return "", fmt.Errorf("抽帧失败（%s t=%.2f）: %s", segID, t, pipeline.TailLines(buf.String(), 3))
+		return "", "", fmt.Errorf("抽帧失败（%s t=%.2f）: %s", segID, t, pipeline.TailLines(buf.String(), 3))
 	}
 	b, err := os.ReadFile(dst)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return jpegDataURL(b), nil
+	return jpegDataURL(b), rel, nil
 }
 
 // extractClip 连续短片段：视频直喂优先，退路 6fps 带时间戳帧序列。跨度超上限
@@ -165,7 +167,7 @@ func (fs *serviceFS) extractClip(ctx context.Context, segID string, t1, t2, dur 
 	var imgs []string
 	var stamps []string
 	for t := t1; t <= t2+1e-6; t += 1.0 / float64(fps) {
-		u, err := fs.extractFrame(ctx, segID, t, dur)
+		u, _, err := fs.extractFrame(ctx, segID, t, dur)
 		if err != nil {
 			return summary + " 帧序列取回失败: " + err.Error(), nil, nil
 		}
@@ -183,16 +185,20 @@ var (
 	vidProbed  bool
 )
 
-// videoSupported 探测端点是否吃 mp4 dataURL。prov 是当前会话的模型通道；
+// videoSupported 探测端点是否吃 mp4 dataURL。探针通道由 auditProvider 注入
+// （videoProbeProv，同锁保护——包级全局无锁读写是数据竞争，2026-10-19 中-20）。
+// 探测全程持锁：并发首调用只探一次（原先锁外探测会双探针白烧一次）；
 // 探针请求失败（非法图片/不支持视频）按不可用缓存，本进程后续片段直接走帧序列。
 func videoSupported(ctx context.Context, mp4 string) bool {
 	vidMu.Lock()
+	defer vidMu.Unlock()
 	if vidProbed {
-		ok := vidSupport
-		vidMu.Unlock()
-		return ok
+		return vidSupport
 	}
-	vidMu.Unlock()
+	prov := videoProbeProv
+	if prov == nil {
+		return false // 探针通道未注入：按不可用处理，不缓存（注入后仍可探）
+	}
 	ok := false
 	if b, err := os.ReadFile(mp4); err == nil && len(b) < 4<<20 {
 		url := "data:video/mp4;base64," + base64.StdEncoding.EncodeToString(b)
@@ -203,13 +209,11 @@ func videoSupported(ctx context.Context, mp4 string) bool {
 				{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: url}},
 			},
 		}}
-		if _, _, err := videoProbeProv.ChatTemp(ctx, msgs, nil, 0.1); err == nil {
+		if _, _, err := prov.ChatTemp(ctx, msgs, nil, 0.1); err == nil {
 			ok = true
 		}
 	}
-	vidMu.Lock()
 	vidSupport, vidProbed = ok, true
-	vidMu.Unlock()
 	return ok
 }
 
@@ -218,35 +222,4 @@ var videoProbeProv ChatClient
 
 func jpegDataURL(b []byte) string {
 	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(b)
-}
-
-// shrinkImage 任意 PNG/JPG → 宽 480 JPEG dataURL（开场注入的锚点帧用；
-// 与 prep.shrinkFrame 同参，独立实现避免包依赖）。
-func shrinkImage(path string) (string, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	src, _, err := image.Decode(bytes.NewReader(b))
-	if err != nil {
-		return "", err
-	}
-	bounds := src.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
-	tw, th := 480, 480*h/w
-	if tw > w {
-		tw, th = w, h
-	}
-	dst := image.NewRGBA(image.Rect(0, 0, tw, th))
-	for y := 0; y < th; y++ {
-		sy := bounds.Min.Y + y*h/th
-		for x := 0; x < tw; x++ {
-			dst.Set(x, y, src.At(bounds.Min.X+x*w/tw, sy))
-		}
-	}
-	var out bytes.Buffer
-	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: 70}); err != nil {
-		return "", err
-	}
-	return jpegDataURL(out.Bytes()), nil
 }

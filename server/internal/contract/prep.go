@@ -205,14 +205,14 @@ func (g EditGrammar) ClampedBand() (lo, hi float64, ok bool) {
 // StylePack 风格包（工件 B）：③理解语境的载体——描述供③接视觉词汇，
 // 剪辑语法供③切段，设计系统（入场/收尾模板在内）进制作。
 type StylePack struct {
-	StyleID      string       `json:"style_id"` // 库内条目或本次衍生登记 id
-	Description  string       `json:"description"` // 风格描述 + 选择理由（一段，供③理解语境）
-	Grammar      EditGrammar  `json:"grammar"`
+	StyleID      string        `json:"style_id"`    // 库内条目或本次衍生登记 id
+	Description  string        `json:"description"` // 风格描述 + 选择理由（一段，供③理解语境）
+	Grammar      EditGrammar   `json:"grammar"`
 	DesignSystem *StyleSamples `json:"design_system"` // 含标准入场/收尾动画模板
-	SampleIDs    []string     `json:"sample_ids"`    // 样张 id 列表（≥1）
-	Confirmed    bool         `json:"confirmed"`     // 打包终审硬门
-	CreatedAt    time.Time    `json:"created_at"`
-	Fingerprint  string       `json:"fingerprint"`
+	SampleIDs    []string      `json:"sample_ids"`    // 样张 id 列表（≥1）
+	Confirmed    bool          `json:"confirmed"`     // 打包终审硬门
+	CreatedAt    time.Time     `json:"created_at"`
+	Fingerprint  string        `json:"fingerprint"`
 }
 
 // ValidateStylePack 风格包校验：剪辑语法三字段齐全、段长带数值合法且与全局钳制
@@ -280,11 +280,11 @@ type DraftSegment struct {
 
 // StoryboardDraft 分镜稿（工件 C）：纯内容，不出现任何缝/转场/机制概念。
 type StoryboardDraft struct {
-	Plan        string          `json:"plan,omitempty"`
+	Plan        string           `json:"plan,omitempty"`
 	Paragraphs  []DraftParagraph `json:"paragraphs"`
-	Segments    []DraftSegment  `json:"segments"`
-	CreatedAt   time.Time       `json:"created_at"`
-	Fingerprint string          `json:"fingerprint"`
+	Segments    []DraftSegment   `json:"segments"`
+	CreatedAt   time.Time        `json:"created_at"`
+	Fingerprint string           `json:"fingerprint"`
 }
 
 // ParseNarrationRefs 句引用解析："N3-N4"（区间）| "N3"（单句）| "N3,N4"（列表）。
@@ -404,11 +404,10 @@ func ValidateStoryboardDraft(d *StoryboardDraft, script *Script, pack *StylePack
 	}
 	// 句铺满：refs 展开序必须恰为 N1..Nn（零丢句、跨段乱序立即现形）
 	if script != nil {
-		for i, sen := range script.Sentences {
+		for _, sen := range script.Sentences {
 			if !covered[sen.ID] {
 				return fmt.Errorf("句 %s 没有被任何段引用（旁白必须铺满全部内容）：%.30s", sen.ID, sen.Text)
 			}
-			_ = i
 		}
 	}
 	// 段落铺满且按段序

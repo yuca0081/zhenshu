@@ -38,6 +38,7 @@ const (
 // ImgRef 留痕里引用的一张项目内图片：给「过程」页渲染缩略图、点击放大用。
 // 图片载荷本身（data URL）不落盘——那是给模型的，落盘只记项目内路径。
 type ImgRef struct {
+	URL   string `json:"-"`               // 注入模型用的 data URL（留痕不落盘，走 Path 取件）
 	Path  string `json:"path"`            // 项目内相对路径（正斜杠），走 /projects/:id/file/ 取件
 	Label string `json:"label,omitempty"` // 这张图是什么（风格样张/真迹/素材/截帧）
 }
@@ -165,5 +166,8 @@ func truncRunes(s string, n int) string {
 	if len(r) <= n {
 		return s
 	}
-	return string(r[:n]) + fmt.Sprintf("…[截断，共 %d 字]", len(r))
+	// 保头保尾截中段：场景提示的打回意见单/输出契约在尾部，排查时恰恰最想看
+	// （只保头会把它们截掉——2026-10-19 实测重写考卷 29k 字，意见单正好看不见）。
+	keepTail := n / 4
+	return string(r[:n-keepTail]) + fmt.Sprintf("…[中段截断，共 %d 字；尾部如下]…", len(r)) + string(r[len(r)-keepTail:])
 }

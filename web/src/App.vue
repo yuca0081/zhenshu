@@ -206,6 +206,28 @@ async function loadActivity() {
   }
 }
 
+// activity 节流（2026-10-19 中-39）：渲染期每段都发 progress/stage，逐条全量拉
+// 2000 行是请求风暴——与 throttledRefresh 同款 3s 窗口 + 尾随补刷（最后一次
+// 触发后 3s 必有一拉，终态事件不丢）。制作中的 5s 定时轮询在跑时直接让位（它
+// 就是那段时间的刷新源）。
+let lastActLoad = 0
+let actTimer: number | null = null
+function throttledLoadActivity() {
+  if (activityTimer != null) return
+  const now = Date.now()
+  if (now - lastActLoad >= 3000) {
+    lastActLoad = now
+    loadActivity()
+    return
+  }
+  if (actTimer == null) {
+    actTimer = window.setTimeout(() => {
+      actTimer = null
+      throttledLoadActivity()
+    }, 3000 - (now - lastActLoad))
+  }
+}
+
 function selectProject(id: string) {
   // 同项目重复点选只切页不重载：下面是无条件清场，而 current 同值赋值不触发
   // watch → refresh 不会执行，清掉的数据永不回来（页面空白）
@@ -215,6 +237,8 @@ function selectProject(id: string) {
   ++reqSeq // 在途响应全部作废：先于清场，晚到的旧数据在 resolve 处直接丢弃
   msgs.value = []
   chatRefs.value = []
+  chatDraft.value = '' // 草稿不随项目带（中-40：两份清场曾都漏了它，切项目后半截话串台）
+  progressLine.value = ''
   stageState.value = {}
   activity.value = []
   agentBusy.value = false // 上一项目的「Agent 工作中」不带给新项目（不然转圈挂到 90s 超时）
@@ -241,9 +265,11 @@ function addTimeRef(t: number) {
   chatRefs.value = [...chatRefs.value, { idx: hit.idx, key: hit.key, t }]
 }
 function removeRef(ref: ChatRef) {
+  // 可单删语义（中-L）：删段级只删段级条目本身，不级联吞掉同段的时刻级引用——
+  // 要清 moments 再各自点删或清空
   chatRefs.value = chatRefs.value.filter(r =>
     ref.t != null ? !(r.idx === ref.idx && r.t != null && Math.abs(r.t - ref.t) < 0.75)
-      : r.idx !== ref.idx)
+      : !(r.idx === ref.idx && r.t == null))
 }
 
 async function refresh() {
@@ -328,7 +354,7 @@ function openSSE(id: string) {
         : d.detail.startsWith('error') || d.detail.startsWith('repair') ? 'error' : 'running'
       stageState.value = { ...stageState.value, [d.stage]: st }
       loadMsgs()
-      loadActivity() // 阶段推进即拉事件流（用时/打回记帐在 manifest 里）
+      throttledLoadActivity() // 阶段推进即拉事件流（用时/打回记帐在 manifest 里；3s 节流）
     } catch { /* 坏事件静默丢弃 */ }
   })
   es.addEventListener('progress', ev => {
@@ -336,7 +362,7 @@ function openSSE(id: string) {
       const d = JSON.parse((ev as MessageEvent).data)
       progressLine.value = typeof d === 'string' ? d : d?.detail ?? ''
     } catch { return } // 非 JSON 进度行不覆盖当前值
-    loadActivity()
+    throttledLoadActivity()
   })
   es.addEventListener('style_confirmed', () => loadProject(id).catch(() => {}))
   es.addEventListener('style_applied', () => { loadProject(id).catch(() => {}); loadLibrary() })
@@ -380,18 +406,16 @@ watch(() => view.value?.producing, (now, was) => {
   if (now && activityTimer == null) activityTimer = window.setInterval(loadActivity, 5000)
   if (!now && activityTimer != null) { clearInterval(activityTimer); activityTimer = null }
 })
-onBeforeUnmount(() => {
-  if (activityTimer != null) clearInterval(activityTimer)
-  if (projLoadTimer != null) clearTimeout(projLoadTimer)
-})
-
 watch(current, id => {
   if (id) { openSSE(id); refresh() }
   else es?.close() // 项目删空/切换到空：断开上一个项目的订阅
 })
-
+// 定时器/SSE/监听的统一拆解（中-L5：原先两处 onBeforeUnmount 分立，漏一个就是泄漏）
 onBeforeUnmount(() => {
   es?.close()
+  if (activityTimer != null) clearInterval(activityTimer)
+  if (actTimer != null) clearTimeout(actTimer)
+  if (projLoadTimer != null) clearTimeout(projLoadTimer)
   if (busyTimer) clearTimeout(busyTimer)
   if (turnTimer) clearTimeout(turnTimer)
   window.removeEventListener('hashchange', applyHash)
@@ -456,14 +480,13 @@ async function onCreated(id: string) {
 }
 
 // 删除项目：磁盘目录+聊天全删（制作中后端 409 拒）。删的是当前项目则清空工作区。
+// 确认在 HistoryRail 侧两段式按钮（自绘，替代 window.confirm——原生弹窗在已知
+// 环境会死按钮，全站已弃用，2026-10-19 中-36）。
 async function onDeleteProject(id: string) {
-  const p = projects.value.find(x => x.id === id)
-  if (!p) return
-  if (!window.confirm(`删除项目「${p.name}」？成片与全部过程文件都会删除，不可恢复。`)) return
   try {
     await api.deleteProject(id)
   } catch (e) {
-    window.alert(`删除失败：${e instanceof Error ? e.message : e}`)
+    topMsg.error(`删除失败：${errMsg(e)}`)
     return
   }
   if (current.value === id) {
@@ -473,10 +496,14 @@ async function onDeleteProject(id: string) {
     storyboard.value = null
     style.value = null
     manuscript.value = null
+    prep.value = null
     audioMeta.value = null
     msgs.value = []
     chatRefs.value = []
+    chatDraft.value = ''
+    progressLine.value = ''
     stageState.value = {}
+    activity.value = []
     agentBusy.value = false
     endTurn()
     manualTab.value = null
@@ -489,6 +516,10 @@ const stageSummary = computed(() => {
   if (!states.some(Boolean)) return null
   return stageOrder.map((s, i) => ({ key: s, state: states[i] }))
 })
+
+// 挑选中的段序号（中-L5：原先模板内联 map，App 任意状态变更都新建数组触发
+// Timeline 重渲染）
+const pickedIdx = computed(() => chatRefs.value.map(r => r.idx))
 
 // 准备工位各站实时态（SSE stage 事件：prep/script|style|storyboard → running/done/error）
 // → 想法页签的「进行到哪一步」显示
@@ -562,7 +593,7 @@ async function confirmStyle() {
               :tab="activeTab" :view="view" :storyboard="storyboard" :style-samples="style" :manuscript="manuscript"
               :prep="prep"
               :stage-summary="stageSummary" :video-id="current" :audio-meta="audioMeta"
-              :picked-idx="chatRefs.map(r => r.idx)" :video-rev="videoRev" :progress-line="progressLine"
+              :picked-idx="pickedIdx" :video-rev="videoRev" :progress-line="progressLine"
               :activity="activity" :agent-busy="turnActive" :prep-progress="prepProgress"
               @tab="setTab" @go-tab="setTab"
               @saved="refresh" @chat-sent="markBusy"
@@ -573,6 +604,7 @@ async function confirmStyle() {
               @pick-time="addTimeRef"
               @cancel="async () => { if (current) { await api.cancel(current).catch(() => {}); refresh() } }"
               @cancel-agent="cancelAgentTurn"
+              @rework-started="refresh"
             />
             <div v-else class="empty-ws">
               从左侧选择一个项目，或

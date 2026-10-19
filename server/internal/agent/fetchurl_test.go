@@ -14,8 +14,13 @@ func TestFetchURLToolRegistered(t *testing.T) {
 	if tl == nil {
 		t.Fatal("fetch_url 未注册")
 	}
-	if got := tl.gate(State{}); got != "" {
-		t.Errorf("fetch_url 不应设状态门，被拒原因 %q", got)
+	// 免门禁工具 gate=nil（2026-10-19 中-19）：reactTools 据此跳过全量扫盘
+	if tl.gate != nil {
+		if got := tl.gate(State{}); got != "" {
+			t.Errorf("fetch_url 不应设状态门，被拒原因 %q", got)
+		} else {
+			t.Error("fetch_url 应为免门禁工具（gate=nil），不该付全量扫盘成本")
+		}
 	}
 	found := false
 	for _, td := range toolSchemas() {

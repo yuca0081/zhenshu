@@ -142,6 +142,14 @@ def _subset_woff2(ttf_path: pathlib.Path, text: str) -> bytes:
     return out
 
 
+def _write_atomic(path: pathlib.Path, text: str):
+    """tmp+replace 原子写：font_assets.json 是 assemble/snap_samples 的并发读源，
+    裸写的 truncate 窗口会让渲染侧吃到半截 JSON（2026-10-19 低危加固）。"""
+    tmp = path.with_name(path.name + '.tmp')
+    tmp.write_text(text, encoding='utf-8')
+    os.replace(tmp, path)
+
+
 def _strip_family_from_stacks(proj: pathlib.Path, family: str):
     """把失败家族从设计三件套的字体栈里剥除(与 Go 侧 clampFontStack 同语义)。
     剥前把原文备份进 style/font_strip_backup.json——剥族不可逆太重(网络恢复后
@@ -157,7 +165,7 @@ def _strip_family_from_stacks(proj: pathlib.Path, family: str):
             s2 = pat.sub('', s)
             if s2 != s:
                 backup[rel] = s
-                p.write_text(s2, encoding='utf-8')
+                _write_atomic(p, s2)
         except Exception:
             pass
     if backup:
@@ -171,7 +179,7 @@ def _strip_family_from_stacks(proj: pathlib.Path, family: str):
         ledger.append({'family': family, 'at': time.strftime('%Y-%m-%dT%H:%M:%S'),
                        'files': backup})
         try:
-            bp.write_text(json.dumps(ledger, ensure_ascii=False), encoding='utf-8')
+            _write_atomic(bp, json.dumps(ledger, ensure_ascii=False))
         except Exception:
             pass
 
@@ -202,8 +210,8 @@ def ensure(proj_dir: str) -> int:
             _strip_family_from_stacks(proj, family)
             print('font_tool: %s 准备失败,已从设计剥除:%s' % (family, e))
     out = proj / 'style' / 'font_assets.json'
-    out.write_text(json.dumps({'resolved': resolved, 'stripped': stripped},
-                              ensure_ascii=False), encoding='utf-8')
+    _write_atomic(out, json.dumps({'resolved': resolved, 'stripped': stripped},
+                                  ensure_ascii=False))
     return len(stripped)
 
 

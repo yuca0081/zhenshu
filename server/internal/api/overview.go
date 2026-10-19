@@ -330,8 +330,8 @@ func (s *Server) overview(c *gin.Context) {
 	producing := s.Producer.IsRunning(id)
 	if producing {
 		status = "producing"
-	} else if _, err := os.Stat(p.Artifact("renders/main.mp4")); err == nil {
-		status = "video" // 与项目列表同口径：成片在即 video
+	} else if s.hasFinalVideo(id) {
+		status = "video" // 与项目列表同口径：成片在即 video（本地 miss 回退云端正本）
 	}
 	b, _ := os.ReadFile(p.Artifact("manifest.jsonl"))
 	stages, run, durations, events := scanManifest(b)

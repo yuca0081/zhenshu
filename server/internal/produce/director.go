@@ -1,10 +1,13 @@
-// director.go —— 导演统筹两层落点：
-// M1 定调消费：directorNoteFor 把弧线定位/母题任务/邻段衔接/本段节拍注入每段
-// 的生成 prompt；directorFingerprint 让导演字段改动正确传导成段缓存过期。
-// M2 审片：directorReview 在 run() 的 assemble 后、check 前跑——按节拍锚句×
-// 词级时间戳抽帧成全片连环画，一次多模态调用对照弧线/母题/节拍表审「整片像
-// 不像一部片子」；意见 high 段重出画面（≤1 轮，不二审），medium 只落意见单。
-// 非阻塞哲学同 prereview/frameQA：审片类故障降级放行，绝不挡出片。
+// director.go —— 导演统筹两层落点。
+//
+// ⚠ 架构状态（2026-10-19 标注；docs/production-architecture-discussion.md 已
+// 裁定「导演角色退役、预期考卷并入审核工位」）：
+//   - M1 仍是活代码：directorNoteFor 把弧线定位/母题任务/邻段衔接/本段节拍
+//     注入每段生成 prompt（prep 段级流水线与 legacy run() 两条路径共用），
+//     directorFingerprint 让导演字段改动正确传导成段缓存过期。
+//   - M2 审片（directorReview 及其配套）只服务 legacy run() 路径：prep 新项目
+//     走 segpipe 的段审/边界审/全片终审，永不触达本文件下半部分。非阻塞哲学
+//     同 prereview/frameQA（审片故障降级放行）；legacy 项目清零后 M2 可整删。
 package produce
 
 import (
@@ -376,10 +379,8 @@ func (r *Runner) directorReview(ctx context.Context, p *pipeline.Project) error 
 	r.emit(id, "stage", "director", "running")
 	r.Manifest(p, "director.review.start", fmt.Sprintf("%d 帧连环画", len(shots)))
 	atArg := make([]string, len(shots))
-	shotAt := make(map[float64]directorShot, len(shots))
 	for i, sh := range shots {
 		atArg[i] = fmt.Sprintf("%.2f", sh.At)
-		shotAt[sh.At] = sh
 	}
 	frames, serr := r.snapFrames(p, strings.Join(atArg, ","), "reports/director/review")
 	if serr != nil {
@@ -498,7 +499,7 @@ func (r *Runner) directorReview(ctx context.Context, p *pipeline.Project) error 
 		if err := pipeline.Run(ctx, p, "compositions"); err != nil {
 			return fmt.Errorf("合成物落盘失败: %w", err)
 		}
-		if err := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); err != nil {
+		if err := r.assemble(ctx, p); err != nil {
 			return fmt.Errorf("组装失败: %w", err)
 		}
 	}

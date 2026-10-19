@@ -15,6 +15,23 @@ function toggle() {
 }
 
 const statusOf = (s: string) => ({ label: statusLabel[s] ?? s, cls: statusDotCls[s] ?? '' })
+
+// 删除两段式确认（2026-10-19 中-36，替代 window.confirm——原生弹窗 2026-10-16
+// 死按钮、Playwright 30s 超时同源，全站已弃用）：第一枪只亮确认态，3s 内再点
+// 才真删；超时自动解除
+const armed = ref<string | null>(null)
+let armTimer: number | null = null
+function clickDel(id: string) {
+  if (armed.value === id) {
+    if (armTimer) clearTimeout(armTimer)
+    armed.value = null
+    emit('delete', id)
+    return
+  }
+  armed.value = id
+  if (armTimer) clearTimeout(armTimer)
+  armTimer = window.setTimeout(() => { armed.value = null }, 3000)
+}
 </script>
 
 <template>
@@ -42,13 +59,17 @@ const statusOf = (s: string) => ({ label: statusLabel[s] ?? s, cls: statusDotCls
                 <em>{{ dateOf(p.created_at) }}</em>
               </span>
             </span>
-            <button v-if="!collapsed" class="del" title="删除项目（不可恢复）" @click.stop="emit('delete', p.id)">✕</button>
+            <button v-if="!collapsed" class="del" :class="{ armed: armed === p.id }"
+                    :title="armed === p.id ? '再点一次确认删除（不可恢复）' : '删除项目（不可恢复）'"
+                    @click.stop="clickDel(p.id)">{{ armed === p.id ? '确认?' : '✕' }}</button>
           </div>
         </template>
         <div class="pop">
           <div class="pop-name">{{ p.name }}</div>
           <div class="pop-meta">{{ statusOf(p.status).label }}{{ p.has_video ? ' · 可下载成片' : '' }}{{ lastProduceFailed(p) ? ' · 上次制作失败' : '' }}</div>
-          <button class="pop-del" @click="emit('delete', p.id)">删除项目…</button>
+          <button class="pop-del" :class="{ armed: armed === p.id }" @click="clickDel(p.id)">
+            {{ armed === p.id ? '再点一次，确认删除（不可恢复）' : '删除项目…' }}
+          </button>
         </div>
       </NPopover>
     </NScrollbar>
@@ -91,11 +112,13 @@ const statusOf = (s: string) => ({ label: statusLabel[s] ?? s, cls: statusDotCls
 }
 .item:hover .del { opacity: 1; }
 .del:hover { color: #ff6b6b; background: #2a1518; border-color: #ff7a7a; }
+.del.armed { opacity: 1; color: #fff; background: #b3261e; border-color: #ff6b6b; }
 .pop-del {
   border: 0; background: transparent; color: #ff9d9d; cursor: pointer;
   font-size: 12px; padding: 6px 0 0; text-align: left;
 }
 .pop-del:hover { text-decoration: underline; }
+.pop-del.armed { color: #ff6b6b; font-weight: 600; }
 .ava {
   width: 32px; height: 32px; flex: none; border-radius: 9px; overflow: hidden;
   display: flex; align-items: center; justify-content: center;

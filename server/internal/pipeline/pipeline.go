@@ -53,8 +53,6 @@ type Project struct {
 	// Ctx 任务级取消信号（pipeline.Run 注入）；runCLI 等长作业用其杀子进程。
 	// 为 nil 时视为 context.Background()（CLI 直跑 m0 run 场景）。
 	Ctx context.Context
-
-	manifestMu sync.Mutex // 并发作业（spec 并行生成）下 manifest.jsonl 追加互斥
 }
 
 func NewProject(dataDir, id string) *Project {
@@ -99,8 +97,9 @@ func (p *Project) ManifestFields(event, detail string, extra map[string]any) {
 	}
 	line, _ := json.Marshal(m)
 	line = append(line, '\n')
-	p.manifestMu.Lock()
-	defer p.manifestMu.Unlock()
+	mu := ManifestMu(p)
+	mu.Lock()
+	defer mu.Unlock()
 	for attempt := 0; attempt < 2; attempt++ {
 		fh, err := os.OpenFile(f, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
@@ -187,20 +186,37 @@ func ctxCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
 // 先写（style_id 被 bgm 写入抹掉那类丢更新）——单笔原子写防撕裂不防丢更新，
 // 必须串行化。凡手工读-改-写 project.json 的代码都必须持有它。
 func ProjectMu(p *Project) *sync.Mutex {
+	return keyMu(p.Dir)
+}
+
+// ManifestMu manifest.jsonl 追加互斥——按项目目录取全局锁（2026-10-19 中-17）：
+// NewProject 每次调用都返回新实例，实例字段锁护不住「api handler + agent 轮 +
+// 段级流水线」各持不同 *Project 的并发追加；此前全靠 O_APPEND 单行写的 OS
+// 原子性兜底（那是文件系统副作用，不是设计保证，而注释自己强调终态丢行=对账全盲）。
+func ManifestMu(p *Project) *sync.Mutex {
+	return keyMu(p.Dir + "|manifest")
+}
+
+func keyMu(key string) *sync.Mutex {
 	projMuLock.Lock()
 	defer projMuLock.Unlock()
-	mu := projMus[p.Dir]
+	mu := projMus[key]
 	if mu == nil {
 		mu = &sync.Mutex{}
-		projMus[p.Dir] = mu
+		projMus[key] = mu
 	}
 	return mu
 }
 
 var (
 	projMuLock sync.Mutex
-	projMus    = map[string]*sync.Mutex{} // 按项目目录取锁
+	projMus    = map[string]*sync.Mutex{} // 按键取锁（project.json 读改写 / manifest 追加）
 )
+
+// HyperframesPkg 渲染/检查/截帧共用的 hyperframes 包版本。全仓只此一处定义：
+// 版本与 --no-browser-gpu 等正确性参数散落多处靠人肉同步，将来只改一处必出
+// 「预审/回放门禁与渲染器不同源」的假失败（2026-10-19 中-6）。升级 = 只改这里。
+const HyperframesPkg = "hyperframes@0.8.55"
 
 func pctx(p *Project) context.Context {
 	if p.Ctx != nil {
@@ -411,6 +427,15 @@ func stageStoryboard(p *Project) error {
 		if gerr == nil {
 			p.Manifest("llm.usage", fmt.Sprintf("storyboard prompt=%d completion=%d tokens",
 				usage.PromptTokens, usage.CompletionTokens))
+			// 本体先自检、再进导演统筹（2026-10-19 中-18）：分镜本体不合格时，
+			// 导演定调最多 3 轮 LLM 调用全白烧、最后还是被 accept 拒——坏本体早死
+			// 早省钱；本体过了导演再补注（失败降级不挡入库）。
+			if verr := contract.ValidateStoryboard(&sb); verr != nil {
+				p.Manifest("storyboard.api.rejected", verr.Error())
+				_ = writeFile(p.LLMRequest("storyboard"),
+					storyboardUserPrompt(p, string(article))+fmt.Sprintf("\n\n<!-- 上次模型输出被拒绝: %s\n    产物写入 %s 后重跑 -->\n", verr, out))
+				return fmt.Errorf("API 分镜被自检拒绝: %w", verr)
+			}
 			directorPass(p, &sb) // 导演定调（失败降级：分镜照常入库）
 			if aerr := accept(&sb); aerr == nil {
 				p.Manifest("storyboard.api", prov.Name+"/"+prov.Model)
@@ -792,13 +817,12 @@ func stageCheck(p *Project) error {
 		p.Manifest("check.skipped_fresh", "")
 		return nil
 	}
-	out, err := runCLI(p, "npx", "--yes", "hyperframes@0.8.55", "check", "--no-browser-gpu")
+	out, err := runCLI(p, "npx", "--yes", HyperframesPkg, "check", "--no-browser-gpu")
 	if err != nil {
 		// 完整输出：上游修复轮要从 ✗ 行提取报错段（截断会丢 Layout 段的重叠错误）；
 		// 对话/清单侧各自再做 tail/挑行
 		return fmt.Errorf("check 未过（诊断如下，修复后重跑）:\n%s", out)
 	}
-	_ = writeFile(p.Artifact(".hyperframes-ok"), "check passed "+time.Now().Format(time.RFC3339)+"\n")
 	WriteCheckStamp(p)
 	p.Manifest("check.passed", "")
 	return nil
@@ -899,7 +923,7 @@ func stageRender(p *Project) error {
 // stageRender/concat 才能正确判"新鲜"跳过。要求该段的段工程已在（assemble 产物）。
 func RenderSeg(p *Project, segID string) error {
 	fmt.Printf("  · %s 渲染中\n", segID)
-	outLog, err := runCLI(p, "npx", "hyperframes@0.8.55", "render", ".",
+	outLog, err := runCLI(p, "npx", HyperframesPkg, "render", ".",
 		"-c", ".hf-seg/"+segID+".html", "-o", "renders/segs/"+segID+".mp4")
 	if err != nil {
 		return fmt.Errorf("%s 渲染失败:\n%s", segID, tailLines(outLog, 30))
@@ -975,6 +999,10 @@ func segStale(p *Project, segID, out string) bool {
 	}
 	return string(want) != got
 }
+
+// SegStale 段片是否需要重渲（内容指纹判旧）——segpipe 的段渲染位与 stageRender
+// 共用同一判旧口径（2026-10-19 中-14：两套口径不一致会把一边的缓存白渲一遍）。
+func SegStale(p *Project, segID, out string) bool { return segStale(p, segID, out) }
 
 // segSrcSum 段渲染输入的内容指纹：帧html + 音频 + 单段工程逐个 sha256 拼接。
 // 指纹只吃内容与文件基名（+槽位序号）——绝对路径掺进去的话项目目录一挪/

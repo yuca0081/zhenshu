@@ -56,6 +56,14 @@ const targets = [
   { id: 'style', label: '改风格', hint: '重跑风格工位（分镜级联重做）' },
   { id: 'storyboard', label: '改结构/场景', hint: '只重跑分镜工位' },
 ] as const
+// IME 组合期的 Enter 是选词不是发送（中-38：主用户群中文输入，漏这个守卫会把
+// 半截反馈发出去触发工位重跑——同仓 ChatPanel/NewProjectModal/LoginView 三处
+// 同款）
+function onEnter(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return
+  e.preventDefault()
+  sendFeedback()
+}
 async function sendFeedback() {
   const note = feedback.value.trim()
   if (!note || !props.projectId || props.agentBusy) return
@@ -160,7 +168,7 @@ const sentences = computed(() => props.prep?.script?.sentences ?? [])
         <NInput
           v-model:value="feedback" type="text" size="small" :disabled="agentBusy"
           placeholder="不满意的点写在这里，按工件路由重跑对应的准备工位…"
-          @keydown.enter="sendFeedback"
+          @keydown.enter="onEnter"
         />
         <NButton size="small" :disabled="!feedback.trim() || agentBusy" :loading="agentBusy" @click="sendFeedback">发给我改</NButton>
       </footer>

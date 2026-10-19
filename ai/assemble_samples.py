@@ -9,12 +9,20 @@
 用法：python ai/assemble_samples.py <项目目录>
 """
 import json
+import os
 import pathlib
 import shutil
 import sys
 
 AI_DIR = pathlib.Path(__file__).resolve().parent
 from assemble import GSAP_SRC, _esc_html, ensure_font_faces, fontface_css, load_font_assets, load_style_tokens, subtitle_text_color
+
+
+def _write_atomic(path: pathlib.Path, text: str):
+    """tmp+os.replace 原子写（与 assemble.write_atomic 同款：并发读者防半截）。"""
+    tmp = path.with_name(path.name + '.tmp')
+    tmp.write_text(text, encoding='utf-8')
+    os.replace(tmp, path)
 
 
 def load_slots(proj):
@@ -133,17 +141,17 @@ def main(proj_dir: str) -> int:
         dur = float(e.get('duration') or 3.0)
         if resolved:
             # 片段字体声明纠错+补齐（幂等）：目录字体 local() 空声明 → 真字体 url，
-            # 小样里的标题字体才和确认样张一致
+            # 小样里的标题字体才和确认样张一致。原子写：片段是渲染器/快照脚本的并发读源
             src = frag.read_text(encoding='utf-8')
             fixed = ensure_font_faces(src, resolved)
             if fixed != src:
-                frag.write_text(fixed, encoding='utf-8')
+                _write_atomic(frag, fixed)
         cap_body, cap_js = caption_block(clip_id, dur, (e.get('narration') or '').strip(), slots)
         out = segdir / f'{clip_id}.html'
         # 壳底色取皮肤 bg 槽位；槽位缺失（样张读不出/老数据）回退米白保旧行为
-        out.write_text(mini_html(W, H, dur, clip_id, f'style/clips/{e["file"]}',
-                                 cap_body, cap_js, xfade, fontface,
-                                 slots.get('bg') or '#FDF6E3'), encoding='utf-8')
+        _write_atomic(out, mini_html(W, H, dur, clip_id, f'style/clips/{e["file"]}',
+                                     cap_body, cap_js, xfade, fontface,
+                                     slots.get('bg') or '#FDF6E3'))
         done += 1
 
     # 渲染器要的工程底座（与 assemble.py 同款；样张阶段先于正式 assemble 跑，得自备）

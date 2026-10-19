@@ -52,6 +52,9 @@ def sha256_of(p: pathlib.Path) -> str:
 
 
 def curl_retry(url: str, out: pathlib.Path, tries: int = 4) -> bool:
+    if not shutil.which('curl'):
+        print('✗ 环境缺 curl——按 vend-stage.md §5 报修（不回喂模型）')
+        return False
     for k in range(tries):
         r = subprocess.run(['curl', '-s', '--retry', '2', '--max-time', '120',
                             '-L', '-o', str(out), url])

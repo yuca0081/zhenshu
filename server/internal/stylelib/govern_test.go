@@ -11,11 +11,11 @@ import (
 func TestDeriveSeedsVocabOnColdStart(t *testing.T) {
 	lib := New(t.TempDir()) // 空词表 + 空风格库（冷启动）
 	in := DeriveInput{
-		Name:   "墨宣木语 · 古雅",
-		Delta:  "测试：宣纸米白底、浓墨衬线字，中轴对称留白",
+		Name:    "墨宣木语 · 古雅",
+		Delta:   "测试：宣纸米白底、浓墨衬线字，中轴对称留白",
 		Subject: "测试题材",
-		Tags:   &contract.StyleTags{Main: "国风"},
-		Facets: &StyleFacets{Mood: "沉稳", Tone: "低饱和暖色", Density: "疏朗"},
+		Tags:    &contract.StyleTags{Main: "国风"},
+		Facets:  &StyleFacets{Mood: "沉稳", Tone: "低饱和暖色", Density: "疏朗"},
 	}
 	st, err := lib.Derive(in)
 	if err != nil {

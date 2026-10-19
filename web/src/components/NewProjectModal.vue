@@ -4,8 +4,8 @@ import { NButton, NInput, NModal, NRadioButton, NRadioGroup } from 'naive-ui'
 import { api } from '../api'
 import { errMsg } from '../format'
 
-// 新建三件事：名称 + 主题 + 画幅。文稿/分镜/风格是三前置硬门，
-// 进工作区后点对话栏上方的同名标签补齐（文稿弹窗可 AI 起草，风格弹窗可选库内或描述方向）。
+// 新建三件事：名称 + 主题 + 画幅。文稿/分镜/风格三前置走「想法」页签的
+// 准备工位自动完成（2026-10-19 注释对齐：文稿弹窗/AI 起草入口已随弹窗体系退役）。
 const show = defineModel<boolean>('show')
 const emit = defineEmits<{ created: [id: string] }>()
 const name = ref('')

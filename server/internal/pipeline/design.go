@@ -506,8 +506,11 @@ func LockDesign(p *Project, ss *contract.StyleSamples) error {
 	// 夹具/裸项目）只跳过接线不失败——令牌落不进机械层，设计本体照常锁定。
 	if _, err := os.Stat(p.Artifact("project.json")); err == nil {
 		if tok := transitionTokenOf(ss); tok != "" {
-			if err := SetProjectField(p, "transition", tok); err != nil {
-				return fmt.Errorf("转场令牌落盘失败: %w", err)
+			// 幂等短路（与 writePostFX 同理）：令牌没变不动盘，防每轮重放白写
+			if readProjectField(p, "transition") != tok {
+				if err := SetProjectField(p, "transition", tok); err != nil {
+					return fmt.Errorf("转场令牌落盘失败: %w", err)
+				}
 			}
 			p.Manifest("design.transition", tok)
 		}
@@ -574,7 +577,7 @@ var reFontFamilyDecl = regexp.MustCompile(`(?i)(font-family\s*:\s*)([^;{}"]+)`)
 
 // ClampSegmentFonts 段帧字体栈机械归一（段级流水线 written 位）：模型屡教不改的
 // 字体问题在落盘侧一次收口——目录字体的中文别名/大小写写法归一成规范 Family
-//（'站酷快乐体' → 'ZCOOL KuaiLe'，与 LockDesign 同一 clampFontStack）；渲染端
+// （'站酷快乐体' → 'ZCOOL KuaiLe'，与 LockDesign 同一 clampFontStack）；渲染端
 // 没有且目录没有的字体（思源黑体/PingFang SC 等）直接剥除退到栈内后备。
 // 只动 font-family 声明值，选择器与内容不碰。幂等。
 func ClampSegmentFonts(p *Project, segID string) {
@@ -602,16 +605,40 @@ func postFXOf(ss *contract.StyleSamples) any {
 	return ss.Post
 }
 
-// writePostFX post 槽位接线（幂等条件写：值变化才动盘）。
+// readProjectField 读 project.json 顶层字段（缺失/损坏返回零值；幂等短路用）。
+func readProjectField(p *Project, key string) string {
+	b, err := os.ReadFile(p.Artifact("project.json"))
+	if err != nil {
+		return ""
+	}
+	var m map[string]any
+	if json.Unmarshal(b, &m) != nil {
+		return ""
+	}
+	if s, ok := m[key].(string); ok {
+		return s
+	}
+	return ""
+}
+
+// writePostFX post 槽位接线（幂等条件写：值变化才动盘）。比较前先归一化：
+// meta["post"] 反序列化成 map 后 Marshal 按键字母序输出，want 是 struct 按字段
+// 序输出——两串恒不相等，旧版短路永不生效，每轮管线重放都白写 project.json
+// +重复上传正本（2026-10-19 中-16）。
 func writePostFX(p *Project, ss *contract.StyleSamples) error {
 	want := postFXOf(ss)
 	b, _ := os.ReadFile(p.Artifact("project.json"))
 	var meta map[string]any
 	if json.Unmarshal(b, &meta) == nil {
-		cur, _ := json.Marshal(meta["post"])
-		w, _ := json.Marshal(want)
-		if string(cur) == string(w) {
-			return nil
+		if wj, err := json.Marshal(want); err == nil {
+			var wnorm map[string]any
+			if json.Unmarshal(wj, &wnorm) == nil {
+				cur, _ := json.Marshal(meta["post"])
+				wn, _ := json.Marshal(wnorm)
+				if string(cur) == string(wn) {
+					return nil
+				}
+			}
 		}
 	}
 	return SetProjectField(p, "post", want)

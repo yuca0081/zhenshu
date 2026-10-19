@@ -10,6 +10,7 @@ package stylelib
 import (
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -24,6 +25,10 @@ import (
 
 type catalog interface {
 	ListStyles() ([]Style, error)
+	// GetStyle 单条读（2026-10-19 中-29：Get/BuildBrief/BumpUsage/Derive/媒体回退
+	// 高频调用，全量 List 意味着 PG 整表 SELECT + 逐行 payload 反序列化——库长到
+	// 几百条后是明显的延迟陷阱）。无行返回 ErrNoEntry。
+	GetStyle(id string) (*Style, error)
 	// PutStyle upsert：同 ID 覆盖但保留首建 created_at（回填到 s，列表排序稳定）。
 	PutStyle(s *Style) error
 	// MarkPublished 用户确认入库。ErrNoEntry。
@@ -252,6 +257,22 @@ func (c *pgCatalog) ListStyles() ([]Style, error) {
 	return out, nil
 }
 
+// GetStyle 单条读：WHERE id 精确取行，不做 payload 损坏的全库跳过日志。
+func (c *pgCatalog) GetStyle(id string) (*Style, error) {
+	var row styleRow
+	if err := c.db.Table("styles").Where("id = ?", id).Take(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: %s", ErrNoEntry, id)
+		}
+		return nil, err
+	}
+	s, err := row.toStyle()
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
 // PutStyle upsert。ON CONFLICT 不碰 created_at = 保首建值；回查一次把实际值
 // 写回 s（重解析覆盖路径的返回值与旧文件实现同形）。
 func (c *pgCatalog) PutStyle(s *Style) error {
@@ -380,6 +401,23 @@ func (c *fileCatalog) ListStyles() ([]Style, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.listLocked()
+}
+
+// GetStyle 单条读（文件后端库量小，线性查找与全量读同价——保持行为一致）。
+func (c *fileCatalog) GetStyle(id string) (*Style, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	styles, err := c.listLocked()
+	if err != nil {
+		return nil, err
+	}
+	for i := range styles {
+		if styles[i].ID == id {
+			s := styles[i]
+			return &s, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: %s", ErrNoEntry, id)
 }
 
 func (c *fileCatalog) listLocked() ([]Style, error) {

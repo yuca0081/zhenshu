@@ -198,9 +198,9 @@ func minimalValidDesign(t *testing.T) *StyleSamples {
 			Rhythm: "每 3 秒一个事件", Exits: "淡出", Camera: "微推", Transition: "直切",
 			Notes: "克制",
 		},
-		Device: &DeviceSpec{Name: "卡片", Desc: "什么", PerSeg: "怎么变奏"},
+		Device:    &DeviceSpec{Name: "卡片", Desc: "什么", PerSeg: "怎么变奏"},
 		EntryExit: &EntryExitSpec{Entry: "晕染显影", Exit: "淡出收黑", EntryDur: 0.4},
-		Samples: []Sample{{Tag: "样张 A", Desc: "测试", HTML: "<!doctype html><html></html>"}},
+		Samples:   []Sample{{Tag: "样张 A", Desc: "测试", HTML: "<!doctype html><html></html>"}},
 	}
 	if err := ValidateStyleSamplesDraft(ss); err != nil {
 		t.Fatalf("夹具设计系统不合法: %v", err)

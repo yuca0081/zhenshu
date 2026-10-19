@@ -208,9 +208,16 @@ const redoNames = computed(() => {
 const showRedo = computed(() =>
   props.tab === 'video' && !!props.view?.has_video && !props.view.producing && !props.stageSummary && redoNames.value.length > 0)
 const redoing = ref(false)
+// 两段式确认（2026-10-19 中-36，替代 window.confirm——原生弹窗死按钮问题，全站已弃用）
+const redoArmed = ref(false)
 async function redoFull() {
   if (redoing.value || !props.view) return
-  if (!window.confirm('按最新的文稿/分镜/风格整片重做？管线会复用没变的产物，只重做出入的部分。')) return
+  if (!redoArmed.value) {
+    redoArmed.value = true
+    window.setTimeout(() => { redoArmed.value = false }, 4000)
+    return
+  }
+  redoArmed.value = false
   redoing.value = true
   try {
     await api.produce(props.videoId)
@@ -235,12 +242,12 @@ async function redoFull() {
           <span class="dot" />{{ t.label }}<span v-if="tabState(t.id).label" class="tab-sub">{{ tabState(t.id).label }}</span>
         </button>
         <div class="head-right">
-          <!-- 整片过期重做：悬停显示哪几样改过 -->
+          <!-- 整片过期重做：悬停显示哪几样改过；两段式确认（第一枪只亮确认态） -->
           <NButton
-            v-if="showRedo" class="redo-btn" size="tiny" type="warning" :loading="redoing"
+            v-if="showRedo" class="redo-btn" size="tiny" :type="redoArmed ? 'error' : 'warning'" :loading="redoing"
             :title="`${redoNames.join('、')}在成片生成后又改过——成片还是旧版。点此按最新内容重做：没变的产物会复用，只重做出入的部分。`"
             @click="redoFull"
-          >按最新内容重做</NButton>
+          >{{ redoArmed ? '确认重做？' : '按最新内容重做' }}</NButton>
           <!-- 下载成片 -->
           <a
             v-if="view.has_video" class="dl-btn"
@@ -321,7 +328,7 @@ async function redoFull() {
             :view="view" :storyboard="storyboard" :audio-meta="audioMeta" :picked-idx="pickedIdx"
             :video-id="videoId" :video-rev="videoRev" :progress-line="progressLine" :stage-summary="stageSummary"
             @seg="(i, k) => emit('seg', i, k)" @pick-time="t => emit('pick-time', t)"
-            @cancel="emit('cancel')" @rework-started="emit('rework-started')"
+            @cancel="emit('cancel')"
             @go-tab="t => emit('go-tab', t)"
           />
           <ActivityPane

@@ -91,7 +91,7 @@ func goodDesign() *StyleSamples {
 			Camera:     "10 秒内 scale≥1.08 或位移≥画面宽 5%",
 			Transition: "章节门牌翻转切入，禁无论证黑场",
 		},
-		Device: &DeviceSpec{Name: "章节门牌", Desc: "每章开场的金属铭牌", PerSeg: "seg01 亮相，此后每章复现并换章名"},
+		Device:    &DeviceSpec{Name: "章节门牌", Desc: "每章开场的金属铭牌", PerSeg: "seg01 亮相，此后每章复现并换章名"},
 		EntryExit: &EntryExitSpec{Entry: "金属铭牌翻起显影 0.4s", Exit: "铭牌合拢收场", EntryDur: 0.4},
 	}
 }

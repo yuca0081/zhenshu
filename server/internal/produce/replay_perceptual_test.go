@@ -10,6 +10,27 @@ import (
 	"testing"
 )
 
+// pngDiffPerceptual / pngDiffStats：文件路径版的像素比对——生产路径用
+// diffPerceptualImgs/diffStatsImgs（吃已解码对象），这两个薄封装只剩本测试
+// 文件消费，2026-10-19 死代码清仓时从 produce.go 移入。
+func pngDiffPerceptual(pathA, pathB string) (blockMean, blockMax float64, err error) {
+	ia, ib, err := decodePngPair(pathA, pathB)
+	if err != nil {
+		return 0, 0, err
+	}
+	bm, bp := diffPerceptualImgs(ia, ib)
+	return bm, bp, nil
+}
+
+func pngDiffStats(pathA, pathB string) (maxDiff, nDiff, total int, err error) {
+	ia, ib, err := decodePngPair(pathA, pathB)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	m, n, t := diffStatsImgs(ia, ib)
+	return m, n, t, nil
+}
+
 func mustWritePNG(t *testing.T, dir, name string, img image.Image) string {
 	t.Helper()
 	p := filepath.Join(dir, name)

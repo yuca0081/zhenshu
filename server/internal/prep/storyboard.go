@@ -141,16 +141,19 @@ func storyboardTools(p *pipeline.Project, d Deps, script *contract.Script, pack 
 					return Observation{Text: "被拒（先 validate_storyboard 修到零错误）：\n- " + err.Error()}
 				}
 				final := contract.NewStoryboardDraft(draft.Plan, draft.Paragraphs, draft.Segments)
-				if err := writeJSONFile(draftPath(p), final); err != nil {
-					return Observation{Text: "落盘失败：" + err.Error()}
-				}
-				// 翻译落盘：制作契约 storyboard.json（制作阶段零改动的衔接点）
+				// 翻译落盘：制作契约 storyboard.json（制作阶段零改动的衔接点）。
+				// legacy（storyboard.json）先落、工件标记（draft.json）最后落
+				// （2026-10-19 中-21，与 script/style 同纪律）：两笔之间崩溃不留
+				// 「站被跳过但制作契约陈旧」的半完成态
 				sb := final.Translate(script, pack)
 				if err := contract.ValidateStoryboard(sb); err != nil {
 					return Observation{Text: "翻译产物未过制作契约校验（内部错误，请原样重交）：" + err.Error()}
 				}
 				if err := writeJSONFile(p.Artifact("storyboards/storyboard.json"), sb); err != nil {
 					return Observation{Text: "分镜落盘失败：" + err.Error()}
+				}
+				if err := writeJSONFile(draftPath(p), final); err != nil {
+					return Observation{Text: "落盘失败：" + err.Error()}
 				}
 				d.emit(p.ID, "stage", "prep/storyboard", fmt.Sprintf("done：%d 段 / %d 段落 / 约 %.0f 秒",
 					len(final.Segments), len(final.Paragraphs), final.TotalHint()))

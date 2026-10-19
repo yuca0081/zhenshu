@@ -42,9 +42,12 @@ type Agent struct {
 	Lib       *stylelib.Library
 	Refs      *styleref.Store // 参考视频库（列/解析工具用；nil = 未接线，工具如实回报）
 	Artifacts artifacts.Store // 产物正本后端（nil/本地 = 不上云，docs/storage-cloud-migration.md）
-	Emit      func(projectID, typ, stage, detail string)
-	Producer  Producer
-	OnEvent   func(projectID, event, detail string) // 状态回写钩子（storyboard/style 等里程碑）
+	// Preps 准备链运行器（nil = 未接线，rerun_prep 退化为裸 RunStrict）：
+	// 对话侧重跑经 RunInline 与想法页异步链共用同一把互斥（2026-10-19 高-6）
+	Preps    *prep.Runner
+	Emit     func(projectID, typ, stage, detail string)
+	Producer Producer
+	OnEvent  func(projectID, event, detail string) // 状态回写钩子（storyboard/style 等里程碑）
 }
 
 // invalidateArtifacts 本地作废产物后同步删远端正本（best-effort）——不删的话，
@@ -151,6 +154,11 @@ func (a *Agent) State(id string) State {
 	if info, err := os.Stat(p.Artifact("renders/main.mp4")); err == nil {
 		st.HasVideo = true
 		st.VideoAt = info.ModTime()
+	} else if a.Artifacts != nil && a.Artifacts.Stat(artifacts.ProjectKey(id, "renders/main.mp4")) {
+		// GC 清理后的成片正本只在云端（2026-10-19 高-3）：本地 miss 回退远端
+		// Stat——只查本地会把能正常播放的片子报成「无片」，段级重做也被误拒。
+		// VideoAt 留零：远端对象没有可与上游比较的本地 mtime，过期三轴不算。
+		st.HasVideo = true
 	}
 	// 三上游 mtime（文稿真源 article.txt 缺时回退管线产物；风格取样张+简报较晚者）
 	if info, err := os.Stat(p.Artifact("input/article.txt")); err == nil {
@@ -166,7 +174,9 @@ func (a *Agent) State(id string) State {
 			st.StyleAt = info.ModTime()
 		}
 	}
-	if st.HasVideo {
+	// VideoAt 零值 = 成片只剩云端正本（GC 清理过），本地 mtime 无从比较——
+	// 过期三轴不算，避免把远端-only 的片子三轴全点亮成黄灯
+	if st.HasVideo && !st.VideoAt.IsZero() {
 		st.Stale.Manuscript = st.VideoAt.Before(st.ManuscriptAt)
 		st.Stale.Storyboard = st.VideoAt.Before(st.StoryboardAt)
 		st.Stale.Style = st.VideoAt.Before(st.StyleAt)
@@ -695,9 +705,17 @@ func (a *Agent) reactTools(p *pipeline.Project) []react.Tool {
 	for i := range tools {
 		t := &tools[i]
 		out = append(out, react.Tool{
-			Def:  t.def,
-			Gate: func() string { return t.gate(a.State(p.ID)) },
-			Run:  func(ctx context.Context, args string) string { return t.run(ctx, a, p, args) },
+			Def: t.def,
+			// gate==nil 的免门禁工具不碰 State（2026-10-19 中-19）：State 是
+			// 全量扫盘（工件+manifest 尾窗），web_search/list_projects 这类
+			// 纯查询工具每次调用不该付这笔——Go 参数先求值，写成内联调用就绕不过去
+			Gate: func() string {
+				if t.gate == nil {
+					return ""
+				}
+				return t.gate(a.State(p.ID))
+			},
+			Run: func(ctx context.Context, args string) string { return t.run(ctx, a, p, args) },
 		})
 	}
 	return out

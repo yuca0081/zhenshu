@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/rand"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -26,7 +27,8 @@ func (p *Provider) ChatTemp(ctx context.Context, msgs []openai.ChatCompletionMes
 
 func (p *Provider) chatTemp(ctx context.Context, msgs []openai.ChatCompletionMessage, tools []openai.Tool, temp *float64) (openai.ChatCompletionMessage, openai.Usage, error) {
 	// 600s：判卷载荷比工位对话重（锚点帧/样张多图 + 深思考），端点忙时 300s 不够
-	// （段审实测死在 5 分钟线上）；Chat 保持 300s 不变，只有审核走这档
+	// （段审实测死在 5 分钟线上）。Chat 与 ChatTemp 同走这档——旧注释宣称
+	// 「Chat 保持 300s」与实现不符，2026-10-19 对齐为如实描述。
 	ctx, cancel := context.WithTimeout(ctx, 600*time.Second)
 	defer cancel()
 	// 消息逐条预序列化（含 tool_calls 等字段原样透传），再拼成 RawMessage 数组进统一壳
@@ -51,25 +53,35 @@ func (p *Provider) chatTemp(ctx context.Context, msgs []openai.ChatCompletionMes
 	}
 	applyEffort(&req, EffortHigh)
 	// 429 限速退避重试（循环对话轮没有外层重试——审核/工位一轮 429 就整轮报废，
-	// 代价远大于等一个限速窗口）。退避 15s/30s；ctx 取消立即让路。
-	var usage openai.Usage
+	// 代价远大于等一个限速窗口）。退避 15s/30s，叠随机抖动——多路调用方同步退避
+	// 会一起醒来再撞一次（2026-10-17 惊群教训，与 generate 同款）；ctx 取消立即让路。
 	for attempt := 0; ; attempt++ {
-		resp, err := p.postChat(ctx, req)
+		// 账户级并发闸（2026-10-19 高-8）：Chat/ChatTemp 原先绕闸直发，而准备三
+		// 工位与全部审片循环都走这条路——多项目并行时正是 429 惊群最后一个口子。
+		// 闸在退避等待之外（睡着的调用不占坑），与 generate 同一道闸。
+		select {
+		case <-ctx.Done():
+			return openai.ChatCompletionMessage{}, openai.Usage{}, ctx.Err()
+		case llmGate <- struct{}{}:
+		}
+		resp, err := func() (openai.ChatCompletionResponse, error) {
+			defer func() { <-llmGate }()
+			return p.postChat(ctx, req)
+		}()
 		if err == nil {
 			if len(resp.Choices) == 0 {
 				return openai.ChatCompletionMessage{}, resp.Usage, ErrEmptyChoice
 			}
 			return resp.Choices[0].Message, resp.Usage, nil
 		}
-		usage = resp.Usage
 		var se *StatusError
 		if attempt >= 2 || ctx.Err() != nil || !errors.As(err, &se) || se.Code != 429 {
-			return openai.ChatCompletionMessage{}, usage, err
+			return openai.ChatCompletionMessage{}, openai.Usage{}, err
 		}
 		select {
 		case <-ctx.Done():
-			return openai.ChatCompletionMessage{}, usage, ctx.Err()
-		case <-time.After(time.Duration(attempt+1) * 15 * time.Second):
+			return openai.ChatCompletionMessage{}, openai.Usage{}, ctx.Err()
+		case <-time.After(time.Duration(attempt+1)*15*time.Second + time.Duration(rand.Int63n(int64(6*time.Second)))):
 		}
 	}
 }

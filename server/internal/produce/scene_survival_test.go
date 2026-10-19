@@ -92,7 +92,7 @@ func TestSceneSurvivalBench(t *testing.T) {
 			continue
 		}
 		out := p.Artifact("renders/segs/" + seg.ID + ".mp4")
-		if _, err := pipeline.RunCLI(p, "npx", "hyperframes@0.8.55", "render", ".",
+		if _, err := pipeline.RunCLI(p, "npx", pipeline.HyperframesPkg, "render", ".",
 			"-c", ".hf-seg/"+seg.ID+".html", "-o", "renders/segs/"+seg.ID+".mp4"); err != nil {
 			row.note = "渲染失败"
 			rows = append(rows, row)

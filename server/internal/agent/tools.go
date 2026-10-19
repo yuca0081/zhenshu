@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,12 +55,27 @@ func (a *Agent) rerunPrep(ctx context.Context, p *pipeline.Project, station, not
 	default:
 		return "target 只能是 script / style / storyboard"
 	}
-	prep.InvalidateFrom(p, station)
-	if err := prep.RunStrict(ctx, p, a.prepDeps()); err != nil {
+	// 与异步链共用一把互斥（2026-10-19 高-6）：执行期间登记 running——想法页
+	// runPrep / cancelPrep / deleteProject 都能看到「在跑」；反向（链已在跑）
+	// 返回 ErrPrepRunning 如实回喂。作废挪进闭包：被拒时不白作废。
+	var runErr error
+	if a.Preps != nil {
+		runErr = a.Preps.RunInline(ctx, p.ID, func(ictx context.Context) error {
+			prep.InvalidateFrom(p, station)
+			return prep.RunStrict(ictx, p, a.prepDeps())
+		})
+	} else {
+		prep.InvalidateFrom(p, station)
+		runErr = prep.RunStrict(ctx, p, a.prepDeps())
+	}
+	if runErr != nil {
+		if errors.Is(runErr, prep.ErrPrepRunning) {
+			return "准备阶段已有链在跑（想法页或更早的工具启动的），等它完成再重跑。"
+		}
 		if ctx.Err() != nil {
 			return "重跑被中断。"
 		}
-		return "重跑失败：" + err.Error()
+		return "重跑失败：" + runErr.Error()
 	}
 	// 三工件齐 → 状态回「等终审确认」（与出样张后的门语义一致）
 	a.setDoneStatus(p.ID, "style")
@@ -74,11 +90,9 @@ func (a *Agent) rerunPrep(ctx context.Context, p *pipeline.Project, station, not
 
 type tool struct {
 	def  openai.Tool
-	gate func(s State) string // 返回空串 = 放行；否则拒绝原因（回喂）
+	gate func(s State) string // nil = 无门禁（免扫盘直放）；否则返回空串 = 放行、非空 = 拒绝原因（回喂）
 	run  func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string
 }
-
-func noGate(State) string { return "" }
 
 // voiceAliases 项目音色别名（与 ai/tts_align.py VOICE_ALIASES 保持一致，
 // voice_alias_test.go 钉住两表不漂移）。
@@ -314,6 +328,11 @@ var tools = []tool{
 			},
 		}),
 		gate: func(s State) string {
+			// 制作运行中不许重出样张：重跑②会 InvalidateFrom 连坐删 stylepack/
+			// 样张/设计衍生品——全是制作管线的硬门与渲染输入（2026-10-19 高-10）
+			if s.Producing {
+				return "制作运行中，不能重出样张——先等本条完成"
+			}
 			// 新路径（文字稿工件在）：②在③之前，不需要先有分镜
 			if s.HasStoryboard || s.Prep != "" {
 				return ""
@@ -396,7 +415,7 @@ var tools = []tool{
 	},
 	{
 		def:  toolDef("run_selfcheck", "自检三前置硬门（文稿/分镜/风格确认）", nil),
-		gate: noGate,
+		gate: nil,
 		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
 			s := a.State(p.ID)
 			var r []string
@@ -617,7 +636,7 @@ var tools = []tool{
 	},
 	{
 		def:  toolDef("read_project", "查看项目当前状态与产物", nil),
-		gate: noGate,
+		gate: nil,
 		run: func(_ context.Context, a *Agent, p *pipeline.Project, _ string) string {
 			return a.State(p.ID).summary()
 		},
@@ -630,7 +649,7 @@ var tools = []tool{
 			},
 			"required": []string{"query"},
 		}),
-		gate: noGate,
+		gate: nil,
 		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
 			var in struct {
 				Query string `json:"query"`
@@ -697,7 +716,7 @@ var tools = []tool{
 			},
 			"required": []string{"query"},
 		}),
-		gate: noGate,
+		gate: nil,
 		run: func(ctx context.Context, _ *Agent, _ *pipeline.Project, args string) string {
 			return runWebSearch(ctx, args)
 		},
@@ -710,7 +729,7 @@ var tools = []tool{
 			},
 			"required": []string{"url"},
 		}),
-		gate: noGate,
+		gate: nil,
 		run: func(ctx context.Context, _ *Agent, _ *pipeline.Project, args string) string {
 			return runFetchURL(ctx, args)
 		},
@@ -1222,7 +1241,7 @@ var tools = []tool{
 	},
 	{
 		def:  toolDef("cancel_production", "取消正在运行的制作/重做（整片或段级）。用户说停就停，别劝阻；取消终态会自动报进对话", nil),
-		gate: noGate,
+		gate: nil,
 		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
 			if a.Producer == nil {
 				return "制作运行器未接线（Producer 为空）"
@@ -1235,7 +1254,7 @@ var tools = []tool{
 	},
 	{
 		def:  toolDef("read_check", "读最近一轮制作的逐段检查报告（frameqa 各段 pass/fail 与问题明细）与制作过程事件。用户问「哪几段没过/为什么」、或制作失败要定位原因时用它", nil),
-		gate: noGate,
+		gate: nil,
 		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
 			lines, err := produce.ReadJSONLTail(p.Artifact("manifest.jsonl"), 512)
 			if err != nil {
@@ -1281,7 +1300,7 @@ var tools = []tool{
 	},
 	{
 		def:  toolDef("list_projects", "列出数据目录里的全部项目（id/名称/状态/有无成片）。用户问「有哪些项目」「之前那个 XX 项目」时用它", nil),
-		gate: noGate,
+		gate: nil,
 		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
 			entries, err := os.ReadDir(filepath.Join(a.DataDir, "projects"))
 			if err != nil {
@@ -1331,7 +1350,7 @@ var tools = []tool{
 				"aspect":     map[string]any{"type": "string", "description": "画幅：9:16（默认）| 16:9"},
 			},
 		}),
-		gate: noGate,
+		gate: nil,
 		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
 			var in struct {
 				Name       string `json:"name"`
@@ -1413,7 +1432,7 @@ var tools = []tool{
 	},
 	{
 		def:  toolDef("list_references", "列出风格参考视频库（上传的参考片及其解析状态：pending/running/done/error、是否已入库）。用户问参考素材、或要引导上传参考片时用它", nil),
-		gate: noGate,
+		gate: nil,
 		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
 			if a.Refs == nil {
 				return "参考视频库未接线（服务端未配置）"
@@ -1460,7 +1479,7 @@ var tools = []tool{
 			},
 			"required": []string{"id"},
 		}),
-		gate: noGate,
+		gate: nil,
 		run: func(ctx context.Context, a *Agent, p *pipeline.Project, args string) string {
 			if a.Refs == nil {
 				return "参考视频库未接线（服务端未配置）"
@@ -1506,20 +1525,23 @@ func (a *Agent) saveManuscriptContent(p *pipeline.Project, content string) strin
 	if content == "" {
 		return "缺少文稿正文"
 	}
-	if err := os.WriteFile(p.Artifact("input/article.txt"), []byte(content), 0o644); err != nil {
+	// prep 链运行中拒改稿（2026-10-19 中-30，与 api 侧 saveManuscript 同口径）：
+	// 改稿的级联作废会与后台链的工件写入互踩
+	if a.Preps != nil && a.Preps.IsRunning(p.ID) {
+		return "准备阶段运行中，等它完成再改稿（改稿会级联作废准备工件）。"
+	}
+	// 落盘+级联作废走统一语义（2026-10-19 中-34，与 api saveManuscript 同源）
+	invalidated, err := prep.ReplaceManuscript(p, content)
+	if err != nil {
 		return "保存失败：" + err.Error()
 	}
-	_ = os.Remove(p.Artifact("manuscripts/manuscript.json"))
 	_, hasSb := os.Stat(p.Artifact("storyboards/storyboard.json"))
 	a.setDoneStatus(p.ID, "manuscript")
 	msg := fmt.Sprintf("文稿已保存（%d 字）", len([]rune(content)))
 	if hasSb == nil {
 		msg += "；已有分镜基于旧稿，要重新出分镜才会生效"
 	}
-	// 新路径（准备工位产物在）：改文字 → ①②③ 级联作废（反馈路由同款），
-	// 下次重跑产出配套的新文字稿/风格包/分镜稿
-	if prep.HasArtifact(p, prep.StationScript) {
-		prep.InvalidateFrom(p, prep.StationScript)
+	if invalidated {
 		msg += "；准备工件（文字稿/风格包/分镜稿）已按新稿级联作废，重跑后需重新终审确认"
 	}
 	return msg

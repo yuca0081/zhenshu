@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -74,7 +75,10 @@ func loadMaterials(p *pipeline.Project) *MaterialStore {
 	return nil
 }
 
-// saveMaterials 登记簿落盘（调用方持有 matStoreMu）。
+// saveMaterials 登记簿落盘（调用方持有 matStoreMu——锁只护写写互斥；读者
+// materialsForSeg/materialWhitelistCheck 不持锁，靠原子替换读完整文件：
+// 裸 WriteFile 的 truncate+write 窗口会让并发段读到半截 JSON，素材「消失」、
+// 白名单整组跳过，2026-10-19 中-3）。
 func saveMaterials(p *pipeline.Project, st *MaterialStore) error {
 	if err := os.MkdirAll(filepath.Dir(materialsPath(p)), 0o755); err != nil {
 		return err
@@ -83,7 +87,7 @@ func saveMaterials(p *pipeline.Project, st *MaterialStore) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(materialsPath(p), b, 0o644)
+	return pipeline.WriteFileAtomic(materialsPath(p), b, 0o644)
 }
 
 // materialFiles 素材白名单（相对路径集合）。
@@ -332,19 +336,30 @@ func (m *metClient) search(ctx context.Context, q string) ([]int, error) {
 
 func (m *metClient) object(ctx context.Context, id int) (*metObject, error) {
 	var o metObject
-	err := m.getJSON(ctx, fmt.Sprintf("%s/v1/objects/%d", m.base, id), &o)
-	if err != nil { // Met 有突发限流：隔半秒重试一次（睡眠可被取消打断）
+	url := fmt.Sprintf("%s/v1/objects/%d", m.base, id)
+	err := m.getJSON(ctx, url, &o)
+	if err != nil && metRetryable(err) { // Met 有突发限流：隔半秒重试一次（睡眠可被取消打断）
 		select {
 		case <-time.After(500 * time.Millisecond):
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		err = m.getJSON(ctx, fmt.Sprintf("%s/v1/objects/%d", m.base, id), &o)
+		err = m.getJSON(ctx, url, &o)
 	}
 	if err != nil {
 		return nil, err
 	}
 	return &o, nil
+}
+
+// metRetryable 只有可自愈的错误才值得重试（2026-10-19 中-L14）：404/400 这类
+// 永久错误睡半秒再打一次只是白等——按状态码分类，429/5xx/网络错才重试。
+func metRetryable(err error) bool {
+	var se *metStatusError
+	if errors.As(err, &se) {
+		return se.Code == 429 || se.Code >= 500
+	}
+	return !errors.Is(err, context.Canceled) // 网络类错误保守重试一次，取消除外
 }
 
 func (m *metClient) getJSON(ctx context.Context, url string, out any) error {
@@ -359,10 +374,18 @@ func (m *metClient) getJSON(ctx context.Context, url string, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("met api %d: %s", resp.StatusCode, url)
+		return &metStatusError{Code: resp.StatusCode, URL: url}
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }
+
+// metStatusError Met API 非 200 应答（重试分类用）。
+type metStatusError struct {
+	Code int
+	URL  string
+}
+
+func (e *metStatusError) Error() string { return fmt.Sprintf("met api %d: %s", e.Code, e.URL) }
 
 // fetchOne 检索→挑公版→下载压图→返回登记条目（入库由调用方做，登记簿要串行化）。
 // i 是该检索词第几张（0 起），决定文件名序号。

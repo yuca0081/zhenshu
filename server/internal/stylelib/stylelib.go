@@ -46,7 +46,7 @@ type Style struct {
 	Published     bool                   `json:"published"`
 	CreatedAt     time.Time              `json:"created_at"`
 
-	Facets      StyleFacets `json:"facets,omitempty"`      // 分面：情绪/色调/密度（题材=Subject）
+	Facets      StyleFacets `json:"facets,omitempty"`       // 分面：情绪/色调/密度（题材=Subject）
 	DerivedFrom string      `json:"derived_from,omitempty"` // 衍生出处（register_style 自动带）
 	Unverified  bool        `json:"unverified,omitempty"`   // 未验证：用过它的片出片后才转正
 	Usage       UsageStats  `json:"usage,omitempty"`        // 使用统计（出片记账；分数来自审核）
@@ -63,9 +63,9 @@ type StyleFacets struct {
 // UsageStats 使用统计：本片风格包选型时的数据驱动依据；⑤审核通过记账回写，
 // 形成「②探索 ← ⑤记账」闭环。分数 0–5（0 = 未评）。
 type UsageStats struct {
-	Count      int       `json:"count,omitempty"`       // 被项目选用的次数
-	Passes     int       `json:"passes,omitempty"`      // 产出成片（通过制作全部门禁）次数
-	LastScore  float64   `json:"last_score,omitempty"`  // 最近一次审核分（0–5）
+	Count      int       `json:"count,omitempty"`      // 被项目选用的次数
+	Passes     int       `json:"passes,omitempty"`     // 产出成片（通过制作全部门禁）次数
+	LastScore  float64   `json:"last_score,omitempty"` // 最近一次审核分（0–5）
 	LastUsedAt time.Time `json:"last_used_at,omitempty"`
 }
 
@@ -122,20 +122,21 @@ func (l *Library) List() ([]Style, error) {
 	return styles, nil
 }
 
-// Get 取单个条目（新建项目选用后查详情/复用）。账本读失败时按不存在处理，
-// 但必须把失败喊出来——静默返回会让人以为条目丢了。
+// Get 取单个条目（新建项目选用后查详情/复用）。走 catalog 单条读（2026-10-19
+// 中-29：旧版全量 List，PG 后端每查一条 = 整表 SELECT + 逐行反序列化）。
+// 账本读失败时按不存在处理，但必须把失败喊出来——静默返回会让人以为条目丢了。
 func (l *Library) Get(id string) (*Style, bool) {
-	styles, err := l.List()
-	if err != nil {
-		log.Printf("[stylelib] 账本读取失败，查询按不存在处理: %v", err)
+	if l.cat == nil {
 		return nil, false
 	}
-	for i := range styles {
-		if styles[i].ID == id {
-			return &styles[i], true
+	s, err := l.cat.GetStyle(id)
+	if err != nil {
+		if !errors.Is(err, ErrNoEntry) {
+			log.Printf("[stylelib] 账本读取失败，查询按不存在处理: %v", err)
 		}
+		return nil, false
 	}
-	return nil, false
+	return s, true
 }
 
 // VideoStyleIn 参考视频风格入库载荷 v3（api 层从解析草稿变形；IngestVideoRef 消费）。

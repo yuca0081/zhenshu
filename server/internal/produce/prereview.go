@@ -34,7 +34,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 
@@ -221,21 +220,25 @@ func (r *Runner) preReview(ctx context.Context, p *pipeline.Project) (preReviewR
 		if err := pipeline.Run(ctx, p, "compositions"); err != nil {
 			return res, fmt.Errorf("合成物落盘失败: %w", err)
 		}
-		if err := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); err != nil {
+		if err := r.assemble(ctx, p); err != nil {
 			return res, fmt.Errorf("组装失败: %w", err)
 		}
 	}
 }
 
-// snapFrames 主组合一次性截全部时刻（一次浏览器冷启）。--no-browser-gpu 强制
+// snapMainFrames 主组合 snapshot 截帧的共用体（2026-10-19 中-6：scene 回放门禁
+// 与渲前预审原先两处复制，版本/参数靠人肉同步）。--no-browser-gpu 强制
 // SwiftShader：渲前看到的帧必须和渲染器将产出的画面同源（渲染器 auto-detect 掷
-// 硬币是 seg07 事故根因，7f3b61d 已强制）。
-func (r *Runner) snapFrames(p *pipeline.Project, atArg, dir string) ([]string, error) {
-	_ = os.RemoveAll(p.Artifact(dir))
-	out, err := pipeline.RunCLI(p, "npx", "hyperframes@0.8.55", "snapshot", ".",
+// 硬币是 seg07 事故根因，7f3b61d 已强制）。先清旧目录再截，防残留帧混入。
+// 返回 frame-*.png 文件名（不判空——按调用方语义处理）。
+func snapMainFrames(p *pipeline.Project, atArg, dir string) ([]string, error) {
+	if err := os.RemoveAll(p.Artifact(dir)); err != nil {
+		return nil, err
+	}
+	out, err := pipeline.RunCLI(p, "npx", pipeline.HyperframesPkg, "snapshot", ".",
 		"--at", atArg, "--no-end", "--no-browser-gpu", "-o", dir)
 	if err != nil {
-		return nil, fmt.Errorf("snapshot 失败: %s", pipeline.TailLines(out, 8))
+		return nil, fmt.Errorf("snapshot 失败（--at %s）: %s", atArg, pipeline.TailLines(out, 8))
 	}
 	entries, err := os.ReadDir(p.Artifact(dir))
 	if err != nil {
@@ -246,6 +249,15 @@ func (r *Runner) snapFrames(p *pipeline.Project, atArg, dir string) ([]string, e
 		if strings.HasPrefix(e.Name(), "frame-") && strings.HasSuffix(e.Name(), ".png") {
 			names = append(names, e.Name())
 		}
+	}
+	return names, nil
+}
+
+// snapFrames 主组合一次性截全部时刻（一次浏览器冷启）；空产物按失败处理。
+func (r *Runner) snapFrames(p *pipeline.Project, atArg, dir string) ([]string, error) {
+	names, err := snapMainFrames(p, atArg, dir)
+	if err != nil {
+		return nil, err
 	}
 	if len(names) == 0 {
 		return nil, fmt.Errorf("snapshot 未产出帧（--at %s）", atArg)

@@ -19,9 +19,20 @@ const emit = defineEmits<{
 // ── 媒体：条目快照（library）优先，引用根目录次之 ──
 const frames = ref<string[]>([])
 const hasVideo = ref(false)
-// editing/draft 必须先于下方 watch 声明：immediate 回调在 setup 期同步执行，
-// 用到未初始化的 const 会抛 TDZ ReferenceError（Vue 吞成 console 报错且中断回调）。
+// editing/draft/pickerFor 必须先于下方 watch 声明：immediate 回调在 setup 期同步
+// 执行，用到未初始化的 const 会抛 TDZ ReferenceError（Vue 吞成 console 报错且
+// 中断回调）——2026-10-19 中-37：老注释只提了 editing，pickerFor 漏了，每次
+// 挂载都向全局 errorHandler 抛一次。
 const editing = ref(false)
+// 证据帧挑选：默认只亮已选缩略图，点「挑证据帧」展开全部帧网格（缩略图点选，≤3）。
+// pickerFor 记当前展开的挑选器（签名 id 或 'add'），一次只开一个。
+const pickerFor = ref<string | null>(null)
+// 草稿编辑态（startEdit 在 immediate 回调里就会被调——draft 同样必须先声明）
+const draft = reactive<{
+  name: string
+  subject: string
+  signatures: Signature[]
+}>({ name: '', subject: '', signatures: [] })
 const mediaURL = computed(() => {
   const d = props.detail
   if (d?.libMediaId) return (f: string) => libraryMediaURL(d.libMediaId!, f)
@@ -53,11 +64,6 @@ watch(
 )
 
 // ── 草稿编辑（特色增删改）──────────────────────────────
-const draft = reactive<{
-  name: string
-  subject: string
-  signatures: Signature[]
-}>({ name: '', subject: '', signatures: [] })
 
 function startEdit() {
   const d = props.detail
@@ -76,9 +82,6 @@ function toggleSigFrame(sg: Signature, f: string) {
   else if (sg.frames.length < 3) sg.frames.push(f)
 }
 
-// 证据帧挑选：默认只亮已选缩略图，点「挑证据帧」展开全部帧网格（缩略图点选，≤3）。
-// pickerFor 记当前展开的挑选器（签名 id 或 'add'），一次只开一个。
-const pickerFor = ref<string | null>(null)
 function togglePicker(key: string) { pickerFor.value = pickerFor.value === key ? null : key }
 
 const kindOptions = Object.entries(kindLabel).map(([value, label]) => ({ value, label }))

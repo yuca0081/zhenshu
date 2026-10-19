@@ -38,7 +38,7 @@ async function save() {
   try {
     const r = await api.saveManuscript(props.projectId, content.value)
     stale.value = r.storyboard_stale
-    prepInvalidated.value = !!(r as { prep_invalidated?: boolean }).prep_invalidated
+    prepInvalidated.value = r.prep_invalidated // 类型已如实声明，不再 cast 嗅探（中-41）
     savedMsg.value = `已保存（${r.word_count} 字）`
     dirty.value = false
     emit('saved')

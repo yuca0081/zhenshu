@@ -116,6 +116,7 @@ func main() {
 	refs.Lib = lib       // 参考解析打标要查风格词表/落新词（同一实例，含账本后端选型）
 	refs.Artifacts = art // 参考库产物上正本（解析完成即整套上传）
 	ag.Refs = refs       // 参考库补线（list/analyze 参考工具用）
+	refs.Reconcile()     // 启动对账：重启前卡在 running 的引用改写为 error（与制作同职责）
 	// 准备阶段三工位（①文稿②风格③分镜）接线进管线：stagePrep 经钩子调用
 	//（prep 依赖 pipeline，反向接线防 import 环）。产物齐全即重放跳过，老项目不碰。
 	prepDeps := prep.Deps{RootDir: root, Lib: lib, Emit: hub.Emit, Artifacts: art}
@@ -124,6 +125,7 @@ func main() {
 	}
 	// 准备阶段异步运行器（想法页签/对话入口共用）：终态回写状态 + 落聊天框
 	preps := prep.NewRunner(cfg.DataDir, prepDeps)
+	ag.Preps = preps // 对话侧重跑走 RunInline，与异步链共用同一把互斥（2026-10-19 高-6）
 	preps.OnDone = func(id string, err error) {
 		pp := pipeline.NewProject(cfg.DataDir, id)
 		switch {

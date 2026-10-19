@@ -19,6 +19,8 @@ import (
 	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
+
+	"webpage-video-agent/server/internal/llm"
 )
 
 // Observation 工具执行结果（与 prep.Observation 同形）：Text 回喂模型；
@@ -58,11 +60,15 @@ type Loop struct {
 	System    string
 	Kickoff   string
 	KickoffIm []string // 开场注入的图片（锚点帧/样张等，程序装配——跟 kickoff 同一条 user 消息）
-	Tools     []Tool
-	Submit    string
-	MaxRounds int
-	Temp      float64 // 判卷低温（≈0）
-	LogPath   string  // 取证留痕 jsonl（非空时自动接 OnTool）
+	// KickoffRefs 与 KickoffIm 一一对应：每张图的项目内路径+标签。落留痕时随
+	// kickoff 记进 images 字段，「过程」页据此渲染缩略图/点击放大（10-19 起：
+	// 旧版只接 preReview/frameQA，而段级流水线带图的是这三类审查，缩略图永不亮）。
+	KickoffRefs []llm.ImgRef
+	Tools       []Tool
+	Submit      string
+	MaxRounds   int
+	Temp        float64 // 判卷低温（≈0）
+	LogPath     string  // 取证留痕 jsonl（非空时自动接 OnTool）
 	// OnStep 每步记账（kind: action|observation|text）；OnTool 取证留痕（工具+参数+结果指纹由调用方算）。
 	OnStep func(round int, kind, detail string)
 	OnTool func(name, args, result string)
@@ -94,7 +100,10 @@ func (l *Loop) Run(ctx context.Context) error {
 		{Role: openai.ChatMessageRoleSystem, Content: l.System},
 		kick,
 	}
-	l.record(msgs...)
+	if l.Rec != nil {
+		l.Rec.Message(msgs[0])
+		l.recordKick(kick)
+	}
 	schemas := make([]openai.Tool, 0, len(l.Tools))
 	byName := map[string]int{}
 	for _, t := range l.Tools {
@@ -159,6 +168,22 @@ func (l *Loop) record(ms ...openai.ChatCompletionMessage) {
 	for _, m := range ms {
 		l.Rec.Message(m)
 	}
+}
+
+// recordKick 落开场注入消息：带图片引用清单时走 MessageImgs（路径给「过程」页
+// 缩略图），Sink 不支持或无引用退回普通 Message。
+func (l *Loop) recordKick(kick openai.ChatCompletionMessage) {
+	if len(l.KickoffRefs) == 0 {
+		l.Rec.Message(kick)
+		return
+	}
+	if ti, ok := l.Rec.(interface {
+		MessageImgs(msg openai.ChatCompletionMessage, imgs []llm.ImgRef)
+	}); ok {
+		ti.MessageImgs(kick, l.KickoffRefs)
+		return
+	}
+	l.Rec.Message(kick)
 }
 
 func (l *Loop) recNote(format string, a ...any) {

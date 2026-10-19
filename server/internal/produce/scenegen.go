@@ -247,7 +247,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			errs = sceneValidate(r, ctx, p, payload.HTML, seg.ID)
 		}
 		if len(errs) > 0 {
-			if only == "" && instruction == "" && feedback == "" && r.fallbackOldScene(p, seg.ID, "重生成契约检查三轮未过") {
+			if instruction == "" && feedback == "" && r.fallbackOldScene(p, seg.ID, "重生成契约检查三轮未过") {
 				return
 			}
 			werr = fmt.Errorf("%s 契约检查三轮未过：\n- %s", seg.ID, strings.Join(errs, "\n- "))
@@ -255,7 +255,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			return
 		}
 		if len(payload.Elements) < 3 {
-			if only == "" && instruction == "" && feedback == "" && r.fallbackOldScene(p, seg.ID, "重生成的元素注册表不足 3 条") {
+			if instruction == "" && feedback == "" && r.fallbackOldScene(p, seg.ID, "重生成的元素注册表不足 3 条") {
 				return
 			}
 			werr = fmt.Errorf("%s 元素注册表不足 3 条（元素级指认依赖它）", seg.ID)
@@ -327,12 +327,13 @@ func (r *Runner) snapSamples(ctx context.Context, p *pipeline.Project) {
 	snapSamplesMu.Unlock()
 }
 
-// fallbackOldScene 整片制作里段级重生成反复过不了契约时，只要上一版产物还在就
-// 沿用旧画面继续出片——宁要旧设计的合格段，不要没有成片（2026-10-11 夜跑教训：
-// 设计一换全片段重画，一段连挂三轮把整片拖死，且每次重掷都是新骰子）。
-// 指纹故意不刷新：下轮制作还会再试重生成，过了自然换新。只用于整片制作——
-// rework（instruction/feedback/only 任一非空）不适用：用户点名要改这一段，
-// 静默沿用旧画面等于没改。
+// fallbackOldScene 段级重生成反复过不了契约时，只要上一版产物还在就沿用旧画面
+// 继续出片——宁要旧设计的合格段，不要没有成片（2026-10-11 夜跑教训：一段连挂
+// 三轮把整片拖死，且每次重掷都是新骰子；2026-10-19 高-11：旧门槛 only=="" 把
+// 段级流水线（恒传段号）挡在门外，首写顽固失败只能整片报废）。
+// 指纹故意不刷新：下轮制作还会再试重生成，过了自然换新。
+// instruction/feedback 非空（用户点名改段 / 审查打回重写）不适用：那是明确要
+// 改这一段，静默沿用旧画面等于没改——审查重写的收敛由签名刹车+带伤放行负责。
 func (r *Runner) fallbackOldScene(p *pipeline.Project, segID, why string) bool {
 	old := p.Artifact("llm/comp-" + segID + ".json")
 	if info, err := os.Stat(old); err != nil || info.IsDir() || info.Size() == 0 {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue'
 import { NButton, NCheckbox, NInput, useMessage } from 'naive-ui'
 import { api } from '../api'
 import type { PrepView } from '../types'
@@ -26,24 +26,31 @@ watch(() => props.prep?.idea, v => { if (idea.value.trim() === '') idea.value = 
 let pollTimer: number | null = null
 const local = ref<PrepView | null>(props.prep)
 watch(() => props.prep, v => { local.value = v })
-watch(() => local.value?.running, running => {
-  if (running && pollTimer == null) {
-    pollTimer = window.setInterval(async () => {
-      const pp = await api.prep(props.projectId).catch(() => null)
-      if (pp) local.value = pp
-      if (pp && !pp.running) {
-        stopPoll()
-        emit('refresh')
-        if (pp.exists && pp.draft) message.success('准备阶段完成，去「终审」页签确认')
-      }
-    }, 3000)
-  }
-  if (!running) stopPoll()
-}, { immediate: true })
+function startPoll() {
+  if (pollTimer != null) return
+  pollTimer = window.setInterval(async () => {
+    const pp = await api.prep(props.projectId).catch(() => null)
+    if (pp) local.value = pp
+    if (pp && !pp.running) {
+      stopPoll()
+      emit('refresh')
+      if (pp.exists && pp.draft) message.success('准备阶段完成，去「终审」页签确认')
+    }
+  }, 3000)
+}
 function stopPoll() {
   if (pollTimer != null) { clearInterval(pollTimer); pollTimer = null }
 }
+watch(() => local.value?.running, running => {
+  if (running) startPoll()
+  if (!running) stopPoll()
+}, { immediate: true })
 onBeforeUnmount(stopPoll)
+// KeepAlive 页签只是 deactivate 不 unmount（中-42）：切离「想法」页后 3s 轮询
+// 照跑全程 15-25 分钟白烧——切走暂停、切回（running 仍在）恢复
+let wantedPoll = false
+onDeactivated(() => { wantedPoll = pollTimer != null; stopPoll() })
+onActivated(() => { if (wantedPoll && local.value?.running) startPoll() })
 
 const running = computed(() => !!local.value?.running)
 const exists = computed(() => !!local.value?.exists)
@@ -71,12 +78,22 @@ const stateTag = (s: StationState) =>
 
 const starting = ref(false)
 const forceRerun = ref(false)
+// 两段式确认（自绘，替代 window.confirm——原生弹窗 2026-10-16 死按钮、10-18
+// Playwright 点按 30s 超时同源，全站已弃用）：破坏性提交第一枪只亮确认态
+const armed = ref(false)
 async function start() {
   if (starting.value || running.value || !props.projectId) return
-  if (forceRerun.value && !window.confirm('按新想法重跑会作废现有文字稿/风格包/分镜稿（含已确认的设计），继续？')) return
+  // 换想法重跑模式 = 破坏性操作，必须带 force（2026-10-19 高-7：旧版该模式下
+  // 勾选框被 v-if 隐藏、force 恒 false，工件已存在时必被后端 409 拒之门外）
+  const force = rerunOpen.value || forceRerun.value
+  if (force && !armed.value) {
+    armed.value = true
+    return
+  }
+  armed.value = false
   starting.value = true
   try {
-    await api.runPrep(props.projectId, idea.value.trim(), forceRerun.value)
+    await api.runPrep(props.projectId, idea.value.trim(), force)
     rerunOpen.value = false
     const pp = await api.prep(props.projectId).catch(() => null)
     if (pp) local.value = pp
@@ -98,7 +115,7 @@ async function cancel() {
     <div class="wrap">
       <template v-if="running">
         <h3 class="live-title"><span class="live-dot" />准备阶段进行中</h3>
-        <p class="sub">AI 正按链跑三个工位，一般 15~25 分钟（出样张的轮次多时更久）；每步的详细动作都在本页工位卡片上，制作阶段的账在「视频」页签的事件流里。</p>
+        <p class="sub">AI 正按链跑三个工位，一般 15~25 分钟（出样张的轮次多时更久）；每步的详细动作都在本页工位卡片上，制作阶段的账在「过程」页签里。</p>
         <ol class="stations">
           <li v-for="s in stations" :key="s.key" :class="s.state || 'pending'">
             <span class="mark">{{ s.state === 'done' ? '✓' : s.state === 'error' ? '✗' : '◐' }}</span>
@@ -137,11 +154,11 @@ async function cancel() {
           :autosize="{ minRows: 4, maxRows: 10 }" :maxlength="2000" show-count
         />
         <div class="row">
-          <NButton type="primary" :loading="starting" @click="start">
-            {{ rerunOpen ? '按新想法重跑全部' : '让 AI 自动完成准备' }}
+          <NButton :type="armed ? 'error' : 'primary'" :loading="starting" @click="start">
+            {{ armed ? '确认作废现有工件并重跑' : rerunOpen ? '按新想法重跑全部' : '让 AI 自动完成准备' }}
           </NButton>
-          <NCheckbox v-if="!rerunOpen && exists" v-model:checked="forceRerun">作废现有工件重跑</NCheckbox>
-          <NButton v-if="rerunOpen" quaternary @click="rerunOpen = false">返回</NButton>
+          <NCheckbox v-if="!rerunOpen && exists" v-model:checked="forceRerun" @update:checked="armed = false">作废现有工件重跑</NCheckbox>
+          <NButton v-if="rerunOpen" quaternary @click="rerunOpen = false; armed = false">返回</NButton>
         </div>
         <p v-if="exists" class="note">重跑 = 级联作废现有文字稿/风格包/分镜稿（含已确认的设计），按新想法重新出齐。</p>
       </template>

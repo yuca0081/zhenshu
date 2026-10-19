@@ -1,7 +1,10 @@
 package produce
 
 import (
+	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/pipeline"
@@ -186,5 +189,77 @@ func TestFinalFramesDistribution(t *testing.T) {
 		if frames[i].T <= frames[i-1].T {
 			t.Fatalf("终审帧时刻应递增: %v", frames)
 		}
+	}
+}
+
+func TestBoundaryTrackerRedispatchAfterRework(t *testing.T) {
+	// 2026-10-19 萤火虫实测楔子回归：边界审打回路径不记账（genP/genN 留 -1），
+	// 「在飞」标志必须由 auditBoundary 完成时自己释放（bndBusy）——旧版靠跟踪器在
+	// 过审记账分支复位，打回路径永不复位：被打回段重写过审后该边界再无人重派，
+	// waitAllPassed 干等看门狗。本测试锁定：busy 期间不重派；释放后代际失配即重派。
+	c := &coordinator{
+		journal:    map[string]journalLine{},
+		auditCh:    make(chan auditReq, 8),
+		passNotify: make(chan string, 8),
+		bndBusy:    map[int]bool{},
+	}
+	ids := []string{"seg01", "seg02", "seg03"}
+	for _, id := range ids {
+		// gen=1 对齐 run() 恢复语义：账面 audited 时段代际取自 journal
+		c.segs = append(c.segs, &segCtx{seg: contract.Segment{ID: id}, gen: 1, feedCh: make(chan string, 1)})
+		c.journal["seg/"+id] = journalLine{Kind: "seg", ID: id, State: stAudited, Gen: 1}
+	}
+	for i := 0; i < 2; i++ {
+		c.bounds = append(c.bounds, &boundaryCtx{
+			id: fmt.Sprintf("b%02d", i+1), prev: ids[i], next: ids[i+1],
+			genP: -1, genN: -1,
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.boundaryTracker(ctx)
+
+	// ① 两侧都过审且未记账 → 两边界都派发
+	got := map[int]bool{}
+	for len(got) < 2 {
+		select {
+		case req := <-c.auditCh:
+			if req.kind != "bnd" {
+				t.Fatalf("应只派边界审: %+v", req)
+			}
+			if got[req.bi] {
+				t.Fatalf("边界 %d 重复派发", req.bi)
+			}
+			got[req.bi] = true
+		case <-time.After(3 * time.Second):
+			t.Fatalf("边界审未被派发: got=%v", got)
+		}
+	}
+
+	// ② b01 打回 seg02：busy 期间即使代际已失配也不得重派
+	c.mu.Lock()
+	if !c.bndBusy[0] {
+		t.Fatal("派发后 bndBusy[0] 应为 true（在飞）")
+	}
+	c.segs[1].gen = 2 // 重写完成：dispatchRewrite→重写→下轮段审 gen+1
+	c.journal["seg/seg02"] = journalLine{Kind: "seg", ID: "seg02", State: stAudited, Gen: 2}
+	c.mu.Unlock()
+	select {
+	case req := <-c.auditCh:
+		t.Fatalf("在飞期间不应重派: %+v", req)
+	case <-time.After(2 * time.Second):
+	}
+
+	// ③ auditBoundary 完成（defer 释放 busy）→ b01 按新代际重派
+	c.mu.Lock()
+	c.bndBusy[0] = false
+	c.mu.Unlock()
+	select {
+	case req := <-c.auditCh:
+		if req.bi != 0 {
+			t.Fatalf("应重派 b01（bi=0），实派 %+v", req)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("打回段重写过审后 b01 未被重派——旧楔子回归")
 	}
 }

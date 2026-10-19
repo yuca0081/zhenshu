@@ -1,11 +1,10 @@
 // Package produce：制作任务运行器（确定性编排，LLM 只在需要的点上介入）。
 //
-// 链路（v2）：tts（python）→ 每段场景文件（LLM 直写 HTML + 契约 lint 门禁，
-//
-//	见 scenegen.go / docs/contract.md）→ 管线落盘合成物 → 组装（python assemble）
-//	→ check 门禁（失败带着报错回喂重生成，最多 2 轮）→ 渲染 → 成片。
-//
-// 每步 SSE 广播 stage 事件；产物落盘可从任意步重放（manifest 记账）。
+// 双路分发：prep 新项目（10-16 起的全部新项目）走 runSegmentPipeline（见
+// segpipe.go——逐段 写→审→渲 三池并发 + 边界审 + 全片终审）；本文件 run()
+// 的 v2 六道链路（tts → 场景 → 合成物 → 组装 → check → 渲染 → 成片）只服务
+// legacy 老项目重跑与段级 Rework 旁路。每步 SSE 广播 stage 事件；产物落盘可
+// 从任意步重放（manifest 记账）。
 package produce
 
 import (
@@ -148,37 +147,53 @@ func claimFinish(projectID string) bool {
 	return true
 }
 
-// Start 启动制作（同项目幂等：已在跑则返回 false）。
-func (r *Runner) Start(projectID string) (bool, error) {
+// awaitNotOrphaned 强制终局后的收尾窗口：等老 goroutine 退出（正常几秒；若被
+// 死锁卡死则等 3 分钟放行——死锁者不再写任何产物，双开实际无害，别把用户锁在
+// 外面）。Start 与 Rework 共用（2026-10-19 中-5：Rework 原先漏等，取消楔死的
+// 60 秒窗口内点重做会开出第二条管线与老 goroutine 并发写同一项目）。
+func awaitNotOrphaned(projectID string) {
 	mu.Lock()
 	done := orphaned[projectID]
 	mu.Unlock()
-	if done != nil {
-		// 强制终局后的收尾窗口：等老 goroutine 退出（正常几秒；若被死锁卡死则
-		// 等 3 分钟放行——死锁者不再写任何产物，双开实际无害，别把用户锁在外面）。
-		select {
-		case <-done:
-		case <-time.After(3 * time.Minute):
-		}
+	if done == nil {
+		return
 	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Minute):
+	}
+}
+
+// Start 启动制作（同项目幂等：已在跑则返回 false）。
+func (r *Runner) Start(projectID string) (bool, error) {
+	awaitNotOrphaned(projectID)
 	mu.Lock()
-	defer mu.Unlock()
 	if r.stopping.Load() {
+		mu.Unlock()
 		return false, errors.New("服务正在停机，不再接受新任务")
 	}
 	if _, live := running[projectID]; live {
+		mu.Unlock()
 		return false, nil
-	}
-	p := pipeline.NewProject(r.DataDir, projectID)
-	if _, err := os.Stat(p.Dir); err != nil {
-		return false, fmt.Errorf("项目不存在: %w", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	gen := claimRun(projectID, cancel)
-	delete(finished, projectID)       // 新一轮重置终态认领（已在 mu 临界区内）
+	delete(finished, projectID) // 新一轮重置终态认领（已在 mu 临界区内）
+	r.wg.Add(1)
+	mu.Unlock()
+	// 慢操作（磁盘 stat / manifest 追加写 / DB 写）全在锁外（2026-10-19 中-2）：
+	// mu 是整个 produce 包的全局互斥锁，锁内做 IO 会把其他项目的 IsRunning/
+	// Cancel/Start 全排在这把锁上；失败回滚认领即可（Rework 早退路径同款模式）。
+	p := pipeline.NewProject(r.DataDir, projectID)
+	if _, err := os.Stat(p.Dir); err != nil {
+		mu.Lock()
+		releaseRun(projectID, gen)
+		mu.Unlock()
+		r.wg.Done()
+		return false, fmt.Errorf("项目不存在: %w", err)
+	}
 	p.Manifest(EventProduceStart, "") // 启动对账依据：有 start 无终态 = 进程死在中途（Reconcile 补写）
 	r.jobStart(projectID, "produce")
-	r.wg.Add(1)
 	go func() {
 		defer func() {
 			mu.Lock()
@@ -375,6 +390,7 @@ func (r *Runner) Rework(projectID string, segIDs []string, instruction string) (
 	if len(segIDs) == 0 {
 		return false, fmt.Errorf("未指定重做段")
 	}
+	awaitNotOrphaned(projectID) // 与 Start 同款收尾等待（2026-10-19 中-5）
 	ctx, cancel := context.WithCancel(context.Background())
 	mu.Lock()
 	if r.stopping.Load() {
@@ -388,6 +404,10 @@ func (r *Runner) Rework(projectID string, segIDs []string, instruction string) (
 		return false, nil
 	}
 	gen := claimRun(projectID, cancel)
+	// 新一轮任务重置终态认领（与 Start 同款）：上一轮失败的 finishJob 已认领
+	// finished，不重置的话本轮重做失败时 claimFinish 拒收——终态不落账、
+	// render_jobs 卡 running、无通知（2026-10-19 高-9）
+	delete(finished, projectID)
 	mu.Unlock()
 	p := pipeline.NewProject(r.DataDir, projectID)
 	sb, err := p.LoadStoryboard()
@@ -541,9 +561,19 @@ func (r *Runner) appendReworkHistory(p *pipeline.Project, segIDs []string, instr
 	if len(es) > 50 {
 		es = es[:50]
 	}
-	_ = os.MkdirAll(filepath.Dir(reworkHistoryPath(p)), 0o755)
-	if b, err := json.MarshalIndent(es, "", "  "); err == nil {
-		_ = pipeline.WriteFileAtomic(reworkHistoryPath(p), b, 0o644)
+	// 双吞改留痕（中-L11）：重做历史是「用上次指令」按钮的数据源，静默失败
+	// 会让该按钮无声失灵且无从排查
+	if err := os.MkdirAll(filepath.Dir(reworkHistoryPath(p)), 0o755); err != nil {
+		log.Printf("[produce] 重做历史目录创建失败: %v", err)
+		return
+	}
+	b, err := json.MarshalIndent(es, "", "  ")
+	if err != nil {
+		log.Printf("[produce] 重做历史序列化失败: %v", err)
+		return
+	}
+	if err := pipeline.WriteFileAtomic(reworkHistoryPath(p), b, 0o644); err != nil {
+		log.Printf("[produce] 重做历史落盘失败: %v", err)
 	}
 }
 
@@ -587,7 +617,7 @@ func (r *Runner) runRework(ctx context.Context, p *pipeline.Project, segs []cont
 	// 2. 重组装（时间轴不变）+ 检查（失败只修目标段）
 	r.emit(id, "stage", "assemble", "running")
 	r.Manifest(p, "stage.start", "assemble")
-	if err := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); err != nil {
+	if err := r.assemble(ctx, p); err != nil {
 		return fmt.Errorf("组装失败: %w", err)
 	}
 	r.emit(id, "stage", "assemble", "done")
@@ -804,7 +834,7 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 	// ── 3. 组装 ─────────────────────────────────────────────
 	r.emit(id, "stage", "assemble", "running")
 	r.Manifest(p, "stage.start", "assemble")
-	if err := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); err != nil {
+	if err := r.assemble(ctx, p); err != nil {
 		return fmt.Errorf("组装失败: %w", err)
 	}
 	r.emit(id, "stage", "assemble", "done")
@@ -916,7 +946,6 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 		}
 		r.emit(p.ID, "stage", "check", fmt.Sprintf("running（第 %d 次）", attempt))
 		r.Manifest(p, "stage.start", "check")
-		_ = os.Remove(p.Artifact(".hyperframes-ok"))
 		err := pipeline.Run(ctx, p, "check")
 		if err == nil {
 			// scene 确定性回放硬闸（P1-1）：hyperframes check 之后、放行之前，
@@ -942,7 +971,7 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 		if fixN > 0 {
 			r.emit(p.ID, "stage", "check", fmt.Sprintf("cheap-fix：机械回填 %d 处（对比度/opacity 冲突）", fixN))
 			r.Manifest(p, "check.contrast_fix", fmt.Sprintf("%d 处", fixN))
-			if perr := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); perr == nil {
+			if perr := r.assemble(ctx, p); perr == nil {
 				if cerr := pipeline.Run(ctx, p, "check"); cerr == nil {
 					// 捷径放行同样要过 scene 回放门禁：机械回填理论上不影响力
 					// 确定性，但门禁口径必须与主路径一致（不兜「理论」）
@@ -987,7 +1016,7 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 		if err := pipeline.Run(ctx, p, "compositions"); err != nil {
 			return fmt.Errorf("合成物落盘失败: %w", err)
 		}
-		if err := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); err != nil {
+		if err := r.assemble(ctx, p); err != nil {
 			return fmt.Errorf("组装失败: %w", err)
 		}
 	}
@@ -1138,26 +1167,10 @@ func (r *Runner) sceneReplayCheck(ctx context.Context, p *pipeline.Project) erro
 	}
 	frames := make([][]string, 2)
 	snap := func(atArg, dir string) ([]string, error) {
-		_ = os.RemoveAll(p.Artifact(dir))
-		// --no-browser-gpu 强制 SwiftShader：渲染器 auto-detect 会在硬件 GPU 与
-		// 软件光栅间掷硬币（GPU 初始化抖动即回退），两轮各拿一种渲染器时纹理层
-		// 差异高达 42% 像素——确定性探针必须自己先确定（2026-10-09 seg07 事故）。
-		out, err := pipeline.RunCLI(p, "npx", "hyperframes@0.8.55", "snapshot", ".",
-			"--at", atArg, "--no-end", "--no-browser-gpu", "-o", dir)
-		if err != nil {
-			return nil, fmt.Errorf("scene 回放 snapshot 失败: %s", pipeline.TailLines(out, 8))
-		}
-		entries, err := os.ReadDir(p.Artifact(dir))
-		if err != nil {
-			return nil, err
-		}
-		var names []string
-		for _, e := range entries {
-			if strings.HasPrefix(e.Name(), "frame-") && strings.HasSuffix(e.Name(), ".png") {
-				names = append(names, e.Name())
-			}
-		}
-		return names, nil
+		// 共用体在 prereview.snapMainFrames（2026-10-19 中-6）：--no-browser-gpu
+		// 强制 SwiftShader，渲染器 auto-detect 掷硬币是 seg07 事故根因——两处
+		// 必须同一份参数，升级只改 pipeline.HyperframesPkg。
+		return snapMainFrames(p, atArg, dir)
 	}
 	// 逐帧比对（带 LSB 容差 + 感知二级判据）：返回未过容差的帧名与按段去重的报错行。
 	textureFrames := 0
@@ -1336,20 +1349,11 @@ func nrgbaAt8(px *image.NRGBA, x, y int) (r, g, b uint8) {
 	return prem(px.Pix[i]), prem(px.Pix[i+1]), prem(px.Pix[i+2])
 }
 
-// pngDiffPerceptual 感知比对：两帧各做 8×8 盒滤波降采样后逐块比较，
-// 返回（最坏块均差, 最坏块内单像素差, err），0-255 口径。
-func pngDiffPerceptual(pathA, pathB string) (blockMean, blockMax float64, err error) {
-	ia, ib, err := decodePngPair(pathA, pathB)
-	if err != nil {
-		return 0, 0, err
-	}
-	bm, bp := diffPerceptualImgs(ia, ib)
-	return bm, bp, nil
-}
-
-// diffPerceptualImgs 同 pngDiffPerceptual，吃已解码对象（与 diffStatsImgs 同源
-// 像素口径：At().RGBA()>>8 的 0-255 预乘值）。尺寸不一致按最严重处理（与
-// pngDiffStats 同口径：报不崩也放行不了）。
+// diffPerceptualImgs 感知比对（吃已解码对象）：两帧各做 8×8 盒滤波降采样后
+// 逐块比较，返回（最坏块均差, 最坏块内单像素差），0-255 口径（与 diffStatsImgs
+// 同源像素口径：At().RGBA()>>8 的 0-255 预乘值）。尺寸不一致按最严重处理
+// （报不崩也放行不了）。（文件路径版 pngDiffPerceptual 只剩测试在用，已移
+// replay_perceptual_test.go——2026-10-19 死代码清仓）
 func diffPerceptualImgs(ia, ib image.Image) (blockMean, blockMax float64) {
 	if ia.Bounds() != ib.Bounds() {
 		return 1e9, 1e9
@@ -1402,18 +1406,10 @@ func diffPerceptualImgs(ia, ib image.Image) (blockMean, blockMax float64) {
 	return blockMean, blockMax
 }
 
-// pngDiffStats 解码两 PNG 逐像素比较 → (最大通道差, 差异像素数, 总像素)。
-func pngDiffStats(pathA, pathB string) (maxDiff, nDiff, total int, err error) {
-	ia, ib, err := decodePngPair(pathA, pathB)
-	if err != nil {
-		return 0, 0, 0, err
-	}
-	m, n, t := diffStatsImgs(ia, ib)
-	return m, n, t, nil
-}
-
-// diffStatsImgs 同 pngDiffStats，吃已解码对象。NRGBA（hyperframes snapshot 的
-// 实际格式）直接扫 Pix 数组；其余格式退回 At() 接口路径，口径不变。
+// diffStatsImgs 逐像素比较（吃已解码对象）→ (最大通道差, 差异像素数, 总像素)。
+// NRGBA（hyperframes snapshot 的实际格式）直接扫 Pix 数组；其余格式退回 At()
+// 接口路径，口径不变。（文件路径版 pngDiffStats 只剩测试在用，已移
+// replay_perceptual_test.go）
 func diffStatsImgs(ia, ib image.Image) (maxDiff, nDiff, total int) {
 	if ia.Bounds() != ib.Bounds() {
 		return 1 << 30, 1 << 30, 0 // 尺寸不一致按最严重处理
@@ -1596,7 +1592,10 @@ func (r *Runner) translateSubtitles(ctx context.Context, p *pipeline.Project) er
 	if n == 0 {
 		return errors.New("翻译返回为空/错位")
 	}
-	nb, _ := json.MarshalIndent(am, "", "  ")
+	nb, err := json.MarshalIndent(am, "", "  ")
+	if err != nil {
+		return fmt.Errorf("audio_meta 序列化失败（翻译回写中止，未动盘）: %w", err)
+	}
 	if err := pipeline.WriteFileAtomic(p.Artifact("audio_meta.json"), nb, 0o644); err != nil {
 		return err
 	}
@@ -1877,6 +1876,20 @@ func feedbackBlock(f, prevHTML string) string {
 }
 
 // ── 子进程与工具 ─────────────────────────────────────────────
+
+// assembleMu assemble.py 的进程内互斥（2026-10-19 中-15）：写池 ≤4 worker 各自
+// 全量重跑 assemble，index/.hf-seg/*.html 与 assets/hf.js 的文件写会被并发踩——
+// 另一 worker 的 ensureSegCheckDir 恰在拷 .hf-seg/<seg>.html 时读到半截 →
+// check 幻影失败白烧 LLM 修复轮。全局一把锁：组装是秒级轻活，串行化无感
+// （瓶颈在渲染不在组装；Python 侧另有 tmp+rename 原子写双保险）。
+var assembleMu sync.Mutex
+
+// assemble 组装工位统一入口：互斥后跑 ai/assemble.py（见 assembleMu 注释）。
+func (r *Runner) assemble(ctx context.Context, p *pipeline.Project) error {
+	assembleMu.Lock()
+	defer assembleMu.Unlock()
+	return r.assemble(ctx, p)
+}
 
 // python 跑仓库 ai/ 脚本（cwd = 仓库根）。任务取消时连带杀掉子进程；走
 // pipeline.CommandContext——整棵进程树击杀，python 拉起的孙进程不残留。

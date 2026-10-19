@@ -21,7 +21,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 
@@ -91,14 +90,21 @@ func (r *Runner) frameQA(ctx context.Context, p *pipeline.Project, instruction, 
 				return err
 			}
 			r.clearFrames(p, segID)
-			_ = os.Remove(p.Artifact("renders/segs/" + segID + ".mp4"))
+			// 删除失败必须留痕（中-L16）：Windows 上文件被渲染进程占用时 Remove
+			// 会失败，render 按「段片存在即复用」吃旧画面，修复轮白做且无感知
+			if rerr := os.Remove(p.Artifact("renders/segs/" + segID + ".mp4")); rerr != nil && !os.IsNotExist(rerr) {
+				r.Manifest(p, "frameqa.seg_remove_failed", fmt.Sprintf("%s: %v（旧段片可能被复用，修复或未生效）", segID, rerr))
+				_ = os.Remove(p.Artifact("renders/segs/"+segID+".mp4") + ".sum")
+			} else {
+				_ = os.Remove(p.Artifact("renders/segs/"+segID+".mp4") + ".sum")
+			}
 		}
 		// 全部段改完统一落盘一次（与 prereview 修复轮同构）：compositions 是
 		// 全量重扫，逐段跑一遍 N 段就白付 N-1 遍
 		if err := pipeline.Run(ctx, p, "compositions"); err != nil {
 			return fmt.Errorf("合成物落盘失败: %w", err)
 		}
-		if err := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); err != nil {
+		if err := r.assemble(ctx, p); err != nil {
 			return fmt.Errorf("组装失败: %w", err)
 		}
 		if err := pipeline.Run(ctx, p, "render"); err != nil {
@@ -117,7 +123,7 @@ func (r *Runner) frameQA(ctx context.Context, p *pipeline.Project, instruction, 
 			if cerr := pipeline.Run(ctx, p, "compositions"); cerr != nil {
 				return fmt.Errorf("合成物落盘失败: %w", cerr)
 			}
-			if cerr := r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute); cerr != nil {
+			if cerr := r.assemble(ctx, p); cerr != nil {
 				return fmt.Errorf("组装失败: %w", cerr)
 			}
 			if cerr := pipeline.Run(ctx, p, "render"); cerr != nil {

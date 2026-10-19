@@ -35,6 +35,7 @@ import (
 
 	"webpage-video-agent/server/internal/artifacts"
 	"webpage-video-agent/server/internal/contract"
+	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
 	"webpage-video-agent/server/internal/prep"
 	"webpage-video-agent/server/internal/review"
@@ -313,10 +314,40 @@ func (r *Runner) runSegmentPipeline(ctx context.Context, p *pipeline.Project) er
 	r.emit(id, "done", "", "renders/main.mp4")
 	r.Manifest(p, EventProduceDone, "renders/main.mp4")
 	r.jobTerminal(id, "done", "renders/main.mp4", "")
-	if r.OnDone != nil {
+	// 完成通知如实区分「全过」与「带伤」（2026-10-19 中-13：带伤放行/审查器
+	// 故障降级/终审降级的运行原先也说「全部通过」，用户无从知晓成片有账）
+	if wounds := c.woundedNotes(); len(wounds) > 0 {
+		r.notifyOnDone(id, "video", fmt.Sprintf("全片制作完成（带伤 %d 处：%s）——明细见过程页与 reviews/ 意见单",
+			len(wounds), strings.Join(wounds, "、")))
+	} else {
 		r.notifyOnDone(id, "video", "全片制作完成（段级流水线：逐段审核、边界审、全片终审全部通过）")
 	}
 	return nil
+}
+
+// woundedNotes 汇总本run的「带伤」账：段审打回超限带伤放行、审查器故障降级、
+// 边界带伤放行/降级、终审降级——完成通知与「全部通过」区分开（中-13）。
+func (c *coordinator) woundedNotes() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []string
+	for _, s := range c.segs {
+		if e := c.journal["seg/"+s.seg.ID]; e.State == stAudited &&
+			(strings.Contains(e.Detail, "带伤") || strings.Contains(e.Detail, "降级")) {
+			out = append(out, s.seg.ID+" "+e.Detail)
+		}
+	}
+	for _, b := range c.bounds {
+		if e := c.journal["bnd/"+b.id]; e.State == stAudited &&
+			(strings.Contains(e.Detail, "带伤") || strings.Contains(e.Detail, "降级")) {
+			out = append(out, b.id+" "+e.Detail)
+		}
+	}
+	if e := c.journal["final/all"]; e.State == stAudited &&
+		(strings.Contains(e.Detail, "带伤") || strings.Contains(e.Detail, "降级")) {
+		out = append(out, "全片终审 "+e.Detail)
+	}
+	return out
 }
 
 // ── 协调器 ────────────────────────────────────────────────────────
@@ -340,13 +371,13 @@ type auditReq struct {
 	kind  string // seg | bnd
 	segID string
 	bi    int // 边界序号
-	round int
 }
 
 type boundaryCtx struct {
 	id         string
 	prev, next string
 	genP, genN int // 已过审时的两侧代际（-1 = 未审/已失效）
+	round      int // 已打回次数（2026-10-19 中-7：轮次上限依据；过审/降级即清零）
 }
 
 type coordinator struct {
@@ -373,6 +404,8 @@ type coordinator struct {
 	renderSem chan struct{}
 	auditCh   chan auditReq
 
+	bndBusy map[int]bool // 边界审在飞（auditBoundary 自己释放）；跟踪器据此防重派
+
 	passNotify chan string // 段过审通知（边界跟踪的唤醒信号）
 
 	samplesOnce sync.Once
@@ -397,6 +430,7 @@ func newCoordinator(r *Runner, p *pipeline.Project, svc *review.Service, sb *con
 		renderSem:  make(chan struct{}, renderConcurrency()),
 		auditCh:    make(chan auditReq, len(sb.Segments)*3+len(sb.Segments)),
 		passNotify: make(chan string, len(sb.Segments)*4+8),
+		bndBusy:    make(map[int]bool),
 	}
 	for _, seg := range sb.Segments {
 		c.segs = append(c.segs, &segCtx{seg: seg, feedCh: make(chan string, 4)})
@@ -428,7 +462,9 @@ func (c *coordinator) seg(id string) *segCtx {
 }
 
 // log 状态迁移落账：journal 追加 + 内存镜像 + manifest 一行（§4.4）。
-// audited 迁移顺带唤醒边界跟踪（提示性；轮询兜底）。
+// audited 迁移顺带唤醒边界跟踪（提示性；轮询兜底）。journal 文件写与 manifest
+// 落盘都在锁外（2026-10-19 中-L6：临界区只碰内存镜像——磁盘 IO 进临界区会把
+// 并发段的记账串行排队，与 journal 文件写「刻意放锁外」同一顾虑）。
 func (c *coordinator) log(e journalLine) {
 	e.TS = time.Now().Format(time.RFC3339)
 	b, _ := json.Marshal(e)
@@ -439,13 +475,14 @@ func (c *coordinator) log(e journalLine) {
 	}
 	c.touch()
 	c.mu.Lock()
-	defer c.mu.Unlock() // panic 也不许把锁带走：锁被带走的瞬间全协调器冻结成化石
 	if c.journal == nil {
 		c.journal = map[string]journalLine{}
 	}
 	c.journal[e.Kind+"/"+e.ID] = e
+	notify := e.Kind == "seg" && e.State == stAudited
+	c.mu.Unlock() // panic 也不许把锁带走：锁被带走的瞬间全协调器冻结成化石
 	c.r.Manifest(c.p, "seg."+e.Kind+"."+e.State, e.ID+": "+pipeline.FirstLine(e.Detail, 120))
-	if e.Kind == "seg" && e.State == stAudited {
+	if notify {
 		select {
 		case c.passNotify <- e.ID:
 		default:
@@ -453,7 +490,7 @@ func (c *coordinator) log(e journalLine) {
 	}
 }
 
-// logNoState 同 log，但语义上不是状态迁移（如打回记账）——照写，便于追溯。
+// segState 段状态迁移记账的薄封装（round/gen 进 journal，恢复判定用）。
 func (c *coordinator) segState(id, state string, round, gen int, detail string) {
 	c.log(journalLine{Kind: "seg", ID: id, State: state, Round: round, Gen: gen, Detail: detail})
 }
@@ -616,7 +653,7 @@ func (c *coordinator) stitch(ctx context.Context) error {
 	c.emit("stage", "render", "running")
 	c.r.Manifest(c.p, "stage.start", "render")
 	if fixes := c.takeStitchFixes(); len(fixes) > 0 {
-		if err := c.r.python(ctx, "ai/assemble.py", c.p.Dir, 2*time.Minute); err != nil {
+		if err := c.r.assemble(ctx, c.p); err != nil {
 			return fmt.Errorf("拼接修正（assemble 重跑）失败: %w", err)
 		}
 		c.r.Manifest(c.p, "review.stitch_fix_applied", fmt.Sprintf("%d 条", len(fixes)))
@@ -752,7 +789,7 @@ func (c *coordinator) writeSegment(ctx context.Context, s *segCtx, feedback stri
 	pipeline.ClampSegmentFonts(c.p, s.seg.ID) // 机械钳：字体栈归一（别名→规范 Family，剥未知字体）
 	pipeline.FixupSegmentFrame(c.p, s.seg.ID) // 机械钳：字体声明补齐（目录字体接 url()）
 	pipeline.ClampSegmentFrame(c.p, s.seg.ID) // 机械钳：叠层声明
-	if err := c.r.python(ctx, "ai/assemble.py", c.p.Dir, 2*time.Minute); err != nil {
+	if err := c.r.assemble(ctx, c.p); err != nil {
 		return fmt.Errorf("组装失败: %w", err)
 	}
 	c.segState(s.seg.ID, stWritten, 0, 0, "")
@@ -804,7 +841,9 @@ func (c *coordinator) checkSegment(ctx context.Context, s *segCtx) error {
 	return nil
 }
 
-// renderSegment 段渲染（不被审核闸，§4.2）：渲池限流 → 帧数核对（rendered 位）。
+// renderSegment 段渲染（不被审核闸，§4.2）：渲池限流 → 内容指纹判旧（恢复进场
+// 的已渲段不重渲，2026-10-19 中-14——stitch 侧 stageRender 本就按同一指纹跳过，
+// 旧版这里无条件重渲，断点续跑对未变段片整段分钟级白渲）→ 帧数核对（rendered 位）。
 func (c *coordinator) renderSegment(ctx context.Context, s *segCtx) error {
 	select {
 	case <-ctx.Done():
@@ -812,7 +851,10 @@ func (c *coordinator) renderSegment(ctx context.Context, s *segCtx) error {
 	case c.renderSem <- struct{}{}:
 	}
 	defer func() { <-c.renderSem }()
-	if err := pipeline.RenderSeg(c.p, s.seg.ID); err != nil {
+	out := c.p.Artifact("renders/segs/" + s.seg.ID + ".mp4")
+	if !pipeline.SegStale(c.p, s.seg.ID, out) {
+		c.r.Manifest(c.p, "render.seg.cached", s.seg.ID)
+	} else if err := pipeline.RenderSeg(c.p, s.seg.ID); err != nil {
 		return err
 	}
 	dur := pipeline.SegVideoDuration(c.p, s.seg.ID)
@@ -914,7 +956,7 @@ func (c *coordinator) auditSegment(ctx context.Context, req auditReq) {
 		Sentences:   c.sentencePairs(s),
 		Facts:       segFacts(c.script, s.seg),
 		Rules:       designRulesDigest(c.sp),
-		Samples:     c.sampleImages(),
+		Samples:     c.sampleRefs(),
 		Dur:         s.dur,
 		Round:       round,
 		AnchorTimes: c.anchorFramesFor(s, ends),
@@ -1018,7 +1060,6 @@ func (c *coordinator) dispatchRewrite(ctx context.Context, s *segCtx, feedback s
 // 代际失配自动失效重审。
 func (c *coordinator) boundaryTracker(ctx context.Context) {
 	defer c.guardWorker("边界跟踪")
-	launched := map[int]bool{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -1033,25 +1074,37 @@ func (c *coordinator) boundaryTracker(ctx context.Context) {
 			}
 			c.mu.Lock()
 			gp, gn := b.genP, b.genN
+			busy := c.bndBusy[i]
 			c.mu.Unlock()
 			sg, ng := c.segGen(s), c.segGen(n)
 			if gp == sg && gn == ng {
-				launched[i] = false // 当前代际已审过：复位在飞标志，下次失效可重派
-				continue
+				continue // 当前代际已审过
 			}
 			if !c.segAudited(s) || !c.segAudited(n) {
 				continue // 两侧没都过审，等
 			}
-			if launched[i] {
-				continue // 在飞
+			if busy {
+				continue // 在飞（auditBoundary 完成时自己释放）
 			}
-			launched[i] = true
+			c.mu.Lock()
+			// 双检：等锁期间可能已有并发派发（passNotify 唤醒 vs 兜底轮询）
+			if c.bndBusy[i] {
+				c.mu.Unlock()
+				continue
+			}
+			c.bndBusy[i] = true
+			c.mu.Unlock()
 			select {
 			case <-ctx.Done():
+				c.mu.Lock()
+				c.bndBusy[i] = false
+				c.mu.Unlock()
 				return
 			case c.auditCh <- auditReq{kind: "bnd", bi: i}:
 			default:
-				launched[i] = false // 队列满：下轮再派
+				c.mu.Lock()
+				c.bndBusy[i] = false // 队列满：下轮再派
+				c.mu.Unlock()
 			}
 		}
 	}
@@ -1071,6 +1124,14 @@ func (c *coordinator) segAudited(s *segCtx) bool {
 // auditBoundary 边界审 → 打回路由（anchor 时刻正负定前/后段）+ stitch_fix 清单。
 func (c *coordinator) auditBoundary(ctx context.Context, req auditReq) {
 	defer c.guardWorker("边界审")
+	// 在飞标志由本 goroutine 释放（含打回重写路径）——旧版靠跟踪器在「过审记账」
+	// 分支复位，而打回路径不记账（genP/genN 保持 -1），标志永不复位：被打回段
+	// 重写过审后该边界再无人重派，全管线静等看门狗（2026-10-19 萤火虫实测楔死）。
+	defer func() {
+		c.mu.Lock()
+		c.bndBusy[req.bi] = false
+		c.mu.Unlock()
+	}()
 	if req.bi < 0 || req.bi >= len(c.bounds) {
 		return
 	}
@@ -1079,11 +1140,14 @@ func (c *coordinator) auditBoundary(ctx context.Context, req auditReq) {
 	if s == nil || n == nil {
 		return
 	}
+	c.mu.Lock()
+	rnd := b.round // 已打回次数（0 = 首审；递增在打回派发处，过审/降级清零）
+	c.mu.Unlock()
 	in := review.BndInput{
 		ID: b.id, Prev: s.seg, Next: n.seg,
 		PrevDur: pipeline.SegVideoDuration(c.p, s.seg.ID),
 		NextDur: pipeline.SegVideoDuration(c.p, n.seg.ID),
-		Round:   1,
+		Round:   rnd + 1,
 		LogPath: c.p.Artifact(fmt.Sprintf("reviews/bnd-%s.tools.jsonl", b.id)),
 	}
 	if c.sp.DesignSystem != nil && c.sp.DesignSystem.EntryExit != nil {
@@ -1096,30 +1160,48 @@ func (c *coordinator) auditBoundary(ctx context.Context, req auditReq) {
 		}
 		c.r.Manifest(c.p, "review.bnd_error", b.id+": "+pipeline.FirstLine(err.Error(), 140))
 		// 审查器故障：按当前代际通过记账（防打转），明细交用户。
-		// 已持 c.mu，直接读 gen 字段——调 segGen 会二次加锁自锁（2026-10-17
-		// 转储实锤：这里死锁的 goroutine 变成永久持锁者，全管线冻结成化石）。
+		// 直接读 s.gen/n.gen 而非调 segGen——segGen 内部拿同一把 c.mu，二次
+		// 加锁自锁（2026-10-17 转储实锤：死锁 goroutine 变成永久持锁者）；
+		// s/n 是 c.seg() 来的同指针，gen 字段统一在 mu 内读写。
 		c.mu.Lock()
 		b.genP, b.genN = s.gen, n.gen
+		b.round = 0
+		gp, gn := b.genP, b.genN
 		c.mu.Unlock()
-		c.log(journalLine{Kind: "bnd", ID: b.id, State: stAudited, GenP: b.genP, GenN: b.genN, Detail: "审查器故障降级"})
+		c.log(journalLine{Kind: "bnd", ID: b.id, State: stAudited, GenP: gp, GenN: gn, Detail: "审查器故障降级"})
 		return
 	}
-	_ = saveVerdict(c.p, "bnd", b.id, 1, &v)
+	// 真实轮次落盘（2026-10-19 中-7：旧版恒写 round 1，多次重审互相覆盖不可考）
+	_ = saveVerdict(c.p, "bnd", b.id, rnd+1, &v)
+	// stitch 分流（2026-10-19 中-8）：stitch_fix 是拼接侧可机械修正的意见，不该
+	// 触发段重画——旧版全部 high 一律打回，含 stitch_fix 的边界永远活不到 stitch
+	// 阶段（takeStitchFixes 恒空，「能拼接修的别判 redraw」的提示词承诺落空）。
 	high := v.HighFindings()
-	if len(high) == 0 {
+	var redraw []review.Finding
+	for _, f := range high {
+		if f.Fix != "stitch_fix" {
+			redraw = append(redraw, f)
+		}
+	}
+	if len(redraw) == 0 {
+		// 全过，或只剩 stitch_fix（交 stitch 位执行）——都按当前代际通过记账
 		c.mu.Lock()
-		b.genP, b.genN = s.gen, n.gen // 同上：持锁期间禁调 segGen
+		b.genP, b.genN = s.gen, n.gen
+		b.round = 0 // 过审清轮次：新代际失效重审从首审起算
 		gp, gn := b.genP, b.genN
 		c.mu.Unlock()
 		c.brakes.clear("bnd:" + b.id) // 过审撤销刹车记账
-		c.log(journalLine{Kind: "bnd", ID: b.id, State: stAudited, GenP: gp, GenN: gn,
-			Detail: fmt.Sprintf("%d 条意见", len(v.Findings))})
+		detail := fmt.Sprintf("%d 条意见", len(v.Findings))
+		if len(high) > 0 {
+			detail = fmt.Sprintf("%d 条意见（%d 条 stitch_fix 交拼接修正）", len(v.Findings), len(high))
+		}
+		c.log(journalLine{Kind: "bnd", ID: b.id, State: stAudited, GenP: gp, GenN: gn, Detail: detail})
 		c.emit("progress", "review", fmt.Sprintf("边界 %s 通过", b.id))
 		return
 	}
 	// 打回路由：high 意见 anchor 的时刻符号投票定前/后段（负=前段内）
 	prevVotes, nextVotes := 0, 0
-	for _, f := range high {
+	for _, f := range redraw {
 		if t, ok := bndAnchorT(f.Anchor); ok {
 			if t < 0 {
 				prevVotes++
@@ -1138,9 +1220,29 @@ func (c *coordinator) auditBoundary(ctx context.Context, req auditReq) {
 		c.r.Manifest(c.p, "review.brake", c.brakes.reason())
 		return
 	}
+	// 轮次上限（2026-10-19 中-7，与段审 maxSegRework 同口径）：bndBusy 死转修复
+	// 后，打回-重写循环若无上界，签名刹车在「单边界+单段」场景凑不满阈值
+	// （同签名连续两轮兜得住同意见循环，意见签名每轮漂移的循环就裸奔）——
+	// 超限带伤放行：宁出带伤成片不出零成片（哲学同段审打回超限）。
+	if rnd+1 > maxSegRework {
+		c.brakes.clear("bnd:" + b.id)
+		c.mu.Lock()
+		b.genP, b.genN = s.gen, n.gen
+		b.round = 0
+		gp, gn := b.genP, b.genN
+		c.mu.Unlock()
+		c.log(journalLine{Kind: "bnd", ID: b.id, State: stAudited, GenP: gp, GenN: gn,
+			Detail: fmt.Sprintf("第 %d 轮仍有 %d 条 high，带伤放行", rnd+1, len(redraw))})
+		c.emit("progress", "review", fmt.Sprintf("边界 %s %d 轮仍未过，带伤放行（意见单在 reviews/ 可查）", b.id, rnd+1))
+		c.r.Manifest(c.p, "review.bnd_pass_degraded", fmt.Sprintf("%s r%d: %d 条 high", b.id, rnd+1, len(redraw)))
+		return
+	}
+	c.mu.Lock()
+	b.round = rnd + 1
+	c.mu.Unlock()
 	c.r.Manifest(c.p, "review.rework", fmt.Sprintf("%s → %s（%s）", b.id, target.seg.ID, dirWhy))
-	c.emit("progress", "review", fmt.Sprintf("边界 %s %d 条 high，打回 %s 重画", b.id, len(high), target.seg.ID))
-	c.dispatchRewrite(ctx, target, redrawFeedback(high))
+	c.emit("progress", "review", fmt.Sprintf("边界 %s %d 条 high，打回 %s 重画", b.id, len(redraw), target.seg.ID))
+	c.dispatchRewrite(ctx, target, redrawFeedback(redraw))
 }
 
 // bndAnchorT 解析边界 anchor 的相对时刻（b02|t=-0.2 → -0.2, true）。
@@ -1156,14 +1258,20 @@ func bndAnchorT(anchor string) (float64, bool) {
 	return f, true
 }
 
-// takeStitchFixes 边界审 stitch_fix 意见 → 拼接修正清单（取走即清，stitch 位执行）。
+// takeStitchFixes 边界审 stitch_fix 意见 → 拼接修正清单（stitch 位执行 = 重跑
+// assemble）。按轮次文件聚合（2026-10-19 中-7/中-8：意见单已落真实轮次——旧版
+// 只读 round 1，而含 stitch_fix 的边界在新分流下按当前代际通过时往往不在 r1）。
+// 幂等聚合不删文件；已执行的标记是 stitch 位的 review.stitch_fix_applied 账行。
 func (c *coordinator) takeStitchFixes() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// 从已落盘的边界意见单聚合（内存不长期持有——账在 reviews/*.json）
 	var out []string
 	for _, b := range c.bounds {
-		if v := c.loadVerdictFile("bnd", b.id, 1); v != nil {
+		for r := 1; r <= maxSegRework+2; r++ {
+			v := c.loadVerdictFile("bnd", b.id, r)
+			if v == nil {
+				continue
+			}
 			for _, f := range v.Findings {
 				if f.Fix == "stitch_fix" && f.Severity == "high" {
 					out = append(out, fmt.Sprintf("%s %s: %s", b.id, f.Anchor, f.Evidence))
@@ -1190,7 +1298,16 @@ func (c *coordinator) finalAudit(ctx context.Context, round int) ([]string, erro
 	}
 	v, err := c.svc.AuditFinal(ctx, in)
 	if err != nil {
-		return nil, fmt.Errorf("终审失败: %w", err)
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("终审失败: %w", err)
+		}
+		// 终审故障降级放行（2026-10-19 中-9）：段审/边界审故障都记账降级，唯独
+		// 终审一次 LLM 抖动/预算烧尽就整片失败、再叠两轮自动重跑——口径拉齐：
+		// 记账出片带账（review.final_error），意见单缺失如实可见。
+		c.r.Manifest(c.p, "review.final_error", pipeline.FirstLine(err.Error(), 140))
+		c.log(journalLine{Kind: "final", ID: "all", State: stAudited, Round: round, Detail: "终审审查器故障降级"})
+		c.emit("stage", "review", "done: 全片终审审查器故障，降级放行（账在 manifest）")
+		return nil, nil
 	}
 	_ = saveVerdict(c.p, "final", "all", round, &v)
 	high := v.HighFindings()
@@ -1358,10 +1475,11 @@ func (c *coordinator) anchorFramesFor(s *segCtx, ends map[string]float64) []revi
 	return anchorFrames(segSentences(c.script, s.seg), ends, s.dur)
 }
 
-// sampleImages 样张 dataURL（每次审核同一套，算一次缓存）。
-func (c *coordinator) sampleImages() []string {
+// sampleRefs 样张注入图（URL 喂模型 + 路径/标签给「过程」页缩略图；每次审核
+// 同一套，算一次缓存）。
+func (c *coordinator) sampleRefs() []llm.ImgRef {
 	c.samplesOnce.Do(func() { c.sampleVis = styleSampleImages(c.p) })
-	return visURLs(c.sampleVis)
+	return visRefs(c.sampleVis)
 }
 
 func (c *coordinator) loadVerdictFile(kind, id string, round int) *review.Verdict {
@@ -1424,12 +1542,12 @@ func finalFeedback(c *coordinator, segID string, round int) string {
 	b.WriteString("上一版画面被全片终审打回，涉及本段的意见逐条修正：\n")
 	hit := false
 	if v != nil {
+		tl := pipeline.LoadTimeline(c.p) // 逐条意见共用一份时间轴（中-L5：循环内反复读盘）
 		for _, f := range v.HighFindings() {
 			t, perr := strconv.ParseFloat(strings.TrimPrefix(f.Anchor, "t="), 64)
 			if perr != nil {
 				continue
 			}
-			tl := pipeline.LoadTimeline(c.p)
 			if idx := segIndexAt(tl, t); idx >= 0 && tl[idx].ID == segID {
 				fmt.Fprintf(&b, "- [%s][%s] %s\n", f.Category, f.Anchor, f.Evidence)
 				hit = true

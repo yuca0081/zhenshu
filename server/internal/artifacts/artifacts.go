@@ -186,9 +186,16 @@ func (s *localStore) Fetch(key, dstPath string) error {
 
 // ── 批量操作（对两种后端一视同仁；localStore 的上传/回源自然退化为无操作或直取）──
 
+// normPrefix 批量操作入口统一去尾斜杠：调用方常传 ProjectKey(id,"") 这种带尾
+// 斜杠的「整实体」前缀，而内部 TrimPrefix(key, prefix+"/") 会拼出双斜杠永不
+// 匹配 → Classify 拿到整 key，三分类整体失效（2026-10-19 高-2：一切文件被判
+// Keeper——设计上不上传的垃圾全量上云、GC 永不清 Discard、Restore 拉回垃圾）。
+func normPrefix(prefix string) string { return strings.TrimSuffix(prefix, "/") }
+
 // SyncUp 把 root/prefix 下本地有而远端缺的 Keeper 文件传上去（幂等，Stat 已在则跳过）。
 // 返回上传文件数。单文件失败记日志继续——不打断制作，缺口由后续检查点或 -storage-sync 补。
 func SyncUp(st Store, root, prefix string) (int, error) {
+	prefix = normPrefix(prefix)
 	if !st.Available() {
 		return 0, nil
 	}
@@ -228,6 +235,7 @@ func SyncUp(st Store, root, prefix string) (int, error) {
 // Restore 把远端前缀下本地缺失的 Keeper 文件回源落地——给清理过的老项目恢复工作区
 // （produce/prep 开跑前调用）。返回回源文件数；localStore 无操作。
 func Restore(st Store, root, prefix string) (int, error) {
+	prefix = normPrefix(prefix)
 	if !st.Available() {
 		return 0, nil
 	}
@@ -265,6 +273,7 @@ func Restore(st Store, root, prefix string) (int, error) {
 // 调用方负责确认项目不在制作中且 MinIO 已接线（Available=false 时防御性直接返回）。
 // 返回释放的字节数与删除的文件数。删完后自底向上摘掉空目录。
 func Prune(st Store, root, prefix string) (freed int64, files int, err error) {
+	prefix = normPrefix(prefix)
 	if !st.Available() {
 		return 0, 0, nil
 	}

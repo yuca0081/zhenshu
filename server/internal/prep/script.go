@@ -301,12 +301,16 @@ func (r *scriptRun) submit(args string, target float64) Observation {
 		mode = "topic"
 	}
 	s := contract.NewScript(in.Text, mode, facts, target)
+	// legacy 先落、工件标记（script.json）最后落（2026-10-19 中-21）：
+	// HasArtifact(script.json 在) = 站完成的唯一事实——反序在两笔之间崩溃会留下
+	// 「站被跳过但 manuscript.json 陈旧」的半完成态；两笔错误都回流模型。
+	m := contract.NewManuscript(s.Text, "ai")
+	if err := writeJSONFile(r.p.Artifact("manuscripts/manuscript.json"), m); err != nil {
+		return Observation{Text: "文稿落盘失败：" + err.Error()}
+	}
 	if err := writeJSONFile(scriptPath(r.p), s); err != nil {
 		return Observation{Text: "落盘失败：" + err.Error()}
 	}
-	// legacy 兼容：改写后的口播稿就是项目的文稿（下游 agent 状态/TTS 链的读法不变）
-	m := contract.NewManuscript(s.Text, "ai")
-	_ = writeJSONFile(r.p.Artifact("manuscripts/manuscript.json"), m)
 	r.d.emit(r.p.ID, "stage", "prep/script", fmt.Sprintf("done：%d 句 / %d 字 / fact×%d", len(s.Sentences), s.WordCount, len(facts)))
 	return Observation{
 		Text: fmt.Sprintf("文字稿已提交：%d 句 / %d 字（约 %.0f 秒，目标 %.0f 秒）；fact_sheet %d 条。工件已落盘。",

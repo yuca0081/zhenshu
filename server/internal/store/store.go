@@ -215,6 +215,9 @@ func (s *pgStore) Kind() string { return "pg" }
 
 func (s *pgStore) DB() *gorm.DB { return s.db }
 
+// ErrNoProjectRow 该 disk_id 在 projects 表无行（磁盘才是事实源，属正常态）。
+var ErrNoProjectRow = errors.New("项目无 DB 行")
+
 func (s *pgStore) findUUID(diskID string) (string, error) {
 	var row struct {
 		UUID string `gorm:"column:id"`
@@ -226,7 +229,7 @@ func (s *pgStore) findUUID(diskID string) (string, error) {
 		return "", fmt.Errorf("项目 %s 查 DB 失败: %w", diskID, err)
 	}
 	if row.UUID == "" {
-		return "", fmt.Errorf("项目 %s 无 DB 行", diskID)
+		return "", fmt.Errorf("项目 %s: %w", diskID, ErrNoProjectRow)
 	}
 	return row.UUID, nil
 }
@@ -259,11 +262,16 @@ func (s *pgStore) UpdateProjectMeta(diskID string, meta ProjectMeta) error {
 		meta.Topic, meta.Aspect, meta.Status, meta.StoragePrefix, diskID).Error
 }
 
-// DeleteProject 删项目镜像：聊天、任务、行。无行不报错（磁盘才是事实源）。
+// DeleteProject 删项目镜像：聊天、任务、行。无行不报错（磁盘才是事实源）；
+// 但「DB 查询/删除失败」必须原样上抛（2026-10-19 中-32）——瞬时抖动被吞成
+// 「删除成功」时镜像行变孤儿且无从排查，与 findUUID 自己注释的纪律一致。
 func (s *pgStore) DeleteProject(diskID string) error {
 	uuid, err := s.findUUID(diskID)
 	if err != nil {
-		return nil
+		if errors.Is(err, ErrNoProjectRow) {
+			return nil // 磁盘已删、DB 本就无行：干净
+		}
+		return err // 查库失败：上抛，由调用方决定降级提示
 	}
 	if err := s.db.Exec(`DELETE FROM chat_messages WHERE project_id = ?`, uuid).Error; err != nil {
 		return err

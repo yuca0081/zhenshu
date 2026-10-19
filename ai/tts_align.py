@@ -360,6 +360,10 @@ def main(proj_dir: str) -> int:
             removed += 1
         for s in (proj / 'audio').glob('*.wav.src'):
             s.unlink(missing_ok=True)
+        # 旧 meta 一并作废（2026-10-19 低危）：它记着旧音色的时长/词级时间戳，
+        # 且引用的 wav 已删——留着就是「有账无货」的中间态（TTS 中途失败时
+        # 下游读到会按旧时长拼画面）；下一轮跑完自然重写
+        meta_path.unlink(missing_ok=True)
         print(f'音色切换 {prev_meta_voice} → {meta_voice}，重配 {removed} 段')
 
     def narr_fp(text):

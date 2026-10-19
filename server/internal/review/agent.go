@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"webpage-video-agent/server/internal/agentlog"
 	"webpage-video-agent/server/internal/contract"
@@ -48,14 +49,14 @@ func (s *Service) emit(id, typ, stage, detail string) {
 // SegInput 段审材料（程序装配，不走工具）。
 type SegInput struct {
 	Seg       contract.Segment
-	Sentences [][2]string // {N几, 句文本} 本段句编号旁白（有序）
-	Facts     []string    // 本段相关事实清单条目
-	Rules     string      // 设计规则要点（可空）
-	Samples   []string    // 样张 dataURL
-	Dur       float64     // 段片时长（锚点帧抽取与工具越界判断）
-	Round     int         // 1=首审 ≥2=修复轮
-	Prior     *Verdict    // 修复轮的既往意见单
-	LogPath   string      // 取证留痕 jsonl（可空）
+	Sentences [][2]string  // {N几, 句文本} 本段句编号旁白（有序）
+	Facts     []string     // 本段相关事实清单条目
+	Rules     string       // 设计规则要点（可空）
+	Samples   []llm.ImgRef // 样张（URL 注入模型；Path/Label 给「过程」页缩略图）
+	Dur       float64      // 段片时长（锚点帧抽取与工具越界判断）
+	Round     int          // 1=首审 ≥2=修复轮
+	Prior     *Verdict     // 修复轮的既往意见单
+	LogPath   string       // 取证留痕 jsonl（可空）
 	// AnchorTimes 锚点帧时刻表（程序按句末时刻+首末帧算好，标注随图注入）
 	AnchorTimes []AnchorFrame
 }
@@ -94,7 +95,11 @@ func auditProvider() (ChatClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("审核需要 API 模式（LLM_API_KEY）: %w", err)
 	}
+	// 注入探针通道要持 vidMu：段审/边界审 goroutine 并发调 videoSupported 读它
+	// ——包级全局无锁读写是数据竞争（2026-10-19 中-20）
+	vidMu.Lock()
 	videoProbeProv = prov
+	vidMu.Unlock()
 	return prov, nil
 }
 
@@ -183,7 +188,7 @@ func (s *Service) getFrameTool(fs *serviceFS, targets map[string]float64) Tool {
 			if !ok {
 				return Observation{Text: "被拒：seg 只准 " + strings.Join(mapKeys(targets), "/")}
 			}
-			url, err := fs.extractFrame(ctx, in.Seg, in.T, dur)
+			url, _, err := fs.extractFrame(ctx, in.Seg, in.T, dur)
 			if err != nil {
 				return Observation{Text: err.Error()}
 			}
@@ -303,6 +308,7 @@ func (s *Service) AuditSegment(ctx context.Context, in SegInput) (Verdict, error
 	fs := &serviceFS{
 		segVideo: func(segID string) string { return s.P.Artifact("renders/segs/" + segID + ".mp4") },
 		cacheDir: s.P.Artifact("reports/audit"),
+		relBase:  "reports/audit",
 	}
 	targets := map[string]float64{in.Seg.ID: in.Dur}
 	// 锚点帧（程序装配）：首帧 + 句末帧（封顶均匀采样）+ 末帧，标注随文注入
@@ -328,17 +334,27 @@ func (s *Service) AuditSegment(ctx context.Context, in SegInput) (Verdict, error
 		kick.WriteString("\n## 5. 事实清单：（本段无登记条目——事实维按画面与旁白互证）\n")
 	}
 	kick.WriteString("\n## 6. 锚点帧\n")
-	var imgs []string
+	// 抽帧并行（2026-10-19 中-24）：帧间完全独立，每帧一次 ffmpeg 进程串行跑
+	// 白付进程起降；并发 4 抽完原序拼接（缓存键含 t，无写冲突）
+	imgs := make([]string, len(in.AnchorTimes))
+	refs := make([]llm.ImgRef, len(in.AnchorTimes))
+	if err := parallelFrames(len(in.AnchorTimes), func(i int) error {
+		u, rel, err := fs.extractFrame(ctx, in.Seg.ID, in.AnchorTimes[i].T, in.Dur)
+		if err != nil {
+			return err
+		}
+		imgs[i] = u
+		refs[i] = llm.ImgRef{URL: u, Path: rel, Label: in.AnchorTimes[i].Label}
+		return nil
+	}); err != nil {
+		return Verdict{}, fmt.Errorf("锚点帧抽取失败: %w", err)
+	}
 	for i, a := range in.AnchorTimes {
 		fmt.Fprintf(&kick, "图%d = %s（t=%.2fs）\n", i+1, a.Label, a.T)
-		u, err := fs.extractFrame(ctx, in.Seg.ID, a.T, in.Dur)
-		if err != nil {
-			return Verdict{}, fmt.Errorf("锚点帧抽取失败: %w", err)
-		}
-		imgs = append(imgs, u)
 	}
 	for i, smp := range in.Samples {
-		imgs = append(imgs, smp)
+		imgs = append(imgs, smp.URL)
+		refs = append(refs, smp)
 		fmt.Fprintf(&kick, "图%d = 样张%d（风格实物基准）\n", len(in.AnchorTimes)+i+1, i+1)
 	}
 	if in.Prior != nil {
@@ -346,14 +362,15 @@ func (s *Service) AuditSegment(ctx context.Context, in SegInput) (Verdict, error
 		kick.WriteString("\n## 上一轮意见单（修复轮：逐条 reassessment 后才考虑新发现）\n```json\n" + string(b) + "\n```\n")
 	}
 	loop := Loop{
-		System:    segmentSystem,
-		Kickoff:   kick.String(),
-		KickoffIm: imgs,
-		Tools:     []Tool{s.getFrameTool(fs, targets), s.getClipTool(fs, targets)},
-		MaxRounds: segmentBudget,
-		LogPath:   in.LogPath,
-		TaskID:    fmt.Sprintf("seg.audit.%s.r%d", in.Seg.ID, in.Round),
-		TaskLabel: fmt.Sprintf("段审 %s（第 %d 轮）", in.Seg.ID, in.Round),
+		System:      segmentSystem,
+		Kickoff:     kick.String(),
+		KickoffIm:   imgs,
+		KickoffRefs: refs,
+		Tools:       []Tool{s.getFrameTool(fs, targets), s.getClipTool(fs, targets)},
+		MaxRounds:   segmentBudget,
+		LogPath:     in.LogPath,
+		TaskID:      fmt.Sprintf("seg.audit.%s.r%d", in.Seg.ID, in.Round),
+		TaskLabel:   fmt.Sprintf("段审 %s（第 %d 轮）", in.Seg.ID, in.Round),
 	}
 	s.emit(s.P.ID, "progress", "review", fmt.Sprintf("段审 %s（第 %d 轮）开工", in.Seg.ID, in.Round))
 	v, err := s.runAudit(ctx, prov, loop, profSegment, in.Prior)
@@ -427,6 +444,7 @@ func (s *Service) AuditBoundary(ctx context.Context, in BndInput) (Verdict, erro
 	fs := &serviceFS{
 		segVideo: func(segID string) string { return s.P.Artifact("renders/segs/" + segID + ".mp4") },
 		cacheDir: s.P.Artifact("reports/audit"),
+		relBase:  "reports/audit",
 	}
 	targets := map[string]float64{in.Prev.ID: in.PrevDur, in.Next.ID: in.NextDur}
 	win := in.EntryDur
@@ -456,30 +474,35 @@ func (s *Service) AuditBoundary(ctx context.Context, in BndInput) (Verdict, erro
 	}
 	imgs = append(imgs, cimgs...)
 	kick.WriteString(text + "\n")
-	// 末帧×首帧对
-	last, err := fs.extractFrame(ctx, in.Prev.ID, in.PrevDur-0.04, in.PrevDur)
+	// 末帧×首帧对（附路径引用：「过程」页缩略图；片段视频是 mp4 dataURL 不进引用）
+	last, lastRel, err := fs.extractFrame(ctx, in.Prev.ID, in.PrevDur-0.04, in.PrevDur)
 	if err != nil {
 		return Verdict{}, fmt.Errorf("前段末帧抽取失败: %w", err)
 	}
-	first, err := fs.extractFrame(ctx, in.Next.ID, 0.0, in.NextDur)
+	first, firstRel, err := fs.extractFrame(ctx, in.Next.ID, 0.0, in.NextDur)
 	if err != nil {
 		return Verdict{}, fmt.Errorf("后段首帧抽取失败: %w", err)
 	}
 	imgs = append(imgs, last, first)
+	refs := []llm.ImgRef{
+		{URL: last, Path: lastRel, Label: "末帧（" + in.Prev.ID + " 最后一帧）"},
+		{URL: first, Path: firstRel, Label: "首帧（" + in.Next.ID + " 第一帧）"},
+	}
 	kick.WriteString("最后两张附图 = 末帧（前段最后一帧）× 首帧（后段第一帧），紧挨着的就是物理拼接点。\n")
 	if in.Prior != nil {
 		b, _ := json.MarshalIndent(in.Prior, "", "  ")
 		kick.WriteString("\n## 上一轮意见单（修复轮：逐条 reassessment 后才考虑新发现）\n```json\n" + string(b) + "\n```\n")
 	}
 	loop := Loop{
-		System:    boundarySystem,
-		Kickoff:   kick.String(),
-		KickoffIm: imgs,
-		Tools:     []Tool{s.getFrameTool(fs, targets), s.getClipTool(fs, targets)},
-		MaxRounds: boundaryBudget,
-		LogPath:   in.LogPath,
-		TaskID:    fmt.Sprintf("seg.boundary.%s", in.ID),
-		TaskLabel: fmt.Sprintf("边界审 %s", in.ID),
+		System:      boundarySystem,
+		Kickoff:     kick.String(),
+		KickoffIm:   imgs,
+		KickoffRefs: refs,
+		Tools:       []Tool{s.getFrameTool(fs, targets), s.getClipTool(fs, targets)},
+		MaxRounds:   boundaryBudget,
+		LogPath:     in.LogPath,
+		TaskID:      fmt.Sprintf("seg.boundary.%s", in.ID),
+		TaskLabel:   fmt.Sprintf("边界审 %s", in.ID),
 	}
 	s.emit(s.P.ID, "progress", "review", fmt.Sprintf("边界审 %s（第 %d 轮）开工", in.ID, in.Round))
 	return s.runAudit(ctx, prov, loop, profBoundary, in.Prior)
@@ -556,24 +579,70 @@ func (s *Service) AuditFinal(ctx context.Context, in FinalInput) (Verdict, error
 	for i, f := range in.Frames {
 		fmt.Fprintf(&kick, "图%d = %s（t=%.2fs）\n", i+1, f.Label, f.T)
 	}
-	for _, f := range in.Frames {
-		u, err := extractFilmFrame(ctx, s.P, f.T)
+	// 终审 12–16 帧并行抽（2026-10-19 中-24）：每帧一次 ffmpeg 进程，串行是
+	// 分钟级白等；并发 4 原序拼接。serviceFS 提到循环外共用（旧版每帧新建）。
+	ffFS := &serviceFS{
+		segVideo: func(string) string { return s.P.Artifact("renders/main.mp4") },
+		cacheDir: s.P.Artifact("reports/audit"),
+		relBase:  "reports/audit",
+	}
+	imgs = make([]string, len(in.Frames))
+	refs := make([]llm.ImgRef, len(in.Frames))
+	if err := parallelFrames(len(in.Frames), func(i int) error {
+		u, rel, err := ffFS.extractFrame(ctx, "film", in.Frames[i].T, 0)
 		if err != nil {
-			return Verdict{}, fmt.Errorf("终审抽帧失败（t=%.2f）: %w", f.T, err)
+			return fmt.Errorf("t=%.2f: %w", in.Frames[i].T, err)
 		}
-		imgs = append(imgs, u)
+		imgs[i] = u
+		refs[i] = llm.ImgRef{URL: u, Path: rel, Label: in.Frames[i].Label}
+		return nil
+	}); err != nil {
+		return Verdict{}, fmt.Errorf("终审抽帧失败: %w", err)
 	}
 	loop := Loop{
-		System:    finalSystem,
-		Kickoff:   kick.String(),
-		KickoffIm: imgs,
-		MaxRounds: finalBudget,
-		LogPath:   in.LogPath,
-		TaskID:    fmt.Sprintf("final.audit.r%d", in.Round),
-		TaskLabel: fmt.Sprintf("全片终审（第 %d 轮）", in.Round),
+		System:      finalSystem,
+		Kickoff:     kick.String(),
+		KickoffIm:   imgs,
+		KickoffRefs: refs,
+		MaxRounds:   finalBudget,
+		LogPath:     in.LogPath,
+		TaskID:      fmt.Sprintf("final.audit.r%d", in.Round),
+		TaskLabel:   fmt.Sprintf("全片终审（第 %d 轮）", in.Round),
 	}
 	s.emit(s.P.ID, "progress", "review", "全片终审开工")
 	return s.runAudit(ctx, prov, loop, profFinal, nil)
+}
+
+// parallelFrames 并发抽帧的小骨架：n 项独立作业、并发 4、任一失败取首个错误、
+// 结果由调用方按下标写入（键互不相同，无写冲突）。抽帧互相独立，串行跑只是
+// 白付每帧一次的 ffmpeg 进程起降（2026-10-19 中-24）。
+func parallelFrames(n int, fn func(i int) error) error {
+	if n <= 0 {
+		return nil
+	}
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+	sem := make(chan struct{}, 4)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := fn(i); err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+	return firstErr
 }
 
 // extractFilmFrame 从成片（renders/main.mp4）抽全片时刻帧。
@@ -581,6 +650,8 @@ func extractFilmFrame(ctx context.Context, p *pipeline.Project, t float64) (stri
 	fs := &serviceFS{
 		segVideo: func(string) string { return p.Artifact("renders/main.mp4") },
 		cacheDir: p.Artifact("reports/audit"),
+		relBase:  "reports/audit",
 	}
-	return fs.extractFrame(ctx, "film", t, 0)
+	_, rel, err := fs.extractFrame(ctx, "film", t, 0)
+	return rel, err
 }

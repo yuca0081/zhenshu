@@ -43,6 +43,24 @@ func stylePackPath(p *pipeline.Project) string  { return p.Artifact("style/style
 func draftPath(p *pipeline.Project) string      { return p.Artifact("storyboards/draft.json") }
 func styleDraftPath(p *pipeline.Project) string { return p.Artifact("style/prep-draft.json") }
 
+// ReplaceManuscript 文稿真源替换的统一语义（api saveManuscript 与 agent
+// saveManuscriptContent 两入口共用——2026-10-19 中-34：两处手抄同一套「写
+// article.txt → 删 manuscript.json → 有①工件则级联作废」，注释互相声称同
+// 语义实际已漂移，收进一处）：article.txt 是唯一真源；manuscript.json 是
+// 重放产物必须删（不删的话重新制作时 TTS 拿的还是旧稿）。返回是否触发了
+// ①②③级联作废（调用方各自包装提示语）。
+func ReplaceManuscript(p *pipeline.Project, content string) (invalidated bool, err error) {
+	if err := os.WriteFile(p.Artifact("input/article.txt"), []byte(content), 0o644); err != nil {
+		return false, err
+	}
+	_ = os.Remove(p.Artifact("manuscripts/manuscript.json"))
+	if HasArtifact(p, StationScript) {
+		InvalidateFrom(p, StationScript)
+		return true, nil
+	}
+	return false, nil
+}
+
 // LoadScript 读工件 A（不存在返回 os.ErrNotExist 语义错误）。
 func LoadScript(p *pipeline.Project) (*contract.Script, error) {
 	var s contract.Script

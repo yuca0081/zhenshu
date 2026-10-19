@@ -11,9 +11,12 @@ const password = ref('')
 const busy = ref(false)
 const error = ref('')
 
-// IME 组合期（候选未上屏）的 Enter 是选词不是提交（与 NewProjectModal 同款判断）
+// IME 组合期（候选未上屏）的 Enter 是选词不是提交（与 NewProjectModal 同款判断）。
+// 必须 preventDefault：keydown 走 submit 后，表单默认提交行为会经 @submit.prevent
+// 再触发一次 submit——双发两次登录请求（2026-10-19 中-L4）。
 function onEnter(e: KeyboardEvent) {
   if (e.isComposing || e.keyCode === 229) return
+  e.preventDefault()
   submit()
 }
 

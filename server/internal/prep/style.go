@@ -404,10 +404,39 @@ func (r *styleRun) renderSampleTool(snapLeft *int) Tool {
 			if len(draft.Samples) >= styleSampleMax {
 				return Observation{Text: fmt.Sprintf("样张已满 %d 张（契约上限），直接 submit_style。", styleSampleMax)}
 			}
-			// 同参数哈希缓存：同 html 重渲染直接回上次的截图说明
 			idx := len(draft.Samples)
-			if hit, note := r.cachedRender(in.HTML, idx); hit {
-				return Observation{Text: note}
+			// 缓存命中两分支（2026-10-19 中-22）：
+			// ① 这张 HTML 已在草稿——回它的说明，防截图失败重试时重复追加；
+			// ② 缓存标记在但样张被级联作废清了（InvalidateFrom 不清渲染缓存）——
+			//    幂等回填：重新挂进草稿+镜像+补截图（秒级 headless），不烧渲染
+			//    额度、不重掷设计。旧版命中只回「未重渲」：submit_style 永远报
+			//    「还没有样张」，②整站卡死。
+			if hit, note, dup := r.cachedRender(in.HTML, draft); hit {
+				if dup >= 0 {
+					return Observation{Text: note}
+				}
+				draft.Samples = append(draft.Samples, contract.Sample{
+					Tag:  fmt.Sprintf("样张 %c · %s", 'A'+idx, contract.FirstRunes(in.SceneBrief, 20)),
+					Desc: in.SceneBrief,
+					HTML: in.HTML,
+				})
+				if err := writeJSONFile(styleDraftPath(r.p), draft); err != nil {
+					return Observation{Text: "样张草稿落盘失败：" + err.Error()}
+				}
+				_ = writeJSONFile(r.p.Artifact("style/style_samples.json"), map[string]any{
+					"samples": draft.Samples, "confirmed": false,
+				})
+				backfill := fmt.Sprintf("样张 %d 沿用缓存渲染结果（同参数已渲过），已重新挂入草稿。", idx+1)
+				var images []string
+				if serr := snapSamples(ctx, r.d, r.p); serr == nil {
+					if dataURL, err := shrinkFrame(r.p.Artifact(fmt.Sprintf("style/sample-%d.png", idx))); err == nil {
+						images = append(images, dataURL)
+						backfill += "附图见下，可目检。"
+					}
+				} else {
+					backfill += "补截图失败——凭代码自查后提交。"
+				}
+				return Observation{Text: backfill, Images: images}
 			}
 			if *snapLeft <= 0 {
 				return Observation{Text: "渲染额度已用完（最多 3 张），直接 submit_style。"}
@@ -443,14 +472,22 @@ func (r *styleRun) renderSampleTool(snapLeft *int) Tool {
 	}
 }
 
-// cachedRender 同 HTML 参数哈希命中 → 不重渲染（§3.2 同参数哈希缓存）。
-func (r *styleRun) cachedRender(html string, idx int) (bool, string) {
-	key := renderHash(html)
-	cached := r.p.Artifact("llm/prep-render-cache/" + key + ".txt")
-	if b, err := os.ReadFile(cached); err == nil {
-		return true, string(b)
+// cachedRender 同 HTML 命中判定（§3.2 同参数哈希缓存）：
+//   - dup>=0：这张 HTML 已在草稿（返回说明与下标，防重复追加）；
+//   - dup==-1：缓存标记在但样张不在草稿（级联作废清了）——调用方走幂等回填；
+//   - hit=false：真没渲过。
+func (r *styleRun) cachedRender(html string, draft *styleDraft) (hit bool, note string, dup int) {
+	for i, s := range draft.Samples {
+		if s.HTML == html {
+			return true, fmt.Sprintf("%s 已在草稿里，无需重复渲染——要改就换 HTML 后重新 render_sample，或直接 submit_style。", s.Tag), i
+		}
 	}
-	return false, ""
+	key := renderHash(html)
+	if b, err := os.ReadFile(r.p.Artifact("llm/prep-render-cache/" + key + ".txt")); err == nil {
+		_ = b
+		return true, "", -1
+	}
+	return false, "", -2
 }
 
 func (r *styleRun) markRenderCache(html string) {
@@ -707,13 +744,14 @@ func (r *styleRun) submitStyleTool() Tool {
 			if err := contract.ValidateStylePack(sp); err != nil {
 				return reply("被拒：" + err.Error())
 			}
-			if err := writeJSONFile(stylePackPath(r.p), sp); err != nil {
-				return reply("落盘失败：" + err.Error())
-			}
-			// legacy 兼容：设计系统整包写 style_samples.json（未确认态——
-			// 现有确认门/样张页/produce 的读法全部不变）
+			// legacy 先落、工件标记（stylepack.json）最后落（2026-10-19 中-21，
+			// 与 script/storyboard 同纪律）：两笔之间崩溃不留「站被跳过但
+			// style_samples 陈旧」的半完成态
 			if err := writeJSONFile(r.p.Artifact("style/style_samples.json"), &ds); err != nil {
 				return reply("设计系统落盘失败：" + err.Error())
+			}
+			if err := writeJSONFile(stylePackPath(r.p), sp); err != nil {
+				return reply("落盘失败：" + err.Error())
 			}
 			_ = pipeline.SetProjectField(r.p, "style_id", sid)
 			_ = os.Remove(styleDraftPath(r.p))

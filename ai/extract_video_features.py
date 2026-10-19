@@ -45,10 +45,18 @@ def _ff(name: str) -> str:
 
 
 def probe_duration(video: pathlib.Path) -> float:
-    out = subprocess.run([_ff('ffprobe'), '-v', 'error', '-show_entries',
-                          'format=duration', '-of', 'csv=p=0', str(video)],
-                         capture_output=True, text=True, encoding='utf-8', errors='replace',
-                         check=True)
+    # ffprobe 崩溃（坏文件/缺二进制）时 CalledProcessError 会甩裸 traceback——
+    # 与下面 float 解析失败的人话口径对齐（低危）
+    try:
+        out = subprocess.run([_ff('ffprobe'), '-v', 'error', '-show_entries',
+                              'format=duration', '-of', 'csv=p=0', str(video)],
+                             capture_output=True, text=True, encoding='utf-8', errors='replace',
+                             check=True)
+    except subprocess.CalledProcessError as e:
+        raise SystemExit(f'✗ ffprobe 读时长失败({video}): '
+                         f'{(e.stderr or e.stdout or "").strip()[:200] or "无输出"}')
+    except FileNotFoundError:
+        raise SystemExit(f'✗ 找不到 ffprobe（{_ff("ffprobe")}）——检查 PATH / FFMPEG_BIN')
     try:
         return float(out.stdout.strip())
     except ValueError:

@@ -105,10 +105,12 @@ func (v *Verdict) Validate(p profile, prior *Verdict) error {
 		}
 	}
 
-	if len(v.Findings) == 0 && (p.dims == nil || countFails(v.Dims, p.dims) > 0) {
+	// 空意见单只对「有判卷维度」的档案要求意见（fail 必须逐条有 findings）；
+	// 终审（dims=nil）交空单 = 干净成片无意见，合法（2026-10-19 高-1：旧条件
+	// p.dims==nil 恒真导致终审空卷必拒，模型被迫编造 low 意见凑数或烧尽预算）
+	if len(v.Findings) == 0 && p.dims != nil && countFails(v.Dims, p.dims) > 0 {
 		add("存在 fail 维度但 findings 为空——每个 fail 都要有一条意见")
 	}
-	seenID := map[string]bool{}
 	for i, f := range v.Findings {
 		n := i + 1
 		if !sliceContains(p.categories, f.Category) {
@@ -140,10 +142,10 @@ func (v *Verdict) Validate(p profile, prior *Verdict) error {
 		} else if f.Fix != "" {
 			add("findings[%d].fix 应缺省（终审的处置由程序按时刻落段映射，不由模型给）", n)
 		}
-		if seenID[f.ID] {
-			add("findings[%d].id=%q 重复", n, f.ID)
-		}
-		seenID[f.ID] = true
+		// id 不校验：提示词与工具 schema 都没让模型给 id，收下后 AssignIDs() 统一
+		// 补号 f1..fN——校验一个必被覆盖的字段只会误杀（2026-10-19 实测：终审
+		// 意见单多条 findings 全空 id 被判「重复」烧尽预算，意见单本身完全合法）。
+		_ = f.ID
 	}
 
 	if prior != nil {

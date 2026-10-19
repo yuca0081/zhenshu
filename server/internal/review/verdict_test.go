@@ -97,6 +97,10 @@ func TestValidateBoundaryAndFinal(t *testing.T) {
 	if err := f.Validate(profFinal, nil); err == nil {
 		t.Fatal("终审带 fix 应被拒（处置由程序映射）")
 	}
+	// 高-1 回归：终审空卷 = 干净成片无意见，必须放行（旧条件必拒）
+	if err := (&Verdict{}).Validate(profFinal, nil); err != nil {
+		t.Fatalf("终审空意见单应放行（干净成片）: %v", err)
+	}
 }
 
 func TestSignatures(t *testing.T) {
