@@ -2012,10 +2012,11 @@ func (r *Runner) clearFrames(p *pipeline.Project, only string) {
 var contrastSuggRe = regexp.MustCompile(
 	`✗[ ]*([^\r\n]+?)\s+[0-9]+(?:\.[0-9]+)?:1\s*\(need[^)]*\)\s*\n\s*Try\s+(rgb\([^)]*\))\s*;\s*source\s+(\S+)`)
 
-// pushedColor 把 checker 建议色推到黑白极性：建议色相对亮度 >0.35（浅色建议
-// =深背景）推纯白，否则推近黑。对任意单色背景，黑白两极的对比度数学下限
-// ≈4.58:1（背景亮度卡黑白等值点时），远超 3:1 闸——建议色按快照背景算，
-// 背景动起来就贴线翻车，极性色一劳永逸。
+// pushedColor 把 checker 建议色推到黑白极性：建议色比中灰亮（亮度 >0.5，深背景
+// 才会配浅字）推纯白，比中灰暗推近黑（浅背景配深字）。对任意单色背景，黑白两极
+// 的对比度数学下限 ≈4.58:1（背景亮度卡黑白等值点时），远超 3:1 闸——建议色按
+// 快照背景算，背景动起来就贴线翻车，极性色一劳永逸。（2026-10-21 两实测：阈值
+// 0.35 曾把 rgb(89,93,92)=0.36 的浅背景深字建议误推成纯白，白上更白越修越死。）
 func pushedColor(sugg string) string {
 	nums := reRGBNums.FindAllString(sugg, 3)
 	if len(nums) < 3 {
@@ -2024,7 +2025,7 @@ func pushedColor(sugg string) string {
 	r, _ := strconv.Atoi(nums[0])
 	g, _ := strconv.Atoi(nums[1])
 	b, _ := strconv.Atoi(nums[2])
-	if 0.2126*float64(r)+0.7152*float64(g)+0.0722*float64(b) > 0.35*255 {
+	if 0.2126*float64(r)+0.7152*float64(g)+0.0722*float64(b) > 0.5*255 {
 		return "rgb(255,255,255)"
 	}
 	return "rgb(10,12,14)"
