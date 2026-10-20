@@ -87,9 +87,9 @@ func removeSceneHistory(p *pipeline.Project, segID string) {
 	_ = os.Remove(sceneHistoryPath(p, segID))
 }
 
-// sceneContRepairMsg 修复轮追加的用户消息——轻量提示词（§八·1）的续写半边：
-// 不重发契约/设计系统/金样例/词序表（那些活在首轮消息里），只带指令本身。
-// 本步（第 2 步）仍回整份 JSON；patch 改动单是第 3 步的事。
+// sceneContRepairMsg 修复轮追加的用户消息——轻量提示词（§八·1）：不重发契约/
+// 设计系统/金样例/词序表（那些活在首轮消息里），只带指令本身与输出契约
+// （patch 改动单优先，整份文件兜底）。
 func sceneContRepairMsg(instruction, feedback string) string {
 	var b strings.Builder
 	b.WriteString("## 修复指令（在原对话续写：你自己的上一条回复就是当前场景文件）\n")
@@ -99,8 +99,19 @@ func sceneContRepairMsg(instruction, feedback string) string {
 	if feedback != "" {
 		b.WriteString("检查回喂（逐条修正）：\n" + feedback + "\n")
 	}
-	b.WriteString("\n只修指出的问题、只做要求里的改动，其余画面一切保持原样。" +
-		"首轮附带的样张/素材图本轮不重发，风格以你首轮成稿为准。\n" +
-		`仍然只输出一个 JSON 对象：{"note":"改动思路一句话","html":"<template>…整份场景文件…</template>","elements":[{"id":"元素DOM id","name":"人话名"}]}`)
+	b.WriteString(`
+只修指出的问题、只做要求里的改动，其余画面一切保持原样。首轮附带的样张/素材图本轮不重发，风格以你首轮成稿为准。
+
+输出二选一：
+a) 改动单（改动少时首选，省 token）：
+{"note":"改动思路一句话","patches":[
+  {"target":"#dom-id","text":"新文字"},
+  {"target":"#dom-id","style":{"color":"#fff"}},
+  {"target":"#dom-id","html":"<div id=\"dom-id\" …>替换后的完整外层</div>"}]}
+   - target 用元素 DOM id；一条只做一件事（text/style/html 互斥）；打不中整单作废
+   - html 替换必须保持同一 id（GSAP 补间按 id 找元素）
+   - 时间轴/GSAP 补间/大结构改动塞不进改动单——不要硬凑，用 b
+b) 整份文件（结构/时序大改时）：
+{"note":"…","html":"<template>…整份场景文件…</template>","elements":[{"id":"元素DOM id","name":"人话名"}]}`)
 	return b.String()
 }

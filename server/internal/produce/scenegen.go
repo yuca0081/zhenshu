@@ -166,6 +166,58 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		}
 		return u, err
 	}
+	// contRepair 续写修复一轮（D2/§3.3）：模型回 patch 改动单（程序确定性套用，
+	// C3「改一处重抄全文」的正主）或整份 html；改动单打不中自动追加一条「改出
+	// 整份」再试一次——宁回退整份重写，不出「改了一半」的产物。
+	// 返回新场景与新消息数组（含本轮 user+assistant，验收后写回历史）。
+	contRepair := func(acc *segUsage, msgs []openai.ChatCompletionMessage, cur scenePayload, userMsg string) (scenePayload, []openai.ChatCompletionMessage, error) {
+		msgs = append(append([]openai.ChatCompletionMessage{}, msgs...),
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: userMsg})
+		var fixed struct {
+			Note     string                  `json:"note"`
+			HTML     string                  `json:"html"`
+			Patches  []scenePatch            `json:"patches"`
+			Elements []contract.NamedElement `json:"elements"`
+		}
+		if _, err := genCont(acc, msgs, &fixed); err != nil {
+			return cur, msgs, err
+		}
+		if fixed.HTML != "" { // 整份重写（结构/时序大改的合法通道）
+			if len(fixed.Elements) == 0 {
+				return cur, msgs, fmt.Errorf("整份重写缺 elements 注册表")
+			}
+			np := scenePayload{HTML: fixed.HTML, Elements: fixed.Elements}
+			return np, append(msgs, openai.ChatCompletionMessage{
+				Role: openai.ChatMessageRoleAssistant, Content: scenePayloadJSON(np.HTML, np.Elements)}), nil
+		}
+		if len(fixed.Patches) > 0 {
+			newHTML, perr := applyScenePatches(cur.HTML, fixed.Patches)
+			if perr == nil {
+				np := scenePayload{HTML: newHTML, Elements: cur.Elements}
+				return np, append(msgs, openai.ChatCompletionMessage{
+					Role: openai.ChatMessageRoleAssistant, Content: scenePayloadJSON(np.HTML, np.Elements)}), nil
+			}
+			if acc.rec != nil {
+				acc.rec.Note("改动单套用失败，本轮回退整份重写: %v", perr)
+			}
+			msgs = append(msgs, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content:
+				"改动单套用失败：" + perr.Error() + "\n改为输出整份文件：{\"note\":\"…\",\"html\":\"<template>…整份场景文件…</template>\",\"elements\":[{\"id\":\"…\",\"name\":\"…\"}]}"})
+			var full struct {
+				HTML     string                  `json:"html"`
+				Elements []contract.NamedElement `json:"elements"`
+			}
+			if _, err := genCont(acc, msgs, &full); err != nil {
+				return cur, msgs, err
+			}
+			if full.HTML == "" || len(full.Elements) == 0 {
+				return cur, msgs, fmt.Errorf("补丁打不中且整份重写缺 html/elements")
+			}
+			np := scenePayload{HTML: full.HTML, Elements: full.Elements}
+			return np, append(msgs, openai.ChatCompletionMessage{
+				Role: openai.ChatMessageRoleAssistant, Content: scenePayloadJSON(np.HTML, np.Elements)}), nil
+		}
+		return cur, msgs, fmt.Errorf("修复输出既无 html 也无 patches")
+	}
 	// 样张源码（文字样式规范）全段同一份：循环外读一次盘
 	sampleSrc := sampleStyleNote(p)
 	if feedback != "" && only == "" { // 全片重生成：先清旧产物（含会话历史——宁无历史不错历史）
@@ -240,20 +292,15 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		var contMsgs []openai.ChatCompletionMessage
 		if instruction != "" || feedback != "" {
 			if h := loadSceneHistory(p, seg.ID, fp); h != nil {
-				msgs := append(append([]openai.ChatCompletionMessage{}, h.Messages...),
-					openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: sceneContRepairMsg(instruction, feedback)})
-				var fixed struct {
-					HTML          string                  `json:"html"`
-					Elements      []contract.NamedElement `json:"elements"`
-					ImageRequests []materialRequest       `json:"image_requests,omitempty"`
-				}
-				if _, cerr := genCont(acc, msgs, &fixed); cerr == nil && fixed.HTML != "" && len(fixed.Elements) > 0 {
-					payload = fixed
-					contMsgs = append(msgs, openai.ChatCompletionMessage{
-						Role:    openai.ChatMessageRoleAssistant,
-						Content: scenePayloadJSON(payload.HTML, payload.Elements),
-					})
-					hist = h
+				var cur scenePayload
+				if json.Unmarshal([]byte(h.Messages[len(h.Messages)-1].Content), &cur) == nil &&
+					cur.HTML != "" && len(cur.Elements) > 0 {
+					np, msgs2, cerr := contRepair(acc, h.Messages, cur, sceneContRepairMsg(instruction, feedback))
+					if cerr == nil {
+						payload.HTML, payload.Elements = np.HTML, np.Elements
+						contMsgs = msgs2
+						hist = h
+					}
 				}
 			}
 		}
@@ -283,29 +330,31 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		}
 		errs := sceneValidate(r, ctx, p, payload.HTML, seg.ID)
 		for repair := 0; repair < 2 && len(errs) > 0; repair++ { // 外科修复：违规逐条回喂
-			fb := instruction + feedback + "\n上一版场景文件被契约检查拒绝，必须逐条修正：\n- " + strings.Join(errs, "\n- ")
-			var fixed struct {
-				HTML     string                  `json:"html"`
-				Elements []contract.NamedElement `json:"elements"`
-			}
 			var err2 error
-			if hist != nil { // 续写会话：lint 违规也追加在原对话上修
-				msgs := append(append([]openai.ChatCompletionMessage{}, contMsgs...),
-					openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "上一版场景文件被契约检查拒绝，逐条修正（只修列出的错，其余保持原样）：\n- " + strings.Join(errs, "\n- ")})
-				_, err2 = genCont(acc, msgs, &fixed)
+			if hist != nil { // 续写会话：lint 违规也走 patch 优先的续写修复
+				var np scenePayload
+				np, contMsgs, err2 = contRepair(acc, contMsgs,
+					scenePayload{HTML: payload.HTML, Elements: payload.Elements},
+					"上一版场景文件被契约检查拒绝，逐条修正（只修列出的错，其余保持原样）：\n- "+strings.Join(errs, "\n- "))
 				if err2 == nil {
-					contMsgs = append(msgs, openai.ChatCompletionMessage{
-						Role: openai.ChatMessageRoleAssistant, Content: scenePayloadJSON(fixed.HTML, fixed.Elements)})
+					payload.HTML, payload.Elements = np.HTML, np.Elements
 				}
 			} else {
+				fb := instruction + feedback + "\n上一版场景文件被契约检查拒绝，必须逐条修正：\n- " + strings.Join(errs, "\n- ")
+				var fixed struct {
+					HTML     string                  `json:"html"`
+					Elements []contract.NamedElement `json:"elements"`
+				}
 				_, err2 = gen(acc, vis, sceneUserPrompt(seg, v, "", fb, cv, style, golden, sceneM, compM, false, payload.HTML), &fixed)
+				if err2 == nil {
+					payload.HTML, payload.Elements = fixed.HTML, fixed.Elements
+				}
 			}
 			if err2 != nil {
 				werr = fmt.Errorf("%s 场景修复失败: %w", seg.ID, err2)
 				fail(werr)
 				return
 			}
-			payload.HTML, payload.Elements = fixed.HTML, fixed.Elements
 			errs = sceneValidate(r, ctx, p, payload.HTML, seg.ID)
 		}
 		if len(errs) > 0 {
