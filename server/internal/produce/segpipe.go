@@ -4,9 +4,13 @@ package produce
 //
 //	TTS（一次，全局）→ ④写画面 ×N（并发 ≤4，谁写完谁往下流）
 //	   段链：本段 check（junction 子工程，含 canvas 段回放门禁）
-//	         → 段渲染（不被审核闸）→ ⑤段审（判卷型 ReAct，review 包）
-//	→ 邻居两侧段审都过 → ⑤边界审 → 最后一对边界通过 → 拼接（永远零改动）
+//	         → 段渲染（不被审核闸）→ ⑤段审（判卷型 ReAct，review 包；可关，见 segAuditOn）
+//	→ 邻居两侧段都过（机检直过或段审过）→ ⑤边界审 → 最后一对边界通过 → 拼接（永远零改动）
 //	→ 全片终审（12–16 帧四查）→ 出片
+//
+// 段审开关（2026-10-20 降本 D1，docs/cost-optimization-plan §2）：PRODUCE_SEG_AUDIT
+// 默认 off——段渲完直接记 audited（机检直过），内容型质量交提示词「内容忠实」条款
+// 预防 + 全片终审抽样兜底；on 回滚原审核链，代码不删。
 //
 // 与 legacy 栅栏管线的分工：prep 新项目（scripts/script.json 在）走本文件；
 // 老项目走 run() 原路径零改动（⑭：legacy 设计流程原样保留）。
@@ -66,6 +70,18 @@ func writeConcurrency() int { return envLimit("PRODUCE_WRITE_CONCURRENCY", 4) }
 
 // auditConcurrency 审核并发（PRODUCE_AUDIT_CONCURRENCY，默认 4）。
 func auditConcurrency() int { return envLimit("PRODUCE_AUDIT_CONCURRENCY", 4) }
+
+// segAuditOn 段审开关（PRODUCE_SEG_AUDIT，默认 off——2026-10-20 降本 D1 撤段审）。
+// off：段链 写→check→渲 后直接记 audited（机检直过），不再起判卷 agent——内容型
+// 质量由写画面提示词「内容忠实」条款预防 + 全片终审抽样兜底；边界审由代际机制
+// 照常触发（segState 记 audited 即唤醒边界跟踪）。on：回滚原审核链，代码不删。
+func segAuditOn() bool {
+	switch strings.ToLower(os.Getenv("PRODUCE_SEG_AUDIT")) {
+	case "on", "1", "true":
+		return true
+	}
+	return false
+}
 
 // renderConcurrency 渲染并发（PRODUCE_RENDER_CONCURRENCY，默认 min(4, CPU-2)，
 // 下限 1——渲吃 CPU，给写/审留余量）。
@@ -350,7 +366,11 @@ func (r *Runner) runSegmentPipeline(ctx context.Context, p *pipeline.Project) er
 		r.notifyOnDone(id, "video", fmt.Sprintf("全片制作完成（带伤 %d 处：%s）——明细见过程页与 reviews/ 意见单",
 			len(wounds), strings.Join(wounds, "、")))
 	} else {
-		r.notifyOnDone(id, "video", "全片制作完成（段级流水线：逐段审核、边界审、全片终审全部通过）")
+		auditNote := "逐段审核、"
+		if !segAuditOn() {
+			auditNote = "段审已关（机检直过）、"
+		}
+		r.notifyOnDone(id, "video", "全片制作完成（段级流水线："+auditNote+"边界审、全片终审全部通过）")
 	}
 	return nil
 }
@@ -784,13 +804,18 @@ func (c *coordinator) chainWorker(ctx context.Context, s *segCtx) {
 			c.fail(err)
 			return
 		}
-		// 进审核队列（dispatcher 拥有轮次与打回路由）
-		select {
-		case <-ctx.Done():
-			return
-		case c.auditCh <- auditReq{kind: "seg", segID: s.seg.ID}:
+		// 进审核队列（dispatcher 拥有轮次与打回路由）；段审已关（D1）时渲完即记
+		// audited——gen 照常前进，边界对靠代际失配自动重审，passNotify 唤醒跟踪器。
+		if segAuditOn() {
+			select {
+			case <-ctx.Done():
+				return
+			case c.auditCh <- auditReq{kind: "seg", segID: s.seg.ID}:
+			}
+		} else {
+			c.markSegAuditedNoAudit(s)
 		}
-		// 等打回（或管线终结）
+		// 等打回（或管线终结）——段审关时终审打回/边界审 redraw 仍走此通道
 		select {
 		case <-ctx.Done():
 			return
@@ -1058,6 +1083,19 @@ func (c *coordinator) auditSegment(ctx context.Context, req auditReq) {
 	c.r.Manifest(c.p, "review.rework", fmt.Sprintf("%s r%d: %s", s.seg.ID, round, detail))
 	c.emit("progress", "review", fmt.Sprintf("段审 %s %d 条 high，打回重写（第 %d 轮）", s.seg.ID, len(high), round))
 	c.dispatchRewrite(ctx, s, redrawFeedback(high))
+}
+
+// markSegAuditedNoAudit 段审已关（D1）路径：渲完即记 audited，round/gen 照常前进——
+// 边界代际机制与断点恢复语义与开审时完全一致，只是没了判卷 agent 这一环。
+func (c *coordinator) markSegAuditedNoAudit(s *segCtx) {
+	c.mu.Lock()
+	s.round++
+	s.gen++
+	round, gen := s.round, s.gen
+	c.mu.Unlock()
+	c.segState(s.seg.ID, stAudited, round, gen, "段审已关，机检直过")
+	c.r.Manifest(c.p, "review.seg_audit_off", s.seg.ID)
+	c.emit("progress", "review", fmt.Sprintf("%s 段审已关（机检直过）", s.seg.ID))
 }
 
 // spawnWorker 起该段的链 worker（幂等）。feedback 非空 = 恢复进场的已过段

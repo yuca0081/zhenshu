@@ -273,6 +273,88 @@ func (p *Provider) chatOnce(ctx context.Context, system string, userParts []glmM
 	return p.postChat(ctx, req)
 }
 
+// chatOnceMsgs 多轮组包（GenerateJSONContinue 专用）：调用方给完整消息数组
+// （system 在首位），JSON 模式与单轮 chatOnce 一致。
+func (p *Provider) chatOnceMsgs(ctx context.Context, msgs []glmMessage, temperature float32, effort Effort) (openai.ChatCompletionResponse, error) {
+	raw, err := json.Marshal(msgs)
+	if err != nil {
+		return openai.ChatCompletionResponse{}, err
+	}
+	req := glmChatRequest{
+		Model:          p.Model,
+		Messages:       raw,
+		ResponseFormat: &openai.ChatCompletionResponseFormat{Type: openai.ChatCompletionResponseFormatTypeJSONObject},
+		Temperature:    temperature,
+	}
+	applyEffort(&req, effort)
+	return p.postChat(ctx, req)
+}
+
+// GenerateJSONContinue 多轮续写（2026-10-20 降本 D2，docs/cost-optimization-plan §3.2）：
+// 修复轮在原对话上追加指令——模型带着自己首轮的全上下文改自己的稿，不再失忆重开。
+// 重试/退避/预算闸/JSON 解析与 generate 同款；断点续跑时同历史同指令的请求体哈希
+// 一致，磁盘缓存天然复用（重启接着续写不重付）。
+func (p *Provider) GenerateJSONContinue(ctx context.Context, msgs []openai.ChatCompletionMessage, temperature float32, effort Effort, out any) (openai.Usage, error) {
+	glmMsgs := make([]glmMessage, len(msgs))
+	for i, m := range msgs {
+		glmMsgs[i] = glmMessage{Role: m.Role, Content: m.Content}
+	}
+	var lastErr error
+	var usage openai.Usage
+	for attempt := 0; attempt < 3; attempt++ {
+		// 预算闸（P0-1）：超限的调用一个字节都不出网
+		if err := budgetCheck(ctx); err != nil {
+			return usage, err
+		}
+		if attempt > 0 {
+			// 重试退避感知取消；429 按限速窗口退避（与 generate 同款，含抖动防惊群）
+			delay := time.Duration(attempt) * 2 * time.Second
+			var se *StatusError
+			if errors.As(lastErr, &se) && se.Code == http.StatusTooManyRequests {
+				delay = time.Duration(attempt)*15*time.Second + time.Duration(rand.Int63n(int64(6*time.Second)))
+			}
+			select {
+			case <-ctx.Done():
+				return usage, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return usage, ctx.Err()
+		case llmGate <- struct{}{}:
+		}
+		resp, err := func() (r openai.ChatCompletionResponse, e error) {
+			defer func() { <-llmGate }()
+			return p.chatOnceMsgs(ctx, glmMsgs, temperature, effort)
+		}()
+		if err != nil {
+			if ctx.Err() != nil {
+				return usage, ctx.Err()
+			}
+			var se *StatusError
+			if errors.As(err, &se) && se.Code >= 400 && se.Code < 500 && se.Code != http.StatusTooManyRequests {
+				return usage, fmt.Errorf("LLM 请求被上游拒绝（HTTP %d，不重试）: %w", se.Code, se)
+			}
+			lastErr = err
+			continue
+		}
+		if len(resp.Choices) == 0 {
+			lastErr = fmt.Errorf("上游返回空 choices（可能被内容审查或长度截断），finish 原因未知")
+			continue
+		}
+		usage = resp.Usage
+		budgetAdd(ctx, usage)
+		content := extractJSON(stripFence(resp.Choices[0].Message.Content))
+		if err := json.Unmarshal([]byte(content), out); err != nil {
+			lastErr = fmt.Errorf("模型输出不是合法 JSON: %w（原文前 200 字: %.200s）", err, content)
+			continue
+		}
+		return usage, nil
+	}
+	return usage, fmt.Errorf("LLM 作业 3 次尝试均失败: %w", lastErr)
+}
+
 // applyEffort 把档位落到请求上：disabled 走 thinking 开关，low/high/max 走 reasoning_effort，
 // 默认档什么都不传（跟随端点默认）。两者互斥，绝不同时出现。
 func applyEffort(req *glmChatRequest, effort Effort) {

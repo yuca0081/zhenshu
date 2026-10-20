@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"webpage-video-agent/server/internal/contract"
+	"webpage-video-agent/server/internal/events"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
+	"webpage-video-agent/server/internal/review"
 )
 
 func TestSentenceEndTimes(t *testing.T) {
@@ -334,5 +337,76 @@ func TestBudgetSentinelSurvivesWaitAllPassed(t *testing.T) {
 	}
 	if b2.failure() == nil || !strings.Contains(b2.failure().Error(), "管线静默") {
 		t.Fatal("字符串刹车文案丢失")
+	}
+}
+
+// 段审开关（2026-10-20 降本 D1 撤段审）：默认 off，on/1/true/ON 开、非法值视为关。
+// markSegAuditedNoAudit 机检直过：round/gen 前进、journal 落 audited、segAudited 为真，
+// 边界跟踪照常接手派边界审——撤的只是判卷 agent 这一环，边界链路不能断。
+func TestSegAuditSwitchAndMarkAudited(t *testing.T) {
+	t.Setenv("PRODUCE_SEG_AUDIT", "")
+	if segAuditOn() {
+		t.Fatal("未配置时默认应关")
+	}
+	for _, v := range []string{"on", "1", "true", "ON"} {
+		t.Setenv("PRODUCE_SEG_AUDIT", v)
+		if !segAuditOn() {
+			t.Fatalf("PRODUCE_SEG_AUDIT=%s 应开", v)
+		}
+	}
+	t.Setenv("PRODUCE_SEG_AUDIT", "garbage")
+	if segAuditOn() {
+		t.Fatal("非法值应视为关")
+	}
+
+	t.Setenv("PRODUCE_SEG_AUDIT", "")
+	dir := t.TempDir()
+	r := &Runner{DataDir: dir, RootDir: dir, Hub: events.NewHub()}
+	p := pipeline.NewProject(dir, "p1")
+	if err := os.MkdirAll(p.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sb := &contract.Storyboard{Segments: []contract.Segment{{ID: "seg01"}, {ID: "seg02"}}}
+	c := newCoordinator(r, p, &review.Service{P: p, Emit: r.Hub.Emit}, sb, nil, nil, nil)
+
+	for _, s := range c.segs {
+		c.markSegAuditedNoAudit(s)
+	}
+	for _, s := range c.segs {
+		e := c.segEntry(s.seg.ID)
+		if e.State != stAudited || e.Gen != 1 || e.Round != 1 {
+			t.Fatalf("%s 记账不符: %+v", s.seg.ID, e)
+		}
+		if !c.segAudited(s) {
+			t.Fatalf("%s segAudited 应为真", s.seg.ID)
+		}
+	}
+	if _, err := os.Stat(journalPath(p)); err != nil {
+		t.Fatalf("journal 未落盘（断点恢复依据）: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.boundaryTracker(ctx)
+	select {
+	case req := <-c.auditCh:
+		if req.kind != "bnd" || req.bi != 0 {
+			t.Fatalf("机检直过后应派 b01 边界审: %+v", req)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("机检直过后边界审未被派发")
+	}
+}
+
+// 内容忠实条款（2026-10-20 降本 D1 对冲）：撤段审后内容对齐只剩提示词预防+终审抽样，
+// 注入包必须带这段硬要求——锁文案在位，防后续改提示词时无声脱落。
+func TestSceneUserPromptHasContentFidelityClause(t *testing.T) {
+	got := sceneUserPrompt(contract.Segment{ID: "seg01", Key: "k", Narration: "n"},
+		voiceMeta{}, "", "", contract.Canvas{W: 1080, H: 1920, Aspect: "9:16"},
+		"", "", "", "", false, "")
+	for _, want := range []string{"内容忠实", "首拍", "末拍", "逐字一致"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("提示词缺内容忠实条款关键词 %q", want)
+		}
 	}
 }

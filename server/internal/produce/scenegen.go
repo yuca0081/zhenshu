@@ -144,11 +144,34 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		}
 		return u, err
 	}
+	// genCont 续写调用（D2）：完整消息数组出站（JSON 模式/NoThink 与 gen 同款）。
+	// 留痕只记新追加的指令与回复——历史消息首轮已记过，重启恢复后的续写任务另起
+	// 留痕，记一笔来源说明即可。
+	genCont := func(acc *segUsage, msgs []openai.ChatCompletionMessage, out any) (openai.Usage, error) {
+		if acc.rec != nil {
+			acc.rec.Note("续写修复第 %d 轮（消息数组 %d 条，历史不重录）", acc.calls, len(msgs))
+			acc.rec.Message(msgs[len(msgs)-1])
+		}
+		u, err := prov.GenerateJSONContinue(ctx, msgs, 0.7, llm.EffortDisabled, out)
+		acc.prompt += u.PromptTokens
+		acc.compl += u.CompletionTokens
+		acc.calls++
+		if err != nil && acc.rec != nil {
+			acc.rec.Note("续写调用失败: %v", err)
+		}
+		if err == nil && acc.rec != nil {
+			if b, merr := json.Marshal(out); merr == nil {
+				acc.rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: string(b)})
+			}
+		}
+		return u, err
+	}
 	// 样张源码（文字样式规范）全段同一份：循环外读一次盘
 	sampleSrc := sampleStyleNote(p)
-	if feedback != "" && only == "" { // 全片重生成：先清旧产物
+	if feedback != "" && only == "" { // 全片重生成：先清旧产物（含会话历史——宁无历史不错历史）
 		for _, seg := range sb.Segments {
 			_ = os.Remove(p.Artifact("llm/comp-" + seg.ID + ".json"))
+			removeSceneHistory(p, seg.ID)
 		}
 	}
 	onlySet := map[string]bool{}
@@ -203,30 +226,58 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			vis = append(vis, materialVisImgs(p, segMats)...)
 			style += materialNote(len(segMats)) + materialsNote(segMats)
 		}
-		user := sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, len(segMats) == 0, prevSceneHTML(p, seg.ID))
+		fp := sceneSidecarFingerprint(p, sb, seg)
 		var payload struct {
 			HTML          string                  `json:"html"`
 			Elements      []contract.NamedElement `json:"elements"`
 			ImageRequests []materialRequest       `json:"image_requests,omitempty"`
 		}
-		_, gerr := gen(acc, vis, user, &payload)
-		if gerr != nil {
-			werr = fmt.Errorf("%s 场景生成失败: %w", seg.ID, gerr)
-			fail(werr)
-			return
+		// 续写路径（D2，docs/cost-optimization-plan §3.2）：修复/rework 轮且有可用
+		// 会话历史 → 修复指令追加在原对话上（模型带着首轮全上下文改自己的稿），
+		// 不再重发全套注入包+prevHTML。历史缺失/指纹失配/超帽/续写失败 → 落回
+		// 下方全新会话路径，行为同旧版。
+		var hist *sceneHistory
+		var contMsgs []openai.ChatCompletionMessage
+		if instruction != "" || feedback != "" {
+			if h := loadSceneHistory(p, seg.ID, fp); h != nil {
+				msgs := append(append([]openai.ChatCompletionMessage{}, h.Messages...),
+					openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: sceneContRepairMsg(instruction, feedback)})
+				var fixed struct {
+					HTML          string                  `json:"html"`
+					Elements      []contract.NamedElement `json:"elements"`
+					ImageRequests []materialRequest       `json:"image_requests,omitempty"`
+				}
+				if _, cerr := genCont(acc, msgs, &fixed); cerr == nil && fixed.HTML != "" && len(fixed.Elements) > 0 {
+					payload = fixed
+					contMsgs = append(msgs, openai.ChatCompletionMessage{
+						Role:    openai.ChatMessageRoleAssistant,
+						Content: scenePayloadJSON(payload.HTML, payload.Elements),
+					})
+					hist = h
+				}
+			}
 		}
-		// 素材申请单（两段式）：第一段式模型交了申请 → 检索公版图 → 带图出终稿。
-		// 检索全落空就按无素材继续——第一段式的画面稿直接生效，不挡出片。
-		if len(segMats) == 0 && len(payload.ImageRequests) > 0 {
-			if mats := r.fulfillRequests(ctx, p, seg.ID, cleanRequests(payload.ImageRequests)); len(mats) > 0 {
-				segMats = mats
-				vis = append(vis, materialVisImgs(p, segMats)...)
-				style += materialNote(len(segMats)) + materialsNote(segMats)
-				_, err2 := gen(acc, vis, sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, false, ""), &payload)
-				if err2 != nil {
-					werr = fmt.Errorf("%s 带素材终稿生成失败: %w", seg.ID, err2)
-					fail(werr)
-					return
+		if hist == nil { // 全新会话（首写或续写不可用的修复兜底，行为同旧版）
+			user := sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, len(segMats) == 0, prevSceneHTML(p, seg.ID))
+			_, gerr := gen(acc, vis, user, &payload)
+			if gerr != nil {
+				werr = fmt.Errorf("%s 场景生成失败: %w", seg.ID, gerr)
+				fail(werr)
+				return
+			}
+			// 素材申请单（两段式）：第一段式模型交了申请 → 检索公版图 → 带图出终稿。
+			// 检索全落空就按无素材继续——第一段式的画面稿直接生效，不挡出片。
+			if len(segMats) == 0 && len(payload.ImageRequests) > 0 {
+				if mats := r.fulfillRequests(ctx, p, seg.ID, cleanRequests(payload.ImageRequests)); len(mats) > 0 {
+					segMats = mats
+					vis = append(vis, materialVisImgs(p, segMats)...)
+					style += materialNote(len(segMats)) + materialsNote(segMats)
+					_, err2 := gen(acc, vis, sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, false, ""), &payload)
+					if err2 != nil {
+						werr = fmt.Errorf("%s 带素材终稿生成失败: %w", seg.ID, err2)
+						fail(werr)
+						return
+					}
 				}
 			}
 		}
@@ -237,7 +288,18 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 				HTML     string                  `json:"html"`
 				Elements []contract.NamedElement `json:"elements"`
 			}
-			_, err2 := gen(acc, vis, sceneUserPrompt(seg, v, "", fb, cv, style, golden, sceneM, compM, false, payload.HTML), &fixed)
+			var err2 error
+			if hist != nil { // 续写会话：lint 违规也追加在原对话上修
+				msgs := append(append([]openai.ChatCompletionMessage{}, contMsgs...),
+					openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "上一版场景文件被契约检查拒绝，逐条修正（只修列出的错，其余保持原样）：\n- " + strings.Join(errs, "\n- ")})
+				_, err2 = genCont(acc, msgs, &fixed)
+				if err2 == nil {
+					contMsgs = append(msgs, openai.ChatCompletionMessage{
+						Role: openai.ChatMessageRoleAssistant, Content: scenePayloadJSON(fixed.HTML, fixed.Elements)})
+				}
+			} else {
+				_, err2 = gen(acc, vis, sceneUserPrompt(seg, v, "", fb, cv, style, golden, sceneM, compM, false, payload.HTML), &fixed)
+			}
 			if err2 != nil {
 				werr = fmt.Errorf("%s 场景修复失败: %w", seg.ID, err2)
 				fail(werr)
@@ -261,6 +323,22 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			werr = fmt.Errorf("%s 元素注册表不足 3 条（元素级指认依赖它）", seg.ID)
 			fail(werr)
 			return
+		}
+		// 会话历史落盘（D2）：续写轮把成对消息写回并计数；全新会话轮（首写/兜底
+		// 重掷）重建为 [user(完整提示但不带 prevHTML), assistant(成稿)]——prevHTML
+		// 已被 assistant 成稿取代，存进历史只会让每轮续写白背一份旧稿。
+		if hist != nil {
+			hist.Messages = contMsgs
+			hist.Cont++
+			saveSceneHistory(p, seg.ID, hist)
+		} else {
+			saveSceneHistory(p, seg.ID, &sceneHistory{
+				FP: fp,
+				Messages: []openai.ChatCompletionMessage{
+					{Role: openai.ChatMessageRoleUser, Content: sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, false, "")},
+					{Role: openai.ChatMessageRoleAssistant, Content: scenePayloadJSON(payload.HTML, payload.Elements)},
+				},
+			})
 		}
 		b, _ := json.MarshalIndent(payload, "", "  ")
 		if err := pipeline.WriteFileAtomic(p.Artifact("llm/comp-"+seg.ID+".json"), b, 0o644); err != nil {
@@ -563,6 +641,11 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
 - 标题：%s
 - 旁白（%d 词，%.1f 秒）：%s
 - %s：%s
+
+## 内容忠实（硬要求——机检只查工程不查内容，画错了直接进成片没人拦）
+- 画面提示里的场景设定与首拍/末拍承诺必须可见落实：首拍按承诺开场，末拍收在承诺的画面状态
+- 旁白点到的关键实体（人物/物件/数字/年份/地名）画面里必须可辨认；旁白没提到的主体元素不要凭空添加
+- 画面中的文字（字卡/标签/数字/单位）与旁白和画面提示逐字一致，禁止自创数据
 %s
 %s
 %s
