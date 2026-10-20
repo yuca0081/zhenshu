@@ -3,6 +3,7 @@ package produce
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -89,5 +90,17 @@ func TestRunWithAutoRetry(t *testing.T) {
 	mb, _ := os.ReadFile(p.Artifact("manifest.jsonl"))
 	if !strings.Contains(string(mb), "budget.exhausted") {
 		t.Fatal("预算耗尽未落 manifest 账行")
+	}
+
+	// check 三轮未过（2026-10-19 成本刀）：确定性失败不烧重跑轮次——重跑只会
+	// 换个变量名再死一次（seg07 实测白烧两条段链）。错误链必须保真（%w）。
+	n = 0
+	inner := fmt.Errorf("%w: seg07 ✗ Cannot access 'Ph'", errCheckNotConverged)
+	err = r.runWithAutoRetry(context.Background(), p, "p1", EventProduceRetry, func(context.Context) error {
+		n++
+		return inner
+	})
+	if n != 1 || !errors.Is(err, errCheckNotConverged) || strings.Contains(err.Error(), "已自动重跑") {
+		t.Fatalf("check 不收敛不该重跑: n=%d err=%v", n, err)
 	}
 }

@@ -64,3 +64,22 @@ func TestStashRestoreLastGoodScene(t *testing.T) {
 	}
 	_ = filepath.Join // 保持 filepath 引用（不同平台测试共用）
 }
+
+func TestIsLoneRuntimeCrash(t *testing.T) {
+	lone := "✗ check_runtime_failure: Cannot access 'Ph' before initialization"
+	if !isLoneRuntimeCrash(lone) {
+		t.Fatal("单条幽灵 TDZ 应命中")
+	}
+	mixed := "✗ contrast: #x 1.2:1\n✗ check_runtime_failure: Cannot access 'Ph' before initialization"
+	if isLoneRuntimeCrash(mixed) {
+		t.Fatal("伴随版面诊断不应命中（那是要真修的）")
+	}
+	other := "✗ check_runtime_failure: ReferenceError: foo is not defined"
+	if isLoneRuntimeCrash(other) {
+		t.Fatal("其他运行时错误不属幽灵 TDZ 指纹")
+	}
+	empty := ""
+	if isLoneRuntimeCrash(empty) {
+		t.Fatal("空诊断不应命中")
+	}
+}

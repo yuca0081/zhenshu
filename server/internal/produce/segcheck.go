@@ -148,7 +148,8 @@ func removeSegCheckDir(p *pipeline.Project, segID string) {
 func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string, dur float64) error {
 	id := p.ID
 	prevSig := ""
-	for attempt := 1; attempt <= 3; attempt++ {
+	rechecks := 0 // 幽灵 TDZ 本地复检次数（竞态骰子，重掷不花钱）
+	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -180,11 +181,21 @@ func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string
 			return ctx.Err()
 		}
 		r.Manifest(p, "stage.finish", "check/"+segID)
-		if attempt == 3 {
+		// 幽灵 TDZ 复检（2026-10-20）：仅一条「Cannot access」运行时崩溃、无任何
+		// 版面诊断 → 先本地重掷（fresh browser 重跑竞态，~10s 零 token），连挂
+		// 2 次才进修复轮——把 checker 内伤从「烧 1.7 万修复轮」降成免费骰子。
+		if blocking != nil && rechecks < 2 && isLoneRuntimeCrash(blocking.Error()) {
+			rechecks++
+			r.emit(id, "stage", "check", segID+" 运行时崩溃复检（checker 竞态，本地重跑）")
+			r.Manifest(p, "check.tdz_recheck", segID+": "+pipeline.FirstLine(blocking.Error(), 120))
+			attempt-- // 复检不消耗修复轮次
+			continue
+		}
+		if attempt >= 3 {
 			// 三轮全死在 ensureSegCheckDir（缺段工程/assemble 未跑等）时 blocking
 			// 为 nil——裸 blocking.Error() 会 panic，真因被吞成空指针崩溃（中-12）
 			if blocking != nil {
-				return fmt.Errorf("%s check 三轮未过:\n%s", segID, pipeline.TailLines(blocking.Error(), 25))
+				return fmt.Errorf("%s %w:\n%s", segID, errCheckNotConverged, pipeline.TailLines(blocking.Error(), 25))
 			}
 			return fmt.Errorf("%s check 三轮未过（环境类失败，无诊断输出——查 ensureSegCheckDir）: %w", segID, err)
 		}
@@ -233,6 +244,24 @@ func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string
 		}
 	}
 	return nil
+}
+
+// isLoneRuntimeCrash 幽灵 TDZ 指纹：blocking 里仅一条 ✗ 且是「Cannot access
+// 'X' before initialization」。这是 checker 注入运行时自身的初始化竞态（其压缩
+// 代码里 Ph 是巨型 let 链的一节，被提前的 seek 抢跑即 TDZ）——2026-10-19 实测
+// 三案（seg06/seg11/seg07）内容各不相同、报错永远是同一个 'Ph'，场景代码怎么
+// 重生成都治不了。版面/内容类诊断并行出现时不在此列（那是真要修的）。
+func isLoneRuntimeCrash(blocking string) bool {
+	if !strings.Contains(blocking, "check_runtime_failure: Cannot access") {
+		return false
+	}
+	n := 0
+	for _, ln := range strings.Split(blocking, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(ln), "✗") {
+			n++
+		}
+	}
+	return n == 1
 }
 
 // checkSig 检查诊断的归一化签名：变量名/数字/引号内容剥掉（重掷一轮只换个变量名

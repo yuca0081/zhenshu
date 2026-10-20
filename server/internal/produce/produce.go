@@ -253,6 +253,12 @@ const maxAutoRetries = 2
 
 var autoRetryDelays = [maxAutoRetries]time.Duration{10 * time.Second, 30 * time.Second} // var：测试可缩成 0
 
+// errCheckNotConverged 确定性失败哨兵：check 修复轮烧完仍没过。这类失败重跑不会
+// 变好——同一份报错回喂同一个模型，同样的错换个变量名再死一次（2026-10-19 seg07
+// 实测：段链失败后自动重跑 ×2，每遍白烧一条完整段链）。调度层 errors.Is 识别后
+// 跳过自动重跑，如实落失败（产物按段保留，重跑入口照常）。
+var errCheckNotConverged = errors.New("check 三轮未过")
+
 // runWithAutoRetry 首跑 + 至多 maxAutoRetries 次自动重跑；ev 是重跑的 manifest 事件名
 // （produce.retry / rework.retry，事件流面板可见）。重跑轮次耗尽仍失败时 err 带
 // 「已自动重跑」标记（%w 保错误链，取消分支的 errors.Is 不受影响），聊天话术据此
@@ -268,6 +274,9 @@ func (r *Runner) runWithAutoRetry(ctx context.Context, p *pipeline.Project, proj
 	for n := 1; err != nil && n <= maxAutoRetries && ctx.Err() == nil && !r.stopping.Load(); n++ {
 		if errors.Is(err, llm.ErrBudgetExceeded) {
 			break // 预算耗尽是确定性失败：重跑必立刻再拒，不烧重跑轮次
+		}
+		if errors.Is(err, errCheckNotConverged) {
+			break // check 不收敛是确定性失败：重跑换个变量名再死一次，白烧整条段链
 		}
 		delay := autoRetryDelays[n-1]
 		r.Manifest(p, ev, fmt.Sprintf("自动重跑 %d/%d（%s 后开始）；上次失败：%s",
@@ -949,9 +958,17 @@ const checkRepairRules = `
 	"- 字体 ✗（font_family_without_font_face）：报的字体渲染端不存在、也没有合法下载渠道（专有字体永远下不了）。" +
 	"修复＝把该字体从 font-family 栈里删掉、退到栈内或设计系统字体角色的后备字体——" +
 	"这算合规修复，不算违反设计系统（渲染端不存在的字体本来就守护不了设计）；" +
-	"除此之外画面一切照旧，不要顺手改构图/配色/动效。\n"
+	"除此之外画面一切照旧，不要顺手改构图/配色/动效。\n" +
+		"- ReferenceError: Cannot access 'X' before initialization ＝ 时序死区：X 在它声明语句执行之前就被调用了。" +
+		"修法＝把 X 的声明挪到所有调用之前，或把调用挪进声明之后才执行的函数——" +
+		"只把变量换个名字改不掉这个错（上一轮就是这么原地打转的），声明顺序必须动。\n" +
+		"- 若报错是 Cannot access 且报的变量名在你的代码里根本不存在（复检两轮仍在）＝" +
+		"检查器自己的 canvas 装配器消化不了这段 draw 函数，不是你的变量问题。" +
+		"修法＝把画布绘制函数改小改笨：删掉情节性小特效块（脉冲环/闪光/尾迹类），" +
+		"每个 ctx 调用直写、不套辅助函数、循环上界用字面量数字，主体画面保持不变。\n"
 
 func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instruction, only string) error {
+	rechecks := 0 // 幽灵 TDZ 本地复检次数（同 segCheck：checker 竞态重掷不花钱）
 	for attempt := 1; attempt <= 3; attempt++ {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -975,6 +992,15 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 		}
 		if ctx.Err() != nil { // 用户取消 ≠ check 失败，别进修复轮
 			return ctx.Err()
+		}
+		// 幽灵 TDZ 复检（同 segCheck 的 guard）：仅一条「Cannot access」崩溃先
+		// 本地重掷，连挂 2 次才进修复轮。
+		if rechecks < 2 && isLoneRuntimeCrash(err.Error()) {
+			rechecks++
+			r.emit(p.ID, "stage", "check", "运行时崩溃复检（checker 竞态，本地重跑）")
+			r.Manifest(p, "check.tdz_recheck", pipeline.FirstLine(err.Error(), 120))
+			attempt--
+			continue
 		}
 		// 廉价修复先行：checker 对对比度项给了建议色就直接回填 HTML 再检，
 		// 不烧 LLM 修复轮——LLM 回喂修对比度从未收敛过（同色反复重生成）。
@@ -1004,7 +1030,7 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 		if attempt == 3 {
 			r.emit(p.ID, "stage", "check", "error: "+err.Error())
 			r.Manifest(p, "stage.finish", "check")
-			return fmt.Errorf("check 三轮未过: %w", err)
+			return fmt.Errorf("%w: %w", errCheckNotConverged, err)
 		}
 		// 修复目标 = 重做段（可逗号多段）∪ 本轮报错涉及的段：check 是全片门禁，
 		// 重做段之外的段报错时若只重生成重做段，那些错误永远修不掉（结构性死锁）。

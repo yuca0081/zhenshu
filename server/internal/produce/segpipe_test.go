@@ -2,11 +2,14 @@ package produce
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"webpage-video-agent/server/internal/contract"
+	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
 )
 
@@ -307,5 +310,29 @@ func TestBoundaryTrackerWaitsForRewriteAfterRejection(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("重写落地后 b01 未被重派")
+	}
+}
+
+// 预算哨兵全链路：c.fail → tripErr → waitAllPassed → runWithAutoRetry 的
+// errors.Is 必须认得（2026-10-20：waitAllPassed 字符串重建曾把链斩断，
+// 预算闸触发后照样空跑两遍重试）。
+func TestBudgetSentinelSurvivesWaitAllPassed(t *testing.T) {
+	b := newBrakeTracker(4)
+	b.tripErr("段链失败：", fmt.Errorf("seg08: %w", llm.ErrBudgetExceeded))
+	err := b.failure()
+	if !errors.Is(err, llm.ErrBudgetExceeded) {
+		t.Fatalf("failure() 断链: %v", err)
+	}
+	if !strings.Contains(err.Error(), "段链失败：seg08") {
+		t.Fatalf("文案变了: %v", err)
+	}
+	// 纯字符串刹车（看门狗/签名刹车）语义不变：可重跑，无哨兵
+	b2 := newBrakeTracker(4)
+	b2.trip("管线静默超过 32m0s 无进展")
+	if errors.Is(b2.failure(), llm.ErrBudgetExceeded) {
+		t.Fatal("字符串刹车不该冒充预算哨兵")
+	}
+	if b2.failure() == nil || !strings.Contains(b2.failure().Error(), "管线静默") {
+		t.Fatal("字符串刹车文案丢失")
 	}
 }

@@ -357,7 +357,16 @@ func (s *Service) AuditSegment(ctx context.Context, in SegInput) (Verdict, error
 	for _, sn := range in.Sentences {
 		fmt.Fprintf(&kick, "%s：%s\n", sn[0], sn[1])
 	}
-	kick.WriteString("\n## 3. 样张（风格实物基准，见锚点帧之后的附图）\n")
+	kick.WriteString("\n## 3. 样张")
+	if len(in.Samples) > 0 {
+		kick.WriteString("（风格实物基准，见锚点帧之后的附图）\n")
+	} else if in.Round > 1 {
+		// 重审不附样张（2026-10-19 成本刀）：首轮已按样张判过风格，重审聚焦修复
+		// 复核；风格基准以上一轮意见单的判词为准（随 ## 上一轮意见单 注入）。
+		kick.WriteString("：本轮不附图（首轮已按样张判过风格，以上一轮意见单的判词为基准）\n")
+	} else {
+		kick.WriteString("：（本片未配置样张——风格维按设计规则判）\n")
+	}
 	if in.Rules != "" {
 		kick.WriteString("\n## 4. 设计规则要点\n" + in.Rules + "\n")
 	} else {

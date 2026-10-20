@@ -162,6 +162,7 @@ type brakeTracker struct {
 	prevSigs map[string]map[string]bool // 轨道名（段 id / bnd:b01 / final）→ 上一轮 high 签名集
 	catSegs  map[string]map[string]bool // category → 出现过 high 的轨道
 	tripped  string
+	cause    error // 首个带哨兵的刹车错误（%w 保链）；nil = 纯字符串刹车（看门狗/签名刹车）
 }
 
 func newBrakeTracker(segCount int) *brakeTracker {
@@ -227,6 +228,35 @@ func (b *brakeTracker) trip(reason string) {
 		b.tripped = reason
 	}
 	b.mu.Unlock()
+}
+
+// tripErr 带原始错误的刹车：reason 进账本（事件流可见），err 存 cause 供
+// failure() 保链上抛——调度层的 errors.Is 哨兵（预算耗尽/check 不收敛）只有
+// 走这条道才活得下来（2026-10-19 实测：旧版 trip 拼字符串，errors.New(reason)
+// 重建终态错误，哨兵全灭——预算闸触发后照样空跑两遍重试）。
+func (b *brakeTracker) tripErr(prefix string, err error) {
+	b.mu.Lock()
+	if b.tripped == "" {
+		b.tripped = prefix + err.Error()
+	}
+	if b.cause == nil {
+		b.cause = err
+	}
+	b.mu.Unlock()
+}
+
+// failure 终态错误：保链优先（哨兵可被上游 errors.Is 识别），无 cause 退回
+// 纯字符串（看门狗/签名刹车语义不变，可重跑）。
+func (b *brakeTracker) failure() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.cause != nil {
+		return fmt.Errorf("段链失败：%w", b.cause)
+	}
+	if b.tripped != "" {
+		return errors.New(b.tripped)
+	}
+	return nil
 }
 
 func (b *brakeTracker) reason() string {
@@ -586,8 +616,8 @@ func (c *coordinator) run(ctx context.Context) error {
 	c.chainWg.Wait()
 	trackerWg.Wait()
 	c.cleanup()
-	if reason := c.brakes.reason(); reason != "" && finalErr == nil {
-		finalErr = errors.New(reason)
+	if finalErr == nil {
+		finalErr = c.brakes.failure() // 保链：哨兵（预算耗尽/check 不收敛）活着到达调度层
 	}
 	return finalErr
 }
@@ -669,8 +699,11 @@ func (c *coordinator) stitch(ctx context.Context) error {
 // waitAllPassed 阻塞到全部段过审且全部边界过审（或刹车/取消）。
 func (c *coordinator) waitAllPassed(ctx context.Context) error {
 	for {
-		if reason := c.brakes.reason(); reason != "" {
-			return errors.New(reason)
+		// failure() 而非 errors.New(reason)：哨兵链（预算耗尽/check 不收敛）必须
+		// 活着到调度层——这里曾是字符串重建，runWithAutoRetry 的 errors.Is 永远
+		// 扑空，预算闸触发后照样空跑两遍重试（2026-10-20 11:05 实测）。
+		if err := c.brakes.failure(); err != nil {
+			return err
 		}
 		if c.allPassed() {
 			return nil
@@ -904,7 +937,7 @@ func (c *coordinator) guardWorker(what string) {
 }
 
 func (c *coordinator) fail(err error) {
-	c.brakes.trip("段链失败：" + err.Error())
+	c.brakes.tripErr("段链失败：", err)
 	c.emit("error", "segpipe", pipeline.FirstLine(err.Error(), 160))
 	c.r.Manifest(c.p, "segpipe.error", err.Error())
 }
@@ -959,12 +992,18 @@ func (c *coordinator) auditSegment(ctx context.Context, req auditReq) {
 	round, gen := s.round, s.gen
 	c.mu.Unlock()
 	ends := c.sentenceEnds(s)
+	// 重审不重发金样例（2026-10-19 成本刀）：样张 5 张 ≈ 每轮 6k+ token，首轮已按
+	// 样张判过风格；重审的对象是修复复核，风格基准以上一轮意见单的判词为准。
+	samples := c.sampleRefs()
+	if round > 1 {
+		samples = nil
+	}
 	in := review.SegInput{
 		Seg:         s.seg,
 		Sentences:   c.sentencePairs(s),
 		Facts:       segFacts(c.script, s.seg),
 		Rules:       designRulesDigest(c.sp),
-		Samples:     c.sampleRefs(),
+		Samples:     samples,
 		Dur:         s.dur,
 		Round:       round,
 		AnchorTimes: c.anchorFramesFor(s, ends),
