@@ -61,6 +61,12 @@ type Server struct {
 	// loginFails 登录失败窗口："ip|username" → *failWindow（见 login）。
 	loginFails sync.Map
 
+	// videoStat 远端成片 Stat 的短 TTL 记忆（videoStatEntry）：listProjects/
+	// overview/projectView 轮询热路径上回退远端 Stat 是同步网络调用（MinIO 30s
+	// 超时），N 项目×3-5s 一轮会把抖动放大成整页挂死（2026-10-19 审查中危）。
+	// 正反结果都记 5s——状态灯场景 5s 陈旧无感。
+	videoStat sync.Map
+
 	turnMu sync.Map // projectID → *sync.Mutex：同项目对话轮串行（见 chat）
 
 	// turnCancels projectID → context.CancelFunc：正在执行的对话轮取消函数（见 chat）。
@@ -688,7 +694,25 @@ func (s *Server) hasFinalVideo(id string) bool {
 	if _, err := os.Stat(filepath.Join(s.DataDir, "projects", id, "renders", "main.mp4")); err == nil {
 		return true
 	}
-	return s.Artifacts != nil && s.Artifacts.Stat(artifacts.ProjectKey(id, "renders/main.mp4"))
+	if s.Artifacts == nil {
+		return false
+	}
+	if v, ok := s.videoStat.Load(id); ok {
+		if e := v.(videoStatEntry); time.Since(e.at) < videoStatTTL {
+			return e.ok
+		}
+	}
+	ok := s.Artifacts.Stat(artifacts.ProjectKey(id, "renders/main.mp4"))
+	s.videoStat.Store(id, videoStatEntry{ok: ok, at: time.Now()})
+	return ok
+}
+
+// videoStatTTL / videoStatEntry 见 Server.videoStat 注释。
+const videoStatTTL = 5 * time.Second
+
+type videoStatEntry struct {
+	ok bool
+	at time.Time
 }
 
 func (s *Server) projectView(c *gin.Context) {
@@ -851,7 +875,9 @@ func (s *Server) deleteProject(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	_ = s.Store.DeleteProject(id)
+	// 存储层已上抛 DB 错误（bad59fa 中-32），这里必须接住：吞成假成功会让镜像行
+	// 变孤儿且无从排查（2026-10-19 审查实锤：`_ =` 丢弃，修复只做了半截）
+	dbErr := s.Store.DeleteProject(id)
 	artifacts.DeletePrefixBestEffort(s.Artifacts, artifacts.ProjectKey(id, "")) // 远端正本跟着走
 	s.Hub.Forget(id)                                                            // 重放窗跟着项目走：不删的话删了的项目在 SSE 侧阴魂不散
 	// 在跑的对话轮先取消再清账：项目目录已删，轮还握着旧句柄继续跑只会写出幽灵产物
@@ -860,6 +886,12 @@ func (s *Server) deleteProject(c *gin.Context) {
 	}
 	s.turnMu.Delete(id)  // 对话轮互斥锁同理（sync.Map 只增不减的慢泄漏）
 	s.ensured.Delete(id) // 列表自愈记账同步清掉，同名重建能再补行
+	if dbErr != nil {
+		// 磁盘已删、DB 行清不掉=镜像残留：如实 500 不装成功；后续清理与 DB 无关已照做
+		log.Printf("[delete] 项目 %s 磁盘已删但 DB 行清理失败: %v", id, dbErr)
+		c.JSON(500, gin.H{"error": "项目已删除，但记录清理失败（可能残留镜像行，请查服务端日志）"})
+		return
+	}
 	c.JSON(200, gin.H{"ok": true})
 }
 
@@ -1570,6 +1602,12 @@ func (s *Server) cancelProduce(c *gin.Context) {
 // instruction 可空 = 依次取目标段的历史指令复用（「用上次的要求再试一次」）。
 func (s *Server) startRework(c *gin.Context) {
 	id := c.Param("id")
+	// prep 链运行中拒绝（中-30 守门家族的唯一缺口，2026-10-19 审查补齐）：
+	// force 重跑链开头 InvalidateFrom 作废三工件，期间段级重做会读到半作废工件
+	if s.Preps != nil && s.Preps.IsRunning(id) {
+		c.JSON(409, gin.H{"error": "准备阶段重跑中，先等完成再段级重做"})
+		return
+	}
 	var in struct {
 		Segments    []string `json:"segments"`
 		Instruction string   `json:"instruction"`

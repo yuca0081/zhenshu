@@ -263,3 +263,49 @@ func TestBoundaryTrackerRedispatchAfterRework(t *testing.T) {
 		t.Fatal("打回段重写过审后 b01 未被重派——旧楔子回归")
 	}
 }
+
+func TestBoundaryTrackerWaitsForRewriteAfterRejection(t *testing.T) {
+	// 2026-10-19 四路审查实锤回归：打回路径的 bndBusy 由 auditBoundary 完成时
+	// 自释放（高-1 修复），但若被打回段的 journal 还停在 audited@旧代际（重写
+	// 未落地），跟踪器 ≤800ms 内就用同一批像素重派边界审——假审计空烧、相同
+	// 意见再打回把轮次烧穿后提前记「带伤放行」。修复=打回瞬间摘账 stRewriting
+	// （同终审打回路径）。本测试锁定：摘账期间不重派；重写落地（同代际过审）后才派。
+	c := &coordinator{
+		journal:    map[string]journalLine{},
+		auditCh:    make(chan auditReq, 8),
+		passNotify: make(chan string, 8),
+		bndBusy:    map[int]bool{},
+	}
+	c.segs = append(c.segs,
+		&segCtx{seg: contract.Segment{ID: "seg01"}, gen: 1, feedCh: make(chan string, 1)},
+		&segCtx{seg: contract.Segment{ID: "seg02"}, gen: 1, feedCh: make(chan string, 1)},
+	)
+	// seg01 已过审；seg02 刚被打回（摘账 rewriting，重写在飞）——auditBoundary
+	// 打回路径落账后的真实瞬间状态。
+	c.journal["seg/seg01"] = journalLine{Kind: "seg", ID: "seg01", State: stAudited, Gen: 1}
+	c.journal["seg/seg02"] = journalLine{Kind: "seg", ID: "seg02", State: stRewriting}
+	c.bounds = append(c.bounds, &boundaryCtx{id: "b01", prev: "seg01", next: "seg02", genP: -1, genN: -1})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.boundaryTracker(ctx)
+
+	select {
+	case req := <-c.auditCh:
+		t.Fatalf("重写在飞期间不应重派边界审: %+v", req)
+	case <-time.After(2 * time.Second):
+	}
+
+	// 重写落地：同代际过审记账 → 边界按失配重派
+	c.mu.Lock()
+	c.journal["seg/seg02"] = journalLine{Kind: "seg", ID: "seg02", State: stAudited, Gen: 1}
+	c.mu.Unlock()
+	select {
+	case req := <-c.auditCh:
+		if req.kind != "bnd" || req.bi != 0 {
+			t.Fatalf("重写落地后应重派 b01: %+v", req)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("重写落地后 b01 未被重派")
+	}
+}

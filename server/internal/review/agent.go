@@ -29,9 +29,17 @@ const (
 	auditTemp      = 0.1
 	segmentBudget  = 6
 	boundaryBudget = 6 // 2026-10-17 实测：4 回合下"回合预算耗尽"反复出现（b04/b05 连续两轮），提一档降降级率
-	finalBudget    = 2 // 单轮判卷；给 1 轮 nudge 余量防光说不做烧死
+	// 终审预算 4：submit 被校验拒收要吃一轮才就地改对——预算 2 时一次拒收就烧光
+	// 整个终审触发重跑（重发全部帧格+思考 ≈ 2 万 token/次，2026-10-19 实测 3 连败）。
+	finalBudget = 4
 
 	boundaryWindowMin = 1.5 // 边界短片段窗口下限（秒）
+
+	// 取证预算帽（get_frame/get_clip 每审合计）：只剪失控尾巴不拦正常取证
+	//（2026-10-19 实测均值段审 3.8 次/边界 7.7 次，无帽极端 14 次）。边界看动画
+	// 接续合法地比段审多要点。用完回喂人话提示强制凭已取证据交卷，不拦 submit。
+	segEvidenceBudget = 6
+	bndEvidenceBudget = 8
 )
 
 // Service 审核工位对项目的依赖。Emit 可空。
@@ -103,6 +111,35 @@ func auditProvider() (ChatClient, error) {
 	return prov, nil
 }
 
+// auditEffort 审核思考档位（LLM_AUDIT_EFFORT，默认 low）：判卷是对照清单打勾，
+// high 档的 reasoning 开销比意见单本身贵一个量级（2026-10-19 实测账：审核
+// completion 46.5 万/项目，意见单撑死十分之一）。判卷质量不满意改环境变量回
+// high 或 disabled，不动代码。
+func auditEffort() llm.Effort {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LLM_AUDIT_EFFORT"))) {
+	case "high":
+		return llm.EffortHigh
+	case "disabled":
+		return llm.EffortDisabled
+	default:
+		return llm.EffortLow
+	}
+}
+
+// withEvidenceBudget 取证预算帽：帽内原样执行，用完不再取证、回喂人话提示
+// （凭已取证据交卷；submit 不受帽限）。两个取证工具共享同一计数。
+func withEvidenceBudget(t Tool, left *int, total int) Tool {
+	base := t.Run
+	t.Run = func(ctx context.Context, args string) Observation {
+		if *left <= 0 {
+			return Observation{Text: fmt.Sprintf("取证额度已用完（本审上限 %d 次）——凭已取证据汇总意见单，调用 submit_verdict。", total)}
+		}
+		*left--
+		return base(ctx, args)
+	}
+	return t
+}
+
 // runAudit Loop 组装 + 取证留痕的共用尾。verdict 由各档案的 submit 工具在
 // 校验通过后闭包捕获返回。TaskID 非空时统一挂「过程」页任务账（对话留痕 +
 // agent.start/done + token 用量）。
@@ -110,6 +147,7 @@ func (s *Service) runAudit(ctx context.Context, prov ChatClient, loop Loop, prof
 	var verdict Verdict
 	loop.Prov = prov
 	loop.Temp = auditTemp
+	loop.Effort = auditEffort()
 	loop.Submit = "submit_verdict"
 	submit := toolSchema("submit_verdict",
 		"提交结构化意见单（唯一出口；提交前先按流程完成判卷）。载荷不合规范会被整体拒收并回喂错误清单。",
@@ -361,16 +399,20 @@ func (s *Service) AuditSegment(ctx context.Context, in SegInput) (Verdict, error
 		b, _ := json.MarshalIndent(in.Prior, "", "  ")
 		kick.WriteString("\n## 上一轮意见单（修复轮：逐条 reassessment 后才考虑新发现）\n```json\n" + string(b) + "\n```\n")
 	}
+	evLeft := segEvidenceBudget
 	loop := Loop{
 		System:      segmentSystem,
 		Kickoff:     kick.String(),
 		KickoffIm:   imgs,
 		KickoffRefs: refs,
-		Tools:       []Tool{s.getFrameTool(fs, targets), s.getClipTool(fs, targets)},
-		MaxRounds:   segmentBudget,
-		LogPath:     in.LogPath,
-		TaskID:      fmt.Sprintf("seg.audit.%s.r%d", in.Seg.ID, in.Round),
-		TaskLabel:   fmt.Sprintf("段审 %s（第 %d 轮）", in.Seg.ID, in.Round),
+		Tools: []Tool{
+			withEvidenceBudget(s.getFrameTool(fs, targets), &evLeft, segEvidenceBudget),
+			withEvidenceBudget(s.getClipTool(fs, targets), &evLeft, segEvidenceBudget),
+		},
+		MaxRounds: segmentBudget,
+		LogPath:   in.LogPath,
+		TaskID:    fmt.Sprintf("seg.audit.%s.r%d", in.Seg.ID, in.Round),
+		TaskLabel: fmt.Sprintf("段审 %s（第 %d 轮）", in.Seg.ID, in.Round),
 	}
 	s.emit(s.P.ID, "progress", "review", fmt.Sprintf("段审 %s（第 %d 轮）开工", in.Seg.ID, in.Round))
 	v, err := s.runAudit(ctx, prov, loop, profSegment, in.Prior)
@@ -493,16 +535,20 @@ func (s *Service) AuditBoundary(ctx context.Context, in BndInput) (Verdict, erro
 		b, _ := json.MarshalIndent(in.Prior, "", "  ")
 		kick.WriteString("\n## 上一轮意见单（修复轮：逐条 reassessment 后才考虑新发现）\n```json\n" + string(b) + "\n```\n")
 	}
+	bndLeft := bndEvidenceBudget
 	loop := Loop{
 		System:      boundarySystem,
 		Kickoff:     kick.String(),
 		KickoffIm:   imgs,
 		KickoffRefs: refs,
-		Tools:       []Tool{s.getFrameTool(fs, targets), s.getClipTool(fs, targets)},
-		MaxRounds:   boundaryBudget,
-		LogPath:     in.LogPath,
-		TaskID:      fmt.Sprintf("seg.boundary.%s", in.ID),
-		TaskLabel:   fmt.Sprintf("边界审 %s", in.ID),
+		Tools: []Tool{
+			withEvidenceBudget(s.getFrameTool(fs, targets), &bndLeft, bndEvidenceBudget),
+			withEvidenceBudget(s.getClipTool(fs, targets), &bndLeft, bndEvidenceBudget),
+		},
+		MaxRounds: boundaryBudget,
+		LogPath:   in.LogPath,
+		TaskID:    fmt.Sprintf("seg.boundary.%s", in.ID),
+		TaskLabel: fmt.Sprintf("边界审 %s", in.ID),
 	}
 	s.emit(s.P.ID, "progress", "review", fmt.Sprintf("边界审 %s（第 %d 轮）开工", in.ID, in.Round))
 	return s.runAudit(ctx, prov, loop, profBoundary, in.Prior)
@@ -643,15 +689,4 @@ func parallelFrames(n int, fn func(i int) error) error {
 	}
 	wg.Wait()
 	return firstErr
-}
-
-// extractFilmFrame 从成片（renders/main.mp4）抽全片时刻帧。
-func extractFilmFrame(ctx context.Context, p *pipeline.Project, t float64) (string, error) {
-	fs := &serviceFS{
-		segVideo: func(string) string { return p.Artifact("renders/main.mp4") },
-		cacheDir: p.Artifact("reports/audit"),
-		relBase:  "reports/audit",
-	}
-	_, rel, err := fs.extractFrame(ctx, "film", t, 0)
-	return rel, err
 }

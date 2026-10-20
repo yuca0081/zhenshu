@@ -29,6 +29,22 @@ func (a *Agent) prepDeps() prep.Deps {
 	return prep.Deps{RootDir: a.RootDir, Lib: a.Lib, Emit: a.Emit}
 }
 
+// runPrepInline 对话侧起草工具（draft_storyboard/draft_style_samples）的互斥
+// 入口：不动作废，只登记 running 跑缺站——与想法页异步链互斥（高-6 补漏，
+// 2026-10-19 审查：两处裸跑 RunStrict 双向都不在互斥内）。返回错误原文。
+func (a *Agent) runPrepInline(ctx context.Context, p *pipeline.Project) error {
+	if a.Preps == nil {
+		return prep.RunStrict(ctx, p, a.prepDeps())
+	}
+	err := a.Preps.RunInline(ctx, p.ID, func(ictx context.Context) error {
+		return prep.RunStrict(ictx, p, a.prepDeps())
+	})
+	if errors.Is(err, prep.ErrPrepRunning) {
+		return errors.New("准备阶段已有链在跑（想法页或更早的工具启动的），等它完成再试")
+	}
+	return err
+}
+
 // rerunPrep 反馈路由的重跑执行体：note 落工位附注 → 从 station 起级联失效 →
 // 链式重跑缺的工位 → 汇报三工件状态。失败原文返回（调用方回喂对话）。
 // 同步执行（与 draft_storyboard 跑管线同模式）；对话轮 20min 时限兜底。
@@ -137,8 +153,11 @@ var tools = []tool{
 				if prep.HasArtifact(p, prep.StationStoryboard) {
 					return "分镜稿已出（准备工位产物）。要改结构/场景直接说要求，我走反馈重跑；开工前在「终审」页签确认。"
 				}
-				if err := prep.RunStrict(ctx, p, a.prepDeps()); err != nil {
-					return "准备阶段失败：" + err.Error()
+				// 与异步链共用一把互斥（高-6 补漏，2026-10-19 审查）：这里裸跑
+				// 既不登记 running 也不查在跑，想法页链跑着时对话里一句话就能
+				// 开出第二条链互踩工件
+				if err := a.runPrepInline(ctx, p); err != nil {
+					return err.Error()
 				}
 				dr, derr := prep.LoadDraft(p)
 				if derr != nil {
@@ -362,8 +381,9 @@ var tools = []tool{
 					}
 					return a.rerunPrep(ctx, p, prep.StationStyle, in.Instruction)
 				}
-				if err := prep.RunStrict(ctx, p, a.prepDeps()); err != nil {
-					return "风格包生成失败：" + err.Error()
+				// 同 draft_storyboard：过 RunInline 互斥（高-6 补漏）
+				if err := a.runPrepInline(ctx, p); err != nil {
+					return err.Error()
 				}
 				sp, serr := prep.LoadStylePack(p)
 				if serr != nil {

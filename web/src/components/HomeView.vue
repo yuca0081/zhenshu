@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, onBeforeUnmount } from 'vue'
 import { dateOf, lastProduceFailed, statusLabel } from '../format'
 import type { ProjectRow } from '../types'
 
@@ -8,6 +8,23 @@ const props = defineProps<{ projects: ProjectRow[] }>()
 const emit = defineEmits<{ new: []; open: [id: string]; materials: []; delete: [id: string] }>()
 
 const recent = computed(() => props.projects.slice(0, 6))
+
+// 删除两段式确认（同 HistoryRail）：window.confirm 全站弃用（死按钮环境），
+// 首页入口必须自带确认——2026-10-19 拆 confirm 时漏了这里，单击即永久删。
+const armed = ref<string | null>(null)
+let armTimer: number | null = null
+function clickDel(id: string) {
+  if (armed.value === id) {
+    if (armTimer) clearTimeout(armTimer)
+    armed.value = null
+    emit('delete', id)
+    return
+  }
+  armed.value = id
+  if (armTimer) clearTimeout(armTimer)
+  armTimer = window.setTimeout(() => { armed.value = null }, 3000)
+}
+onBeforeUnmount(() => { if (armTimer) clearTimeout(armTimer) })
 </script>
 
 <template>
@@ -36,7 +53,7 @@ const recent = computed(() => props.projects.slice(0, 6))
         <!-- 卡片用 div+button 组合（button 里不能再套 button）；删除钮 hover 露出，同左侧项目栏 -->
         <div v-for="p in recent" :key="p.id" class="proj" role="button" tabindex="0" @click="emit('open', p.id)" @keydown.enter="emit('open', p.id)">
           <b>{{ p.name }}</b>
-          <button class="del" title="删除项目（不可恢复）" @click.stop="emit('delete', p.id)">✕</button>
+          <button class="del" :class="{ armed: armed === p.id }" :title="armed === p.id ? '再点一次确认删除（不可恢复）' : '删除项目（不可恢复）'" @click.stop="clickDel(p.id)">{{ armed === p.id ? '确认?' : '✕' }}</button>
           <span class="meta">
             <i :class="['st', p.status === 'video' ? 'done' : p.status === 'producing' ? 'run' : '', { fail: lastProduceFailed(p) }]">
               {{ statusLabel[p.status] ?? p.status }}{{ lastProduceFailed(p) ? ' · 上次制作失败' : '' }}
@@ -118,8 +135,9 @@ const recent = computed(() => props.projects.slice(0, 6))
   font-size: 13px; width: 24px; height: 24px; line-height: 1; border-radius: 6px;
   opacity: 0; transition: opacity .12s;
 }
-.proj:hover .del { opacity: 1; }
-.del:hover { color: #ff6b6b; background: #2a1518; border-color: #ff7a7a; }
+.proj:hover .del, .del.armed { opacity: 1; }
+.del:hover, .del.armed { color: #ff6b6b; background: #2a1518; border-color: #ff7a7a; }
+.del.armed { width: auto; padding: 0 6px; font-weight: 600; opacity: 1; }
 .meta { display: flex; justify-content: space-between; align-items: center; }
 .meta i { font-style: normal; font-size: 11px; color: #8a8a96; }
 .meta i.done { color: #7ed491; }

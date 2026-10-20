@@ -15,7 +15,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
+	"strconv"
 	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -47,6 +49,12 @@ type ChatClient interface {
 	ChatTemp(ctx context.Context, msgs []openai.ChatCompletionMessage, tools []openai.Tool, temp float64) (openai.ChatCompletionMessage, openai.Usage, error)
 }
 
+// effortClient 可选的档位扩展（*llm.Provider 实现）。分开声明而非并进 ChatClient：
+// 测试 mock 只实现 ChatTemp 就能跑，档位路径走接口探测降级。
+type effortClient interface {
+	ChatTempEffort(ctx context.Context, msgs []openai.ChatCompletionMessage, tools []openai.Tool, temp float64, effort llm.Effort) (openai.ChatCompletionMessage, openai.Usage, error)
+}
+
 // Sink 对话留痕接收端（*llm.Transcript 隐式满足）。可空：nil 照跑不留痕。
 type Sink interface {
 	Message(msg openai.ChatCompletionMessage)
@@ -68,7 +76,10 @@ type Loop struct {
 	Submit      string
 	MaxRounds   int
 	Temp        float64 // 判卷低温（≈0）
-	LogPath     string  // 取证留痕 jsonl（非空时自动接 OnTool）
+	// Effort 思考档位（可空 = 走 ChatTemp 的 high 默认）。判卷档案由 runAudit
+	// 按 LLM_AUDIT_EFFORT 注入——降档省 reasoning token，判卷质量不满意改环境变量。
+	Effort  llm.Effort
+	LogPath string // 取证留痕 jsonl（非空时自动接 OnTool）
 	// OnStep 每步记账（kind: action|observation|text）；OnTool 取证留痕（工具+参数+结果指纹由调用方算）。
 	OnStep func(round int, kind, detail string)
 	OnTool func(name, args, result string)
@@ -81,17 +92,47 @@ type Loop struct {
 	Calls     int
 }
 
+// auditImgKeepRounds 取证图保留窗（AUDIT_IMG_KEEP_ROUNDS，默认 2）：第 N 轮取的
+// 证图随历史保留到第 N+K 轮，之后换一行文字占位。平台无缓存折扣时（cached_tokens=0，
+// 2026-10-19 实测 80 调全零）每张老图每轮全额重发，一张 480 宽帧 ≈ 500 token；
+// 窗口调大或设解析上限 50 等效关闭裁剪。开场图（锚点帧/样张）不在此列——那是全轮共享的稳定前缀。
+func auditImgKeepRounds() int {
+	if v := os.Getenv("AUDIT_IMG_KEEP_ROUNDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 50 {
+			return n
+		}
+	}
+	return 2
+}
+
+// trimmedEvidenceMsg 被裁取证图的占位文本。不删消息条目只换载荷：模型仍知道
+// 「这里曾有图」，真要回看就重新取证——抽帧有磁盘缓存（键=段+时刻+文件指纹），
+// 重取不重跑 ffmpeg，且新图作为最新附图恰好落回保留窗内。裁剪只在追加新消息时
+// 发生且裁了不复原（单调）：后续请求仍互为前缀延长线，平台若开缓存照常命中。
+func trimmedEvidenceMsg() openai.ChatCompletionMessage {
+	return openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser,
+		Content: "［系统附图·已撤］此前的取证图已从上下文撤下（省额度）。需要回看就再调一次 get_frame/get_clip 取同一时刻。"}
+}
+
 // Run 跑到 submit 校验通过，或预算耗尽 / 模型调用失败。
 func (l *Loop) Run(ctx context.Context) error {
 	kickParts := []openai.ChatMessagePart{{Type: openai.ChatMessagePartTypeText, Text: l.Kickoff}}
+	skipped := 0
 	for _, u := range l.KickoffIm {
+		if u == "" { // 空URL图外发必吃 endpoint 400（image_url格式错误）整审报废——跳过并记账
+			skipped++
+			continue
+		}
 		kickParts = append(kickParts, openai.ChatMessagePart{
 			Type:     openai.ChatMessagePartTypeImageURL,
 			ImageURL: &openai.ChatMessageImageURL{URL: u},
 		})
 	}
+	if skipped > 0 && l.Rec != nil {
+		l.Rec.Note("警告：跳过 %d 张空 URL 注入图（注入装配丢拷贝的症状，查 visRefs 类函数）", skipped)
+	}
 	kick := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser}
-	if len(l.KickoffIm) > 0 {
+	if len(kickParts) > 1 {
 		kick.MultiContent = kickParts // kickParts[0] 即 kickoff 正文；Content 与 MultiContent 互斥（openai 库序列化硬约束）
 	} else {
 		kick.Content = l.Kickoff
@@ -114,8 +155,12 @@ func (l *Loop) Run(ctx context.Context) error {
 			schemas = append(schemas, t.Def)
 		}
 	}
+	// 中途取证图的登记簿（下标+取证轮次）：每轮开工前按保留窗裁剪。
+	// 开场图在 msgs[1]，全轮共享一个字节不改——那是稳定前缀，裁它等于自拆缓存。
+	var imgs []imgMsgAt
 	for round := 1; round <= l.MaxRounds; round++ {
-		msg, u, err := l.Prov.ChatTemp(ctx, msgs, schemas, l.Temp)
+		trimStaleImgs(msgs, imgs, round, l.Rec)
+		msg, u, err := l.chatRound(ctx, msgs, schemas)
 		llm.AccumulateUsage(&l.Usage, u)
 		l.Calls++
 		if err != nil {
@@ -150,6 +195,7 @@ func (l *Loop) Run(ctx context.Context) error {
 			if len(obs.Images) > 0 {
 				im := imageFollowUp(obs.Images)
 				msgs = append(msgs, im)
+				imgs = append(imgs, imgMsgAt{idx: len(msgs) - 1, round: round})
 				l.record(im)
 			}
 			if call.Function.Name == l.Submit && obs.Done {
@@ -158,6 +204,43 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 	}
 	return ErrBudgetExhausted
+}
+
+// imgMsgAt 一条带图消息在 msgs 里的位置与取证轮次（裁剪记账用）。
+type imgMsgAt struct {
+	idx   int
+	round int
+}
+
+// trimStaleImgs 按保留窗把超出窗口的取证图消息原位换成文字占位。单调：换过的
+// （MultiContent 已 nil）不再动，后续请求互为前缀延长线。审计留痕不受影响——
+// 图在追加当时已进 transcript，这里只瘦发给模型的上下文。
+func trimStaleImgs(msgs []openai.ChatCompletionMessage, imgs []imgMsgAt, next int, rec Sink) {
+	cut := next - 1 - auditImgKeepRounds()
+	if cut < 1 {
+		return
+	}
+	n := 0
+	for _, im := range imgs {
+		if im.round <= cut && msgs[im.idx].MultiContent != nil {
+			msgs[im.idx] = trimmedEvidenceMsg()
+			n++
+		}
+	}
+	if n > 0 && rec != nil {
+		rec.Note("第 %d 轮起撤下 %d 张早期取证图（保留最近 %d 轮，AUDIT_IMG_KEEP_ROUNDS）", next, n, auditImgKeepRounds())
+	}
+}
+
+// chatRound 一轮对话。Effort 非空且底层支持档位扩展时走 ChatTempEffort（降档省
+// reasoning token），否则退回 ChatTemp 的 high 默认——mock 只实现基础接口也能跑。
+func (l *Loop) chatRound(ctx context.Context, msgs []openai.ChatCompletionMessage, tools []openai.Tool) (openai.ChatCompletionMessage, openai.Usage, error) {
+	if l.Effort != "" {
+		if ec, ok := l.Prov.(effortClient); ok {
+			return ec.ChatTempEffort(ctx, msgs, tools, l.Temp, l.Effort)
+		}
+	}
+	return l.Prov.ChatTemp(ctx, msgs, tools, l.Temp)
 }
 
 func (l *Loop) record(ms ...openai.ChatCompletionMessage) {
@@ -172,14 +255,22 @@ func (l *Loop) record(ms ...openai.ChatCompletionMessage) {
 // recordKick 落开场注入消息：带图片引用清单时走 MessageImgs（路径给「过程」页
 // 缩略图），Sink 不支持或无引用退回普通 Message。
 func (l *Loop) recordKick(kick openai.ChatCompletionMessage) {
-	if len(l.KickoffRefs) == 0 {
+	// 只记真正外发的图：Run() 的空 URL 守卫跳过的条目不进留痕——留痕多于外发
+	// 会渲染一张模型从没见过的缩略图，与「跳过 N 张空 URL」的警告自相矛盾
+	refs := make([]llm.ImgRef, 0, len(l.KickoffRefs))
+	for _, r := range l.KickoffRefs {
+		if r.URL != "" {
+			refs = append(refs, r)
+		}
+	}
+	if len(refs) == 0 {
 		l.Rec.Message(kick)
 		return
 	}
 	if ti, ok := l.Rec.(interface {
 		MessageImgs(msg openai.ChatCompletionMessage, imgs []llm.ImgRef)
 	}); ok {
-		ti.MessageImgs(kick, l.KickoffRefs)
+		ti.MessageImgs(kick, refs)
 		return
 	}
 	l.Rec.Message(kick)

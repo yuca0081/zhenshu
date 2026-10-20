@@ -631,7 +631,10 @@ func writePostFX(p *Project, ss *contract.StyleSamples) error {
 	var meta map[string]any
 	if json.Unmarshal(b, &meta) == nil {
 		if wj, err := json.Marshal(want); err == nil {
-			var wnorm map[string]any
+			// 解到 any 而非 map：post=false（设计没写 post 节的默认形态）也是合法
+			// 取值——解 map 必失败 → 短路恒跳过 → 每轮照样白写盘白上传（中-16 只
+			// 修好了对象形态，2026-10-19 审查补齐）
+			var wnorm any
 			if json.Unmarshal(wj, &wnorm) == nil {
 				cur, _ := json.Marshal(meta["post"])
 				wn, _ := json.Marshal(wnorm)

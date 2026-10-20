@@ -16,16 +16,24 @@ var ErrEmptyChoice = errors.New("模型返回空 choices")
 // 思考档 high：Agent 每轮都跑，端点默认 max 烧 reasoning token 又拖响应延迟；
 // high 兜住工具调用推理。返回模型消息（可能含 ToolCalls）与本次 token 用量。
 func (p *Provider) Chat(ctx context.Context, msgs []openai.ChatCompletionMessage, tools []openai.Tool) (openai.ChatCompletionMessage, openai.Usage, error) {
-	return p.chatTemp(ctx, msgs, tools, nil)
+	return p.chatTemp(ctx, msgs, tools, nil, EffortHigh)
 }
 
 // ChatTemp 同 Chat，显式设采样温度。判卷型审核（意见单要可复现、不发散）用低温；
 // Chat 不设温度保持端点默认（既有工位行为不变）。temp=nil 等价 Chat。
+// 思考档固定 high：Agent 每轮都要在工具间做推理。
 func (p *Provider) ChatTemp(ctx context.Context, msgs []openai.ChatCompletionMessage, tools []openai.Tool, temp float64) (openai.ChatCompletionMessage, openai.Usage, error) {
-	return p.chatTemp(ctx, msgs, tools, &temp)
+	return p.chatTemp(ctx, msgs, tools, &temp, EffortHigh)
 }
 
-func (p *Provider) chatTemp(ctx context.Context, msgs []openai.ChatCompletionMessage, tools []openai.Tool, temp *float64) (openai.ChatCompletionMessage, openai.Usage, error) {
+// ChatTempEffort 同 ChatTemp，思考档位由调用方给。判卷型审核走这里降档：
+// 对照清单打勾的活，high 档烧的 reasoning token 比意见单本身贵一个量级
+// （2026-10-19 实测账：审核 completion 46.5 万/项目，意见单撑死十分之一）。
+func (p *Provider) ChatTempEffort(ctx context.Context, msgs []openai.ChatCompletionMessage, tools []openai.Tool, temp float64, effort Effort) (openai.ChatCompletionMessage, openai.Usage, error) {
+	return p.chatTemp(ctx, msgs, tools, &temp, effort)
+}
+
+func (p *Provider) chatTemp(ctx context.Context, msgs []openai.ChatCompletionMessage, tools []openai.Tool, temp *float64, effort Effort) (openai.ChatCompletionMessage, openai.Usage, error) {
 	// 600s：判卷载荷比工位对话重（锚点帧/样张多图 + 深思考），端点忙时 300s 不够
 	// （段审实测死在 5 分钟线上）。Chat 与 ChatTemp 同走这档——旧注释宣称
 	// 「Chat 保持 300s」与实现不符，2026-10-19 对齐为如实描述。
@@ -51,7 +59,7 @@ func (p *Provider) chatTemp(ctx context.Context, msgs []openai.ChatCompletionMes
 	if len(tools) > 0 {
 		req.Tools = tools
 	}
-	applyEffort(&req, EffortHigh)
+	applyEffort(&req, effort)
 	// 429 限速退避重试（循环对话轮没有外层重试——审核/工位一轮 429 就整轮报废，
 	// 代价远大于等一个限速窗口）。退避 15s/30s，叠随机抖动——多路调用方同步退避
 	// 会一起醒来再撞一次（2026-10-17 惊群教训，与 generate 同款）；ctx 取消立即让路。

@@ -45,7 +45,10 @@ watch(() => local.value?.running, running => {
   if (running) startPoll()
   if (!running) stopPoll()
 }, { immediate: true })
-onBeforeUnmount(stopPoll)
+onBeforeUnmount(() => {
+  stopPoll()
+  if (armTimer) clearTimeout(armTimer)
+})
 // KeepAlive 页签只是 deactivate 不 unmount（中-42）：切离「想法」页后 3s 轮询
 // 照跑全程 15-25 分钟白烧——切走暂停、切回（running 仍在）恢复
 let wantedPoll = false
@@ -81,6 +84,7 @@ const forceRerun = ref(false)
 // 两段式确认（自绘，替代 window.confirm——原生弹窗 2026-10-16 死按钮、10-18
 // Playwright 点按 30s 超时同源，全站已弃用）：破坏性提交第一枪只亮确认态
 const armed = ref(false)
+let armTimer: number | null = null
 async function start() {
   if (starting.value || running.value || !props.projectId) return
   // 换想法重跑模式 = 破坏性操作，必须带 force（2026-10-19 高-7：旧版该模式下
@@ -88,6 +92,10 @@ async function start() {
   const force = rerunOpen.value || forceRerun.value
   if (force && !armed.value) {
     armed.value = true
+    // 确认态限时解除（同 HistoryRail/PrepPane 3s 口径）：武装态无限期存活，
+    // 用户被打断回来随手一点就级联作废全部工件（2026-10-19 审查低危）
+    if (armTimer) clearTimeout(armTimer)
+    armTimer = window.setTimeout(() => { armed.value = false }, 3000)
     return
   }
   armed.value = false

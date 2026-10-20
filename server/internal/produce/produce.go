@@ -1795,7 +1795,7 @@ func visURLs(vis []visImg) []string {
 func visRefs(vis []visImg) []llm.ImgRef {
 	refs := make([]llm.ImgRef, 0, len(vis))
 	for _, v := range vis {
-		refs = append(refs, llm.ImgRef{Path: v.Path, Label: v.Label})
+		refs = append(refs, llm.ImgRef{URL: v.URL, Path: v.Path, Label: v.Label})
 	}
 	return refs
 }
@@ -1888,7 +1888,7 @@ var assembleMu sync.Mutex
 func (r *Runner) assemble(ctx context.Context, p *pipeline.Project) error {
 	assembleMu.Lock()
 	defer assembleMu.Unlock()
-	return r.assemble(ctx, p)
+	return r.python(ctx, "ai/assemble.py", p.Dir, 2*time.Minute)
 }
 
 // python 跑仓库 ai/ 脚本（cwd = 仓库根）。任务取消时连带杀掉子进程；走

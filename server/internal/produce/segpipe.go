@@ -1242,6 +1242,13 @@ func (c *coordinator) auditBoundary(ctx context.Context, req auditReq) {
 	c.mu.Unlock()
 	c.r.Manifest(c.p, "review.rework", fmt.Sprintf("%s → %s（%s）", b.id, target.seg.ID, dirWhy))
 	c.emit("progress", "review", fmt.Sprintf("边界 %s %d 条 high，打回 %s 重画", b.id, len(redraw), target.seg.ID))
+	// 打回瞬间先摘账再派（同终审打回路径的模式）：bndBusy 在本函数返回时自释放
+	// （打回路径不记账），被打回段的 journal 若还停在 audited@当前代际，
+	// 跟踪器 ≤800ms 内就会用同一批像素重派边界审——假审计空烧 1-2 次多模态、
+	// 相同意见再打回把轮次预算烧穿后提前记「带伤放行」，重写落地后还要白滚一轮
+	// （2026-10-19 四路审查实锤）。stRewriting 让 segAudited 即刻为假，跟踪器
+	// 自然等到重写落地后的新代际。
+	c.segState(target.seg.ID, stRewriting, 0, 0, "边界审打回重写")
 	c.dispatchRewrite(ctx, target, redrawFeedback(redraw))
 }
 
