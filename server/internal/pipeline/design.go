@@ -89,9 +89,9 @@ func designBrief(p *Project, sb *contract.Storyboard) string {
 可补间只有 opacity/x/y/scale/rotation 系（数字滚动用 count）。动效必须设计成**一套编排**，不是一个档位：
 - entrances 入场手法菜单 3–5 条：每条 name/how/use_for 三件齐，手法之间必须一眼不同（参考族：逐行点亮/滑入揭示/字卡打字机/缩放落定/计数滚动/描边生长——参考族只是例子，按本片气质现场发明优先）；只交一种「淡入+浮入」=整片像PPT，打回；
 - rhythm 段内节奏下限：旁白每推进一个信息点，画面必须有一次可见响应（新元素入场/已有元素强调/运镜变向）；写出量化档（如「每 3–5 秒一个可见事件」）；入场完成后静坐到段尾=失败；
-- exits 出场：该退的元素在旁白收尾前退完，怎么退（淡出/反向滑出/缩小回收）写成规矩，禁拖尾；
+- exits 出场：该退的元素在旁白收尾前退完，怎么退（淡出/反向滑出/缩小回收）写成规矩，禁拖尾；段尾画面必须定格在内容帧（整页淡出收黑是段间接续事故的病根，机检亮度闸直接打回）；
 - camera 运镜：是否持续运镜、什么幅度，按本片气质决定并写清依据——需要呼吸感的片可以设计安静段（定格/微幅呼吸也是运镜决策），但「全片没有一处可感知运动」仍是失败；
-- transition 段间转场政策：发明一个配本片气质的招牌转场（简报含转场类特色时必须按其机制实现）；转场手法本体画进各段场景文件（上段收尾/下段开场自己编排），机械拼接层只认三种出口——措辞明说「黑场/闪黑」会用页内黑场叠化实现，明说「叠化/交叉」会用交叉叠化拼接，其余一律直切（段间节奏全靠你的场景编排接管）；「黑场一瞬」只在气质确实需要时用且须在 notes 里论证——它是观众感知里的「翻页」，滥用=PPT；
+- transition 段间转场政策（2026-10-21 D5 固定契约）：段间接续是全片统一的机械约定，不逐片发明、更不许各段自己编排「上段收尾/下段开场」的握手戏法（历史教训：各段即兴选开场收场，段间对不上暗号，边界事故全出在这）——每段首帧即景（t=0 场景已在画面）、末帧定格（收尾停在内容帧），拼接层固定直切，观众看到的段间节奏由各段开场/收尾状态决定；「黑场一瞬」与页内黑场叠化不再提供；简报确有转场类特色时，机制写进 motion.transition 令牌（拼接层给全片统一过渡），不是画进各段场景；
 - 全片所有段从这套菜单取用并轮换，段间节奏一致性靠统一档位（ease/时长档）而不是靠「都一样呆」。
 
 ### 5. device 贯穿装置
@@ -104,11 +104,11 @@ func designBrief(p *Project, sb *contract.Storyboard) string {
 - 负面清单 = 本片禁用的俗手，按本片内容挑真实风险（右半空版式/假密度/文字压图不可读……）。
 - post 全片后期质感（可选，0–1）：暗角 vignette / 胶片颗粒 grain / 轻微色差 chroma。默认全 0 = 不加后期（干净的画面是正当选择）；只有本片气质确实需要这层质感才开（怀旧/胶片感可开颗粒，干净的 UI/科技风开了反而脏）。
 
-### 7. entry_exit 标准入场/收尾动画模板（转场的载体，确认校验硬性要求）
-- entry：本风格的标准入场动画一句话机制（如「水墨晕染显影，主体自中心洇开 0.4s」）；新场景段开场走它；
-- exit：标准收尾动画一句话机制（如「整帧淡出收黑 0.3s」）；每段收尾走它；
-- entry_dur：入场预算秒数（0.2–1.0，缺省 0.4——计入段长带）；
-- 一套模板一段内生效，禁止逐段即兴发明转场手法（段间衔接的内容依据由分镜的首拍/末拍承担）。
+### 7. entry_exit 标准入场/收尾状态（段间接续契约，确认校验硬性要求）
+- entry：本风格的标准开场状态一句话（如「背景与主字卡 t=0 即在画面，主体元素逐个点亮登场」）；每段开场=它：场景（背景/主体/当段字卡）t=0 即完整在画面，入场只做元素级位移/缩放/点亮（0.2–0.6s），禁整页从黑场/纯色空白淡入（机检首帧亮度闸打回）；
+- exit：标准收尾状态一句话（如「留下的元素归位停稳，画面定格到段尾」）；每段收尾=它：该退的元素在旁白收尾前退完，留下的停稳定格，禁整页淡出到黑/白（机检末帧亮度闸打回）；
+- entry_dur：入场预算秒数（0.2–0.6，缺省 0.4——计入段长带）；
+- 一套模板一段内生效，禁止逐段即兴发明开场/收尾手法（段间衔接靠「首帧即景+直切+末帧定格」固定契约，不靠各段对暗号）。
 
 ## 样张 = 用主皮肤渲出的静态小画面（所见即所得，1–3 张）
 - 颜色/字体必须来自主皮肤槽位（色值逐字一致）——样张即皮肤预览，两处不一致会被打回；
@@ -232,13 +232,13 @@ func designJSONShape() string {
       { "name": "缩放落定", "how": "scale:1.06→1 配 back.out(1.5)，用于强调单主体", "use_for": "大字海报主体/关键证据卡" }
     ],
     "rhythm": "旁白每推进一个信息点画面响应一次；约每 3–5 秒一个可见事件（新元素入场/已有元素强调变色/运镜变向），入场后静坐到段尾=失败",
-    "exits": "旁白收尾前 0.3s 该退的退完：淡出或反向滑出，禁拖尾",
+    "exits": "旁白收尾前该退的退完（淡出/反向滑出/缩小回收），留下的元素停稳——段尾定格在内容帧，禁整页淡出收黑，禁拖尾",
     "camera": "全段持续运动：10 秒内 scale≥1.08 或位移≥画面宽度 5%，方向与叙事呼应",
-    "transition": "本片招牌转场（简报含转场特色时按其机制实现；「黑场一瞬」须在 notes 论证才可用）",
+    "transition": "全片统一直切（首帧即景+末帧定格由各段开场/收尾保证）；简报确有转场类特色才写机制令牌（cut|fade|xfade）",
     "notes": "性格一句话：什么怎么动、禁什么动" },
   "device": { "name": "装置名（如：访客卡片）", "desc": "装置是什么、观众为什么会记住它",
               "per_seg": "seg01 首次亮相…seg02 变奏…seg03 起每章复现…" },
-  "entry_exit": { "entry": "标准入场动画机制一句话（新场景开场走它）", "exit": "标准收尾动画机制一句话", "entry_dur": 0.4 },
+  "entry_exit": { "entry": "标准开场状态一句话（t=0 场景已在画面：背景/主体/字卡就位，逐元素点亮登场）", "exit": "标准收尾状态一句话（留下的元素停稳，画面定格到段尾）", "entry_dur": 0.4 },
   "post": { "vignette": 0, "grain": 0, "chroma": 0 },
   "layouts": [ { "id": "hero-title", "name": "大字海报", "desc": "构图描述：主体位置/元素铺排/留白方向",
                  "layered": "仅叠层版式写：哪层压哪层、为何可读（衬底低对比/前景有实底）；无叠层留空不写" } ],
@@ -289,7 +289,7 @@ func designRequest(p *Project, sb *contract.Storyboard, out string) string {
 - direction/concept 非空；skins 1–2 套（双皮肤必须给 skin_rule）；samples 1–3 张且每张 html 非空
 - fonts.display/body 栈含中文字体；motion.ease/notes 非空、dur_in 0.1–1.5、dur_settle 0.05–1.0、stagger 0–0.5；
   entrances 3–5 条（name/how/use_for 三件齐、手法名互异）、rhythm/exits/camera/transition 各自非空
-- device.name/desc/per_seg 三件齐；entry_exit.entry/exit 非空（entry_dur 0.2–1.0）——标准入场/收尾动画模板是转场的载体
+- device.name/desc/per_seg 三件齐；entry_exit.entry/exit 非空（entry_dur 0.2–0.6）——标准开场/收尾状态是段间接续契约的载体（首帧即景/末帧定格）
 `, designBrief(p, sb), out, designJSONShape(), designAbsorptionNote(p))
 }
 
@@ -298,9 +298,46 @@ func designRequest(p *Project, sb *contract.Storyboard, out string) string {
 // 已有部分（旧项目降级为方向+皮肤，不炸）。segIdx ≥ 1 时附加本段版式指派（按段
 // 轮换）。带风格简报渲染（v3 §4.5：落点表写进 design.md，强参考的特色与落点对
 // scene_gen 可见）；brief 为 nil 退化为旧渲染（老项目/未选风格）。
+// 七刀#4 稳定前缀布局：场景生成提示改用 DesignDocShared + DesignSegAssign 拆装——
+// 共享主体整块进前缀，本段版式指派垫尾；本函数保持既有形态（指派内联在版式节），
+// design.md 落盘与既有测试不受影响。
 func DesignDocWithBrief(ss *contract.StyleSamples, segIdx int, brief *contract.StyleBrief) string {
 	var b strings.Builder
-	w := func(f string, a ...any) { fmt.Fprintf(&b, f, a...) }
+	writeDesignDoc(&b, ss, brief, segIdx)
+	return b.String()
+}
+
+// DesignDocShared 设计系统共享主体（全段逐字一致——写画面提示稳定前缀的组成块）。
+// 不含本段版式指派：段变量由 DesignSegAssign 单独取、垫到提示尾部。
+func DesignDocShared(ss *contract.StyleSamples, brief *contract.StyleBrief) string {
+	var b strings.Builder
+	writeDesignDoc(&b, ss, brief, 0)
+	return b.String()
+}
+
+// DesignSegAssign 本段版式指派（段变量）：按段号从版式清单轮换取用；segIdx < 1
+// 或无版式返回空串。指派引用的版式清单在共享主体里（调用方保证先渲染共享块）。
+func DesignSegAssign(ss *contract.StyleSamples, segIdx int) string {
+	if segIdx < 1 || len(ss.Layouts) == 0 {
+		return ""
+	}
+	return "\n### 本段指定版式（从「本片版式」清单里领的——画面提示与指定版式明显冲突时可改选其他版式）\n" +
+		designAssignLines(ss, segIdx)
+}
+
+// designAssignLines 版式指派正文（「本段指定版式」两条；不含节标题）。
+func designAssignLines(ss *contract.StyleSamples, segIdx int) string {
+	asg := ss.Layouts[(segIdx-1)%len(ss.Layouts)]
+	var b strings.Builder
+	fmt.Fprintf(&b, "- **本段指定版式：%s（%s）——%s**（画面提示与指定版式明显冲突时可改选其他版式）\n", asg.ID, asg.Name, asg.Desc)
+	if strings.TrimSpace(asg.Layered) != "" {
+		fmt.Fprintf(&b, "- 本段指定版式声明叠层：%s——允许叠压的元素，在上层块加 data-layout-allow-overlap；声明之外的叠压仍会被 layout 检查拒绝\n", asg.Layered)
+	}
+	return b.String()
+}
+
+func writeDesignDoc(b *strings.Builder, ss *contract.StyleSamples, brief *contract.StyleBrief, segIdx int) {
+	w := func(f string, a ...any) { fmt.Fprintf(b, f, a...) }
 	w("## 本片设计系统：%s（每一段都必须遵守的全片规矩）\n", ss.Direction)
 	w("\n### 风格≠题材（先读这条，优先级最高）\n")
 	w("- 设计系统管的是**怎么画**（配色/字体/动效/构图骨架）；**画什么**永远由本段画面提示说了算——\n")
@@ -413,11 +450,7 @@ func DesignDocWithBrief(ss *contract.StyleSamples, segIdx int, brief *contract.S
 	if len(ss.Layouts) > 0 {
 		w("\n### 本片版式（先定构图，再往里填元素；禁退回「标题+小卡平铺」默认网格）\n")
 		if segIdx >= 1 {
-			asg := ss.Layouts[(segIdx-1)%len(ss.Layouts)]
-			w("- **本段指定版式：%s（%s）——%s**（画面提示与指定版式明显冲突时可改选其他版式）\n", asg.ID, asg.Name, asg.Desc)
-			if strings.TrimSpace(asg.Layered) != "" {
-				w("- 本段指定版式声明叠层：%s——允许叠压的元素，在上层块加 data-layout-allow-overlap；声明之外的叠压仍会被 layout 检查拒绝\n", asg.Layered)
-			}
+			b.WriteString(designAssignLines(ss, segIdx))
 		}
 		for _, l := range ss.Layouts {
 			w("- %s（%s）：%s\n", l.ID, l.Name, l.Desc)
@@ -465,7 +498,6 @@ func DesignDocWithBrief(ss *contract.StyleSamples, segIdx int, brief *contract.S
 		}
 		w("- 特色吸收的是机制：物件与题材永远跟本段画面提示走，禁止临摹参考片里的具体物件\n")
 	}
-	return b.String()
 }
 
 // LockDesign 确认后的设计系统落盘：design.md（人读 + 门2 + scene_gen 注入源，含

@@ -229,6 +229,8 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	}
 	// 样张源码（文字样式规范）全段同一份：循环外读一次盘
 	sampleSrc := sampleStyleNote(p)
+	// 设计系统共享主体（七刀#4）：全段逐字一致，循环外取一次（段指派在 work 内按段号取）
+	designShared, _ := designNotesFor(p, 0)
 	if feedback != "" && only == "" { // 全片重生成：先清旧产物（含会话历史——宁无历史不错历史）
 		for _, seg := range sb.Segments {
 			_ = os.Remove(p.Artifact("llm/comp-" + seg.ID + ".json"))
@@ -284,14 +286,18 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		v := voices[seg.ID]
 		sceneM, compM := methodsFor(r.RootDir, seg)
 		// 附图顺序 = 样张 → 真迹关键帧 → 本段素材真图（按需申请制，无素材不带图）
+		// ——共享图在前、段变量图在后，与文本的稳定前缀布局同构。
 		vis := append([]visImg{}, sampleImgs...)
-		// 导演统筹块（弧线定位/母题任务/邻段衔接/本段节拍）在最前：先知道本段
-		// 在全片中的角色，再进设计系统约束——无导演字段时空串零占位。
-		style := directorNoteFor(sb, seg) + designNoteFor(p, seg.Idx) + sampleSrc + keyframeNote(len(keyImgs))
+		// 稳定前缀布局（七刀#4）：跨段不变的（样张源码/真迹说明/设计系统主体）连成
+		// 整块进共享前缀；段变量（导演统筹/本段版式指派/素材注记）全部垫尾——
+		// 导演统筹块先前置是可读性取舍，缓存计价下让位（语义由提示词行文自明）。
+		styleShared := sampleSrc + keyframeNote(len(keyImgs)) + designShared
+		_, styleSeg := designNotesFor(p, seg.Idx)
+		styleSeg = directorNoteFor(sb, seg) + styleSeg
 		segMats := materialsForSeg(p, seg.ID)
 		if len(segMats) > 0 {
 			vis = append(vis, materialVisImgs(p, segMats)...)
-			style += materialNote(len(segMats)) + materialsNote(segMats)
+			styleSeg += materialNote(len(segMats)) + materialsNote(segMats)
 		}
 		fp := sceneSidecarFingerprint(p, sb, seg)
 		var payload struct {
@@ -320,7 +326,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			}
 		}
 		if hist == nil { // 全新会话（首写或续写不可用的修复兜底，行为同旧版）
-			user := sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, len(segMats) == 0, prevSceneHTML(p, seg.ID))
+			user := sceneUserPrompt(seg, v, instruction, feedback, cv, styleShared, styleSeg, golden, sceneM, compM, len(segMats) == 0, prevSceneHTML(p, seg.ID))
 			_, gerr := gen(acc, vis, user, &payload)
 			if gerr != nil {
 				werr = fmt.Errorf("%s 场景生成失败: %w", seg.ID, gerr)
@@ -333,8 +339,8 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 				if mats := r.fulfillRequests(ctx, p, seg.ID, cleanRequests(payload.ImageRequests)); len(mats) > 0 {
 					segMats = mats
 					vis = append(vis, materialVisImgs(p, segMats)...)
-					style += materialNote(len(segMats)) + materialsNote(segMats)
-					_, err2 := gen(acc, vis, sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, false, ""), &payload)
+					styleSeg += materialNote(len(segMats)) + materialsNote(segMats)
+					_, err2 := gen(acc, vis, sceneUserPrompt(seg, v, instruction, feedback, cv, styleShared, styleSeg, golden, sceneM, compM, false, ""), &payload)
 					if err2 != nil {
 						werr = fmt.Errorf("%s 带素材终稿生成失败: %w", seg.ID, err2)
 						fail(werr)
@@ -360,7 +366,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 					HTML     string                  `json:"html"`
 					Elements []contract.NamedElement `json:"elements"`
 				}
-				_, err2 = gen(acc, vis, sceneUserPrompt(seg, v, "", fb, cv, style, golden, sceneM, compM, false, payload.HTML), &fixed)
+				_, err2 = gen(acc, vis, sceneUserPrompt(seg, v, "", fb, cv, styleShared, styleSeg, golden, sceneM, compM, false, payload.HTML), &fixed)
 				if err2 == nil {
 					payload.HTML, payload.Elements = fixed.HTML, fixed.Elements
 				}
@@ -399,7 +405,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			saveSceneHistory(p, seg.ID, &sceneHistory{
 				FP: fp,
 				Messages: []openai.ChatCompletionMessage{
-					{Role: openai.ChatMessageRoleUser, Content: sceneUserPrompt(seg, v, instruction, feedback, cv, style, golden, sceneM, compM, false, "")},
+					{Role: openai.ChatMessageRoleUser, Content: sceneUserPrompt(seg, v, instruction, feedback, cv, styleShared, styleSeg, golden, sceneM, compM, false, "")},
 					{Role: openai.ChatMessageRoleAssistant, Content: scenePayloadJSON(payload.HTML, payload.Elements)},
 				},
 			})
@@ -641,10 +647,15 @@ func (r *Runner) sceneLintWithVend(ctx context.Context, html string) []string {
 	return r.sceneLintRun(ctx, html)
 }
 
-// sceneUserPrompt 场景生成作业正文：契约摘要 + 段信息 + 风格/方法注入 + 词序表。
+// sceneUserPrompt 场景生成作业正文。稳定前缀布局（七刀#4，docs/cost-optimization-plan
+// §6 表#4）：跨段不变的部分（契约摘要/内容忠实/设计系统主体/样张源码/金样例/布局
+// 规则/动效手感）连成整块前置，段变量（段信息/导演统筹/本段版式指派/方法参考/
+// 词序表/用户指令/修复反馈）全部垫尾——GLM 前缀缓存按公共前缀计价，段信息插在
+// 共享文本中间曾把共同前缀斩断在 ≈2944 token（=系统+3样张+契约头），后面的共享
+// 文本全够不着。契约摘要里的段 id/段总时长也随之去段化（指向文末段信息）。
 // allowAsk=本段尚无素材，开放真图申请单（image_requests）；已有素材带图生成时关闭。
 // prevHTML=上一版场景文件（修复轮回喂底稿，首稿为空）。
-func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback string, cv contract.Canvas, style, golden, sceneTpl, compMethods string, allowAsk bool, prevHTML string) string {
+func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback string, cv contract.Canvas, styleShared, styleSeg, golden, sceneTpl, compMethods string, allowAsk bool, prevHTML string) string {
 	var wb strings.Builder
 	for i, w := range v.Words {
 		if i > 0 && i%10 == 0 {
@@ -663,7 +674,7 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
 	instrBlock := ""
 	briefLabel := "画面提示"
 	if instruction != "" {
-		instrBlock = "\n## 用户修改要求（最高优先级——这是重画指令，与下方原画面提示冲突时一律以用户要求为准，逐字落实）\n" + instruction + "\n"
+		instrBlock = "\n## 用户修改要求（最高优先级——这是重画指令，与「段信息」里的原画面提示冲突时一律以用户要求为准，逐字落实）\n" + instruction + "\n"
 		briefLabel = "原画面提示（旧版，仅参考）"
 	}
 	goldenBlock := ""
@@ -679,8 +690,8 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
 
 ## 契约摘要（完整版 docs/contract.md；违反任意一条会被 lint 拒收）
 1. 整个文件 = 一个 <template> 片段，无 DOCTYPE/html/head/body
-2. 根元素 data-composition-id="%s" data-width="%d" data-height="%d"；内部 #root 为舞台
-3. 恰好一个 gsap.timeline({paused:true})，末尾注册 window.__timelines["%s"]
+2. 根元素 data-composition-id="<段id>"（逐字用文末「段信息」给的段 id）data-width="%d" data-height="%d"；内部 #root 为舞台
+3. 恰好一个 gsap.timeline({paused:true})，末尾注册 window.__timelines["<段id>"]
 4. 全屏轨道层（背景等）带 class="clip" + data-start/data-duration/data-track-index
 5. 每个有意义的可见元素带 data-hf-name="人话名"（≥3 个；元素级指认依赖它）
 6. 确定性：禁 Date.now/new Date/setTimeout/setInterval/requestAnimationFrame/performance.now；
@@ -697,14 +708,12 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
    禁止在 CSS transform 里做居中（translateX(-50%%) 等）再让 GSAP 补间同一元素——GSAP 会整体覆盖 CSS transform，居中必须用 GSAP 的 xPercent/yPercent；
    元素的初始缩放/位移状态（如 scale(1.12)、scaleX(0)）一律写进 GSAP 的 fromTo from 值，CSS 里禁写 transform 声明——lint 对 CSS transform 与 GSAP 补间同元素一票否决
 9. 不写字幕——底部字幕带由平台注入；内容留在上 83%%，禁止出现 data-ph=/data-w= 标注
-10. 元素揭示随旁白节拍分布（对齐下方词序表，不前载不拖尾）；段总时长 %.3f 秒
+10. 元素揭示随旁白节拍分布（对齐文末词序表，不前载不拖尾）
 11. 需要新框架（如 three.js）：在 <template> 内写注释声明 `+"`<!-- vend: 包名@精确版本 -->`"+`，
     平台自动采购并注入（模型不写任何 <script> 标签，含本地路径也不行）
-
-## 段信息
-- 标题：%s
-- 旁白（%d 词，%.1f 秒）：%s
-- %s：%s
+12. 段间接续契约（机检按首/末帧亮度闸直接打回违反者）：首帧即景——t=0 背景与主体场景已在画面，
+    入场只做元素级位移/缩放/点亮，禁整页从黑场/纯色空白淡入开场；末帧定格——结尾定格在内容帧，
+    该退的元素提前退完、留下的停稳，禁整页淡出到黑/白
 
 ## 内容忠实（硬要求——机检只查工程不查内容，画错了直接进成片没人拦）
 - 画面提示里的场景设定与首拍/末拍承诺必须可见落实：首拍按承诺开场，末拍收在承诺的画面状态
@@ -712,11 +721,6 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
 - 画面中的文字（字卡/标签/数字/单位）与旁白和画面提示逐字一致，禁止自创数据
 %s
 %s
-%s
-%s
-## 词序表（reveal 对齐用）
-%s
-
 ## 布局规则
 %s
 - 每屏至少一个可辨认的视觉重心（它是什么、多大、放哪由你按本段画面决定）；
@@ -737,14 +741,27 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
 - 禁 ease:"none" 的平移/淡入裸入场（canvas 驱动线本身的 ease:"none" 不受此限，那是时钟）：
   入场要有性格；canvas 内运动把缓动写进 f(t) 包络，同样禁匀速直线
 - 次要元素跟随主元素滞后 0.1–0.3s 入场，成组出现要有主次
-- 出场干脆不拖尾：该退的元素在旁白收尾前退完，不恋战
+- 出场干脆不拖尾：该退的元素在旁白收尾前退完，不恋战；段尾画面定格在内容帧（接续契约收尾半条，整页淡出收黑会被亮度闸打回）
+
+## 段信息（本段专属——从这里到文末逐段不同；上文契约/设计/样张/金样例/规则为全片共享）
+- 段 id（根元素 data-composition-id 与 timeline 注册逐字用它）：%s
+- 标题：%s
+- 旁白（%d 词，%.1f 秒）：%s
+- 段总时长：%.3f 秒（timeline 全长，含 %.2fs 收尾垫；canvas 接线里的 duration 用它）
+- %s：%s
+%s
+%s
+%s
+## 词序表（reveal 对齐用）
+%s
 %s
 %s
 %s
 ## 输出（只输出一个 JSON 对象：第一个字符必须是 {、最后一个字符必须是 }，前后不许有任何字、标签、围栏或解释）
 {"note":"画面思路一句话",%s"html":"<template>…整段场景文件…</template>","elements":[{"id":"元素DOM id","name":"人话名（与 data-hf-name 一致）"}]}
-`, seg.ID, int(cv.W), int(cv.H), seg.ID, v.DurationS+contract.SegTail, seg.Key, len(v.Words), v.DurationS, seg.Narration, briefLabel, seg.VisualBrief,
-		instrBlock, style, goldenBlock, sceneTpl, wb.String(), rules, compMethods, askBlock, feedbackBlock(feedback, prevHTML), reqField)
+`, int(cv.W), int(cv.H), styleShared, goldenBlock, rules,
+		seg.ID, seg.Key, len(v.Words), v.DurationS, seg.Narration, v.DurationS+contract.SegTail, contract.SegTail, briefLabel, seg.VisualBrief,
+		styleSeg, sceneTpl, compMethods, wb.String(), instrBlock, askBlock, feedbackBlock(feedback, prevHTML), reqField)
 }
 
 // prevSceneHTML 上一版场景文件（修复轮回喂底稿——模型看得见旧稿才谈得上定点

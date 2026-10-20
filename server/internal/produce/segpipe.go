@@ -3,14 +3,16 @@ package produce
 // segpipe.go —— 段级流水线（production-stage-design 工作项⑬/⑭/⑮/⑰）：
 //
 //	TTS（一次，全局）→ ④写画面 ×N（并发 ≤4，谁写完谁往下流）
-//	   段链：本段 check（junction 子工程，含 canvas 段回放门禁）
+//	   段链：本段 check（junction 子工程，含 canvas 段回放门禁 + 段间接缝亮度闸）
 //	         → 段渲染（不被审核闸）→ ⑤段审（判卷型 ReAct，review 包；可关，见 segAuditOn）
-//	→ 邻居两侧段都过（机检直过或段审过）→ ⑤边界审 → 最后一对边界通过 → 拼接（永远零改动）
+//	→ 全部段过审 → 拼接（永远零改动，段间固定直切）
 //	→ 全片终审（12–16 帧四查）→ 出片
 //
-// 段审开关（2026-10-20 降本 D1，docs/cost-optimization-plan §2）：PRODUCE_SEG_AUDIT
-// 默认 off——段渲完直接记 audited（机检直过），内容型质量交提示词「内容忠实」条款
-// 预防 + 全片终审抽样兜底；on 回滚原审核链，代码不删。
+// 段审开关（2026-10-21 用户拍板恢复）：PRODUCE_SEG_AUDIT 默认 on——分段画面质量
+// 的第一道多模态闸值得花钱；off（2026-10-20 降本 D1）回滚成机检直过，代码保留。
+// 边界审开关（2026-10-21 D5，docs/cost-optimization-plan §八）：PRODUCE_BND_AUDIT
+// 默认 off——段间接缝交给固定机制（场景契约首帧即景/末帧定格 + 机检亮度闸 +
+// 拼接直切），不再靠审；on 回滚原边界审核链（跟踪器/代际/打回路由），代码不删。
 //
 // 与 legacy 栅栏管线的分工：prep 新项目（scripts/script.json 在）走本文件；
 // 老项目走 run() 原路径零改动（⑭：legacy 设计流程原样保留）。
@@ -71,16 +73,43 @@ func writeConcurrency() int { return envLimit("PRODUCE_WRITE_CONCURRENCY", 4) }
 // auditConcurrency 审核并发（PRODUCE_AUDIT_CONCURRENCY，默认 4）。
 func auditConcurrency() int { return envLimit("PRODUCE_AUDIT_CONCURRENCY", 4) }
 
-// segAuditOn 段审开关（PRODUCE_SEG_AUDIT，默认 off——2026-10-20 降本 D1 撤段审）。
-// off：段链 写→check→渲 后直接记 audited（机检直过），不再起判卷 agent——内容型
-// 质量由写画面提示词「内容忠实」条款预防 + 全片终审抽样兜底；边界审由代际机制
-// 照常触发（segState 记 audited 即唤醒边界跟踪）。on：回滚原审核链，代码不删。
+// segAuditOn 段审开关（PRODUCE_SEG_AUDIT，默认 on——2026-10-21 用户拍板恢复段审：
+// 分段画面的内容/风格质量需要一道多模态判卷，成本换质量值回票价）。off（2026-10-20
+// 降本 D1）：段链 写→check→渲 后直接记 audited（机检直过），内容型质量由写画面
+// 提示词「内容忠实」条款预防 + 全片终审抽样兜底；边界审不受本开关影响（归 D5）。
 func segAuditOn() bool {
 	switch strings.ToLower(os.Getenv("PRODUCE_SEG_AUDIT")) {
+	case "off", "0", "false":
+		return false
+	}
+	return true
+}
+
+// bndAuditOn 边界审开关（PRODUCE_BND_AUDIT，默认 off——2026-10-21 D5 撤边界审）。
+// 依据（p20261020-202642 实测片）：边界审抓到的真伤全是淡入淡出类，病根是各段
+// 即兴选开场收场——固定契约（首帧即景/末帧定格+机检亮度闸+拼接直切）后两条都不复
+// 存在；撤审连带拆掉代际级联放大器（终审打回→相邻边界重审→连环重写）与
+// waitAllPassed/bndBusy/代际重派这条多起死锁楔子的共同链条。on：回滚原边界审核链。
+func bndAuditOn() bool {
+	switch strings.ToLower(os.Getenv("PRODUCE_BND_AUDIT")) {
 	case "on", "1", "true":
 		return true
 	}
 	return false
+}
+
+// writeStagger 首写错峰间隔（PRODUCE_WRITE_STAGGER，默认 20s，0/negative 关闭）。
+// GLM 前缀缓存生效有几十秒传播延迟（ai/cache_probe.py 七组对照定案）：4 路首写
+// 同秒开跑互相踩传播窗口，谁也吃不到谁的共享前缀（实测一半调用连 2944 都没蹭上）。
+// 首写按开跑顺序错峰，后来者踩着先到者传播开的缓存价起跑；重写/修复轮不参与——
+// 那时共享前缀早已传播完。
+func writeStagger() time.Duration {
+	if v := os.Getenv("PRODUCE_WRITE_STAGGER"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
+			return d // 显式 0 = 关闭错峰（回拨开关）
+		}
+	}
+	return 20 * time.Second
 }
 
 // renderConcurrency 渲染并发（PRODUCE_RENDER_CONCURRENCY，默认 min(4, CPU-2)，
@@ -366,11 +395,15 @@ func (r *Runner) runSegmentPipeline(ctx context.Context, p *pipeline.Project) er
 		r.notifyOnDone(id, "video", fmt.Sprintf("全片制作完成（带伤 %d 处：%s）——明细见过程页与 reviews/ 意见单",
 			len(wounds), strings.Join(wounds, "、")))
 	} else {
-		auditNote := "逐段审核、"
+		segNote := "逐段审核"
 		if !segAuditOn() {
-			auditNote = "段审已关（机检直过）、"
+			segNote = "段审已关（机检直过）"
 		}
-		r.notifyOnDone(id, "video", "全片制作完成（段级流水线："+auditNote+"边界审、全片终审全部通过）")
+		bndNote := "边界审"
+		if !bndAuditOn() {
+			bndNote = "边界审已关（首帧即景/末帧定格+直切契约）"
+		}
+		r.notifyOnDone(id, "video", "全片制作完成（段级流水线："+segNote+"、"+bndNote+"、全片终审全部通过）")
 	}
 	return nil
 }
@@ -457,6 +490,11 @@ type coordinator struct {
 	bndBusy map[int]bool // 边界审在飞（auditBoundary 自己释放）；跟踪器据此防重派
 
 	passNotify chan string // 段过审通知（边界跟踪的唤醒信号）
+
+	// 首写错峰（writeStagger）：firstWrites 记已领号的首写数，staggerBase 是
+	// 1 号首写的开跑时刻——第 n 号的目标开跑时刻 = base + (n-1)×间隔。
+	firstWrites int
+	staggerBase time.Time
 
 	samplesOnce sync.Once
 	sampleVis   []visImg
@@ -591,10 +629,14 @@ func (c *coordinator) run(ctx context.Context) error {
 	var dispatchWg sync.WaitGroup
 	dispatchWg.Add(1)
 	go func() { defer dispatchWg.Done(); c.auditDispatcher(cctx, &auditWg) }()
-	// 边界跟踪（两侧段审都过 → 派边界审；重写致代际失配自动重审）
+	// 边界跟踪（两侧段审都过 → 派边界审；重写致代际失配自动重审）。
+	// D5 默认关：跟踪器是边界审的唯一派发源，开关关=整条边界链路（跟踪/派发/
+	// 代际比对）随开关休眠，waitAllPassed 只等段（allPassed 同步跳过边界对）。
 	var trackerWg sync.WaitGroup
-	trackerWg.Add(1)
-	go func() { defer trackerWg.Done(); c.boundaryTracker(cctx) }()
+	if bndAuditOn() {
+		trackerWg.Add(1)
+		go func() { defer trackerWg.Done(); c.boundaryTracker(cctx) }()
+	}
 
 	var finalErr error
 	for round := 1; ; round++ {
@@ -736,7 +778,9 @@ func (c *coordinator) waitAllPassed(ctx context.Context) error {
 	}
 }
 
-// allPassed 全部段 audited（当前代际在账）且全部边界在当前代际过审。
+// allPassed 全部段 audited（当前代际在账）且——边界审开着时——全部边界在当前
+// 代际过审。D5 关闸时边界不再是一等公民：终审的 stitch 查项（段序错/黑帧/闪跳）
+// 是接缝问题的兜底（回拨指标见 docs/cost-optimization-plan §八）。
 func (c *coordinator) allPassed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -746,13 +790,15 @@ func (c *coordinator) allPassed() bool {
 			return false
 		}
 	}
-	for _, b := range c.bounds {
-		if b.genP < 0 || b.genN < 0 {
-			return false
-		}
-		s, n := c.seg(b.prev), c.seg(b.next)
-		if s == nil || n == nil || s.gen != b.genP || n.gen != b.genN {
-			return false
+	if bndAuditOn() {
+		for _, b := range c.bounds {
+			if b.genP < 0 || b.genN < 0 {
+				return false
+			}
+			s, n := c.seg(b.prev), c.seg(b.next)
+			if s == nil || n == nil || s.gen != b.genP || n.gen != b.genN {
+				return false
+			}
 		}
 	}
 	return true
@@ -838,6 +884,19 @@ func (c *coordinator) writeSegment(ctx context.Context, s *segCtx, feedback stri
 	if err := llm.CheckBudget(ctx); err != nil {
 		return err
 	}
+	// 首写错峰（七刀#4）：本段第一次写（重写/修复轮不算——共享前缀那时早已传播
+	// 完）按开跑顺序错开，等先到者的共享前缀（系统+样张+契约+金样例）在平台
+	// 传播开再发请求，前缀吃缓存价。占着写信号量睡正是语义：错的是开跑时刻。
+	if feedback == "" && s.round == 0 && s.gen == 0 {
+		if wait := c.staggerSlot(); wait > 0 {
+			c.emit("progress", "compositions", fmt.Sprintf("%s 首写错峰 %.0fs（等前缀缓存传播）", s.seg.ID, wait.Seconds()))
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(wait):
+			}
+		}
+	}
 	c.writeGate(true)
 	defer c.writeGate(false)
 	c.emit("progress", "compositions", fmt.Sprintf("%s 写画面中", s.seg.ID))
@@ -874,6 +933,27 @@ func (c *coordinator) writeGate(on bool) {
 	c.mu.Unlock()
 }
 
+// staggerSlot 首写错峰领号：第 n 个领号的首写目标开跑时刻 = 首写纪元 +
+// (n-1)×writeStagger。返回还需等待的时长（已过点返回 0）。锁内只碰内存。
+func (c *coordinator) staggerSlot() time.Duration {
+	stg := writeStagger()
+	if stg <= 0 {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := c.firstWrites
+	c.firstWrites++
+	if n == 0 {
+		c.staggerBase = time.Now()
+		return 0
+	}
+	if d := time.Until(c.staggerBase.Add(time.Duration(n) * stg)); d > 0 {
+		return d
+	}
+	return 0
+}
+
 // auditGate 写优先于审（§4.3 第 2 条）：写队列非空的窗口里，审核每周期最多放行一个。
 func (c *coordinator) auditGate(ctx context.Context) {
 	for {
@@ -894,9 +974,16 @@ func (c *coordinator) auditGate(ctx context.Context) {
 	}
 }
 
-// checkSegment 本段 check（junction 子工程，含 canvas 段回放门禁）。
+// checkSegment 本段 check（junction 子工程，含 canvas 段回放门禁 + 段间接缝闸）。
 func (c *coordinator) checkSegment(ctx context.Context, s *segCtx) error {
-	if err := c.r.segCheck(ctx, c.p, s.seg.ID, s.dur); err != nil {
+	dur := s.dur
+	if dur <= 0 {
+		// 首写尚无实测时长：按配音时长推算（与写画面提示给的段总时长同源）。
+		// 回放门禁与接缝亮度闸的取样时刻都挂在这上面——旧版首稿 dur=0 直接
+		// 跳过两道闸，黑场开场全都漏到渲染后才被终审看见。
+		dur = c.voices[s.seg.ID].DurationS + contract.SegTail
+	}
+	if err := c.r.segCheck(ctx, c.p, s.seg.ID, dur); err != nil {
 		return err
 	}
 	c.segState(s.seg.ID, stChecked, 0, 0, "")

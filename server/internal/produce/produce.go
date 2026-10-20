@@ -965,7 +965,12 @@ const checkRepairRules = `
 	"- 若报错是 Cannot access 且报的变量名在你的代码里根本不存在（复检两轮仍在）＝" +
 	"检查器自己的 canvas 装配器消化不了这段 draw 函数，不是你的变量问题。" +
 	"修法＝把画布绘制函数改小改笨：删掉情节性小特效块（脉冲环/闪光/尾迹类），" +
-	"每个 ctx 调用直写、不套辅助函数、循环上界用字面量数字，主体画面保持不变。\n"
+	"每个 ctx 调用直写、不套辅助函数、循环上界用字面量数字，主体画面保持不变。\n" +
+	"- 首帧黑场开场 ✗ / 末帧淡出收黑 ✗（段间接缝亮度闸 seam）：病根是整页级的" +
+	"淡入/淡出补间。开场＝场景在 t=0 已完整在画面（背景/主体/字卡就位），把整页 " +
+	"opacity 从 0 拉起的补间删掉，入场改成元素级位移/缩放/点亮；收尾＝留下的元素" +
+	"停稳、画面定格到段尾，把整页淡出/收黑/透明度归零的收尾补间删掉。" +
+	"只动开场与收尾这两段补间，别顺手改构图与配色。\n"
 
 func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instruction, only string) error {
 	rechecks := 0 // 幽灵 TDZ 本地复检次数（同 segCheck：checker 竞态重掷不花钱）
@@ -1344,29 +1349,57 @@ const (
 	perceptualPixMax  = 32.0 // 块内单像素差上限（实测合规最坏 16，2 倍裕量）
 )
 
+// decodePng 读单张 PNG 并解码（decodePngPair 与接缝亮度闸共用）。
+func decodePng(path string) (image.Image, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return png.Decode(f)
+}
+
 // decodePngPair 读两 PNG 并解码。调用方拿到原始 image.Image：逐像素比对走
 // NRGBA 快路径，感知二级判据复用同一对已解码帧（超差帧重开+重解码曾是回放
 // 门禁里最贵的一步）。
 func decodePngPair(pathA, pathB string) (ia, ib image.Image, err error) {
-	fa, err := os.Open(pathA)
-	if err != nil {
+	if ia, err = decodePng(pathA); err != nil {
 		return nil, nil, err
 	}
-	defer fa.Close()
-	ia, err = png.Decode(fa)
-	if err != nil {
-		return nil, nil, err
-	}
-	fb, err := os.Open(pathB)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer fb.Close()
-	ib, err = png.Decode(fb)
-	if err != nil {
+	if ib, err = decodePng(pathB); err != nil {
 		return nil, nil, err
 	}
 	return ia, ib, nil
+}
+
+// meanLuma 帧均值亮度（Rec.709 加权，0-255）。NRGBA 快路径复用 nrgbaAt8
+// （预乘展开）；其余色型走接口逐像素（接缝闸每段只看 5 帧，不在热点上）。
+func meanLuma(img image.Image) float64 {
+	b := img.Bounds()
+	if b.Empty() {
+		return 0
+	}
+	var sum float64
+	if px, ok := img.(*image.NRGBA); ok && px.Rect == b {
+		n := 0
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			for x := b.Min.X; x < b.Max.X; x++ {
+				r, g, bl := nrgbaAt8(px, x, y)
+				sum += 0.2126*float64(r) + 0.7152*float64(g) + 0.0722*float64(bl)
+				n++
+			}
+		}
+		return sum / float64(n)
+	}
+	n := 0
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			r, g, bl, _ := img.At(x, y).RGBA()
+			sum += 0.2126*float64(r>>8) + 0.7152*float64(g>>8) + 0.0722*float64(bl>>8)
+			n++
+		}
+	}
+	return sum / float64(n)
 }
 
 // nrgbaAt8 与 image.NRGBA.RGBA()>>8 同口径取预乘 8bit 通道。快路径免掉每像素

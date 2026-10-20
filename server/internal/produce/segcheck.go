@@ -160,9 +160,11 @@ func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string
 			var out string
 			out, err = pipeline.RunCLI(p, "npx", pipeline.HyperframesPkg, "check", ".hf-check/"+segID, "--no-browser-gpu")
 			if err == nil {
-				// check 过了还差回放门禁（canvas 段）
+				// check 过了还差回放门禁（canvas 段）与段间接缝亮度闸（D5，全段）
 				if rerr := r.segReplayCheck(ctx, p, segID, dur); rerr != nil {
 					err, blocking = rerr, rerr
+				} else if serr := r.segSeamCheck(ctx, p, segID, dur); serr != nil {
+					err, blocking = serr, serr
 				}
 			} else {
 				blocking = fmt.Errorf("%s", blockingCheckErrors(out))
@@ -414,6 +416,119 @@ func (r *Runner) segReplayCheck(ctx context.Context, p *pipeline.Project, segID 
 	}
 	r.Manifest(p, "check.seg_replay", segID+": diff=0")
 	return nil
+}
+
+// segSeamCheck 段间接缝亮度闸（D5，docs/cost-optimization-plan §八）——契约
+// 「首帧即景/末帧定格」的程序化执法，零 token：子工程 snapshot 取开场两点、
+// 段中参考、收尾两点共 5 帧，均值亮度判黑场开场/淡出收黑。白场空白开场 luma
+// 偏高不在本闸射程（契约条款+终审兜底）。snapshot 基础设施故障降级放行并记账
+// （审查类故障不挡制作，哲学同回放门禁）。
+func (r *Runner) segSeamCheck(ctx context.Context, p *pipeline.Project, segID string, dur float64) error {
+	if dur <= 1 {
+		return nil
+	}
+	first := []float64{0.05, 0.15}
+	last := []float64{round2(dur - 0.2), round2(dur - 0.1)}
+	mid := round2(dur / 2)
+	ats := append(append(append([]float64{}, first...), mid), last...)
+	atArg := make([]string, len(ats))
+	for i, t := range ats {
+		atArg[i] = strconv.FormatFloat(t, 'f', 2, 64)
+	}
+	dir := p.Artifact("reports/seam/" + segID)
+	_ = os.RemoveAll(dir) // 输出目录是我们自己的产物，无 junction 风险
+	out, err := pipeline.RunCLI(p, "npx", pipeline.HyperframesPkg, "snapshot",
+		".hf-check/"+segID, "--at", strings.Join(atArg, ","), "--no-end", "--no-browser-gpu", "-o", dir)
+	if err != nil {
+		r.Manifest(p, "check.seam_degraded", segID+": "+pipeline.FirstLine(out, 120))
+		return nil
+	}
+	entries, rerr := os.ReadDir(dir)
+	if rerr != nil {
+		r.Manifest(p, "check.seam_degraded", segID+": "+rerr.Error())
+		return nil
+	}
+	lumas := map[float64]float64{}
+	for _, e := range entries {
+		t, ok := frameNameT(e.Name())
+		if !ok {
+			continue
+		}
+		img, derr := decodePng(filepath.Join(dir, e.Name()))
+		if derr != nil {
+			r.Manifest(p, "check.seam_degraded", segID+": "+derr.Error())
+			return nil
+		}
+		lumas[t] = meanLuma(img)
+	}
+	var firstL, lastL []float64
+	for _, t := range first {
+		v, ok := lumas[t]
+		if !ok {
+			r.Manifest(p, "check.seam_degraded", segID+": 缺开场取样帧 t="+strconv.FormatFloat(t, 'f', 2, 64))
+			return nil
+		}
+		firstL = append(firstL, v)
+	}
+	for _, t := range last {
+		v, ok := lumas[t]
+		if !ok {
+			r.Manifest(p, "check.seam_degraded", segID+": 缺收尾取样帧 t="+strconv.FormatFloat(t, 'f', 2, 64))
+			return nil
+		}
+		lastL = append(lastL, v)
+	}
+	probs := seamLumaVerdict(lumas[mid], firstL, lastL)
+	if len(probs) > 0 {
+		return fmt.Errorf("%s: 段间接缝亮度闸未过（修法见修复规则 seam 条）\n✗ %s", segID, strings.Join(probs, "\n✗ "))
+	}
+	r.Manifest(p, "check.seam", segID+": pass")
+	return nil
+}
+
+// seamLumaVerdict 首/末帧亮度闸判定（纯函数，便于单测）。mid=段中帧均值亮度
+// (0-255)，first/last=开场/收尾各取样点的均值亮度。任一开场取样过暗=黑场开场；
+// 任一收尾取样过暗=淡出收黑。绝对黑线 20/255 + 相对塌陷 0.55×中段双条件；暗色
+// 设计（中段 <40）绝对线失去意义，只看相对塌陷（阈 0.5）。取样取最暗点判——
+// 快启动的淡入在 t=0.05 就现形，慢启动的在 t=0.15 现形。
+func seamLumaVerdict(mid float64, first, last []float64) []string {
+	floor, ratio := 20.0, 0.55
+	if mid < 40 {
+		floor, ratio = 0, 0.5
+	}
+	darkest := func(vs []float64) float64 {
+		m := 255.0
+		for _, v := range vs {
+			if v < m {
+				m = v
+			}
+		}
+		return m
+	}
+	var out []string
+	dark := func(when, what, fix string, vs []float64) {
+		m := darkest(vs)
+		if m < floor || (mid > 0 && m < ratio*mid) {
+			out = append(out, fmt.Sprintf("%s：%s取样最暗 %.0f/255（段中 %.0f）——违反接缝契约：%s",
+				when, what, m, mid, fix))
+		}
+	}
+	dark("首帧黑场开场", "开场", "首帧即景——t=0 场景（背景/主体/字卡）必须已在画面，入场只做元素级位移/缩放/点亮，禁整页从黑场/纯色空白淡入", first)
+	dark("末帧淡出收黑", "收尾", "末帧定格——结尾定格在内容帧，该退的元素提前退完、留下的停稳，禁整页淡出到黑/白", last)
+	return out
+}
+
+// reFrameAt snapshot 输出帧名（frame-00-at-0.5s.png）→ 时刻。文件名里带时刻是
+// 接缝闸对号入座的依据（字典序 ≠ 时刻序，不能按文件名排序配位）。
+var reFrameAt = regexp.MustCompile(`^frame-\d+-at-([\d.]+)s\.png$`)
+
+func frameNameT(name string) (float64, bool) {
+	m := reFrameAt.FindStringSubmatch(name)
+	if m == nil {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(m[1], 64)
+	return f, err == nil
 }
 
 // segCompositions 单段合成物落盘（stageCompositions 的段级版，语义同源）：

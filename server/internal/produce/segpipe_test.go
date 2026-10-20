@@ -370,23 +370,23 @@ func TestBudgetSentinelSurvivesWaitAllPassed(t *testing.T) {
 	}
 }
 
-// 段审开关（2026-10-20 降本 D1 撤段审）：默认 off，on/1/true/ON 开、非法值视为关。
-// markSegAuditedNoAudit 机检直过：round/gen 前进、journal 落 audited、segAudited 为真，
-// 边界跟踪照常接手派边界审——撤的只是判卷 agent 这一环，边界链路不能断。
+// 段审开关（2026-10-21 恢复段审）：默认 on，off/0/false 关、非法值视为开。
+// markSegAuditedNoAudit 机检直过（关闸路径）：round/gen 前进、journal 落 audited、
+// segAudited 为真——边界跟踪的代际机制靠这套记账工作，语义保持。
 func TestSegAuditSwitchAndMarkAudited(t *testing.T) {
 	t.Setenv("PRODUCE_SEG_AUDIT", "")
-	if segAuditOn() {
-		t.Fatal("未配置时默认应关")
+	if !segAuditOn() {
+		t.Fatal("未配置时默认应开（2026-10-21 恢复段审）")
 	}
-	for _, v := range []string{"on", "1", "true", "ON"} {
+	for _, v := range []string{"off", "0", "false", "OFF"} {
 		t.Setenv("PRODUCE_SEG_AUDIT", v)
-		if !segAuditOn() {
-			t.Fatalf("PRODUCE_SEG_AUDIT=%s 应开", v)
+		if segAuditOn() {
+			t.Fatalf("PRODUCE_SEG_AUDIT=%s 应关", v)
 		}
 	}
 	t.Setenv("PRODUCE_SEG_AUDIT", "garbage")
-	if segAuditOn() {
-		t.Fatal("非法值应视为关")
+	if !segAuditOn() {
+		t.Fatal("非法值应视为开")
 	}
 
 	t.Setenv("PRODUCE_SEG_AUDIT", "")
@@ -428,15 +428,81 @@ func TestSegAuditSwitchAndMarkAudited(t *testing.T) {
 	}
 }
 
-// 内容忠实条款（2026-10-20 降本 D1 对冲）：撤段审后内容对齐只剩提示词预防+终审抽样，
-// 注入包必须带这段硬要求——锁文案在位，防后续改提示词时无声脱落。
+// 边界审开关（2026-10-21 D5 撤边界审）：默认 off，on/1/true 开。
+// allPassed 关闸时只等段：两侧段机检直过后即全过，边界对不参与（终审 stitch
+// 查项兜底）；开闸时恢复原语义——边界未审不算全过。
+func TestBndAuditSwitchAndAllPassed(t *testing.T) {
+	t.Setenv("PRODUCE_BND_AUDIT", "")
+	if bndAuditOn() {
+		t.Fatal("未配置时默认应关（D5 撤边界审）")
+	}
+	for _, v := range []string{"on", "1", "true", "ON"} {
+		t.Setenv("PRODUCE_BND_AUDIT", v)
+		if !bndAuditOn() {
+			t.Fatalf("PRODUCE_BND_AUDIT=%s 应开", v)
+		}
+	}
+
+	t.Setenv("PRODUCE_SEG_AUDIT", "off")
+	t.Setenv("PRODUCE_BND_AUDIT", "")
+	dir := t.TempDir()
+	r := &Runner{DataDir: dir, RootDir: dir, Hub: events.NewHub()}
+	p := pipeline.NewProject(dir, "p1")
+	if err := os.MkdirAll(p.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sb := &contract.Storyboard{Segments: []contract.Segment{{ID: "seg01"}, {ID: "seg02"}}}
+	c := newCoordinator(r, p, &review.Service{P: p, Emit: r.Hub.Emit}, sb, nil, nil, nil)
+	for _, s := range c.segs {
+		c.markSegAuditedNoAudit(s)
+	}
+	if !c.allPassed() {
+		t.Fatal("边界审关闸：全部段 audited 后应即全过（不等边界对）")
+	}
+	t.Setenv("PRODUCE_BND_AUDIT", "on")
+	if c.allPassed() {
+		t.Fatal("边界审开闸：边界未审不应全过")
+	}
+}
+
+// 首写错峰（七刀#4）：第 n 个领号的首写目标开跑 = 纪元 + (n-1)×间隔；
+// 间隔 0/非法关闭。1 号领号即开跑不等，2 号起等一个间隔。
+func TestStaggerSlot(t *testing.T) {
+	t.Setenv("PRODUCE_WRITE_STAGGER", "bogus")
+	if d := (&coordinator{}).staggerSlot(); d != 0 {
+		t.Fatalf("非法间隔应回退默认（此测只验不 panic），实得 %v", d)
+	}
+	t.Setenv("PRODUCE_WRITE_STAGGER", "0")
+	if d := (&coordinator{}).staggerSlot(); d != 0 {
+		t.Fatalf("间隔 0 应关闭错峰，实得 %v", d)
+	}
+	t.Setenv("PRODUCE_WRITE_STAGGER", "400ms")
+	c := &coordinator{}
+	if d := c.staggerSlot(); d != 0 {
+		t.Fatalf("1 号首写不该等，实得 %v", d)
+	}
+	if d := c.staggerSlot(); d <= 0 || d > 400*time.Millisecond {
+		t.Fatalf("2 号首写应等 ≤400ms 的正间隔，实得 %v", d)
+	}
+}
+
+// 内容忠实条款（2026-10-20 降本 D1 对冲）与段间接续契约（2026-10-21 D5）：
+// 注入包必须带这些硬要求——锁文案在位，防后续改提示词时无声脱落。
+// 顺带锁稳定前缀布局的形状：段信息（含段 id）必须出现在所有共享块（契约摘要/
+// 内容忠实/布局规则/动效手感）之后——段变量插中间曾把 GLM 前缀缓存斩断在 2944。
 func TestSceneUserPromptHasContentFidelityClause(t *testing.T) {
 	got := sceneUserPrompt(contract.Segment{ID: "seg01", Key: "k", Narration: "n"},
 		voiceMeta{}, "", "", contract.Canvas{W: 1080, H: 1920, Aspect: "9:16"},
-		"", "", "", "", false, "")
-	for _, want := range []string{"内容忠实", "首拍", "末拍", "逐字一致"} {
+		"", "", "", "", "", false, "")
+	for _, want := range []string{"内容忠实", "首拍", "末拍", "逐字一致", "首帧即景", "末帧定格"} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("提示词缺内容忠实条款关键词 %q", want)
+			t.Fatalf("提示词缺硬条款关键词 %q", want)
+		}
+	}
+	tail := got[strings.Index(got, "## 段信息"):]
+	for _, shared := range []string{"## 契约摘要", "## 内容忠实", "## 布局规则", "## 动效手感"} {
+		if strings.Contains(tail, shared) {
+			t.Fatalf("共享块 %q 出现在段信息之后（前缀布局破坏，段变量必须垫尾）", shared)
 		}
 	}
 }
