@@ -200,8 +200,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			if acc.rec != nil {
 				acc.rec.Note("改动单套用失败，本轮回退整份重写: %v", perr)
 			}
-			msgs = append(msgs, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content:
-				"改动单套用失败：" + perr.Error() + "\n改为输出整份文件：{\"note\":\"…\",\"html\":\"<template>…整份场景文件…</template>\",\"elements\":[{\"id\":\"…\",\"name\":\"…\"}]}"})
+			msgs = append(msgs, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "改动单套用失败：" + perr.Error() + "\n改为输出整份文件：{\"note\":\"…\",\"html\":\"<template>…整份场景文件…</template>\",\"elements\":[{\"id\":\"…\",\"name\":\"…\"}]}"})
 			var full struct {
 				HTML     string                  `json:"html"`
 				Elements []contract.NamedElement `json:"elements"`

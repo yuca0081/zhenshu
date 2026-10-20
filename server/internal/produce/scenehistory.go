@@ -108,9 +108,12 @@ a) 改动单（改动少时首选，省 token）：
   {"target":"#dom-id","text":"新文字"},
   {"target":"#dom-id","style":{"color":"#fff"}},
   {"target":"#dom-id","html":"<div id=\"dom-id\" …>替换后的完整外层</div>"}]}
-   - target 用元素 DOM id；一条只做一件事（text/style/html 互斥）；打不中整单作废
-   - html 替换必须保持同一 id（GSAP 补间按 id 找元素）
-   - 时间轴/GSAP 补间/大结构改动塞不进改动单——不要硬凑，用 b
+	   - target 用元素 DOM id；一条只做一件事（text/style/html 互斥）；打不中整单作废
+	   - html 替换必须保持同一 id（GSAP 补间按 id 找元素）
+	   - 时间轴/GSAP 补间/大结构改动塞不进改动单——不要硬凑，用 b。
+	     升级规则：上一轮交的是改动单、检查仍报同一问题＝问题在改动单够不着的
+	     时序/结构里，本轮禁止再交改动单，必须用 b 整份重写（入场动画窗口里的
+	     重叠/越界几乎都属于这类：动的是补间，不是静态摆放）。
 b) 整份文件（结构/时序大改时）：
 {"note":"…","html":"<template>…整份场景文件…</template>","elements":[{"id":"元素DOM id","name":"人话名"}]}`)
 	return b.String()

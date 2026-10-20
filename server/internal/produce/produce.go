@@ -959,13 +959,13 @@ const checkRepairRules = `
 	"修复＝把该字体从 font-family 栈里删掉、退到栈内或设计系统字体角色的后备字体——" +
 	"这算合规修复，不算违反设计系统（渲染端不存在的字体本来就守护不了设计）；" +
 	"除此之外画面一切照旧，不要顺手改构图/配色/动效。\n" +
-		"- ReferenceError: Cannot access 'X' before initialization ＝ 时序死区：X 在它声明语句执行之前就被调用了。" +
-		"修法＝把 X 的声明挪到所有调用之前，或把调用挪进声明之后才执行的函数——" +
-		"只把变量换个名字改不掉这个错（上一轮就是这么原地打转的），声明顺序必须动。\n" +
-		"- 若报错是 Cannot access 且报的变量名在你的代码里根本不存在（复检两轮仍在）＝" +
-		"检查器自己的 canvas 装配器消化不了这段 draw 函数，不是你的变量问题。" +
-		"修法＝把画布绘制函数改小改笨：删掉情节性小特效块（脉冲环/闪光/尾迹类），" +
-		"每个 ctx 调用直写、不套辅助函数、循环上界用字面量数字，主体画面保持不变。\n"
+	"- ReferenceError: Cannot access 'X' before initialization ＝ 时序死区：X 在它声明语句执行之前就被调用了。" +
+	"修法＝把 X 的声明挪到所有调用之前，或把调用挪进声明之后才执行的函数——" +
+	"只把变量换个名字改不掉这个错（上一轮就是这么原地打转的），声明顺序必须动。\n" +
+	"- 若报错是 Cannot access 且报的变量名在你的代码里根本不存在（复检两轮仍在）＝" +
+	"检查器自己的 canvas 装配器消化不了这段 draw 函数，不是你的变量问题。" +
+	"修法＝把画布绘制函数改小改笨：删掉情节性小特效块（脉冲环/闪光/尾迹类），" +
+	"每个 ctx 调用直写、不套辅助函数、循环上界用字面量数字，主体画面保持不变。\n"
 
 func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instruction, only string) error {
 	rechecks := 0 // 幽灵 TDZ 本地复检次数（同 segCheck：checker 竞态重掷不花钱）

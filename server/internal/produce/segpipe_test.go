@@ -198,6 +198,36 @@ func TestFinalFramesDistribution(t *testing.T) {
 	}
 }
 
+func TestFinalFramesSkipFadeInBlack(t *testing.T) {
+	// 2026-10-20 实测回归：段片自带 ~0.25s 淡入，起点精确帧必黑——终审 9 段锚点
+	// 全踩黑帧，被判「后半段全黑」来回重写好段直到刹车。段起点锚必须 +0.4s 越过
+	// 淡入；短段按 60% 收，永不越段尾。
+	sb := &contract.Storyboard{}
+	var tl []pipeline.TimelineRow
+	for i := 1; i <= 9; i++ {
+		id := fmt.Sprintf("seg%02d", i)
+		sb.Segments = append(sb.Segments, contract.Segment{ID: id, Key: "段" + id})
+		tl = append(tl, pipeline.TimelineRow{ID: id, Start: float64(i-1) * 7, End: float64(i) * 7})
+	}
+	tl[8].End = tl[8].Start + 1.0 // 末段压成 1s 短段：夹住 +0.4 不越界
+	frames, _ := finalFrames(nil, sb, tl)
+	byStart := map[float64]bool{}
+	for _, r := range tl {
+		byStart[round2(r.Start)] = true
+	}
+	for _, f := range frames {
+		if byStart[f.T] {
+			t.Fatalf("锚点 t=%.2f 正踩段起点（淡入黑帧）: %v", f.T, f.Label)
+		}
+	}
+	last := tl[len(tl)-1]
+	for _, f := range frames {
+		if f.T > last.End {
+			t.Fatalf("锚点 t=%.2f 越过末段尾 %.2f", f.T, last.End)
+		}
+	}
+}
+
 func TestBoundaryTrackerRedispatchAfterRework(t *testing.T) {
 	// 2026-10-19 萤火虫实测楔子回归：边界审打回路径不记账（genP/genN 留 -1），
 	// 「在飞」标志必须由 auditBoundary 完成时自己释放（bndBusy）——旧版靠跟踪器在

@@ -1507,9 +1507,9 @@ func finalFrames(p *pipeline.Project, sb *contract.Storyboard, tl []pipeline.Tim
 			break
 		}
 		if paraStarts[seg.ID] {
-			cands = append(cands, cand{t: tl[i].Start, label: fmt.Sprintf("此刻=段落界·第%d段「%s」起点", i+1, seg.Key), pin: true})
+			cands = append(cands, cand{t: segStartAnchorT(tl[i]), label: fmt.Sprintf("此刻=段落界·第%d段「%s」起点", i+1, seg.Key), pin: true})
 		} else {
-			cands = append(cands, cand{t: tl[i].Start, label: fmt.Sprintf("此刻=第%d段「%s」起点", i+1, seg.Key)})
+			cands = append(cands, cand{t: segStartAnchorT(tl[i]), label: fmt.Sprintf("此刻=第%d段「%s」起点", i+1, seg.Key)})
 		}
 	}
 	pinned := 0
@@ -1565,6 +1565,19 @@ func finalFrames(p *pipeline.Project, sb *contract.Storyboard, tl []pipeline.Tim
 		frames = append(frames, review.AnchorFrame{T: round2(cd.t), Label: cd.label})
 	}
 	return frames, paragraphs
+}
+
+// segStartAnchorT 段起点锚点的取帧时刻：起点 +0.4s。段片渲染自带 ~0.25s 淡入
+// （黑场渐入是模型最常用的开场），起点精确帧必黑——2026-10-20 实测 9 段片
+// 12-16 张锚点帧全踩在淡入黑帧上，终审据此判「后半段全黑渲染缺失」，把无辜
+// 好段来回重写直到签名刹车。+0.4s 越过淡入看到真实内容帧；段太短按比例收，
+// 永不越过段尾。
+func segStartAnchorT(row pipeline.TimelineRow) float64 {
+	t := row.Start + 0.4
+	if max := row.Start + (row.End-row.Start)*0.6; t > max {
+		t = max
+	}
+	return t
 }
 
 // ── 段审材料装配 ──────────────────────────────────────────────────
