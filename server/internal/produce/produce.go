@@ -2012,6 +2012,26 @@ func (r *Runner) clearFrames(p *pipeline.Project, only string) {
 var contrastSuggRe = regexp.MustCompile(
 	`✗[ ]*([^\r\n]+?)\s+[0-9]+(?:\.[0-9]+)?:1\s*\(need[^)]*\)\s*\n\s*Try\s+(rgb\([^)]*\))\s*;\s*source\s+(\S+)`)
 
+// pushedColor 把 checker 建议色推到黑白极性：建议色相对亮度 >0.35（浅色建议
+// =深背景）推纯白，否则推近黑。对任意单色背景，黑白两极的对比度数学下限
+// ≈4.58:1（背景亮度卡黑白等值点时），远超 3:1 闸——建议色按快照背景算，
+// 背景动起来就贴线翻车，极性色一劳永逸。
+func pushedColor(sugg string) string {
+	nums := reRGBNums.FindAllString(sugg, 3)
+	if len(nums) < 3 {
+		return sugg // 解析不动就原样用（老行为）
+	}
+	r, _ := strconv.Atoi(nums[0])
+	g, _ := strconv.Atoi(nums[1])
+	b, _ := strconv.Atoi(nums[2])
+	if 0.2126*float64(r)+0.7152*float64(g)+0.0722*float64(b) > 0.35*255 {
+		return "rgb(255,255,255)"
+	}
+	return "rgb(10,12,14)"
+}
+
+var reRGBNums = regexp.MustCompile(`\d+`)
+
 // gsapOpacityNoopRe 抓 gsap_from_opacity_noop 诊断对：✗ "#元素" 有 CSS opacity:0
 // 与 gsap.from(opacity:0) 冲突 \n …frames\segNN.html #元素 t=…
 var gsapOpacityNoopRe = regexp.MustCompile(
@@ -2087,6 +2107,9 @@ func applyGsapOpacityFixes(p *pipeline.Project, checkOut string) int {
 
 // applyContrastFixes 把 checker 给的对比度建议色直接回填到段帧 HTML（追加
 // data-contrast-fix 样式块，!important 压过内联样式），返回本次新回填的处数。
+// 建议色先经 pushedColor 推到黑白极性——建议色按快照背景算、背景在动就差一口气
+// （2026-10-21 seg08 实测：2.24:1 需 3:1，贴线三轮不收敛整链刹车），黑白极性对
+// 任意单色背景的对比度数学下限 4.58:1，永过闸不再试探。
 // 已在 HTML 里的同条规则跳过（内容去重）：LLM 修复轮重生成 HTML 会冲掉旧补丁，
 // 此时规则缺席会重新回填；规则在却还报同项，说明该建议色无效，不重复打转。
 func applyContrastFixes(p *pipeline.Project, checkOut string) int {
@@ -2095,7 +2118,7 @@ func applyContrastFixes(p *pipeline.Project, checkOut string) int {
 	}
 	var fixes []fix
 	for _, m := range contrastSuggRe.FindAllStringSubmatch(checkOut, -1) {
-		sel, color, src := strings.TrimSpace(m[1]), m[2], m[3]
+		sel, color, src := strings.TrimSpace(m[1]), pushedColor(m[2]), m[3]
 		file, ok := segFrameFile(src)
 		if !ok {
 			continue // 只动段帧（caps/index 的建议色不碰——字幕配色是平台守卫的事）

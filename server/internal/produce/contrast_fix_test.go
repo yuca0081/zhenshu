@@ -32,8 +32,9 @@ Contrast
 	}
 	b, _ := os.ReadFile(p.Artifact("compositions/frames/seg05.html"))
 	s := string(b)
-	if !strings.Contains(s, "div:nth-of-type(2) > div:nth-of-type(3) > div:nth-of-type(1){color:rgb(99,99,99)!important}") {
-		t.Fatalf("seg05 patch missing: %s", s)
+	// 建议色 rgb(99,99,99) 相对亮度 ≈0.39 > 0.35（浅色建议=深背景）→ 推纯白
+	if !strings.Contains(s, "div:nth-of-type(2) > div:nth-of-type(3) > div:nth-of-type(1){color:rgb(255,255,255)!important}") {
+		t.Fatalf("seg05 patch missing (expect polarity-pushed white): %s", s)
 	}
 	if !strings.Contains(s, "<style data-contrast-fix=\"1\">") || !strings.Contains(s, "</body>") {
 		t.Fatalf("style block malformed: %s", s)
