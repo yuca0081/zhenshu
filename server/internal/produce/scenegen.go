@@ -111,10 +111,18 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	// NoThink：画面是结构化 HTML 作业，开思考单段 5-13 分钟；关思考配合段间并发
 	// 把全片压进分钟级（v1 spec 路径同款取舍）。
 	// segUsage 单段写画面的用量账（首稿→素材二段式→修复轮全算任务总量，不再只记最后一次）。
+	// cached 必须单独累计：Total 落账时手工拼 Usage 会丢 PromptTokensDetails，
+	// 平台缓存命中就全账归零（2026-10-20 实测片写画面真实命中 21-99% 却记 0 的根因）。
 	type segUsage struct {
-		rec           *llm.Transcript
-		prompt, compl int
-		calls         int
+		rec                   *llm.Transcript
+		prompt, compl, cached int
+		calls                 int
+	}
+	genCached := func(u openai.Usage) int {
+		if u.PromptTokensDetails != nil {
+			return u.PromptTokensDetails.CachedTokens
+		}
+		return 0
 	}
 	gen := func(acc *segUsage, imgs []visImg, user string, out any) (openai.Usage, error) {
 		if acc.rec != nil {
@@ -133,6 +141,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		}
 		acc.prompt += u.PromptTokens
 		acc.compl += u.CompletionTokens
+		acc.cached += genCached(u)
 		acc.calls++
 		if err != nil && acc.rec != nil {
 			acc.rec.Note("模型调用失败: %v", err)
@@ -155,6 +164,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		u, err := prov.GenerateJSONContinue(ctx, msgs, 0.7, llm.EffortDisabled, out)
 		acc.prompt += u.PromptTokens
 		acc.compl += u.CompletionTokens
+		acc.cached += genCached(u)
 		acc.calls++
 		if err != nil && acc.rec != nil {
 			acc.rec.Note("续写调用失败: %v", err)
@@ -262,7 +272,13 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		acc := &segUsage{rec: at.Rec()}
 		var werr error
 		defer func() {
-			at.Total(openai.Usage{PromptTokens: acc.prompt, CompletionTokens: acc.compl}, acc.calls)
+			at.Total(openai.Usage{
+				PromptTokens:     acc.prompt,
+				CompletionTokens: acc.compl,
+				PromptTokensDetails: &openai.PromptTokensDetails{
+					CachedTokens: acc.cached,
+				},
+			}, acc.calls)
 			at.Done(werr)
 		}()
 		v := voices[seg.ID]
