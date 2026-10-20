@@ -500,6 +500,35 @@ func writeDesignDoc(b *strings.Builder, ss *contract.StyleSamples, brief *contra
 	}
 }
 
+// clampBoundaryFades D5 接缝契约的机械执法（2026-10-21 实测教训：p20261021-012948
+// 的风格库条目带「黑场呼吸」特色，经特色吸收硬要求把「整场淡入纯黑」写进
+// entry_exit/exit 与 motion——场景模型忠实执行设计文档，写画面提示词拦不住吸收链，
+// 段间接缝亮度闸三轮打回后整条制作刹车）。段间衔接是机械约定，设计也不许发明
+// 黑场翻页：确认落盘前把收尾/转场里的整页黑场类措辞机械改写成定格/直切。
+// 返回改写条数（0=无需改）。
+func clampBoundaryFades(ss *contract.StyleSamples) int {
+	if ss == nil {
+		return 0
+	}
+	reFade := regexp.MustCompile(`整[场页帧][^。；;\n]{0,30}(淡出|淡入|归黑|收黑)|归黑|收黑|黑场|闪黑`)
+	n := 0
+	if ss.EntryExit != nil && reFade.MatchString(ss.EntryExit.Exit) {
+		ss.EntryExit.Exit = "定格收尾——该退的元素在旁白收尾前退完，留下的元素归位停稳，画面定格到段尾（接缝契约：禁整页淡出/归黑，机检亮度闸打回）"
+		n++
+	}
+	if ss.Motion != nil {
+		if reFade.MatchString(ss.Motion.Exits) {
+			ss.Motion.Exits = "该退的元素旁白收尾前退完（元素级淡出/滑出均可），留下的停稳——段尾定格在内容帧，禁整页淡出收黑（接缝契约）"
+			n++
+		}
+		if reFade.MatchString(ss.Motion.Transition) {
+			ss.Motion.Transition = "全片统一直切（接缝契约：各段首帧即景/末帧定格，段间不切黑不加戏）"
+			n++
+		}
+	}
+	return n
+}
+
 // LockDesign 确认后的设计系统落盘：design.md（人读 + 门2 + scene_gen 注入源，含
 // 强参考特色落点表）+ skin.json（引擎件=主皮肤，assemble 字幕带配色消费）。
 // tokens 本体就是 style/style_samples.json——不另立 tokens.json，防双源漂移（宪法 #1）。
@@ -513,6 +542,9 @@ func LockDesign(p *Project, ss *contract.StyleSamples) error {
 	changed, matched := clampDesignFonts(ss)
 	if changed {
 		p.Manifest("design.fontclamp", "设计字体栈含渲染端不可用字体，已过滤为系统字体")
+	}
+	if n := clampBoundaryFades(ss); n > 0 {
+		p.Manifest("design.seam_clamp", fmt.Sprintf("D5 接缝契约改写 %d 处黑场/整页淡出类收尾转场（特色吸收与接缝契约冲突，机械执法）", n))
 	}
 	if len(matched) > 0 {
 		p.Manifest("design.fontcatalog", "设计点名目录字体："+strings.Join(mapKeys(matched), "、"))
@@ -556,20 +588,16 @@ func LockDesign(p *Project, ss *contract.StyleSamples) error {
 }
 
 // transitionTokenOf 设计系统的转场政策 → 机械令牌。现场发明的转场千姿百态，
-// 机械层只认三种出口：cut（直切——默认，段间节奏交给场景内退场/入场编排）、
-// fade（页内黑场微叠化）、xfade（真交叉叠化）。映射只认**未被否定的**关键词：
-// 「段尾黑场一瞬」→ fade，「禁黑场翻页」不算（设计在禁它）；明说「叠化/交叉」
-// → xfade；其余一切（含缺省）→ cut——招牌转场的手法本体本来就该画在场景
-// 文件里，机械层不越权实现。
+// 机械层只认两种出口：cut（直切——默认）、xfade（真交叉叠化，D5 允许的全局
+// 统一过渡）。映射只认**未被否定的**关键词：「叠化/交叉」→ xfade；其余一切
+// （含缺省）→ cut。黑场/闪黑类（旧映射 → fade 页内黑场微叠化）随 2026-10-21
+// D5 撤边界审一并退役：段间禁切黑，clampBoundaryFades 改掉措辞，这里兜住漏网。
 func transitionTokenOf(ss *contract.StyleSamples) string {
 	if ss == nil || ss.Motion == nil {
 		return "cut"
 	}
 	t := strings.ToLower(ss.Motion.Transition)
-	switch {
-	case hasUnnegated(t, "黑场"), hasUnnegated(t, "闪黑"), hasUnnegated(t, "黑一瞬"):
-		return "fade"
-	case hasUnnegated(t, "叠化"), hasUnnegated(t, "交叉"), hasUnnegated(t, "淡入淡出"):
+	if hasUnnegated(t, "叠化") || hasUnnegated(t, "交叉") || hasUnnegated(t, "淡入淡出") {
 		return "xfade"
 	}
 	return "cut"

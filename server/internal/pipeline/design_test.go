@@ -137,8 +137,8 @@ func TestDesignDocLayeredLayout(t *testing.T) {
 }
 
 // 转场令牌映射：设计系统 motion.transition 的现场发明措辞 → 机械令牌。
-// 缺省 cut（段间节奏交给场景编排）；明说黑场→fade；明说叠化/交叉→xfade；
-// 招牌转场（措辞自由）一律 cut——机械层不越权实现手法本体。
+// 缺省 cut（段间节奏交给场景编排）；黑场/闪黑类随 D5 退役一律 cut；
+// 明说叠化/交叉→xfade；招牌转场（措辞自由）一律 cut——机械层不越权实现手法本体。
 func TestTransitionTokenOf(t *testing.T) {
 	cases := []struct {
 		transition string
@@ -146,14 +146,14 @@ func TestTransitionTokenOf(t *testing.T) {
 	}{
 		{"", "cut"},
 		{"招牌转场：上段卡片旋出、下段同位旋入（场景内编排）", "cut"},
-		{"段尾黑场一瞬（片尾挽歌气质，论证见 notes）", "fade"},
-		{"闪黑切换，新闻纪事感", "fade"},
+		{"段尾黑场一瞬（片尾挽歌气质，论证见 notes）", "cut"}, // D5：黑场类退役
+		{"闪黑切换，新闻纪事感", "cut"},               // D5：同上
 		{"相邻段交叉叠化，呼吸感", "xfade"},
 		{"淡入淡出", "xfade"},
 		{"每段首尾元素递进推入", "cut"},
 		{"禁黑场翻页，全片蓝光扫屏换景（场景内实现）", "cut"}, // 否定词不算数
 		{"不用黑场，也不用叠化，硬切带光效", "cut"},      // 多关键词全被否定
-		{"叠化太软，禁叠化，改用闪黑硬转", "fade"},      // 前否后用：以未否定的为准
+		{"叠化太软，禁叠化，改用闪黑硬转", "xfade"},     // 首个「叠化」未被否定（太软不在否定词表）→ xfade
 	}
 	for _, c := range cases {
 		ss := designFixture()
