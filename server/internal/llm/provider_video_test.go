@@ -11,7 +11,7 @@ import (
 // 模型同时看懂视频与图片）。这是跨包组包的唯一出口，形状漂移等于全线断粮，测试钉死。
 func TestMediaPartsWithVideoMarshalShape(t *testing.T) {
 	parts := mediaParts("任务正文",
-		[]string{"data:image/png;base64,AAA", "data:image/png;base64,BBB"},
+		[]string{"data:image/png;base64,AAAA", "data:image/png;base64,BBBB"},
 		"https://v.example.com/clip.mp4")
 	b, err := json.Marshal(parts)
 	if err != nil {
@@ -20,8 +20,8 @@ func TestMediaPartsWithVideoMarshalShape(t *testing.T) {
 	s := string(b)
 	for _, want := range []string{
 		`{"type":"video_url","video_url":{"url":"https://v.example.com/clip.mp4"}}`,
-		`{"type":"image_url","image_url":{"url":"data:image/png;base64,AAA"}}`,
-		`{"type":"image_url","image_url":{"url":"data:image/png;base64,BBB"}}`,
+		`{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}`,
+		`{"type":"image_url","image_url":{"url":"data:image/png;base64,BBBB"}}`,
 		`{"type":"text","text":"任务正文"}`,
 	} {
 		if !strings.Contains(s, want) {
@@ -35,7 +35,7 @@ func TestMediaPartsWithVideoMarshalShape(t *testing.T) {
 
 // videoURL 为空 = 纯图路径：不出现 video_url 块（等价老 GenerateJSONVisionNoThink 行为）。
 func TestMediaPartsPlainHasNoVideo(t *testing.T) {
-	b, _ := json.Marshal(mediaParts("hi", []string{"data:image/png;base64,AAA"}, ""))
+	b, _ := json.Marshal(mediaParts("hi", []string{"data:image/png;base64,AAAA"}, ""))
 	if strings.Contains(string(b), "video_url") {
 		t.Fatalf("纯图路径不该有 video_url 块: %s", b)
 	}

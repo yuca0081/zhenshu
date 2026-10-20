@@ -13,6 +13,10 @@
 package agentlog
 
 import (
+	"encoding/json"
+	"os"
+	"strings"
+
 	openai "github.com/sashabaranov/go-openai"
 
 	"webpage-video-agent/server/internal/llm"
@@ -90,4 +94,29 @@ func (t *Task) Total(u openai.Usage, calls int) {
 	t.compl += u.CompletionTokens
 	t.cached += cachedOf(u)
 	t.calls += calls
+}
+
+// ProjectSpend 从 manifest.jsonl 的 agent.done 账行汇总项目历史用量——预算闸
+// （llm.Account）的播种数据：重启/重跑不归零，超限判定看项目全生命周期。
+// 读不到/解析不了的行跳过（账是旁路，不许它挡主链路）。
+func ProjectSpend(p *pipeline.Project) (prompt, completion, calls int) {
+	b, err := os.ReadFile(p.Artifact("manifest.jsonl"))
+	if err != nil {
+		return 0, 0, 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		var e struct {
+			Event         string `json:"event"`
+			PromptTokens  int    `json:"prompt_tokens"`
+			CompletionTok int    `json:"completion_tokens"`
+			Calls         int    `json:"calls"`
+		}
+		if json.Unmarshal([]byte(line), &e) != nil || e.Event != "agent.done" {
+			continue
+		}
+		prompt += e.PromptTokens
+		completion += e.CompletionTok
+		calls += e.Calls
+	}
+	return prompt, completion, calls
 }

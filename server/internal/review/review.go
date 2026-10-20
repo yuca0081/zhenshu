@@ -119,7 +119,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	kickParts := []openai.ChatMessagePart{{Type: openai.ChatMessagePartTypeText, Text: l.Kickoff}}
 	skipped := 0
 	for _, u := range l.KickoffIm {
-		if u == "" { // 空URL图外发必吃 endpoint 400（image_url格式错误）整审报废——跳过并记账
+		if !llm.ValidImageData(u) { // 坏图外发必吃 endpoint 400（image_url格式错误）整审报废——拦下并记账
 			skipped++
 			continue
 		}
@@ -129,7 +129,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		})
 	}
 	if skipped > 0 && l.Rec != nil {
-		l.Rec.Note("警告：跳过 %d 张空 URL 注入图（注入装配丢拷贝的症状，查 visRefs 类函数）", skipped)
+		l.Rec.Note("警告：拦截 %d 张非法载荷注入图（空 URL/截断 data URL/本地路径——注入装配丢拷贝的症状，查 visRefs 类函数）", skipped)
 	}
 	kick := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser}
 	if len(kickParts) > 1 {
@@ -301,12 +301,16 @@ func (l *Loop) step(round int, kind, detail string) {
 	}
 }
 
-// imageFollowUp 多模态附图（与 prep 同通道）。
+// imageFollowUp 多模态附图（与 prep 同通道）。坏载荷在这里拦下（P0-3）：
+// 取证管线偶产坏帧时，丢一张图好过整审报废。
 func imageFollowUp(images []string) openai.ChatCompletionMessage {
 	parts := []openai.ChatMessagePart{{
 		Type: openai.ChatMessagePartTypeText, Text: "［系统附图］上面工具取回的画面证据，供你判卷。",
 	}}
 	for _, u := range images {
+		if !llm.ValidImageData(u) {
+			continue
+		}
 		parts = append(parts, openai.ChatMessagePart{
 			Type:     openai.ChatMessagePartTypeImageURL,
 			ImageURL: &openai.ChatMessageImageURL{URL: u},

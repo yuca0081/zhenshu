@@ -210,7 +210,7 @@ func (r *Runner) Start(projectID string) (bool, error) {
 		pipeline.EnsureWorkspace(p)
 		// panic 兜底：audio_meta 等产物结构异常不该崩掉整个服务（goroutine panic 直接退进程）；
 		// 真失败自动重跑（≤2 次），重跑烧完才终态落盘+聊天汇报
-		err := r.runWithAutoRetry(ctx, p, projectID, EventProduceRetry, func() error { return r.run(ctx, p) })
+		err := r.runWithAutoRetry(ctx, p, projectID, EventProduceRetry, func(ctx context.Context) error { return r.run(ctx, p) })
 		r.finishJob(p, projectID, err, jobTail{
 			evCancelled:  EventProduceCancelled,
 			evError:      EventProduceError,
@@ -257,10 +257,18 @@ var autoRetryDelays = [maxAutoRetries]time.Duration{10 * time.Second, 30 * time.
 // （produce.retry / rework.retry，事件流面板可见）。重跑轮次耗尽仍失败时 err 带
 // 「已自动重跑」标记（%w 保错误链，取消分支的 errors.Is 不受影响），聊天话术据此
 // 说明「自动重跑也没救回来」。ctx 已死（用户取消/停机）原样返回，走取消分支。
-func (r *Runner) runWithAutoRetry(ctx context.Context, p *pipeline.Project, projectID, ev string, run func() error) error {
-	err := safeRun(run)
+// 项目 token 预算账（P0-1）在这里挂载：历史用量从 manifest 播种（重启不归零），
+// 塞进 ctx 后下游全部 LLM 调用自动过闸；预算耗尽不自动重跑（重跑只会立刻再被
+// 拒，白等 40 秒还把账面搞糊涂）。
+func (r *Runner) runWithAutoRetry(ctx context.Context, p *pipeline.Project, projectID, ev string, run func(context.Context) error) error {
+	sp, sc, sl := agentlog.ProjectSpend(p)
+	ctx = llm.WithAccount(ctx, llm.NewAccount(int64(sp), int64(sc), int64(sl), llm.ProjectTokenBudget()))
+	err := safeRun(func() error { return run(ctx) })
 	retried := 0
 	for n := 1; err != nil && n <= maxAutoRetries && ctx.Err() == nil && !r.stopping.Load(); n++ {
+		if errors.Is(err, llm.ErrBudgetExceeded) {
+			break // 预算耗尽是确定性失败：重跑必立刻再拒，不烧重跑轮次
+		}
 		delay := autoRetryDelays[n-1]
 		r.Manifest(p, ev, fmt.Sprintf("自动重跑 %d/%d（%s 后开始）；上次失败：%s",
 			n, maxAutoRetries, delay, pipeline.FirstLine(err.Error(), 160)))
@@ -274,7 +282,11 @@ func (r *Runner) runWithAutoRetry(ctx context.Context, p *pipeline.Project, proj
 			return ctx.Err()
 		}
 		retried = n
-		err = safeRun(run)
+		err = safeRun(func() error { return run(ctx) })
+	}
+	if errors.Is(err, llm.ErrBudgetExceeded) {
+		r.Manifest(p, "budget.exhausted", "项目 token 预算耗尽，制作停机（产物已按段保留）")
+		r.emit(p.ID, "stage", "produce", "error: 项目 token 预算耗尽，制作停机（可在环境变量 LLM_PROJECT_TOKEN_BUDGET 调整上限后重跑）")
 	}
 	if err != nil && retried > 0 {
 		err = fmt.Errorf("%w（已自动重跑 %d 次仍未过）", err, retried)
@@ -441,7 +453,7 @@ func (r *Runner) Rework(projectID string, segIDs []string, instruction string) (
 		}()
 		// 清理过的老项目先回源工作区（重做的 sceneGen 要吃素材与设计产物）
 		pipeline.EnsureWorkspace(p)
-		err := r.runWithAutoRetry(ctx, p, projectID, EventReworkRetry, func() error { return r.runRework(ctx, p, segs, instruction) })
+		err := r.runWithAutoRetry(ctx, p, projectID, EventReworkRetry, func(ctx context.Context) error { return r.runRework(ctx, p, segs, instruction) })
 		r.finishJob(p, projectID, err, jobTail{
 			evCancelled:    EventReworkCancelled,
 			evError:        EventReworkError,

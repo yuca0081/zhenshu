@@ -55,6 +55,11 @@ func run(ctx context.Context, p *pipeline.Project, d Deps, strict bool) error {
 		p.Manifest("prep.skipped", "LLM 未配置，准备阶段降级 legacy 单发路径")
 		return nil
 	}
+	// 项目 token 预算账（P0-1）：历史用量从 manifest 播种（重启不归零），塞进
+	// ctx 后三工位的全部 LLM 调用自动过闸记账——风格包实测 17–26 万 token/片，
+	// 闸挂在编排器一处比每个工位各自设防可靠。
+	sp, sc, sl := agentlog.ProjectSpend(p)
+	ctx = llm.WithAccount(ctx, llm.NewAccount(int64(sp), int64(sc), int64(sl), llm.ProjectTokenBudget()))
 	type station struct {
 		name  string
 		run   func(context.Context) error
@@ -96,9 +101,10 @@ func runTracked(ctx context.Context, p *pipeline.Project, task, label string, lo
 
 // runWithColdRetry 预算耗尽/模型失败 → 记账 + 至多一次冷重试（§5.2）。
 // 冷重试是全新会话：Loop 与工具闭包都在 station.run 内新建，重调即归零。
+// 预算耗尽（P0-1）不冷重试：重试必立刻再拒，白烧一轮记账。
 func runWithColdRetry(ctx context.Context, p *pipeline.Project, name string, f func(context.Context) error) error {
 	err := f(ctx)
-	if err == nil || ctx.Err() != nil {
+	if err == nil || ctx.Err() != nil || errors.Is(err, llm.ErrBudgetExceeded) {
 		return err
 	}
 	p.Manifest("prep.cold_retry", name+": "+pipeline.FirstLine(err.Error(), 160))

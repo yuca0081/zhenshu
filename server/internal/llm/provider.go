@@ -147,6 +147,7 @@ type glmMessage struct {
 }
 
 func mediaParts(user string, imageURLs []string, videoURL string) []glmMediaPart {
+	imageURLs = sanitizeImageURLs(imageURLs) // 坏图拦在门口：一张坏 data URL 会让端点整包 400
 	parts := make([]glmMediaPart, 0, len(imageURLs)+2)
 	if videoURL != "" {
 		parts = append(parts, glmMediaPart{Type: "video_url", VideoURL: &glmMedia{URL: videoURL}})
@@ -177,6 +178,10 @@ func (p *Provider) generate(ctx context.Context, system, user string, imageURLs 
 	var lastErr error
 	var usage openai.Usage
 	for attempt := 0; attempt < 3; attempt++ {
+		// 预算闸（P0-1）：超限的调用一个字节都不出网，管线如实失败转可重跑
+		if err := budgetCheck(ctx); err != nil {
+			return usage, err
+		}
 		if attempt > 0 {
 			// 重试退避感知取消：任务已被取消还空转重试只会白等。
 			// 429 要按限速窗口退避（实测 2/4s 出不了窗口，三连试全烧在限速上）；
@@ -222,6 +227,7 @@ func (p *Provider) generate(ctx context.Context, system, user string, imageURLs 
 			continue
 		}
 		usage = resp.Usage
+		budgetAdd(ctx, usage)
 		content := extractJSON(stripFence(resp.Choices[0].Message.Content))
 		if err := json.Unmarshal([]byte(content), out); err != nil {
 			lastErr = fmt.Errorf("模型输出不是合法 JSON: %w（原文前 200 字: %.200s）", err, content)
@@ -280,36 +286,38 @@ func applyEffort(req *glmChatRequest, effort Effort) {
 	}
 }
 
-// postChat 组包发送 + 响应解析（chatOnce 与 Chat 共用）。
+// postChat 组包发送 + 响应解析（chatOnce 与 Chat 共用）。缓存/单飞封皮见
+// diskcache.go：相同请求体命中磁盘缓存零成本复用；并发同键只出一份网（P0-2/P0-5）。
 func (p *Provider) postChat(ctx context.Context, req glmChatRequest) (openai.ChatCompletionResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return openai.ChatCompletionResponse{}, err
 	}
+	return cachedChat(ctx, p.Model, body, func() ([]byte, error) { return p.postChatNet(ctx, body) })
+}
+
+// postChatNet 真正的 HTTP 一跳（缓存未命中时由 cachedChat 调）。
+func (p *Provider) postChatNet(ctx context.Context, body []byte) ([]byte, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, "POST",
 		strings.TrimSuffix(p.BaseURL, "/")+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return openai.ChatCompletionResponse{}, err
+		return nil, err
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+p.APIKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
-		return openai.ChatCompletionResponse{}, err
+		return nil, err
 	}
 	defer httpResp.Body.Close()
 	b, err := io.ReadAll(httpResp.Body)
 	if err != nil {
-		return openai.ChatCompletionResponse{}, err
+		return nil, err
 	}
 	if httpResp.StatusCode != http.StatusOK {
-		return openai.ChatCompletionResponse{}, &StatusError{Code: httpResp.StatusCode, Body: string(b)}
+		return nil, &StatusError{Code: httpResp.StatusCode, Body: string(b)}
 	}
-	var resp openai.ChatCompletionResponse
-	if err := json.Unmarshal(b, &resp); err != nil {
-		return openai.ChatCompletionResponse{}, fmt.Errorf("响应解析失败: %w（原文前 200 字: %.200s）", err, b)
-	}
-	return resp, nil
+	return b, nil
 }
 
 // extractJSON 从模型输出里捞第一个完整 JSON 对象（括号配平，跳过字符串字面量内的花括号）。

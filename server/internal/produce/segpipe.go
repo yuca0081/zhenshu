@@ -776,6 +776,10 @@ func (c *coordinator) writeSegment(ctx context.Context, s *segCtx, feedback stri
 	case c.writeSem <- struct{}{}:
 	}
 	defer func() { <-c.writeSem }()
+	// 预算闸前置（P0-1）：耗尽就别开段了——等第一笔调用被拒再层层上抛，账面难看
+	if err := llm.CheckBudget(ctx); err != nil {
+		return err
+	}
 	c.writeGate(true)
 	defer c.writeGate(false)
 	c.emit("progress", "compositions", fmt.Sprintf("%s 写画面中", s.seg.ID))
@@ -941,6 +945,10 @@ func (c *coordinator) auditDispatcher(ctx context.Context, auditWg *sync.WaitGro
 // 打回重写（≤2 轮）。审查器自身故障降级放行（宁放过不误杀，哲学同 frameQA）。
 func (c *coordinator) auditSegment(ctx context.Context, req auditReq) {
 	defer c.guardWorker("段审 " + req.segID)
+	if err := llm.CheckBudget(ctx); err != nil { // 预算耗尽=刹车，不是审查器故障（勿降级放行）
+		c.fail(err)
+		return
+	}
 	s := c.seg(req.segID)
 	if s == nil {
 		return
@@ -968,6 +976,10 @@ func (c *coordinator) auditSegment(ctx context.Context, req auditReq) {
 	v, err := c.svc.AuditSegment(ctx, in)
 	if err != nil {
 		if ctx.Err() != nil {
+			return
+		}
+		if errors.Is(err, llm.ErrBudgetExceeded) { // 预算耗尽是刹车不是故障：降级放行只会烧穿预算继续跑
+			c.fail(err)
 			return
 		}
 		// 审查器故障：记账降级放行（不挡成片，用户知情——非阻塞哲学同 frameQA）
@@ -1124,6 +1136,10 @@ func (c *coordinator) segAudited(s *segCtx) bool {
 // auditBoundary 边界审 → 打回路由（anchor 时刻正负定前/后段）+ stitch_fix 清单。
 func (c *coordinator) auditBoundary(ctx context.Context, req auditReq) {
 	defer c.guardWorker("边界审")
+	if err := llm.CheckBudget(ctx); err != nil { // 预算耗尽=刹车，不是审查器故障（勿降级放行）
+		c.fail(err)
+		return
+	}
 	// 在飞标志由本 goroutine 释放（含打回重写路径）——旧版靠跟踪器在「过审记账」
 	// 分支复位，而打回路径不记账（genP/genN 保持 -1），标志永不复位：被打回段
 	// 重写过审后该边界再无人重派，全管线静等看门狗（2026-10-19 萤火虫实测楔死）。
@@ -1156,6 +1172,10 @@ func (c *coordinator) auditBoundary(ctx context.Context, req auditReq) {
 	v, err := c.svc.AuditBoundary(ctx, in)
 	if err != nil {
 		if ctx.Err() != nil {
+			return
+		}
+		if errors.Is(err, llm.ErrBudgetExceeded) { // 预算耗尽是刹车不是故障
+			c.fail(err)
 			return
 		}
 		c.r.Manifest(c.p, "review.bnd_error", b.id+": "+pipeline.FirstLine(err.Error(), 140))
@@ -1293,6 +1313,9 @@ func (c *coordinator) takeStitchFixes() []string {
 
 // finalAudit 跑一轮终审。返回需重写的段 id 清单（空 = 全过）。
 func (c *coordinator) finalAudit(ctx context.Context, round int) ([]string, error) {
+	if err := llm.CheckBudget(ctx); err != nil { // 预算耗尽=刹车（勿降级放行）
+		return nil, err
+	}
 	tl := pipeline.LoadTimeline(c.p)
 	if len(tl) == 0 {
 		return nil, errors.New("终审缺 timeline（拼接未落 timeline.json）")
@@ -1307,6 +1330,9 @@ func (c *coordinator) finalAudit(ctx context.Context, round int) ([]string, erro
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("终审失败: %w", err)
+		}
+		if errors.Is(err, llm.ErrBudgetExceeded) { // 预算耗尽是刹车不是故障
+			return nil, err
 		}
 		// 终审故障降级放行（2026-10-19 中-9）：段审/边界审故障都记账降级，唯独
 		// 终审一次 LLM 抖动/预算烧尽就整片失败、再叠两轮自动重跑——口径拉齐：

@@ -39,10 +39,12 @@ func (p *Provider) chatTemp(ctx context.Context, msgs []openai.ChatCompletionMes
 	// 「Chat 保持 300s」与实现不符，2026-10-19 对齐为如实描述。
 	ctx, cancel := context.WithTimeout(ctx, 600*time.Second)
 	defer cancel()
-	// 消息逐条预序列化（含 tool_calls 等字段原样透传），再拼成 RawMessage 数组进统一壳
+	// 消息逐条预序列化（含 tool_calls 等字段原样透传），再拼成 RawMessage 数组进统一壳。
+	// 预序列化前过一遍图片校验（P0-3）：非法 image_url 在这里拦下换占位，不让
+	// 它把整轮请求送去端点吃 400。
 	raw := make([]json.RawMessage, 0, len(msgs))
 	for _, m := range msgs {
-		b, err := json.Marshal(m)
+		b, err := json.Marshal(sanitizeChatMsg(m))
 		if err != nil {
 			return openai.ChatCompletionMessage{}, openai.Usage{}, err
 		}
@@ -64,6 +66,11 @@ func (p *Provider) chatTemp(ctx context.Context, msgs []openai.ChatCompletionMes
 	// 代价远大于等一个限速窗口）。退避 15s/30s，叠随机抖动——多路调用方同步退避
 	// 会一起醒来再撞一次（2026-10-17 惊群教训，与 generate 同款）；ctx 取消立即让路。
 	for attempt := 0; ; attempt++ {
+		// 预算闸（P0-1）：超限一个字节都不出网。放在退避等待之前——已超限的
+		// 调用连限速窗口都不该等，立刻失败让上层收摊。
+		if err := budgetCheck(ctx); err != nil {
+			return openai.ChatCompletionMessage{}, openai.Usage{}, err
+		}
 		// 账户级并发闸（2026-10-19 高-8）：Chat/ChatTemp 原先绕闸直发，而准备三
 		// 工位与全部审片循环都走这条路——多项目并行时正是 429 惊群最后一个口子。
 		// 闸在退避等待之外（睡着的调用不占坑），与 generate 同一道闸。
@@ -77,6 +84,7 @@ func (p *Provider) chatTemp(ctx context.Context, msgs []openai.ChatCompletionMes
 			return p.postChat(ctx, req)
 		}()
 		if err == nil {
+			budgetAdd(ctx, resp.Usage) // 200 即记账（含空 choices——端点已计费）
 			if len(resp.Choices) == 0 {
 				return openai.ChatCompletionMessage{}, resp.Usage, ErrEmptyChoice
 			}

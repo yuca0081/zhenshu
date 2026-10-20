@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"webpage-video-agent/server/internal/events"
+	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
 )
 
@@ -29,7 +30,7 @@ func TestRunWithAutoRetry(t *testing.T) {
 
 	// 一直失败：首跑 + 2 次重跑 = 3 次尝试，最终 err 带标记
 	n := 0
-	err := r.runWithAutoRetry(context.Background(), p, "p1", EventProduceRetry, func() error {
+	err := r.runWithAutoRetry(context.Background(), p, "p1", EventProduceRetry, func(context.Context) error {
 		n++
 		return errors.New("boom")
 	})
@@ -39,7 +40,7 @@ func TestRunWithAutoRetry(t *testing.T) {
 
 	// 第 2 次成功：不裹标记
 	n = 0
-	err = r.runWithAutoRetry(context.Background(), p, "p1", EventProduceRetry, func() error {
+	err = r.runWithAutoRetry(context.Background(), p, "p1", EventProduceRetry, func(context.Context) error {
 		n++
 		if n < 2 {
 			return errors.New("boom")
@@ -54,7 +55,7 @@ func TestRunWithAutoRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	n = 0
-	err = r.runWithAutoRetry(ctx, p, "p1", EventProduceRetry, func() error {
+	err = r.runWithAutoRetry(ctx, p, "p1", EventProduceRetry, func(context.Context) error {
 		n++
 		return errors.New("boom")
 	})
@@ -64,7 +65,7 @@ func TestRunWithAutoRetry(t *testing.T) {
 
 	// 重跑轮里冒出 context.Canceled（用户取消）：标记照裹但错误链保真
 	n = 0
-	err = r.runWithAutoRetry(context.Background(), p, "p1", EventProduceRetry, func() error {
+	err = r.runWithAutoRetry(context.Background(), p, "p1", EventProduceRetry, func(context.Context) error {
 		n++
 		if n == 1 {
 			return errors.New("boom")
@@ -73,5 +74,20 @@ func TestRunWithAutoRetry(t *testing.T) {
 	})
 	if n != 1+maxAutoRetries || !errors.Is(err, context.Canceled) {
 		t.Fatalf("取消错误链断了: n=%d err=%v", n, err)
+	}
+
+	// 预算耗尽（P0-1）：确定性失败不烧重跑轮次——首跑即返回且 manifest 落
+	// budget.exhausted 账行
+	n = 0
+	err = r.runWithAutoRetry(context.Background(), p, "p1", EventProduceRetry, func(ctx context.Context) error {
+		n++
+		return llm.ErrBudgetExceeded
+	})
+	if n != 1 || !errors.Is(err, llm.ErrBudgetExceeded) || strings.Contains(err.Error(), "已自动重跑") {
+		t.Fatalf("预算耗尽不该重跑: n=%d err=%v", n, err)
+	}
+	mb, _ := os.ReadFile(p.Artifact("manifest.jsonl"))
+	if !strings.Contains(string(mb), "budget.exhausted") {
+		t.Fatal("预算耗尽未落 manifest 账行")
 	}
 }

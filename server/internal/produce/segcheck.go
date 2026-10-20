@@ -14,6 +14,8 @@ package produce
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -139,8 +141,13 @@ func removeSegCheckDir(p *pipeline.Project, segID string) {
 // segCheck 单段门禁（§4.2 checked 位）：hyperframes check 于子工程，诊断只含
 // 本段；廉价机械修复先行，LLM 修复轮回喂 sceneGen（≤3 轮，与全局 checkWithRepair
 // 同构）；含 canvas 的段加两轮回放门禁。全部通过 = checked。
+// 同签名刹车（2026-10-20 成本诊断 P0-4）：修复轮报同类错误（签名=归一化诊断）
+// 连续两轮，说明重生成在原地打转（seg07 实测：「Cannot access 'Ph' before
+// initialization」连挂三轮，每轮重掷几万 token 换个变量名再死一次）——回退上一
+// 版过检画面重检收场，不再给重掷机会。
 func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string, dur float64) error {
 	id := p.ID
+	prevSig := ""
 	for attempt := 1; attempt <= 3; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -164,6 +171,7 @@ func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string
 			}
 		}
 		if err == nil {
+			stashLastGoodScene(p, segID) // 过检画面入备份：同签名刹车回退时的底牌
 			r.emit(id, "stage", "check", segID+" done")
 			r.Manifest(p, "stage.finish", "check/"+segID)
 			return nil
@@ -195,6 +203,17 @@ func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string
 				continue // 回填后重检（attempt 消耗一次，语义同全局路径）
 			}
 		}
+		// 同签名刹车：上一轮刚报过同类错误，重生成修不掉——回退上一版过检画面
+		// 再检一轮（上一版过过检，大概率直接放行）。没有备份（首写就顽固失败）
+		// 时退回原路重掷，行为同旧版。
+		if sig := checkSig(blocking.Error()); sig == prevSig && restoreLastGoodScene(ctx, r, p, segID) {
+			r.emit(id, "stage", "check", segID+" 修复轮同签名未收敛，回退上一版过检画面")
+			r.Manifest(p, "check.signature_fallback", segID+": "+pipeline.FirstLine(blocking.Error(), 120))
+			prevSig = "" // 回退版本下轮见分晓；别连续两轮回退自己
+			continue
+		} else if sig != prevSig {
+			prevSig = sig
+		}
 		feedback := "上一版画面被自动检查拒绝，报错摘要（✗ 行逐项都要修）：\n" + pipeline.TailLines(blocking.Error(), 25) +
 			"\n修复规则：\n" + checkRepairRules + "逐项修完再输出。"
 		r.emit(id, "stage", "check", fmt.Sprintf("%s repair：重生成画面", segID))
@@ -214,6 +233,78 @@ func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string
 		}
 	}
 	return nil
+}
+
+// checkSig 检查诊断的归一化签名：变量名/数字/引号内容剥掉（重掷一轮只换个变量名
+// 是常态），剩下的错误类别一致即同签名。返回 sha1 前 8 位。
+func checkSig(s string) string {
+	var b strings.Builder
+	for _, ln := range strings.Split(s, "\n") {
+		ln = strings.TrimSpace(strings.ToLower(ln))
+		if ln == "" {
+			continue
+		}
+		b.WriteString(stripQuotedAndDigits(ln))
+		b.WriteByte('\n')
+	}
+	sum := sha1.Sum([]byte(b.String()))
+	return hex.EncodeToString(sum[:4])
+}
+
+// stripQuotedAndDigits 去引号包裹段（'Ph' / "seg07.html"）与数字。重掷一轮的
+// 典型变化就是引号里换个变量名、路径里换个数字——剥掉后剩下的错误类别一致即同签名。
+func stripQuotedAndDigits(s string) string {
+	var out strings.Builder
+	inQ := byte(0)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case inQ != 0:
+			if c == inQ {
+				inQ = 0
+			}
+		case c == '\'' || c == '"' || c == '`':
+			inQ = c
+		case c >= '0' && c <= '9':
+		default:
+			out.WriteByte(c)
+		}
+	}
+	return out.String()
+}
+
+// lastGoodScenePath 上一版过检画面的备份路径（llm/comp-<seg>.lastgood.json）。
+func lastGoodScenePath(p *pipeline.Project, segID string) string {
+	return p.Artifact("llm/comp-" + segID + ".lastgood.json")
+}
+
+// stashLastGoodScene 把当前场景产物备份为「上一版过检画面」（过检后调用）。
+func stashLastGoodScene(p *pipeline.Project, segID string) {
+	b, err := os.ReadFile(p.Artifact("llm/comp-" + segID + ".json"))
+	if err != nil {
+		return
+	}
+	_ = pipeline.WriteFileAtomic(lastGoodScenePath(p, segID), b, 0o644)
+}
+
+// restoreLastGoodScene 同签名刹车收场：回退上一版过检画面并走完合成物落盘链
+// （与修复轮重生成后的落盘步骤同序）。备份缺失/恢复链路失败返回 false（调用方
+// 退回原路重掷）。指纹旁车不动：恢复版本仍是旧指纹，下轮制作照常再试重生成。
+func restoreLastGoodScene(ctx context.Context, r *Runner, p *pipeline.Project, segID string) bool {
+	b, err := os.ReadFile(lastGoodScenePath(p, segID))
+	if err != nil {
+		return false
+	}
+	if err := pipeline.WriteFileAtomic(p.Artifact("llm/comp-"+segID+".json"), b, 0o644); err != nil {
+		return false
+	}
+	if err := segCompositions(p, segID); err != nil {
+		return false
+	}
+	pipeline.ClampSegmentFonts(p, segID)
+	pipeline.FixupSegmentFrame(p, segID)
+	pipeline.ClampSegmentFrame(p, segID)
+	return r.assemble(ctx, p) == nil
 }
 
 // segReplayCheck 段级确定性回放门禁（P1-1 语义不变，范围=本段 canvas）：子工程
