@@ -19,6 +19,9 @@ type CatalogFont struct {
 	Family  string `json:"family"` // CSS family 规范写法（声明与用法逐字一致）
 	Repo    string `json:"repo"`   // google/fonts 仓库内路径 ofl/<dir>/<file>
 	License string `json:"license"`
+	// URL 非空 = 非 google/fonts 源的直连下载（如 GitHub release 资产走
+	// api.github.com assets 端点——本部署唯一可达通道）；Repo 与 URL 二选一。
+	URL string `json:"url,omitempty"`
 }
 
 // fontsCommit google/fonts 仓库锁定的 commit。升字体版本 = 换这里 + 重预热缓存
@@ -38,6 +41,12 @@ var fontCatalog = []CatalogFont{
 		Repo: "ofl/longcang/LongCang-Regular.ttf", License: "OFL"},
 	{ID: "liu-jian-mao-cao", Version: fontsCommit, Family: "Liu Jian Mao Cao",
 		Repo: "ofl/liujianmaocao/LiuJianMaoCao-Regular.ttf", License: "OFL"},
+	// 缝合像素 12px 简体（OFL，TakWolf/fusion-pixel-font）：库内唯一中文像素字体，
+	// 像素风条目的标题/正文主力。release 资产是 zip（内含分语言 ttf，取 zh_hans），
+	// 走 api.github.com assets 端点 + octet-stream（font_tool 侧解包）。
+	// 升版本 = 换 Version 与 URL 里的 asset id（asset id 随 release 固定不变）。
+	{ID: "fusion-pixel-12", Version: "2026.10.16", Family: "Fusion Pixel 12px Prop zh-Hans",
+		URL: "https://api.github.com/repos/TakWolf/fusion-pixel-font/releases/assets/646862498", License: "OFL"},
 }
 
 // fontCatalogAliases 中文名/连写别名：模型点名时写「站酷庆科黄油体」也要接得住。
@@ -48,6 +57,8 @@ var fontCatalogAliases = map[string]string{
 	"志莽行书": "zhi-mang-xing",
 	"龙藏体":  "long-cang", "龙藏": "long-cang",
 	"刘建毛草": "liu-jian-mao-cao",
+	"缝合像素": "fusion-pixel-12", "缝合像素体": "fusion-pixel-12", "像素字体": "fusion-pixel-12",
+	"fusion pixel": "fusion-pixel-12", "fusion pixel 12": "fusion-pixel-12",
 }
 
 // fontCatalogURL 下载入口走 GitHub API raw 模式：raw.githubusercontent 与 jsDelivr
@@ -103,9 +114,13 @@ func writeFontAssetRequest(p *Project, matched map[string]*CatalogFont) error {
 			continue
 		}
 		seen[f.ID] = true
+		url := f.URL
+		if url == "" {
+			url = fontCatalogURL(f.Repo, f.Version)
+		}
 		fonts = append(fonts, map[string]string{
 			"id": f.ID, "version": f.Version, "family": f.Family,
-			"url": fontCatalogURL(f.Repo, f.Version), "license": f.License,
+			"url": url, "license": f.License,
 		})
 	}
 	b, err := json.MarshalIndent(map[string]any{"fonts": fonts}, "", "  ")

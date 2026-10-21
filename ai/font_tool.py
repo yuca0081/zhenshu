@@ -19,6 +19,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 import pathlib
 import re
 import sys
@@ -40,32 +41,32 @@ BASE_CHARS = (
 )
 
 
-def _http_get(url: str, headers: dict = None) -> bytes:
-    """流式下载并卡 DOWNLOAD_CAP：先按 Content-Length 拒超限，再分块读、累计超限
+def _http_get(url: str, headers: dict = None, cap: int = DOWNLOAD_CAP) -> bytes:
+    """流式下载并卡 cap：先按 Content-Length 拒超限，再分块读、累计超限
     即中止——旧版 r.read() 先全量进内存再查上限，遇到超大文件上限形同虚设。"""
     req = urllib.request.Request(url, headers=headers or {'User-Agent': 'zhenshu-font-tool'})
     chunks, total = [], 0
     with urllib.request.urlopen(req, timeout=120) as r:
         length = r.headers.get('Content-Length')
-        if length and length.isdigit() and int(length) > DOWNLOAD_CAP:
+        if length and length.isdigit() and int(length) > cap:
             raise ValueError('文件 %s 字节(Content-Length)超下载上限' % length)
         while True:
             chunk = r.read(1024 * 1024)
             if not chunk:
                 break
             total += len(chunk)
-            if total > DOWNLOAD_CAP:
+            if total > cap:
                 raise ValueError('下载累计 %d 字节超上限，中途中止' % total)
             chunks.append(chunk)
     return b''.join(chunks)
 
 
-def _http_get_retry(url: str, headers: dict = None, attempts: int = 3) -> bytes:
+def _http_get_retry(url: str, headers: dict = None, attempts: int = 3, cap: int = DOWNLOAD_CAP) -> bytes:
     """下载失败先退避重试（2s/6s）再认输——剥族降级是不可逆动作，一次网络抖动
     就触发太重；真不可达（字体源永久下架）重试烧完照常上抛走剥族。"""
     for i in range(attempts):
         try:
-            return _http_get(url, headers)
+            return _http_get(url, headers, cap)
         except Exception as e:
             if i == attempts - 1:
                 raise
@@ -80,6 +81,32 @@ def _load_manifest() -> dict:
     return {'fonts': {}}
 
 
+def _download_bytes(entry: dict) -> bytes:
+    """按 URL 形态分流下载：api.github.com 的 release 资产端点要 octet-stream
+    才回二进制（vnd.github.raw 会回 JSON 元数据）；google/fonts contents
+    端点要 vnd.github.raw。release 资产是整包 zip，上限放宽到 64MB。"""
+    url = entry['url']
+    headers = {'User-Agent': 'zhenshu-font-tool'}
+    cap = DOWNLOAD_CAP
+    if '/releases/assets/' in url:
+        headers['Accept'] = 'application/octet-stream'
+        cap = 64 * 1024 * 1024
+    else:
+        headers['Accept'] = 'application/vnd.github.raw'
+    return _http_get_retry(url, headers=headers, cap=cap)
+
+
+def _ttf_from_zip(raw: bytes) -> bytes:
+    """release 资产是 zip（内含分语言 ttf）：取 zh_hans 变体，没有就退第一个 ttf。"""
+    import zipfile
+    z = zipfile.ZipFile(io.BytesIO(raw))
+    names = [n for n in z.namelist() if n.endswith('.ttf') and not n.startswith('LICENSES')]
+    if not names:
+        raise ValueError('zip 里没有 ttf')
+    pick = next((n for n in names if 'zh_hans' in n), names[0])
+    return z.read(pick)
+
+
 def _cached_ttf(entry: dict) -> pathlib.Path:
     """全字库缓存命中返回文件路径;未命中下载并验收入册。"""
     FONT_CACHE.mkdir(parents=True, exist_ok=True)
@@ -89,9 +116,9 @@ def _cached_ttf(entry: dict) -> pathlib.Path:
     key = '%s@%s' % (entry['id'], entry['version'])
     if path.exists() and key in manifest['fonts']:
         return path
-    raw = _http_get_retry(entry['url'], headers={
-        'Accept': 'application/vnd.github.raw',
-        'User-Agent': 'zhenshu-font-tool'})
+    raw = _download_bytes(entry)
+    if raw[:2] == b'PK':  # zip 魔数：release 资产是整包（URL 未必带 .zip 后缀）
+        raw = _ttf_from_zip(raw)
     if not raw.startswith(b'\x00\x01\x00\x00') and not raw.startswith(b'OTTO'):
         raise ValueError('下载产物不是字体文件(magic 不符)')
     # 先落字体文件（tmp+rename 原子替换）、台账登记放最后：旧顺序（manifest 先落、
