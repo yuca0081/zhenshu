@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>五工位制作架构 v3.1 · 交互流程图</title>
+<title>制作架构 · 交互流程图（文稿驱动 v3.1 / 音乐驱动 PV 草案）</title>
 <style>
   :root {
     --bg: #f7f7f8; --panel: #ffffff; --band: #eef0f4; --text: #1c1c1e; --muted: #6e6e73;
@@ -39,33 +39,45 @@
     background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
     padding: 10px; overflow-x: auto;
   }
-  #flowsvg { display: block; width: 100%; min-width: 960px; height: auto; font-family: inherit; }
+  .flowsvg { display: block; width: 100%; min-width: 960px; height: auto; font-family: inherit; }
 
   /* SVG 图元样式 */
-  #flowsvg .band { fill: var(--band); rx: 12; }
-  #flowsvg .bandlabel { fill: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 2px; }
-  #flowsvg .edge { stroke: var(--edge); stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
-  #flowsvg .arrowfill { fill: var(--edge); }
-  #flowsvg .fnode { cursor: pointer; }
-  #flowsvg .fnode:focus { outline: none; }
-  #flowsvg .fnode .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; rx: 10; transition: stroke .12s; }
-  #flowsvg .fnode:hover .box { stroke: var(--accent); }
-  #flowsvg .fnode.active .box { stroke: var(--accent); stroke-width: 2.5; }
-  #flowsvg .fnode.prog .box { fill: transparent; stroke-dasharray: 5 4; }
-  #flowsvg .fnode.start .box { fill: var(--accent-soft); stroke: var(--accent-soft); }
-  #flowsvg .t { fill: var(--text); font-size: 12.5px; font-weight: 600; text-anchor: middle; }
-  #flowsvg .ts { fill: var(--muted); font-size: 11px; text-anchor: middle; }
-  #flowsvg .to { fill: var(--ok); font-size: 11px; text-anchor: middle; }
-  #flowsvg .chipbox { fill: var(--bg); stroke: var(--line); stroke-dasharray: 4 3; rx: 7; }
-  #flowsvg .chiptx { fill: var(--muted); font-size: 11px; text-anchor: middle; }
-  #flowsvg .pill rect { rx: 9; }
-  #flowsvg .pill text { font-size: 11px; text-anchor: middle; }
-  #flowsvg .pill.gate rect { fill: var(--warn); } #flowsvg .pill.gate text { fill: #ffffff; }
-  @media (prefers-color-scheme: dark) { #flowsvg .pill.gate rect { fill: var(--warn); } #flowsvg .pill.gate text { fill: #161618; } }
-  #flowsvg .lg-line { stroke: var(--text); opacity: .5; stroke-width: 2; }
-  #flowsvg .lg-line.dash { stroke-dasharray: 5 4; }
-  #flowsvg .lg-t { fill: var(--muted); font-size: 11px; }
-  #flowsvg .hint { fill: var(--muted); font-size: 11px; }
+  .flowsvg .band { fill: var(--band); rx: 12; }
+  .flowsvg .bandlabel { fill: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 2px; }
+  .flowsvg .edge { stroke: var(--edge); stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
+  #flowsvg2 .edge { marker-end: url(#arrow2); }
+  .flowsvg .fnode.newk .box { stroke: var(--accent); stroke-width: 2; }
+  .flowsvg .fnode.resh .box { stroke: var(--warn); stroke-width: 2; }
+  .flowsvg .arrowfill { fill: var(--edge); }
+  .flowsvg .fnode { cursor: pointer; }
+  .flowsvg .fnode:focus { outline: none; }
+  .flowsvg .fnode .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; rx: 10; transition: stroke .12s; }
+  .flowsvg .fnode:hover .box { stroke: var(--accent); }
+  .flowsvg .fnode.active .box { stroke: var(--accent); stroke-width: 2.5; }
+  .flowsvg .fnode.prog .box { fill: transparent; stroke-dasharray: 5 4; }
+  .flowsvg .fnode.start .box { fill: var(--accent-soft); stroke: var(--accent-soft); }
+  .flowsvg .t { fill: var(--text); font-size: 12.5px; font-weight: 600; text-anchor: middle; }
+  .flowsvg .ts { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+  .flowsvg .to { fill: var(--ok); font-size: 11px; text-anchor: middle; }
+  .flowsvg .chipbox { fill: var(--bg); stroke: var(--line); stroke-dasharray: 4 3; rx: 7; }
+  .flowsvg .chiptx { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+  .flowsvg .pill rect { rx: 9; }
+  .flowsvg .pill text { font-size: 11px; text-anchor: middle; }
+  .flowsvg .pill.gate rect { fill: var(--warn); } .flowsvg .pill.gate text { fill: #ffffff; }
+  @media (prefers-color-scheme: dark) { .flowsvg .pill.gate rect { fill: var(--warn); } .flowsvg .pill.gate text { fill: #161618; } }
+  .flowsvg .lg-line { stroke: var(--text); opacity: .5; stroke-width: 2; }
+  .flowsvg .lg-line.dash { stroke-dasharray: 5 4; }
+  .flowsvg .lg-t { fill: var(--muted); font-size: 11px; }
+  .flowsvg .hint { fill: var(--muted); font-size: 11px; }
+
+  /* 页签 */
+  .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .tab {
+    font: inherit; font-size: 13.5px; padding: 6px 16px; cursor: pointer;
+    border-radius: 9px; border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+  }
+  .tab.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .page.hidden { display: none; }
 
   .detail { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
   .d-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 2px 28px; }
@@ -85,15 +97,20 @@
 <body>
 
 <header>
-  <h1>五工位制作架构 v3.1 · 交互流程图</h1>
-  <p class="src">依据 <code>docs/production-stage-design.md</code>（制作阶段定稿）与 <code>docs/cost-optimization-plan-2026-10-20.md</code>（2026-10-20 降本改造 + 10-21 动工）绘制。准备阶段＝三个 ReAct agent 工件链（文字稿 → 风格包 → 分镜稿）+ 打包终审门；制作阶段＝段级流水线：TTS 一次全局，写画面 ×N 段并行，谁写完谁往下流（check（含接缝亮度闸）→ 渲染 → 段审），全部段过审即拼接 + 全片终审。段审已恢复（<code>PRODUCE_SEG_AUDIT</code> 默认 on）；边界审已撤（D5：<code>PRODUCE_BND_AUDIT</code> 默认 off，段间接缝交固定契约——首帧即景/末帧定格 + 机检亮度闸 + 统一直切）；打回修复走<b>续写 + patch 改动单</b>（D2）。点击任一节点，详情显示在图上方。</p>
+  <h1>制作架构 · 交互流程图 <span style="color:var(--muted);font-size:14px;font-weight:400">（文稿驱动 v3.1 / 音乐驱动 PV 草案）</span></h1>
+  <nav class="tabs">
+    <button class="tab active" data-page="script" type="button">文稿驱动 · 现行 v3.1</button>
+    <button class="tab" data-page="music" type="button">音乐驱动 · PV 草案</button>
+  </nav>
 </header>
 
 <main class="layout">
-  <aside class="detail" id="detail" aria-live="polite"></aside>
+  <section class="page" id="page-script">
+    <p class="src">依据 <code>docs/production-stage-design.md</code>（制作阶段定稿）与 <code>docs/cost-optimization-plan-2026-10-20.md</code>（2026-10-20 降本改造 + 10-21 动工）绘制。准备阶段＝三个 ReAct agent 工件链（文字稿 → 风格包 → 分镜稿）+ 打包终审门；制作阶段＝段级流水线：TTS 一次全局，写画面 ×N 段并行，谁写完谁往下流（check（含接缝亮度闸）→ 渲染 → 段审），全部段过审即拼接 + 全片终审。段审已恢复（<code>PRODUCE_SEG_AUDIT</code> 默认 on）；边界审已撤（D5：<code>PRODUCE_BND_AUDIT</code> 默认 off，段间接缝交固定契约——首帧即景/末帧定格 + 机检亮度闸 + 统一直切）；打回修复走<b>续写 + patch 改动单</b>（D2）；TTS 后配乐工位自动选曲（曲库 LLM 挑选＋机械改判，拼接层闪避垫底，永不挡片）。点击任一节点，详情显示在图上方。</p>
+    <aside class="detail" id="detailScript" aria-live="polite"></aside>
 
-  <div class="diagram-wrap">
-    <svg id="flowsvg" viewBox="0 0 1180 540" role="img" aria-label="五工位 v3.1 制作流程图：准备阶段三 ReAct agent 工件链 + 打包终审门 + 制作阶段段级流水线 + 渲染后单场审核 + 全片终审">
+    <div class="diagram-wrap">
+    <svg id="flowsvg" class="flowsvg" viewBox="0 0 1180 540" role="img" aria-label="五工位 v3.1 制作流程图：准备阶段三 ReAct agent 工件链 + 打包终审门 + 制作阶段段级流水线 + 渲染后单场审核 + 全片终审">
       <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
@@ -112,6 +129,7 @@
       <path class="edge" d="M572,90 L616,90"></path>
       <path class="edge" d="M846,90 L890,90"></path>
       <path class="edge" d="M1015,122 L1015,154 L88,154 L88,251"></path>
+      <path class="edge" d="M88,321 L88,333"></path>
       <path class="edge" d="M152,289 L194,289"></path>
       <path class="edge" d="M390,249 L432,285"></path>
       <path class="edge" d="M390,289 L432,289"></path>
@@ -132,7 +150,7 @@
         <text class="ts" x="868" y="80">分镜稿</text>
         <text class="ts" x="173" y="280">逐段</text>
         <text class="ts" x="580" y="280">逐段</text>
-        <text class="ts" x="152" y="396">redraw≤1</text>
+        <text class="ts" x="215" y="394">redraw≤1</text>
         <text class="ts" x="475" y="394">终审打回·按段重渲</text>
       </g>
 
@@ -191,6 +209,14 @@
         <rect class="box" x="24" y="257" width="128" height="64"></rect>
         <text class="t" x="88" y="285">TTS + 词级对齐</text>
         <text class="ts" x="88" y="305">程序化 · 一次 · 全局</text>
+      </g>
+
+      <!-- 配乐工位 · BGM 自动选曲（2026-10-21） -->
+      <g class="fnode prog" data-k="bgm" tabindex="0" role="button" aria-label="配乐工位，TTS 后自动选曲">
+        <rect class="box" x="24" y="333" width="128" height="64"></rect>
+        <text class="t" x="88" y="357">配乐 · 自动选曲</text>
+        <text class="ts" x="88" y="375">曲库挑选 · 机械改判</text>
+        <text class="ts" x="88" y="391">垫底闪避 · 永不挡片</text>
       </g>
 
       <!-- ④ 写画面 ×N 并行（扇出容器） -->
@@ -262,10 +288,192 @@
         <text class="t" x="812" y="473">渲染出片</text>
       </g>
     </svg>
-  </div>
+    </div>
+  </section>
+
+  <section class="page hidden" id="page-music">
+    <p class="src">音乐驱动（PV）架构<b>草案</b> · 2026-10-21 讨论定稿，未排期未动工。发令枪从文稿换成音乐——<b>舞台还是那个舞台（渲染引擎/素材/风格库不动），换的是指挥</b>。准备阶段：主题（或主题＋上传曲子：跳过做曲直进地图，「给一首曲子做片子」模式）→ ① 音乐工位（<b>一个 ReAct 会话调两个白名单工具</b>：曲brief → 做曲/选曲 → 音乐地图，一次交付三件套；地图对 brief 闭环自检，做曲重做 ≤2；<code>demo/agi-mv-repro/analyze_audio.py</code> 已验证节拍分析；自家曲库 v2（MIDI 做曲）＝首个后端，谱面直出节拍地图）→ ② 分镜工位（镜头边界钉在节拍上，<b>只认地图不认 brief</b>——曲先行不是偏好是唯一解）→ 打包终审门。制作阶段全链复用段级流水线机器：写画面注入节拍事件、check 新增<b>卡点机械闸</b>、镜头审判卷骨架照搬、拼接挂原曲音轨、终审判据换血。纯音乐无歌词：TTS / 歌词 / 字幕整个退场，时间轴来源唯一化。框色：<em style="color:var(--accent)">蓝＝新增工位</em>、<em style="color:var(--warn)">橙＝判据换血</em>、默认＝直接复用。点击节点看详情。</p>
+    <aside class="detail" id="detailMusic" aria-live="polite"></aside>
+
+    <div class="diagram-wrap">
+      <svg id="flowsvg2" class="flowsvg" viewBox="0 0 1180 600" role="img" aria-label="音乐驱动 PV 架构草案：主题→曲brief→做曲→音乐地图→分镜→打包终审门；制作阶段复用段级流水线机器，卡点机械闸 + 镜头审 + 原曲拼接 + 终审判据换血">
+        <defs>
+          <marker id="arrow2" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
+          </marker>
+        </defs>
+
+        <!-- 阶段底带 -->
+        <rect class="band" x="8" y="24" width="1164" height="116"></rect>
+        <text class="bandlabel" x="24" y="44">准备阶段 · 曲先行</text>
+        <rect class="band" x="8" y="168" width="1164" height="430"></rect>
+        <text class="bandlabel" x="24" y="188">制作阶段 · 流水线机器全复用 · TTS/歌词退场 · 时间轴=节拍</text>
+
+        <!-- 连线 -->
+        <path class="edge" d="M116,90 L150,90"></path>
+        <path class="edge" d="M700,90 L730,90"></path>
+        <path class="edge" d="M930,90 L960,90"></path>
+        <path class="edge" d="M1058,122 L1058,154 L88,154 L88,253"></path>
+        <path class="edge" d="M152,289 L200,289"></path>
+        <path class="edge" d="M390,289 L438,289"></path>
+        <path class="edge" d="M568,289 L608,289"></path>
+        <path class="edge" d="M728,289 L768,289"></path>
+        <path class="edge" d="M883,210 L883,196 L295,196 L295,210"></path>
+        <path class="edge" d="M883,400 L883,440 L387,440 L387,480"></path>
+        <path class="edge" d="M452,516 L500,516"></path>
+        <path class="edge" d="M730,516 L790,516"></path>
+        <path class="edge" d="M500,516 L452,516"></path>
+
+        <!-- 工件/回路标签 -->
+        <g pointer-events="none">
+          <text class="ts" x="715" y="80">三件套</text>
+          <text class="ts" x="945" y="80">镜头表</text>
+          <text class="ts" x="176" y="280">逐镜头</text>
+          <text class="ts" x="600" y="192">打回 · 续写+patch</text>
+          <text class="ts" x="640" y="436">全过审才拼 · 挂原曲</text>
+          <text class="ts" x="476" y="505">打回重拼</text>
+        </g>
+
+        <!-- 图例（右下） -->
+        <g pointer-events="none">
+          <text class="lg-t" x="1010" y="430" style="font-weight:600">图例</text>
+          <line class="lg-line" x1="1010" y1="448" x2="1038" y2="448"></line>
+          <text class="lg-t" x="1044" y="452">LLM 工位</text>
+          <line class="lg-line dash" x1="1010" y1="472" x2="1038" y2="472"></line>
+          <text class="lg-t" x="1044" y="476">程序化</text>
+          <rect x="1010" y="490" width="28" height="16" rx="5" style="fill:var(--panel);stroke:var(--accent);stroke-width:2"></rect>
+          <text class="lg-t" x="1044" y="502">新增工位</text>
+          <rect x="1010" y="514" width="28" height="16" rx="5" style="fill:var(--panel);stroke:var(--warn);stroke-width:2"></rect>
+          <text class="lg-t" x="1044" y="526">判据换血</text>
+          <rect x="1010" y="538" width="28" height="16" rx="5" style="fill:var(--panel);stroke:var(--line);stroke-width:1.5"></rect>
+          <text class="lg-t" x="1044" y="550">直接复用</text>
+          <text class="hint" x="1010" y="576">点击节点看详情</text>
+        </g>
+
+        <!-- 起点 -->
+        <g class="fnode start" data-k="m_input" tabindex="0" role="button" aria-label="用户输入主题，或主题加上传曲子">
+          <rect class="box" x="24" y="58" width="92" height="64"></rect>
+          <text class="t" x="70" y="80">用户输入</text>
+          <text class="ts" x="70" y="98">一句话主题</text>
+          <text class="ts" x="70" y="114">或＋上传曲子</text>
+        </g>
+
+        <!-- ① 音乐工位（一站三交付容器） -->
+        <g class="fnode newk" data-k="m_music" tabindex="0" role="button" aria-label="音乐工位，一个会话交付 brief 做曲 地图三件套">
+          <rect class="box" x="150" y="40" width="550" height="96"></rect>
+          <text class="t" x="425" y="62">① 音乐工位 · ReAct Agent</text>
+          <rect class="chipbox" x="166" y="74" width="160" height="30"></rect>
+          <text class="chiptx" x="246" y="93">曲brief（意图）</text>
+          <path class="edge" d="M326,89 L346,89"></path>
+          <rect class="chipbox" x="346" y="74" width="160" height="30"></rect>
+          <text class="chiptx" x="426" y="93">做曲·选曲（工具）</text>
+          <path class="edge" d="M506,89 L526,89"></path>
+          <rect class="chipbox" x="526" y="74" width="160" height="30"></rect>
+          <text class="chiptx" x="606" y="93">地图（脚本）</text>
+          <text class="chiptx" x="425" y="126">一次交付三件套 · 地图对 brief 自检 · 重做≤2</text>
+        </g>
+
+        <!-- ④ 分镜工位 -->
+        <g class="fnode resh" data-k="m_sb" tabindex="0" role="button" aria-label="分镜工位，判据换血">
+          <rect class="box" x="730" y="58" width="200" height="64"></rect>
+          <text class="t" x="830" y="78">② 分镜工位</text>
+          <text class="ts" x="830" y="96">地图×风格包→镜头表</text>
+          <text class="ts" x="830" y="112">镜头边界钉在节拍上</text>
+        </g>
+
+        <!-- 👤 打包终审门 -->
+        <g class="fnode" data-k="m_gate" tabindex="0" role="button" aria-label="打包终审门，唯一人工门">
+          <rect class="box" x="960" y="58" width="196" height="64"></rect>
+          <text class="t" x="1058" y="78">打包终审门</text>
+          <text class="ts" x="1058" y="96">brief+试听+地图+镜头表</text>
+          <text class="ts" x="1058" y="112">一次确认 · 反馈按工件路由</text>
+          <g class="pill gate"><rect x="964" y="49" width="96" height="18"></rect><text x="1012" y="62">👤 唯一人工门</text></g>
+        </g>
+
+        <!-- 制作起点：音乐地图+音轨 -->
+        <g class="fnode start newk" data-k="m_ax" tabindex="0" role="button" aria-label="音乐地图加音轨，制作阶段发令枪">
+          <rect class="box" x="24" y="253" width="128" height="72"></rect>
+          <text class="t" x="88" y="279">音乐地图+音轨</text>
+          <text class="ts" x="88" y="297">来自① · 发令枪</text>
+          <text class="ts" x="88" y="313">时间轴=节拍/能量</text>
+        </g>
+
+        <!-- 写画面 ×N 并行（扇出容器） -->
+        <g class="fnode" data-k="m_gen" tabindex="0" role="button" aria-label="写画面工位，N 镜头并行，并发上限4">
+          <rect class="box" x="200" y="210" width="190" height="190"></rect>
+          <text class="t" x="295" y="232">写画面 ×N 并行 ≤4</text>
+          <rect class="chipbox" x="216" y="244" width="158" height="34"></rect>
+          <text class="chiptx" x="295" y="265">shot01.html</text>
+          <rect class="chipbox" x="216" y="284" width="158" height="34"></rect>
+          <text class="chiptx" x="295" y="305">shot02.html</text>
+          <rect class="chipbox" x="216" y="324" width="158" height="34"></rect>
+          <text class="chiptx" x="295" y="345">shot03.html</text>
+          <text class="chiptx" x="295" y="378">谁写完谁往下流 · 不等齐</text>
+        </g>
+
+        <!-- 程序 check -->
+        <g class="fnode resh" data-k="m_chk" tabindex="0" role="button" aria-label="程序 check，判据换血">
+          <rect class="box" x="438" y="253" width="130" height="72"></rect>
+          <text class="t" x="503" y="281">程序 check</text>
+          <text class="ts" x="503" y="299">工程门 · 复用</text>
+          <text class="ts" x="503" y="315">卡点机械闸 · 新</text>
+        </g>
+
+        <!-- 段渲染 -->
+        <g class="fnode" data-k="m_render" tabindex="0" role="button" aria-label="段渲染，复用">
+          <rect class="box" x="608" y="253" width="120" height="72"></rect>
+          <text class="t" x="668" y="283">段渲染</text>
+          <text class="ts" x="668" y="303">复用 · ~20s/镜头</text>
+        </g>
+
+        <!-- 镜头审（判卷容器） -->
+        <g class="fnode" data-k="m_shot" tabindex="0" role="button" aria-label="镜头审，判卷复用骨架新判据">
+          <rect class="box" x="768" y="210" width="230" height="190"></rect>
+          <text class="t" x="883" y="232">镜头审 · 判卷（复用骨架）</text>
+          <rect class="chipbox" x="784" y="244" width="198" height="34"></rect>
+          <text class="chiptx" x="883" y="265">画面对情绪 · 段落匹配</text>
+          <rect class="chipbox" x="784" y="284" width="198" height="34"></rect>
+          <text class="chiptx" x="883" y="305">节拍感 · 动效落在重拍上</text>
+          <rect class="chipbox" x="784" y="324" width="198" height="34"></rect>
+          <text class="chiptx" x="883" y="345">重写≤2轮 · 续写+patch</text>
+          <text class="chiptx" x="883" y="378">超限带伤放行 · 签名刹车</text>
+        </g>
+
+        <!-- 拼接 -->
+        <g class="fnode" data-k="m_stitch" tabindex="0" role="button" aria-label="拼接，挂原曲音轨">
+          <rect class="box" x="322" y="480" width="130" height="72"></rect>
+          <text class="t" x="387" y="508">拼接</text>
+          <text class="ts" x="387" y="526">镜头视频+原曲音轨</text>
+          <text class="ts" x="387" y="542">ffmpeg · 复用</text>
+        </g>
+
+        <!-- 全片终审 -->
+        <g class="fnode resh" data-k="m_final" tabindex="0" role="button" aria-label="全片终审，判据换血">
+          <rect class="box" x="500" y="480" width="230" height="72"></rect>
+          <text class="t" x="615" y="504">全片终审（判据换血）</text>
+          <text class="ts" x="615" y="522">卡点/节奏/段落能量匹配</text>
+          <text class="ts" x="615" y="538">抽帧=镜头界+段落界+副歌界</text>
+        </g>
+
+        <!-- 出片 -->
+        <g class="fnode start" data-k="m_out" tabindex="0" role="button" aria-label="渲染出片">
+          <rect class="box" x="790" y="480" width="128" height="72"></rect>
+          <text class="t" x="854" y="513">渲染出片</text>
+          <text class="ts" x="854" y="533">纯音乐 PV</text>
+        </g>
+
+        <!-- 复用注记（左下） -->
+        <g pointer-events="none">
+          <rect class="chipbox" x="24" y="466" width="290" height="52"></rect>
+          <text class="chiptx" x="169" y="486">全链复用：成本闸 · 磁盘缓存 · 事件流</text>
+          <text class="chiptx" x="169" y="504">风格库 · 样张 · 素材工位 · patch 修复</text>
+        </g>
+      </svg>
+    </div>
+  </section>
 </main>
 
-<footer>准备阶段定稿见 <code>docs/prep-agents-design.md</code> · 制作阶段定稿见 <code>docs/production-stage-design.md</code> · 方案每改一次须同步更新本图</footer>
+<footer>准备阶段定稿见 <code>docs/prep-agents-design.md</code> · 制作阶段定稿见 <code>docs/production-stage-design.md</code> · 音乐驱动 PV 方案汇总见 <code>docs/pv-music-driven-design.md</code>（草案，2026-10-21 讨论定稿，未动工；先例素材在 <code>demo/agi-mv-repro/</code>）· 方案每改一次须同步更新本图</footer>
 
 <script>
 (function () {
@@ -315,6 +523,16 @@
       rows: [
         ["职责", "整片 TTS 配音 + 词级时间戳对齐，制作阶段起点、一次全局。"],
         ["为什么重要", "句级时间戳是锚点帧抽取（句末时刻）、段审帧身份（此刻刚念完 N 几）、打回靶向的物理基础；真实时长也只有 TTS 之后才知道（估算乐观约 12%）。"]
+      ]
+    },
+    bgm: {
+      type: "轻量 LLM 调用 · 2026-10-21 上岗", cls: "", title: "配乐工位（TTS 后自动选曲）",
+      rows: [
+        ["职责", "读分镜弧线＋实测语速（字/秒）＋曲库标签（bpm/tempo/energy），一次低功耗 LLM 调用从曲库选 BGM；无效回喂重试一次；选不出走规则兜底（张力→能量 / 语速→节奏 / 库序稳定）——<em>永不挡片</em>。"],
+        ["机械执法", "只抓极端错配（快稿慢垫 / 慢稿快曲）改判，能量偏好保留到合规曲目；曲库缺失、预算闸刹车 → 直接规则兜底或跳过。"],
+        ["主权", "project.json 已有 bgm（用户 set_bgm 拍板）→ <em>永不覆盖</em>——自动选曲只填空，不推翻人。"],
+        ["混音", "拼接层 sidechain 闪避垫底（mixBGM：人声优先压 BGM，结尾淡出），选完零改动自动生效。"],
+        ["PV 复用", "选曲骨架（LLM 挑＋机械改判＋填空不推翻）改提示词即成 PV 曲库后端的选曲层；曲库 MIDI 做曲可谱面直出节拍地图——见「音乐驱动」页签。"]
       ]
     },
     gen: {
@@ -381,13 +599,107 @@
     out: {
       type: "终点", cls: "", title: "渲染出片",
       rows: [["说明", "渲染出片；manifest 全程可查（含段级状态机迁移与每次取证），循环由 Go 拥有（确定性、可重放）。"]]
+    },
+
+    m_input: {
+      type: "起点 · 人工", cls: "", title: "用户输入：主题，或主题＋曲子",
+      rows: [
+        ["模式A·AI做曲", "只给一句话主题：想拍什么、什么感觉。①音乐工位全跑（brief→做曲→地图）。无文稿、无配音——PV 以曲为本，文稿链路整个不进。"],
+        ["模式B·带曲入场", "主题＋上传音频文件：跳过 brief 和做曲，直进地图——「给一首曲子做片子」就是这条，网上同类视频的常见玩法。可带可选的氛围标签，帮 agent 定色彩层。"],
+        ["下游", "① 音乐工位（ReAct agent）；上传入口落在想法页签。"]
+      ]
+    },
+    m_music: {
+      type: "ReAct agent · 新增 · 一站三交付", cls: "", title: "① 音乐工位",
+      rows: [
+        ["职责", "一个会话交付三件套：曲brief（主题→曲风/情绪/BPM/能量走向，创作意图，顶替「起稿」位子）→ 调<em>做曲/选曲工具</em>拿到音频（AI 生成或用户上传）→ 调<em>地图脚本</em>分析实际这首曲（物理事实：节拍网格/段落/能量）。"],
+        ["模式B·带曲入场", "用户上传曲子时只跑第三格：地图＋读谱，把主题与曲子的物理情绪（BPM/能量）合成视觉概念交②。上传＝做曲工具的第三个后端——架构零改动，只是入口多一个。"],
+        ["自检环", "合并的最大收益：地图脚本就是 agent 的耳朵——不用听，读节拍/能量 JSON 对 brief 自检（「要 128 拍爆发收尾，出来 120 拍平铺」→ 调参重做）。拆成三个工位这个闭环就不存在。"],
+        ["护栏一", "做曲与地图分析都是白名单<em>确定性工具</em>：agent 只准调用和判读，不准手改数据——「地图＝物理事实、同输入同输出、可缓存可重放」不丢；agent 的自由度只在调几次、参数怎么调。"],
+        ["护栏二", "做曲重生成封顶 ≤2 次，超限带伤交门或退回选曲兜底——agent 听不见，防止它反复掷骰子烧做曲的钱。"],
+        ["工具可替换", "自家曲库 v2（MIDI 作曲＋FluidSynth，<code>ai/make_bgm_v2.py</code>）/ 本地开源（MusicGen / ACE-Step）/ API / 用户上传——四条后端同一个工具接口，交付物都是一个音频文件，下游不认来源。"],
+        ["曲库后端·零成本先行", "曲库 v2 就是现成的做曲工具：BPM/和弦/声部全是自己写的——<em>节拍地图从谱面直出，DSP 只做校验</em>，卡点精度天花板；确定性、免费、MIT 音色、零显存要求。改造两点：曲长 33–60s 循环垫 → 整曲多段落（能量弧线＋目标时长）；清单标签 → 附节拍/段落/能量 JSON。选曲骨架直接搬 bgmpick（LLM 挑＋机械改判＋填空不推翻），提示词换 brief 即可。"],
+        ["产物", "三件套各自落盘（brief / 音频 / 地图）：交付主体是一站，产物分开——打包终审门的试听与反馈路由、下游分镜全部不用改。"]
+      ]
+    },
+    m_sb: {
+      type: "ReAct agent · 判据换血", cls: "", title: "② 分镜工位",
+      rows: [
+        ["职责", "音乐地图 × 视觉概念 → 镜头表：每个镜头占哪几拍、什么情绪、首帧/末帧承诺。镜头边界钉在节拍上。"],
+        ["只认事实", "分镜吃的是音乐地图（物理事实），不是曲brief（创作意图）——曲不落地就没有可读的东西，所以曲先行不是偏好，是唯一解。"],
+        ["复用", "风格选择整套复用现行架构的风格工位（风格库探索/样张验证/设计系统）；切段判据从「话题完整」换成「音乐段落/乐句」。"],
+        ["产物", "shots.json 形态——<code>demo/agi-mv-repro/</code> 已有人肉版先例。"]
+      ]
+    },
+    m_gate: {
+      type: "👤 唯一人工门", cls: "good", title: "打包终审门",
+      rows: [
+        ["看什么", "曲brief + 音频试听 + 音乐地图 + 镜头表（+风格包）一次确认，拦在昂贵制作之前——与现行架构同构：唯一人工门在准备阶段末端，制作全自动。"],
+        ["反馈路由", "改感觉/节拍不对 → 重①（可先人工校正地图再进）；改镜头 → 重②。"]
+      ]
+    },
+    m_ax: {
+      type: "物理起点 · 发令枪", cls: "", title: "音乐地图 + 音轨",
+      rows: [
+        ["说明", "制作阶段的物理起点：原曲音频文件 + 节拍网格。时间轴从音乐来——TTS 工位整个退场，时间轴来源唯一化，链路比现行更干净。"],
+        ["类比", "舞台还是那个舞台（渲染引擎/素材/风格库不动），换的是指挥：以前指挥是念稿人，现在是指挥棒（节拍）。"]
+      ]
+    },
+    m_gen: {
+      type: "LLM 工位 · 复用机器 · 新注入", cls: "", title: "写画面 ×N 并行（≤4）",
+      rows: [
+        ["复用", "生成机器、续写+patch 修复、磁盘缓存、并发调度全部照搬。镜头＝段＝文件＝时间轴＝渲染单位＝缓存单位＝调度单位，画面是 t 的纯函数这条铁律不变。"],
+        ["新注入", "镜头 brief（占哪几拍 / 首末帧承诺）+ 节拍事件表（切点/重拍时刻，供卡点动效用）。"],
+        ["差异", "镜头比解说段碎得多（一两秒一个）：段数上涨 → 设计调用变多；总帧数不变（歌长定死），成本同量级或略高。"]
+      ]
+    },
+    m_chk: {
+      type: "程序化 · 判据换血", cls: "", title: "程序 check（逐镜头）",
+      rows: [
+        ["复用", "契约 lint、产物不变量、截帧回放门禁、接缝亮度闸——照搬。"],
+        ["新判据", "<b>卡点机械闸</b>：镜头切点偏离节拍 &gt;N 毫秒打回；段落-画面能量匹配做机检初筛。跟黑场执法一个思路——能机器判的绝不花 LLM 的钱。"]
+      ]
+    },
+    m_render: {
+      type: "程序化 · 复用", cls: "", title: "段渲染（逐镜头）",
+      rows: [
+        ["职责", "逐镜头渲染成段视频，~20s/镜头（≈3×镜头时长）。check 过即渲不被审核闸；重渲只花一个镜头的钱——卡点打回循环的经济基础。"]
+      ]
+    },
+    m_shot: {
+      type: "多模态判卷 · 复用骨架", cls: "", title: "镜头审",
+      rows: [
+        ["复用", "段审判卷骨架照搬：锚点帧 + 判卷 + 打回重写 ≤2 轮（续写+patch）+ 签名刹车，超限带伤放行。"],
+        ["新判据", "画面对情绪（这段音乐什么感觉）、节拍感（动效落在重拍上）、段落匹配（副歌够炸）。软判据要拿样张迭代——参考当年动效章节。"],
+        ["分工", "「卡点准不准」是机械判据归 check；这里只管「好不好看、对不对味」。"]
+      ]
+    },
+    m_stitch: {
+      type: "程序化 · 复用", cls: "", title: "拼接",
+      rows: [
+        ["职责", "镜头视频按序拼接 + 挂原曲音轨（ffmpeg）。音轨是现成的——不再有配音合成。全部镜头过审才拼。"]
+      ]
+    },
+    m_final: {
+      type: "多模态 LLM 工位 · 判据换血", cls: "", title: "全片终审",
+      rows: [
+        ["职责", "拼接后抽帧（镜头界 + 段落界 + 副歌界），查：卡点整体准不准、全片节奏与能量曲线对不对、段落-画面情绪匹配、拼接完整性。"],
+        ["复用", "回合预算 / 按镜头重渲 / 重拼重进的循环骨架照搬。"]
+      ]
+    },
+    m_out: {
+      type: "终点", cls: "", title: "渲染出片",
+      rows: [["说明", "纯音乐 PV 成片；manifest 全程可查，循环由 Go 拥有（确定性、可重放）。"]]
     }
   };
 
-  var detail = document.getElementById("detail");
-  var current = "gate";
+  var PAGES = {
+    script: { detail: document.getElementById("detailScript"), def: "gate" },
+    music: { detail: document.getElementById("detailMusic"), def: "m_ax" }
+  };
+  var cur = "script";
 
-  function renderDetail(k) {
+  function renderDetail(k, el) {
     var d = DETAILS[k];
     if (!d) return;
     var html = '<div class="d-head"><span class="d-type ' + d.cls + '">' + d.type + "</span><h3>" + d.title + "</h3></div>";
@@ -396,28 +708,41 @@
       rowsHtml += '<div class="d-row"><span class="d-k">' + r[0] + '</span><div class="d-v">' + r[1] + "</div></div>";
     });
     html += '<div class="d-rows">' + rowsHtml + "</div>";
-    detail.innerHTML = html;
+    el.innerHTML = html;
   }
 
   function select(k) {
-    current = k;
-    document.querySelectorAll("#flowsvg .fnode.active").forEach(function (n) { n.classList.remove("active"); });
-    document.querySelectorAll('#flowsvg .fnode[data-k="' + k + '"]').forEach(function (n) { n.classList.add("active"); });
-    renderDetail(k);
+    document.querySelectorAll(".flowsvg .fnode.active").forEach(function (n) { n.classList.remove("active"); });
+    document.querySelectorAll('.flowsvg .fnode[data-k="' + k + '"]').forEach(function (n) { n.classList.add("active"); });
+    renderDetail(k, PAGES[cur].detail);
   }
 
-  document.querySelectorAll("#flowsvg .fnode").forEach(function (n) {
+  document.querySelectorAll(".flowsvg .fnode").forEach(function (n) {
     n.addEventListener("click", function () {
       select(n.getAttribute("data-k"));
-      var r = detail.getBoundingClientRect();
-      if (r.top < 0) { detail.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+      var d = PAGES[cur].detail;
+      var r = d.getBoundingClientRect();
+      if (r.top < 0) { d.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
     });
     n.addEventListener("keydown", function (e) {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(n.getAttribute("data-k")); }
     });
   });
 
-  select("gate");
+  function activate(page) {
+    if (!PAGES[page]) return;
+    cur = page;
+    document.querySelectorAll(".tab").forEach(function (x) { x.classList.toggle("active", x.getAttribute("data-page") === page); });
+    document.querySelectorAll(".page").forEach(function (p) { p.classList.add("hidden"); });
+    document.getElementById("page-" + page).classList.remove("hidden");
+    select(PAGES[page].def);
+  }
+
+  document.querySelectorAll(".tab").forEach(function (t) {
+    t.addEventListener("click", function () { activate(t.getAttribute("data-page")); });
+  });
+
+  activate(location.hash === "#music" ? "music" : "script");
 })();
 </script>
 </body>

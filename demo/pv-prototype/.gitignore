@@ -1,0 +1,6 @@
+# 可再生中间产物不入库（闸实录文档里的复现命令可重建）：
+# renders/=单镜头mp4（gen_shots+render_frames 可确定性复现）、
+# pv_silent.mp4=拼接中间件（build_pv.py 产出）、concat.txt=临时清单
+renders/
+pv_silent.mp4
+concat.txt

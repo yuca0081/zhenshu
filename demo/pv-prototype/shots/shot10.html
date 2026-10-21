@@ -1,0 +1,39 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>
+html,body{margin:0;padding:0;width:1080px;height:1920px;overflow:hidden;
+  background:#140420;font-family:'Microsoft YaHei',sans-serif;}
+#stage{position:relative;width:1080px;height:1920px;overflow:hidden;}
+
+.inner{position:absolute;inset:0;background:radial-gradient(100% 70% at 50%
+  45%, #2a0a3a 0%, #140420 75%);}
+.fword{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  font-size:620px;font-weight:900;color:#ffffff;
+  text-shadow:0 0 110px #ff2d78;}
+.ticks{position:absolute;left:50%;bottom:160px;transform:translateX(-50%);
+  display:flex;gap:22px;}
+.tk{width:70px;height:14px;border-radius:7px;background:#ffffff;opacity:0.2;}
+</style></head><body><div id="stage"><div class="inner" id="inner"></div><div class="fword" id="word">完</div><div class="ticks"><div class="tk" id="tk0"></div><div class="tk" id="tk1"></div><div class="tk" id="tk2"></div><div class="tk" id="tk3"></div></div></div>
+<script>
+window.__READY = 1;
+var BEAT = 0.5, BAR = 2.0, DUR = 4.0;
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function eoc(x) { return 1 - Math.pow(1 - x, 3); }   // easeOutCubic
+window.__renderFrame = function (t) {
+
+  var bp = (t % BEAT) / BEAT, barIdx = Math.floor(t / BAR);
+  var bpb = (t % BAR) / BAR;
+  var pulse = Math.max(0, 1 - bp * 3);                       // 逐拍脉冲衰减
+  var inner = document.getElementById('inner');
+  inner.style.transform = 'scale(' + (1 + 0.05 * pulse) + ')';
+  inner.style.filter = 'brightness(' + (1 + 0.3 * pulse
+    * (barIdx % 2 === 0 ? 1 : 0.5)) + ')';
+  var w = document.getElementById('word');
+  w.style.transform = 'translate(-50%,-50%) scale(' + (1 + 0.12 * pulse) + ')';
+  w.style.opacity = String(0.7 + 0.3 * Math.max(0, 1 - bpb * 1.2));
+  var on = Math.floor(t / BEAT) % 4;
+  for (var i = 0; i < 4; i++) {
+    document.getElementById('tk' + i).style.opacity = (on >= i) ? '1' : '0.2';
+  }
+
+};
+</script></body></html>

@@ -1,0 +1,136 @@
+{
+ "verdict": "PASS",
+ "findings": [],
+ "self_test_bad_cut_ms": 113.0,
+ "checks": [
+  {
+   "kind": "cut",
+   "at": 32.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "cut",
+   "at": 36.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "cut",
+   "at": 40.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "cut",
+   "at": 44.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "cut",
+   "at": 48.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "cut",
+   "at": 52.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "cut",
+   "at": 56.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "cut",
+   "at": 60.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "cut",
+   "at": 64.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "cut",
+   "at": 68.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "cut",
+   "at": 72.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "dur",
+   "id": "shot01",
+   "measured": 4.0,
+   "want": 4.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "dur",
+   "id": "shot02",
+   "measured": 4.0,
+   "want": 4.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "dur",
+   "id": "shot03",
+   "measured": 4.0,
+   "want": 4.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "dur",
+   "id": "shot04",
+   "measured": 4.0,
+   "want": 4.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "dur",
+   "id": "shot05",
+   "measured": 4.0,
+   "want": 4.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "dur",
+   "id": "shot06",
+   "measured": 4.0,
+   "want": 4.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "dur",
+   "id": "shot07",
+   "measured": 4.0,
+   "want": 4.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "dur",
+   "id": "shot08",
+   "measured": 4.0,
+   "want": 4.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "dur",
+   "id": "shot09",
+   "measured": 4.0,
+   "want": 4.0,
+   "dev_ms": 0.0
+  },
+  {
+   "kind": "dur",
+   "id": "shot10",
+   "measured": 4.0,
+   "want": 4.0,
+   "dev_ms": 0.0
+  }
+ ],
+ "tolerance": {
+  "cut_ms": 50,
+  "dur_ms": 100
+ }
+}

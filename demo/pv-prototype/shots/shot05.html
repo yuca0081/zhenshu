@@ -1,0 +1,31 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>
+html,body{margin:0;padding:0;width:1080px;height:1920px;overflow:hidden;
+  background:#081522;font-family:'Microsoft YaHei',sans-serif;}
+#stage{position:relative;width:1080px;height:1920px;overflow:hidden;}
+
+.sky{position:absolute;inset:0;background:radial-gradient(120% 90% at 30% 20%,
+  #123 0%, #081522 70%);}
+.orb{position:absolute;left:0;top:0;width:160px;height:160px;border-radius:50%;
+  filter:blur(2px);}
+</style></head><body><div id="stage"><div class="sky"></div><div class="orb" id="o0" style="background:#7fd8ff;opacity:0.5;box-shadow:0 0 70px #7fd8ff"></div><div class="orb" id="o1" style="background:#8affc1;opacity:0.5;box-shadow:0 0 70px #8affc1"></div><div class="orb" id="o2" style="background:#c8b6ff;opacity:0.5;box-shadow:0 0 70px #c8b6ff"></div><div class="orb" id="o3" style="background:#7fd8ff;opacity:0.5;box-shadow:0 0 70px #7fd8ff"></div><div class="orb" id="o4" style="background:#8affc1;opacity:0.5;box-shadow:0 0 70px #8affc1"></div><div class="orb" id="o5" style="background:#c8b6ff;opacity:0.5;box-shadow:0 0 70px #c8b6ff"></div><div class="orb" id="o6" style="background:#7fd8ff;opacity:0.5;box-shadow:0 0 70px #7fd8ff"></div><div class="orb" id="o7" style="background:#8affc1;opacity:0.5;box-shadow:0 0 70px #8affc1"></div></div>
+<script>
+window.__READY = 1;
+var BEAT = 0.5, BAR = 2.0, DUR = 4.0;
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function eoc(x) { return 1 - Math.pow(1 - x, 3); }   // easeOutCubic
+window.__renderFrame = function (t) {
+
+  for (var i = 0; i < 8; i++) {                              // 慢漂移·无拍点量化
+    var bx = (Math.sin(i * 12.9898) * 0.5 + 0.5) * 1080;
+    var by = (Math.sin(i * 78.233 + 4.0) * 0.5 + 0.5) * 1920;
+    var sc = 0.45 + (Math.sin(i * 3.7) * 0.5 + 0.5) * 0.8;
+    var x = bx + 70 * Math.sin(t * 0.31 + i * 1.7);
+    var y = by + 50 * Math.sin(t * 0.24 + i * 2.3);
+    document.getElementById('o' + i).style.transform =
+      'translate(' + x + 'px,' + y + 'px) scale('
+      + (sc * (1 + 0.1 * Math.sin(t * 0.5 + i))) + ')';
+  }
+
+};
+</script></body></html>

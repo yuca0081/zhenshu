@@ -1,0 +1,24 @@
+{
+ "score_map": {
+  "bpm": 120,
+  "beats": 161,
+  "phase_ms": 0.0
+ },
+ "dsp": {
+  "bpm_estimated": 122.9,
+  "onsets": 260
+ },
+ "onset_to_16th_grid_ms": {
+  "mean": 13.8,
+  "p95": 52.4,
+  "max": 61.1
+ },
+ "first_onset_phase_ms": -12.3,
+ "tolerance": {
+  "mean_ms": 25,
+  "p95_ms": 60,
+  "bpm_ref": 3.0
+ },
+ "note": "BPM 估计为参考项（自相关 ±2-3% 固有误差），主判据=网格贴合",
+ "verdict": "PASS"
+}

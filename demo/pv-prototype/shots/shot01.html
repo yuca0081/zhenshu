@@ -1,0 +1,32 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>
+html,body{margin:0;padding:0;width:1080px;height:1920px;overflow:hidden;
+  background:#140420;font-family:'Microsoft YaHei',sans-serif;}
+#stage{position:relative;width:1080px;height:1920px;overflow:hidden;}
+
+.bgA{position:absolute;inset:0;background:#140420;}
+.bgB{position:absolute;inset:0;background:#ff2d78;opacity:0;}
+.word{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  font-size:560px;font-weight:900;color:#ffffff;
+  text-shadow:0 0 90px #ff2d78,0 0 180px #ff2d78;}
+</style></head><body><div id="stage"><div class="bgA"></div><div class="bgB" id="bgB"></div>
+<div class="word" id="word">光</div></div>
+<script>
+window.__READY = 1;
+var BEAT = 0.5, BAR = 2.0, DUR = 4.0;
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function eoc(x) { return 1 - Math.pow(1 - x, 3); }   // easeOutCubic
+window.__renderFrame = function (t) {
+
+  var barIdx = Math.floor(t / BAR), bp = (t % BAR) / BAR;
+  var w = document.getElementById('word');
+  var s = 1.55 - 0.55 * eoc(clamp(bp * 3, 0, 1));       // 每小节砸入
+  w.style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  // 透明度给 0.25 下限：从 0 重触发会在小节边界产生整帧空内容的眨眼
+  w.style.opacity = String(0.25 + 0.75 * clamp(bp * 8, 0, 1));
+  var bgB = document.getElementById('bgB');
+  bgB.style.opacity = (barIdx % 2 === 0)
+    ? String(0.5 * (1 - clamp(bp * 2.5, 0, 1))) : '0';   // 双色随小节闪
+
+};
+</script></body></html>
