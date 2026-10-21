@@ -97,3 +97,13 @@ docs/test-result/*/
 
 # TypeScript 增量构建缓存（vue-tsc 产物，可再生）
 web/*.tsbuildinfo
+
+# ai/vendor 本地离线工具链（FluidSynth 二进制/音色库，大文件不入库；来源与授权见 soundfonts/README.txt，
+# README 在 ignore 规则外单独追踪）
+ai/vendor/*
+!ai/vendor/soundfonts/
+ai/vendor/soundfonts/*
+!ai/vendor/soundfonts/README.txt
+
+# BGM v2 试听串烧（可再生副产物，ai/make_bgm_v2.py --reel）
+data/library/media/audio/preview_*_reel.mp3

@@ -52,5 +52,65 @@
   "file": "nostalgic.mp3",
   "duration": 44.0,
   "mood": "怀旧暖色七和弦——历史回顾/老照片/人物回忆/时代变迁"
+ },
+ {
+  "name": "lofi_night",
+  "file": "lofi_night.mp3",
+  "duration": 58.0,
+  "mood": "松弛 lo-fi 夜色（电钢+软鼓刷）——深夜叙事/城市夜景/慢节奏话题",
+  "bpm": 68,
+  "tempo": "slow",
+  "energy": 2,
+  "source": "midi-fluidsynth/FluidR3_GM"
+ },
+ {
+  "name": "piano_story",
+  "file": "piano_story.mp3",
+  "duration": 47.2,
+  "mood": "钢琴叙事（分解和弦+弦乐底）——人物故事/传记/温情/回忆",
+  "bpm": 84,
+  "tempo": "slow",
+  "energy": 2,
+  "source": "midi-fluidsynth/FluidR3_GM"
+ },
+ {
+  "name": "strings_rise",
+  "file": "strings_rise.mp3",
+  "duration": 45.1,
+  "mood": "弦乐推进（组弦+定音底鼓）——历史/战争/宏大叙事/渐强段落",
+  "bpm": 88,
+  "tempo": "mid",
+  "energy": 4,
+  "source": "midi-fluidsynth/FluidR3_GM"
+ },
+ {
+  "name": "morning_walk",
+  "file": "morning_walk.mp3",
+  "duration": 38.4,
+  "mood": "明快行进（马林巴+轻鼓）——旅行/日常/轻松话题/户外",
+  "bpm": 104,
+  "tempo": "mid",
+  "energy": 3,
+  "source": "midi-fluidsynth/FluidR3_GM"
+ },
+ {
+  "name": "sunny_pop",
+  "file": "sunny_pop.mp3",
+  "duration": 34.6,
+  "mood": "欢快流行（钢琴+铃铛+四踩）——美食/萌宠/开箱/生活好物",
+  "bpm": 116,
+  "tempo": "fast",
+  "energy": 4,
+  "source": "midi-fluidsynth/FluidR3_GM"
+ },
+ {
+  "name": "soft_mystery",
+  "file": "soft_mystery.mp3",
+  "duration": 59.7,
+  "mood": "悬浮悬念（暖垫+颤音琴点）——谜题/科技/暗色/未解之谜",
+  "bpm": 66,
+  "tempo": "slow",
+  "energy": 1,
+  "source": "midi-fluidsynth/FluidR3_GM"
  }
 ]
