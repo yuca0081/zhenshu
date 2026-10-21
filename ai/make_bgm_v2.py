@@ -16,6 +16,7 @@ bgmFor/mixBGM 零改动；新增 bpm/tempo/energy/source 字段留给未来自�
 tracks.json 从不调本脚本，这里失败纯属开发机配置问题，响亮失败才对。
 """
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -397,18 +398,29 @@ def render_track(tr, force=False):
 
 
 def update_manifest(tr, dur):
-    """tracks.json 合并更新：v1 条目原样保留，v2 条目带 tempo/energy/source。"""
+    """tracks.json 合并更新：v1 条目原样保留，v2 条目带 tempo/energy/source。
+
+    原子写（tmp+os.replace）：这份清单是 Go 选曲/混音的唯一事实源，且 v1 旧条目
+    只活在这一个文件里——write_text 先截断再写，中途挂掉整个曲库半截残废。
+    读到损坏文件（上次写坏的残卷）时先备份再从空重建，不炸整轮。"""
     path = OUT_DIR / 'tracks.json'
     items = []
     if path.exists():
-        items = json.loads(path.read_text(encoding='utf-8'))
+        try:
+            items = json.loads(path.read_text(encoding='utf-8'))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            bak = path.with_suffix('.json.corrupt')
+            path.replace(bak)
+            print(f"tracks.json 损坏（{e}），已备份为 {bak.name} 从空重建")
     items = [it for it in items if it.get('name') != tr['name']]
     items.append({'name': tr['name'], 'file': f"{tr['name']}.mp3",
                   'duration': round(dur, 1), 'mood': tr['mood'],
                   'bpm': tr['bpm'], 'tempo': tr['tempo'], 'energy': tr['energy'],
                   'source': 'midi-fluidsynth/FluidR3_GM'})
-    path.write_text(json.dumps(items, ensure_ascii=False, indent=1),
-                    encoding='utf-8')
+    tmp = path.with_suffix('.json.tmp')
+    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=1),
+                   encoding='utf-8')
+    os.replace(tmp, path)
 
 
 def load_audio(mp3):

@@ -12,6 +12,7 @@
 """
 import json
 import math
+import os
 import pathlib
 import shutil
 import sys
@@ -229,8 +230,12 @@ def main() -> int:
             print(f"{tr['name']}: {mp3.stat().st_size // 1024}KB ✓")
         manifest.append({'name': tr['name'], 'file': mp3.name,
                          'duration': tr['slot'] * len(tr['chords']), 'mood': tr['mood']})
-    (OUT_DIR / 'tracks.json').write_text(
+    # 原子写：tracks.json 是 Go 选曲的唯一事实源（v1/v2 共用），write_text 先截断
+    # 再写，中途挂掉整份清单半截残废（与 make_bgm_v2.update_manifest 同款修法）
+    tmp = OUT_DIR / 'tracks.json.tmp'
+    tmp.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=1), encoding='utf-8')
+    os.replace(tmp, OUT_DIR / 'tracks.json')
     print(f"曲库清单 tracks.json ✓（{len(manifest)} 首）")
     return 0
 

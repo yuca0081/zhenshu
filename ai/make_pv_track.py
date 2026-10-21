@@ -279,7 +279,7 @@ def self_check(brief, sections, mp):
     verse = [s for s in mp['sections'] if s['name'] == 'verse']
     if not chorus or max(s['energy'] for s in chorus) < 5:
         errs.append('副歌能量未到 5——能量弧立不起来')
-    if verse and max(s['energy'] for s in chorus) - verse[0]['energy'] < 3:
+    if chorus and verse and max(s['energy'] for s in chorus) - verse[0]['energy'] < 3:
         errs.append('副歌-主歌能量差 <3，段落对比不足')
     if mp['score_duration'] != mp['duration']:
         errs.append(f"渲染时长 {mp['duration']} ≠ 谱面 {mp['score_duration']}")

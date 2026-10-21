@@ -38,14 +38,22 @@ func TestBGMSetAndResolve(t *testing.T) {
 	if _, err := os.Stat(file); err != nil {
 		t.Fatalf("曲库文件不存在: %v", err)
 	}
-	// off → 字段删除，解析为空
+	// off → 写哨兵值（删键会被 pickBGM 当「没配乐」自动填回，2026-10-21 巡检中危#3），
+	// 解析侧 bgmFor 照旧回空
 	if err := SetBGM(p, "off"); err != nil {
 		t.Fatal(err)
 	}
 	if n, f := bgmFor(p); n != "" || f != "" {
 		t.Fatalf("off 后应为空，得到 %q %q", n, f)
 	}
+	if b, _ := os.ReadFile(p.Artifact("project.json")); !strings.Contains(string(b), `"bgm": "off"`) {
+		t.Fatalf("off 应写哨兵值（bgmFor 认识、pickBGM 不推翻）: %s", b)
+	}
+	// "" 才是真清除（回「未决定」）
+	if err := SetBGM(p, ""); err != nil {
+		t.Fatal(err)
+	}
 	if b, _ := os.ReadFile(p.Artifact("project.json")); strings.Contains(string(b), "bgm") {
-		t.Fatalf("off 后 project.json 不应残留 bgm 字段: %s", b)
+		t.Fatalf("空串清除后不应残留 bgm 字段: %s", b)
 	}
 }

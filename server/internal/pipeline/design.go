@@ -504,29 +504,66 @@ func writeDesignDoc(b *strings.Builder, ss *contract.StyleSamples, brief *contra
 // 的风格库条目带「黑场呼吸」特色，经特色吸收硬要求把「整场淡入纯黑」写进
 // entry_exit/exit 与 motion——场景模型忠实执行设计文档，写画面提示词拦不住吸收链，
 // 段间接缝亮度闸三轮打回后整条制作刹车）。段间衔接是机械约定，设计也不许发明
-// 黑场翻页：确认落盘前把收尾/转场里的整页黑场类措辞机械改写成定格/直切。
-// 返回改写条数（0=无需改）。
+// 黑场翻页：确认落盘前把开场/收尾/转场里的整页黑场类措辞机械改写成首帧即景/
+// 定格/直切。两头对称：接缝闸首帧禁黑场（Entry）与末帧禁淡出黑（Exit）都查，
+// 钳制只管收尾侧的话「整场淡入」写进 entry 照样落盘，打回兜底正是要消灭的
+// 整链刹车路径。返回改写条数（0=无需改）。
 func clampBoundaryFades(ss *contract.StyleSamples) int {
 	if ss == nil {
 		return 0
 	}
-	reFade := regexp.MustCompile(`整[场页帧][^。；;\n]{0,30}(淡出|淡入|归黑|收黑)|归黑|收黑|黑场|闪黑`)
 	n := 0
-	if ss.EntryExit != nil && reFade.MatchString(ss.EntryExit.Exit) {
-		ss.EntryExit.Exit = "定格收尾——该退的元素在旁白收尾前退完，留下的元素归位停稳，画面定格到段尾（接缝契约：禁整页淡出/归黑，机检亮度闸打回）"
-		n++
+	if ss.EntryExit != nil {
+		if hasUnnegatedFade(ss.EntryExit.Entry) {
+			ss.EntryExit.Entry = "首帧即景——开场元素的入场动画在首帧内起手，画面第一帧就是内容帧（接缝契约：禁整页淡入/黑场开场，机检亮度闸打回）"
+			n++
+		}
+		if hasUnnegatedFade(ss.EntryExit.Exit) {
+			ss.EntryExit.Exit = "定格收尾——该退的元素在旁白收尾前退完，留下的元素归位停稳，画面定格到段尾（接缝契约：禁整页淡出/归黑，机检亮度闸打回）"
+			n++
+		}
 	}
 	if ss.Motion != nil {
-		if reFade.MatchString(ss.Motion.Exits) {
+		if hasUnnegatedFade(ss.Motion.Exits) {
 			ss.Motion.Exits = "该退的元素旁白收尾前退完（元素级淡出/滑出均可），留下的停稳——段尾定格在内容帧，禁整页淡出收黑（接缝契约）"
 			n++
 		}
-		if reFade.MatchString(ss.Motion.Transition) {
+		if hasUnnegatedFade(ss.Motion.Transition) {
 			ss.Motion.Transition = "全片统一直切（接缝契约：各段首帧即景/末帧定格，段间不切黑不加戏）"
 			n++
 		}
 	}
 	return n
+}
+
+// reFade 黑场/整页淡出类措辞（clampBoundaryFades 与 transitionTokenOf 共用的
+// 扫描口径）。
+var reFade = regexp.MustCompile(`整[场页帧][^。；;\n]{0,30}(淡出|淡入|归黑|收黑)|归黑|收黑|黑场|闪黑`)
+
+// negWords 否定词表（紧贴关键词前 2 字内生效）：「禁黑场翻页」≠ 用黑场。
+var negWords = []string{"禁", "不", "无", "没", "别", "非", "拒绝", "远离"}
+
+// hasUnnegatedFade 存在**未被否定**的黑场/整页淡出类措辞：设计写「叠化过渡、
+// 不用黑场」是合法叠化（黑场被否定），不能被钳成直切模板；「整场淡入纯黑」
+// 没人否定，必须钳。与 transitionTokenOf/hasUnnegated 同一套否定语义。
+func hasUnnegatedFade(t string) bool {
+	for _, m := range reFade.FindAllStringIndex(t, -1) {
+		lo := m[0] - 6 // 最多回看 2 个 CJK 字（否定词紧贴关键词）
+		if lo < 0 {
+			lo = 0
+		}
+		negated := false
+		for _, n := range negWords {
+			if strings.Contains(t[lo:m[0]], n) {
+				negated = true
+				break
+			}
+		}
+		if !negated {
+			return true
+		}
+	}
+	return false
 }
 
 // LockDesign 确认后的设计系统落盘：design.md（人读 + 门2 + scene_gen 注入源，含
@@ -544,7 +581,7 @@ func LockDesign(p *Project, ss *contract.StyleSamples) error {
 		p.Manifest("design.fontclamp", "设计字体栈含渲染端不可用字体，已过滤为系统字体")
 	}
 	if n := clampBoundaryFades(ss); n > 0 {
-		p.Manifest("design.seam_clamp", fmt.Sprintf("D5 接缝契约改写 %d 处黑场/整页淡出类收尾转场（特色吸收与接缝契约冲突，机械执法）", n))
+		p.Manifest("design.seam_clamp", fmt.Sprintf("D5 接缝契约改写 %d 处黑场/整页淡出类开场/收尾/转场（特色吸收与接缝契约冲突，机械执法）", n))
 	}
 	if len(matched) > 0 {
 		p.Manifest("design.fontcatalog", "设计点名目录字体："+strings.Join(mapKeys(matched), "、"))
@@ -604,9 +641,9 @@ func transitionTokenOf(ss *contract.StyleSamples) string {
 }
 
 // hasUnnegated t 里存在未被否定的 kw 出现：关键词前 2 字内出现否定词
-// （禁/不/无/没/别/非/拒绝/远离）即视为否定——「禁黑场翻页」≠ 用黑场。
+// （negWords，与 clampBoundaryFades 同一套否定语义）即视为否定——
+// 「禁黑场翻页」≠ 用黑场。
 func hasUnnegated(t, kw string) bool {
-	neg := []string{"禁", "不", "无", "没", "别", "非", "拒绝", "远离"}
 	for i := 0; ; {
 		j := strings.Index(t[i:], kw)
 		if j < 0 {
@@ -619,7 +656,7 @@ func hasUnnegated(t, kw string) bool {
 		}
 		prefix := t[lo:start]
 		negated := false
-		for _, n := range neg {
+		for _, n := range negWords {
 			if strings.Contains(prefix, n) {
 				negated = true
 				break

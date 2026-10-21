@@ -20,11 +20,14 @@ HERE = pathlib.Path(__file__).resolve().parent
 
 
 def frame_gray(video, t):
+    """取 t 时刻灰度帧；解码失败（视频缺失/损坏）返回 None 而非空数组——
+    空数组会被下游算成 std=-1.0 判 EMPTY，把「没读出来」误报成「画面空了」。"""
     r = subprocess.run(
         ['ffmpeg', '-v', 'error', '-ss', str(t), '-i', str(video),
          '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'gray', '-'],
         capture_output=True)
-    return np.frombuffer(r.stdout, dtype=np.uint8)
+    g = np.frombuffer(r.stdout, dtype=np.uint8)
+    return g if len(g) else None
 
 
 def main() -> int:
@@ -39,7 +42,15 @@ def main() -> int:
         base = s['t0'] - spec['meta']['segment']['start']
         for label, off in (('in', 0.5), ('mid', d / 2), ('out', d - 0.5)):
             g = frame_gray(video, base + off)
-            std = float(g.std()) if len(g) == 1080 * 1920 else -1.0
+            if g is None:
+                bad.append(f"{s['id']}@{label}(+{off}s) 解码失败（视频缺失/损坏）")
+                print(f"{s['id']} {label:3s} 解码失败")
+                continue
+            if len(g) != 1080 * 1920:
+                bad.append(f"{s['id']}@{label}(+{off}s) 帧尺寸不符"
+                           f"（{len(g)} 像素 ≠ 1080×1920）")
+                continue
+            std = float(g.std())
             state = 'EMPTY' if std < 3 else ('LOW' if std < 15 else 'OK')
             if state == 'EMPTY':
                 bad.append(f"{s['id']}@{label}(+{off}s) σ={std:.1f}")

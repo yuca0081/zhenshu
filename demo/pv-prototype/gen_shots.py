@@ -289,7 +289,6 @@ def main() -> int:
             stream.reconfigure(errors='replace')
     spec = json.loads((HERE / 'shots.json').read_text(encoding='utf-8'))
     meta = spec['meta']
-    (HERE / 'shots').mkdir(exist_ok=True)
 
     bar_s = meta['bar']
     for shot in spec['shots']:

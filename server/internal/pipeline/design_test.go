@@ -171,3 +171,38 @@ func TestTransitionTokenOf(t *testing.T) {
 		t.Fatalf("无 motion 应 cut，得到 %s", got)
 	}
 }
+
+// clampBoundaryFades 两头对称 + 否定感知（2026-10-21 巡检中危#5 回归）：
+// Entry 侧「整场淡入」同样要钳（接缝闸首帧禁黑场——只钳收尾侧等于把打回整链
+// 刹车的路径放回来）；「叠化过渡、不用黑场」里的黑场被否定，是合法叠化，不钳。
+func TestClampBoundaryFades(t *testing.T) {
+	ss := designFixture()
+	ss.EntryExit = &contract.EntryExitSpec{
+		Entry: "整场淡入纯黑起幕，2 秒后主体浮现",
+		Exit:  "定格收尾，留下的元素归位停稳",
+	}
+	ss.Motion = &contract.MotionLang{
+		Exits:      "该退的元素旁白收尾前退完",
+		Transition: "相邻段交叉叠化，不用黑场",
+	}
+	if n := clampBoundaryFades(ss); n != 1 {
+		t.Fatalf("应只钳 Entry 1 处，实际 %d", n)
+	}
+	if !strings.Contains(ss.EntryExit.Entry, "首帧即景") {
+		t.Fatalf("Entry 未被钳: %s", ss.EntryExit.Entry)
+	}
+	if !strings.Contains(ss.EntryExit.Exit, "定格收尾") {
+		t.Fatalf("干净的 Exit 不该被动: %s", ss.EntryExit.Exit)
+	}
+	if !strings.Contains(ss.Motion.Transition, "叠化") {
+		t.Fatalf("被否定的黑场不该连累合法叠化: %s", ss.Motion.Transition)
+	}
+
+	// 老伤回归：收尾侧黑场照旧要钳（87a97af 的原始案例）
+	ss2 := designFixture()
+	ss2.EntryExit = &contract.EntryExitSpec{Exit: "整场画面随旁白淡出归黑"}
+	ss2.Motion = &contract.MotionLang{Exits: "整场淡出收黑", Transition: "闪黑翻页"}
+	if n := clampBoundaryFades(ss2); n != 3 {
+		t.Fatalf("Exit/Exits/Transition 三处应全钳，实际 %d", n)
+	}
+}

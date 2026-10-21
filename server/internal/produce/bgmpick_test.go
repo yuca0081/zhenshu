@@ -1,10 +1,14 @@
 package produce
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"webpage-video-agent/server/internal/contract"
+	"webpage-video-agent/server/internal/events"
 	"webpage-video-agent/server/internal/pipeline"
 )
 
@@ -88,6 +92,59 @@ func TestTempoConflict(t *testing.T) {
 		if tempoConflict(mk(c.tempo), c.want) {
 			t.Errorf("tempo=%q want=%q 不应判冲突", c.tempo, c.want)
 		}
+	}
+}
+
+// off 哨兵不推翻（2026-10-21 巡检中危#3 回归）：用户 set_bgm off 后，pickBGM 必须
+// 跳过自动选曲且不把 bgm 字段改掉；已有曲名照旧保留。两条都在守卫路径返回，
+// 不碰曲库与 LLM，纯本地可测。
+func TestPickBGMRespectsOffAndExisting(t *testing.T) {
+	for _, tc := range []struct {
+		name, bgm string
+	}{
+		{"off 哨兵不被自动选曲推翻", "off"},
+		{"已有曲名保留", "calm"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			p := &pipeline.Project{ID: "t", Dir: dir, Ctx: context.Background()}
+			if err := os.WriteFile(filepath.Join(dir, "project.json"),
+				[]byte(`{"name":"t","bgm":"`+tc.bgm+`"}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			r := &Runner{Hub: events.NewHub()}
+			r.pickBGM(context.Background(), p, &contract.Storyboard{}, nil)
+			b, err := os.ReadFile(filepath.Join(dir, "project.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(b), `"bgm":"`+tc.bgm+`"`) {
+				t.Fatalf("bgm 字段被改写: %s", b)
+			}
+		})
+	}
+}
+
+// SetBGM off 写哨兵值而非删键（删键=空串=「没配乐」，自动选曲会填回来）。
+func TestSetBGMSentinelOff(t *testing.T) {
+	dir := t.TempDir()
+	p := &pipeline.Project{ID: "t", Dir: dir, Ctx: context.Background()}
+	if err := os.WriteFile(filepath.Join(dir, "project.json"),
+		[]byte(`{"name":"t","bgm":"calm","bgm_reason":"旧选曲理由"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := pipeline.SetBGM(p, "off"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "project.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"bgm": "off"`) {
+		t.Fatalf("off 应写哨兵值而非删键: %s", b)
+	}
+	if strings.Contains(string(b), "bgm_reason") {
+		t.Fatalf("off 应清掉旧选曲理由: %s", b)
 	}
 }
 

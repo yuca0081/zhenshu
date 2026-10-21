@@ -266,6 +266,11 @@ func (r *Runner) pickBGM(ctx context.Context, p *pipeline.Project,
 	}
 	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil &&
 		json.Unmarshal(b, &cur) == nil && strings.TrimSpace(cur.BGM) != "" {
+		// "off" 是用户拍板关闭的哨兵值（SetBGM 写入）：关闭也是拍板，照样不推翻
+		if strings.EqualFold(strings.TrimSpace(cur.BGM), "off") {
+			r.Manifest(p, "produce.bgm", "配乐已被用户关闭（set_bgm off），跳过自动选曲")
+			return
+		}
 		r.Manifest(p, "produce.bgm", "保留已有配乐 "+strings.TrimSpace(cur.BGM))
 		return
 	}

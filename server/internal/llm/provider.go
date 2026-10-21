@@ -178,10 +178,8 @@ func (p *Provider) generate(ctx context.Context, system, user string, imageURLs 
 	var lastErr error
 	var usage openai.Usage
 	for attempt := 0; attempt < 3; attempt++ {
-		// 预算闸（P0-1）：超限的调用一个字节都不出网，管线如实失败转可重跑
-		if err := budgetCheck(ctx); err != nil {
-			return usage, err
-		}
+		// 预算闸/记账在 cachedChat 里（chatOnce→postChat 一跳）：缓存命中免费放行，
+		// 只有真正出网才过闸记账。预算错误在这里快速失败，不吃退避空转。
 		if attempt > 0 {
 			// 重试退避感知取消：任务已被取消还空转重试只会白等。
 			// 429 要按限速窗口退避（实测 2/4s 出不了窗口，三连试全烧在限速上）；
@@ -212,6 +210,9 @@ func (p *Provider) generate(ctx context.Context, system, user string, imageURLs 
 			if ctx.Err() != nil { // 取消/超时不是可重试错误
 				return usage, ctx.Err()
 			}
+			if errors.Is(err, ErrBudgetExceeded) { // 预算闸拒发（cachedChat 里）：立刻失败
+				return usage, err
+			}
 			// 4xx 客户端错（除 429）重试不会好：立即失败并透传状态码；
 			// 429 限流/5xx/网络错照旧退避重试
 			var se *StatusError
@@ -227,7 +228,6 @@ func (p *Provider) generate(ctx context.Context, system, user string, imageURLs 
 			continue
 		}
 		usage = resp.Usage
-		budgetAdd(ctx, usage)
 		content := extractJSON(stripFence(resp.Choices[0].Message.Content))
 		if err := json.Unmarshal([]byte(content), out); err != nil {
 			lastErr = fmt.Errorf("模型输出不是合法 JSON: %w（原文前 200 字: %.200s）", err, content)
@@ -302,10 +302,7 @@ func (p *Provider) GenerateJSONContinue(ctx context.Context, msgs []openai.ChatC
 	var lastErr error
 	var usage openai.Usage
 	for attempt := 0; attempt < 3; attempt++ {
-		// 预算闸（P0-1）：超限的调用一个字节都不出网
-		if err := budgetCheck(ctx); err != nil {
-			return usage, err
-		}
+		// 预算闸/记账在 cachedChat 里（chatOnceMsgs→postChat 一跳），与 generate 同款
 		if attempt > 0 {
 			// 重试退避感知取消；429 按限速窗口退避（与 generate 同款，含抖动防惊群）
 			delay := time.Duration(attempt) * 2 * time.Second
@@ -332,6 +329,9 @@ func (p *Provider) GenerateJSONContinue(ctx context.Context, msgs []openai.ChatC
 			if ctx.Err() != nil {
 				return usage, ctx.Err()
 			}
+			if errors.Is(err, ErrBudgetExceeded) { // 预算闸拒发（cachedChat 里）：立刻失败
+				return usage, err
+			}
 			var se *StatusError
 			if errors.As(err, &se) && se.Code >= 400 && se.Code < 500 && se.Code != http.StatusTooManyRequests {
 				return usage, fmt.Errorf("LLM 请求被上游拒绝（HTTP %d，不重试）: %w", se.Code, se)
@@ -344,7 +344,6 @@ func (p *Provider) GenerateJSONContinue(ctx context.Context, msgs []openai.ChatC
 			continue
 		}
 		usage = resp.Usage
-		budgetAdd(ctx, usage)
 		content := extractJSON(stripFence(resp.Choices[0].Message.Content))
 		if err := json.Unmarshal([]byte(content), out); err != nil {
 			lastErr = fmt.Errorf("模型输出不是合法 JSON: %w（原文前 200 字: %.200s）", err, content)

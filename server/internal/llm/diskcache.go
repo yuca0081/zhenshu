@@ -15,6 +15,7 @@
 package llm
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -22,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -37,7 +39,7 @@ type chatCache struct {
 	once   sync.Once
 	dir    string
 	dirOK  bool
-	writes int
+	writes atomic.Int64 // 多 goroutine 并发落盘同时自增，必须原子
 }
 
 var chatCache_ chatCache
@@ -103,8 +105,7 @@ func cacheStore(model string, body, raw []byte) {
 		return
 	}
 	_ = os.Rename(tmp, path)
-	chatCache_.writes++
-	if chatCache_.writes%cachePruneEvery == 0 {
+	if chatCache_.writes.Add(1)%cachePruneEvery == 0 {
 		pruneCache(chatCache_.dir)
 	}
 }
@@ -172,16 +173,20 @@ func sfWait(ctx contextual, f *sfFlight) (raw []byte, err error) {
 	}
 }
 
-// contextual 只需要 Done()（postChat 传 context.Context，这里收窄便于测试）。
+// contextual 只需要 Done()（cachedChat/sfWait 的取消感知面收窄，便于测试）。
 type contextual interface {
 	Done() <-chan struct{}
 	Err() error
 }
 
 // cachedChat postChat 的缓存/单飞封皮：命中直接回；未命中单飞出网，成功落盘。
-func cachedChat(ctx contextual, model string, body []byte, net func() ([]byte, error)) (openai.ChatCompletionResponse, error) {
+// 预算闸与记账也收在这里（2026-10-21 修复）：只对真正出网的一跳过闸/记账——
+// 重放（磁盘命中/单飞等待者）零成本复用，Usage 清零返回，否则同一响应重放 N 次
+// 账面涨 N 倍，重跑越密集 8M 预算闸越早打死健康项目；agent.done 落的全价账还会
+// 被 ProjectSpend 播种再累计一遍。
+func cachedChat(ctx context.Context, model string, body []byte, net func() ([]byte, error)) (openai.ChatCompletionResponse, error) {
 	if raw, ok := cacheLookup(model, body); ok {
-		return parseChatBody(raw)
+		return replayChat(raw)
 	}
 	f, isOwner := sfEnter(cacheKey(model, body))
 	if !isOwner {
@@ -189,14 +194,23 @@ func cachedChat(ctx contextual, model string, body []byte, net func() ([]byte, e
 		if err != nil {
 			return openai.ChatCompletionResponse{}, err
 		}
-		return parseChatBody(raw)
+		return replayChat(raw)
+	}
+	// 预算闸放在缓存未命中之后：超限只拒「要花钱的新请求」，免费的缓存命中放行
+	// （P0-2 的设计目标恰是重启重跑零成本复用，不能被自己的预算闸拦在门外）
+	if err := budgetCheck(ctx); err != nil {
+		sfLeave(cacheKey(model, body), f, nil, err)
+		return openai.ChatCompletionResponse{}, err
 	}
 	raw, err := net()
 	if err == nil {
-		// 空 choices（内容审查/长度截断）上游算 200 但属可重试失败——不落盘，
-		// 否则重试会永远命中同一条死响应
-		if resp, perr := parseChatBody(raw); perr == nil && len(resp.Choices) > 0 {
-			cacheStore(model, body, raw)
+		// 200 即记账（端点已计费，含空 choices）；空 choices 不落盘——内容审查/
+		// 长度截断属可重试失败，落盘会让重试永远命中同一条死响应
+		if resp, perr := parseChatBody(raw); perr == nil {
+			budgetAdd(ctx, resp.Usage)
+			if len(resp.Choices) > 0 {
+				cacheStore(model, body, raw)
+			}
 		}
 	}
 	sfLeave(cacheKey(model, body), f, raw, err)
@@ -204,6 +218,17 @@ func cachedChat(ctx contextual, model string, body []byte, net func() ([]byte, e
 		return openai.ChatCompletionResponse{}, err
 	}
 	return parseChatBody(raw)
+}
+
+// replayChat 零成本复用（磁盘命中/单飞等待者）：内容原样、Usage 清零——这一次
+// 没花钱，账面不能再记全价。
+func replayChat(raw []byte) (openai.ChatCompletionResponse, error) {
+	resp, err := parseChatBody(raw)
+	if err != nil {
+		return openai.ChatCompletionResponse{}, err
+	}
+	resp.Usage = openai.Usage{}
+	return resp, nil
 }
 
 func parseChatBody(raw []byte) (openai.ChatCompletionResponse, error) {

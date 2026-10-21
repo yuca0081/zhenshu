@@ -65,12 +65,9 @@ func (p *Provider) chatTemp(ctx context.Context, msgs []openai.ChatCompletionMes
 	// 429 限速退避重试（循环对话轮没有外层重试——审核/工位一轮 429 就整轮报废，
 	// 代价远大于等一个限速窗口）。退避 15s/30s，叠随机抖动——多路调用方同步退避
 	// 会一起醒来再撞一次（2026-10-17 惊群教训，与 generate 同款）；ctx 取消立即让路。
+	// 预算闸/记账在 cachedChat 里（postChat 一跳）：缓存命中免费放行，只有真正
+	// 出网才过闸记账；预算错误非 StatusError，走下面的非 429 分支立刻失败。
 	for attempt := 0; ; attempt++ {
-		// 预算闸（P0-1）：超限一个字节都不出网。放在退避等待之前——已超限的
-		// 调用连限速窗口都不该等，立刻失败让上层收摊。
-		if err := budgetCheck(ctx); err != nil {
-			return openai.ChatCompletionMessage{}, openai.Usage{}, err
-		}
 		// 账户级并发闸（2026-10-19 高-8）：Chat/ChatTemp 原先绕闸直发，而准备三
 		// 工位与全部审片循环都走这条路——多项目并行时正是 429 惊群最后一个口子。
 		// 闸在退避等待之外（睡着的调用不占坑），与 generate 同一道闸。
@@ -84,7 +81,6 @@ func (p *Provider) chatTemp(ctx context.Context, msgs []openai.ChatCompletionMes
 			return p.postChat(ctx, req)
 		}()
 		if err == nil {
-			budgetAdd(ctx, resp.Usage) // 200 即记账（含空 choices——端点已计费）
 			if len(resp.Choices) == 0 {
 				return openai.ChatCompletionMessage{}, resp.Usage, ErrEmptyChoice
 			}

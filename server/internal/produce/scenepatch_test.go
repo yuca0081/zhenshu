@@ -47,6 +47,7 @@ func TestApplyScenePatches(t *testing.T) {
 func TestApplyScenePatchesRejects(t *testing.T) {
 	txt := "x"
 	frag := "<div id=\"orbit\"></div>"
+	renamed := `<div id="别的" class="ring"><b>新轨道</b></div>` // id 被换：GSAP 补间将找不着元素，必须整单作废
 	cases := []struct {
 		name    string
 		patches []scenePatch
@@ -56,6 +57,7 @@ func TestApplyScenePatchesRejects(t *testing.T) {
 		{"空改动单", nil, "空改动单"},
 		{"空改动", []scenePatch{{Target: "#title"}}, "空改动"},
 		{"一条多做", []scenePatch{{Target: "#title", Text: &txt, HTML: &frag}}, "一件事"},
+		{"换门牌", []scenePatch{{Target: "#orbit", HTML: &renamed}}, "丢了原 id"},
 	}
 	for _, c := range cases {
 		if _, err := applyScenePatches(patchTestHTML, c.patches); err == nil || !strings.Contains(err.Error(), c.wantErr) {

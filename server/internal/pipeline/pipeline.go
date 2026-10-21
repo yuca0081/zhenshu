@@ -1950,7 +1950,10 @@ func ListBGM() string {
 	return strings.Join(lines, "；")
 }
 
-// SetBGM 写 project.json 的 bgm 字段（track="off"/"" 清除；曲名做曲库校验）。
+// SetBGM 写 project.json 的 bgm 字段（track="off" 写哨兵值 "off" 显式关闭；"" 清除
+// 回「未决定」；曲名做曲库校验）。off 不能走删键——删键后读到空串会被当成「没配乐」，
+// pickBGM 下次制作就把用户「不要配乐」的拍板推翻（2026-10-21 巡检中危#3）；
+// bgmFor 认 "off" 为无配乐，消费侧零改动。
 func SetBGM(p *Project, track string) error {
 	want := strings.TrimSpace(track)
 	if want != "" && !strings.EqualFold(want, "off") {
@@ -1965,8 +1968,12 @@ func SetBGM(p *Project, track string) error {
 			return fmt.Errorf("曲名 %q 不在曲库（可用：%s）", want, ListBGM())
 		}
 	}
-	if want == "" || strings.EqualFold(want, "off") {
+	if want == "" {
 		return SetProjectField(p, "bgm", nil)
+	}
+	if strings.EqualFold(want, "off") {
+		_ = SetProjectField(p, "bgm_reason", nil)
+		return SetProjectField(p, "bgm", "off")
 	}
 	return SetProjectField(p, "bgm", strings.ToLower(want))
 }

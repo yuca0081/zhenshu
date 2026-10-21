@@ -76,6 +76,11 @@ def main() -> int:
                 findings.append(f"{s['id']} 渲染产物缺失：{vp.name}")
                 continue
             d = ffprobe_dur(vp)
+            if d is None:
+                # 闸门脚本报错要说人话：ffprobe 挂了直接说探测失败，
+                # 别让下面 abs(None-…) 的 TypeError 把真因埋进 traceback
+                findings.append(f"{s['id']} 时长探测失败（ffprobe 挂了或文件读不了）")
+                continue
             dev = abs(d - (s['t1'] - s['t0'])) * 1000
             rows.append(dict(kind='dur', id=s['id'], measured=round(d, 3),
                              want=s['t1'] - s['t0'], dev_ms=round(dev, 1)))

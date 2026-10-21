@@ -24,8 +24,8 @@ import numpy as np
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / 'agi-mv-repro'))
-from analyze_audio import (SR, estimate_bpm, pick_onsets,  # noqa: E402
-                           spectral_flux)
+from analyze_audio import (HOP, SR, estimate_bpm,  # noqa: E402
+                           pick_onsets, spectral_flux)
 
 TOL_MEAN_MS = 25     # onset→16 分格 平均偏差（mp3 帧粒度 26ms 在内）
 TOL_P95_MS = 60      # p95：弱拍/装饰音 onset 抖动
@@ -55,7 +55,7 @@ def main() -> int:
 
     flux = spectral_flux(x)
     onsets, _ = pick_onsets(flux)
-    ons = np.array([i * 512 / SR for i in onsets])
+    ons = np.array([i * HOP / SR for i in onsets])  # HOP 跟 analyze_audio 同源，上游改窗距这里不再静默错标
     bpm_ref = estimate_bpm(flux, onsets)
 
     # 主判据：onset → 谱面 16 分网格（谱面先验锚定，无 BPM 估计环节）

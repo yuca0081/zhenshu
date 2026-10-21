@@ -132,6 +132,13 @@ func applyOnePatch(n *html.Node, p scenePatch) error {
 		if err != nil || len(frag) == 0 {
 			return fmt.Errorf("替换片段解析失败或为空")
 		}
+		// 替换片段必须保持原 id（文件头契约）：GSAP 补间按 id 找元素——模型交回
+		// 换了门牌的片段时旧节点被删、id 蒸发，动画静默失效且 sceneValidate/lint
+		// 都查不出（2026-10-21 巡检中危#4）。id 丢了整单作废，调用方回退整份重写。
+		wantID := attrOf(n, "id")
+		if wantID == "" || !fragHasID(frag, wantID) {
+			return fmt.Errorf("替换片段丢了原 id %q（必须保持同一 id，GSAP 按 id 找元素）", wantID)
+		}
 		parent := n.Parent
 		if parent == nil {
 			return fmt.Errorf("元素无父节点")
@@ -142,6 +149,28 @@ func applyOnePatch(n *html.Node, p scenePatch) error {
 		parent.RemoveChild(n)
 	}
 	return nil
+}
+
+// fragHasID 替换片段子树里是否还带着这个 id。
+func fragHasID(frag []*html.Node, id string) bool {
+	var found bool
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if found {
+			return
+		}
+		if n.Type == html.ElementNode && attrOf(n, "id") == id {
+			found = true
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	for _, f := range frag {
+		walk(f)
+	}
+	return found
 }
 
 // splitTemplate 拆出 <template …> 前缀与 </template> 后缀，返回（前缀, 内部, 后缀）。

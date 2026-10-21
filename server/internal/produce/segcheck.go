@@ -245,7 +245,6 @@ func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string
 			return fmt.Errorf("组装失败: %w", err)
 		}
 	}
-	return nil
 }
 
 // isLoneRuntimeCrash 幽灵 TDZ 指纹：blocking 里仅一条 ✗ 且是「Cannot access
@@ -478,7 +477,15 @@ func (r *Runner) segSeamCheck(ctx context.Context, p *pipeline.Project, segID st
 		}
 		lastL = append(lastL, v)
 	}
-	probs := seamLumaVerdict(lumas[mid], firstL, lastL)
+	// 段中参考帧缺失同样降级记账（2026-10-21 巡检中危#6）：map 零值 mid=0 会
+	// 走「暗色设计」分支（floor=0）+ mid>0 守卫关掉相对塌陷——闸静默失能还不留痕，
+	// 与首/尾帧的降级记账不对称
+	midL, ok := lumas[mid]
+	if !ok {
+		r.Manifest(p, "check.seam_degraded", segID+": 缺段中参考帧 t="+strconv.FormatFloat(mid, 'f', 2, 64))
+		return nil
+	}
+	probs := seamLumaVerdict(midL, firstL, lastL)
 	if len(probs) > 0 {
 		return fmt.Errorf("%s: 段间接缝亮度闸未过（修法见修复规则 seam 条）\n✗ %s", segID, strings.Join(probs, "\n✗ "))
 	}
