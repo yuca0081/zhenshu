@@ -369,6 +369,11 @@ func (r *Runner) runSegmentPipeline(ctx context.Context, p *pipeline.Project) er
 		return err
 	}
 
+	// ── 1.6 配乐工位（bgmpick.go）：实测语速+弧线在手，自动选曲写 project.json；
+	// 填空不推翻（用户 set_bgm 过=拍板过），失败兜底规则/跳过，永不挡片。
+	// 拼接混音（mixBGM）按 project.json 自动消费，本步零混音逻辑。
+	r.pickBGM(ctx, p, sb, voices)
+
 	// 目录字体先行（一次，全局；失败降级不挡制作）+ 样张截图
 	r.emit(id, "stage", "compositions", "running")
 	r.Manifest(p, "stage.start", "compositions")

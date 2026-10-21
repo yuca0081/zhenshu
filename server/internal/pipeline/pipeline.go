@@ -1280,11 +1280,40 @@ func StitchNow(p *Project) error {
 // ── BGM 混音 ──────────────────────────────────────────────────────
 
 // bgmTrack 曲库清单（data/library/media/audio/tracks.json）。
+// bpm/tempo/energy/source 是 v2（midi-fluidsynth）新增标签：老 v1 条目缺省零值，
+// 选曲工位把零值 tempo/energy 当「未标注」处理，不参与规则匹配。
 type bgmTrack struct {
 	Name     string  `json:"name"`
 	File     string  `json:"file"`
 	Duration float64 `json:"duration"`
 	Mood     string  `json:"mood"`
+	Bpm      int     `json:"bpm,omitempty"`
+	Tempo    string  `json:"tempo,omitempty"` // slow | mid | fast
+	Energy   int     `json:"energy,omitempty"`
+	Source   string  `json:"source,omitempty"`
+}
+
+// BGMChoice 曲库结构化出口（配乐工位选曲用）：只暴露决策需要的字段。
+type BGMChoice struct {
+	Name   string
+	Mood   string
+	Bpm    int
+	Tempo  string // "" = 未标注
+	Energy int    // 0 = 未标注
+}
+
+// ListBGMChoices 曲库决策视图（加载失败回 nil = 无配乐可用，工位自行跳过）。
+func ListBGMChoices() []BGMChoice {
+	ts := loadTracks()
+	if len(ts) == 0 {
+		return nil
+	}
+	out := make([]BGMChoice, 0, len(ts))
+	for _, t := range ts {
+		out = append(out, BGMChoice{Name: t.Name, Mood: t.Mood, Bpm: t.Bpm,
+			Tempo: t.Tempo, Energy: t.Energy})
+	}
+	return out
 }
 
 func musicDir() string { return filepath.Join(dataDir, "library", "media", "audio") }
