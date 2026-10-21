@@ -8,6 +8,7 @@ import ManuscriptPane from './ManuscriptPane.vue'
 import StylePane from './StylePane.vue'
 import PrepPane from './PrepPane.vue'
 import IdeaPane from './IdeaPane.vue'
+import MusicIdeaPane from './MusicIdeaPane.vue'
 import VideoPane from './VideoPane.vue'
 import ActivityPane from './ActivityPane.vue'
 
@@ -54,8 +55,15 @@ const emit = defineEmits<{
 // 段数/已确认之类的小字标已撤——状态看灯就够，细节在悬停说明和面板里。
 // 想法页签：非 legacy 项目常驻（准备工位的启动页，完成后留作「换个想法重跑」入口）。
 const showIdea = computed(() => !!props.prep && !props.prep.legacy)
+// 音乐驱动 PV：文稿链三前置不适用——页签裁到「想法（PV 准备）＋视频」，M1 上线
+// 后在这里长出做曲/地图/分镜工位。
+const isMusic = computed(() => props.view?.mode === 'music')
 const tabs = computed(() => {
   const list: { id: TabID; label: string }[] = []
+  if (isMusic.value) {
+    list.push({ id: 'idea', label: '想法' }, { id: 'video', label: '视频' })
+    return list
+  }
   if (showIdea.value) list.push({ id: 'idea', label: '想法' })
   list.push({ id: 'manuscript', label: '文稿' }, { id: 'storyboard', label: '分镜' }, { id: 'style', label: '风格' })
   if (props.prep?.exists) list.push({ id: 'review', label: '终审' })
@@ -70,6 +78,13 @@ function tabState(id: TabID): { cls: string[]; title: string; label: string } {
   const stale = v.video_stale
   switch (id) {
     case 'idea':
+      if (isMusic.value) {
+        return {
+          cls: ['wait'],
+          title: '音乐驱动 PV：做曲 → 音乐地图 → 分镜（准备工位 M1 开发中）',
+          label: 'PV',
+        }
+      }
       return {
         cls: [props.prep?.running ? 'run' : props.prep?.exists ? 'ok' : 'wait'],
         title: props.prep?.running
@@ -271,8 +286,12 @@ async function redoFull() {
       <template v-if="view">
         <!-- KeepAlive 要求恰好一个子节点：内部不许放注释/多根（v-if 链整体算一个） -->
         <KeepAlive>
+          <MusicIdeaPane
+            v-if="tab === 'idea' && view.mode === 'music'"
+            :view="view"
+          />
           <IdeaPane
-            v-if="tab === 'idea'"
+            v-else-if="tab === 'idea'"
             :project-id="videoId" :prep="prep" :progress="prepProgress"
             @go-tab="t => emit('go-tab', t)" @refresh="emit('prep-refresh')"
           />

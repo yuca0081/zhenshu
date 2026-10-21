@@ -461,6 +461,9 @@ const autoTab = computed<TabID>(() => {
   const v = view.value
   if (!v) return 'manuscript'
   if (v.has_video || v.producing) return 'video'
+  // 音乐驱动 PV：准备期只有「想法（PV 准备页）」一站，文稿链的自动落页
+  // 规则（白板→想法/三工件→终审/风格→分镜→文稿）对它不适用
+  if (v.mode === 'music') return 'idea'
   // 准备链在跑 / 白板新项目（无文稿无工件非 legacy）→ 停在「想法」启动页
   if (prep.value?.running) return 'idea'
   if (prep.value && !prep.value.exists && !prep.value.legacy && !v.gates.manuscript) return 'idea'

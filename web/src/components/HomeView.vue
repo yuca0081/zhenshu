@@ -55,6 +55,7 @@ onBeforeUnmount(() => { if (armTimer) clearTimeout(armTimer) })
           <b>{{ p.name }}</b>
           <button class="del" :class="{ armed: armed === p.id }" :title="armed === p.id ? '再点一次确认删除（不可恢复）' : '删除项目（不可恢复）'" @click.stop="clickDel(p.id)">{{ armed === p.id ? '确认?' : '✕' }}</button>
           <span class="meta">
+            <i v-if="p.mode === 'music'" class="pv" title="音乐驱动 PV（做曲→音乐地图→分镜）">♪ PV</i>
             <i :class="['st', p.status === 'video' ? 'done' : p.status === 'producing' ? 'run' : '', { fail: lastProduceFailed(p) }]">
               {{ statusLabel[p.status] ?? p.status }}{{ lastProduceFailed(p) ? ' · 上次制作失败' : '' }}
             </i>
@@ -140,6 +141,7 @@ onBeforeUnmount(() => { if (armTimer) clearTimeout(armTimer) })
 .del.armed { width: auto; padding: 0 6px; font-weight: 600; opacity: 1; }
 .meta { display: flex; justify-content: space-between; align-items: center; }
 .meta i { font-style: normal; font-size: 11px; color: #8a8a96; }
+.meta i.pv { color: #c9a24b; border: 1px solid rgba(240, 198, 116, .35); border-radius: 4px; padding: 0 4px; flex: none; }
 .meta i.done { color: #7ed491; }
 .meta i.run { color: #f0c674; }
 .meta i.fail { color: #ff7a7a; }

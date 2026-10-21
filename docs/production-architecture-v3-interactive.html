@@ -351,11 +351,11 @@
         </g>
 
         <!-- 起点 -->
-        <g class="fnode start" data-k="m_input" tabindex="0" role="button" aria-label="用户输入主题，或主题加上传曲子">
+        <g class="fnode start" data-k="m_input" tabindex="0" role="button" aria-label="新建项目选驱动模式，文稿或音乐">
           <rect class="box" x="24" y="58" width="92" height="64"></rect>
-          <text class="t" x="70" y="80">用户输入</text>
-          <text class="ts" x="70" y="98">一句话主题</text>
-          <text class="ts" x="70" y="114">或＋上传曲子</text>
+          <text class="t" x="70" y="80">新建选模式</text>
+          <text class="ts" x="70" y="98">文稿｜音乐·PV</text>
+          <text class="ts" x="70" y="114">主题（或＋曲子）</text>
         </g>
 
         <!-- ① 音乐工位（一站三交付容器） -->
@@ -602,11 +602,12 @@
     },
 
     m_input: {
-      type: "起点 · 人工", cls: "", title: "用户输入：主题，或主题＋曲子",
+      type: "起点 · 人工", cls: "", title: "新建项目：选驱动模式（文稿｜音乐）",
       rows: [
-        ["模式A·AI做曲", "只给一句话主题：想拍什么、什么感觉。①音乐工位全跑（brief→做曲→地图）。无文稿、无配音——PV 以曲为本，文稿链路整个不进。"],
-        ["模式B·带曲入场", "主题＋上传音频文件：跳过 brief 和做曲，直进地图——「给一首曲子做片子」就是这条，网上同类视频的常见玩法。可带可选的氛围标签，帮 agent 定色彩层。"],
-        ["下游", "① 音乐工位（ReAct agent）；上传入口落在想法页签。"]
+        ["入口已落地（2026-10-21）", "新建弹窗多一档「驱动」单选：文稿驱动（默认）｜音乐驱动 · PV。选定落 project.json 的 mode 字段（script/music，老项目无字段=script）。"],
+        ["模式A·AI做曲", "只给一句话主题（情绪与画面想象）：①音乐工位全跑（brief→做曲→地图）。无文稿、无配音——PV 以曲为本，文稿链路整个不进。"],
+        ["模式B·带曲入场", "主题＋上传音频文件：跳过 brief 和做曲，直进地图——「给一首曲子做片子」就是这条。上传 UI 落在音乐项目自己的准备页签（M4）。"],
+        ["工作区分流", "音乐项目页签裁到「想法（PV 准备页）＋视频」：准备页 M1 上线后长出做曲/地图/分镜；制作入口前后端都拦（music 项目 produce 显式 400）。"]
       ]
     },
     m_music: {
