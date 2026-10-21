@@ -52,7 +52,7 @@ export interface ProjectView {
   // 最近一轮制作终态（error/interrupted = 失败/中断，与列表 last_produce 同源）
   last_produce?: { event: string; ts: string } | null
   // 全程 token 消耗（manifest 全量 agent.done 累计；「过程」页头部展示）
-  tokens?: { prompt: number; completion: number; calls: number }
+  tokens?: { prompt: number; completion: number; calls: number; cached?: number }
 }
 
 // 工作区中央页签（想法/文稿/分镜/风格/终审/视频/过程——「想法」是准备工位的启动页）

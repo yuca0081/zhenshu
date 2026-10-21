@@ -2,6 +2,7 @@
 import { KeepAlive, computed, ref, watch } from 'vue'
 import { NButton, NInput, NInputNumber, NSelect, NSpin, useMessage } from 'naive-ui'
 import { api, videoURL } from '../api'
+import { cachePct, fmtTok } from '../format'
 import type { ActivityEvent, AudioMeta, Manuscript, PrepView, ProjectView, Storyboard, StyleSamples, TabID } from '../types'
 import ManuscriptPane from './ManuscriptPane.vue'
 import StylePane from './StylePane.vue'
@@ -253,12 +254,17 @@ async function redoFull() {
             v-if="view.has_video" class="dl-btn"
             :href="videoURL(videoId, videoRev)" :download="`${view.name}.mp4`"
           >↓ 下载成片</a>
-          <!-- 过程回看：独立胶囊按钮（原事件流按钮样式），点击切到整页「过程」内容 -->
+          <!-- 过程回看：独立胶囊按钮（原事件流按钮样式），点击切到整页「过程」内容；
+               右侧小字 = 本次制作全部智能体任务的输入 token 与缓存命中率（projectView.tokens） -->
           <button
             class="feed-btn" :class="{ on: tab === 'activity' }"
             :title="tabState('activity').title"
             @click="emit('tab', tab === 'activity' ? 'video' : 'activity')"
-          ><span v-if="view.producing" class="live-dot" /><span v-else-if="failUnseen" class="fail-dot" />过程</button>
+          ><span v-if="view.producing" class="live-dot" /><span v-else-if="failUnseen" class="fail-dot" />过程<span
+              v-if="view.tokens?.calls"
+              class="feed-tok"
+              title="本次制作全部智能体任务的输入 token 累计与平台前缀缓存命中率（manifest 全量累计，含此前每一轮）"
+            >输入{{ fmtTok(view.tokens.prompt) }}<template v-if="view.tokens.cached">·缓存{{ cachePct(view.tokens.cached, view.tokens.prompt) }}</template></span></button>
         </div>
       </header>
 
@@ -395,6 +401,9 @@ async function redoFull() {
 .feed-btn:hover { border-color: #3a3a45; color: #e6e6ea; }
 .feed-btn.on { border-color: rgba(240, 198, 116, .45); color: #f0c674; background: #1e1a12; }
 .feed-btn .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #8fc7ff; animation: pulse 1.2s infinite; }
+/* 全程 token 小账：输入 token + 缓存命中率，做次要信息色不抢「过程」本体 */
+.feed-btn .feed-tok { margin-left: 2px; font-size: 11px; color: #7c7c88; font-variant-numeric: tabular-nums; }
+.feed-btn:hover .feed-tok, .feed-btn.on .feed-tok { color: inherit; opacity: .75; }
 /* 失败未读红点：最近一次制作失败/中断后还没看过过程页 */
 .feed-btn .fail-dot { width: 7px; height: 7px; border-radius: 50%; background: #ff6b6b; box-shadow: 0 0 6px rgba(255, 107, 107, .8); }
 

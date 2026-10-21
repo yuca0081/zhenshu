@@ -35,6 +35,7 @@ type manifestEvent struct {
 	State            string `json:"state,omitempty"`
 	PromptTokens     int    `json:"prompt_tokens,omitempty"`
 	CompletionTokens int    `json:"completion_tokens,omitempty"`
+	CachedTokens     int    `json:"cached_tokens,omitempty"` // 平台前缀缓存命中（2026-10-19 起记账；旧账目无此字段）
 	Calls            int    `json:"calls,omitempty"`
 	Transcript       string `json:"transcript,omitempty"`
 }

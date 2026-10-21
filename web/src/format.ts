@@ -40,3 +40,14 @@ const stageNames: Record<string, string> = {
 export function stageLabel(stage: string): string {
   return stageNames[stage] ?? stage
 }
+
+// token 数 → 人话（12345 → "1.2万"，过万才折万位； ActivityPane 任务卡与 StagePanel
+// 「过程」按钮共用一份，此前 ActivityPane 自持）
+export function fmtTok(n: number): string {
+  return n >= 10000 ? (n / 10000).toFixed(1).replace(/\.0$/, '') + '万' : n.toLocaleString()
+}
+
+// 缓存命中率：cached 是 prompt 的一部分（平台前缀缓存）；p=0 时不出百分号
+export function cachePct(cached: number, prompt: number): string {
+  return prompt > 0 ? Math.round((cached / prompt) * 100) + '%' : '—'
+}

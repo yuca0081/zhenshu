@@ -2,7 +2,7 @@
 import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue'
 import type { ActivityEvent, TranscriptMsg } from '../types'
 import { api, artifactFileURL } from '../api'
-import { stageLabel } from '../format'
+import { cachePct, fmtTok, stageLabel } from '../format'
 
 // 「过程」页（2026-10-18 替代旧事件流弹窗）：manifest 事件 → 两条线——
 // ① 普通事件行（开工/工位用时/打回/终态，人话翻译沿用原 ActivityFeed 口径）；
@@ -42,6 +42,7 @@ interface TaskGroup {
   state: 'run' | 'ok' | 'fail'
   promptTokens: number
   completionTokens: number
+  cachedTokens: number // 平台前缀缓存命中（cached_tokens；旧账目无此字段=0 不显示）
   calls: number
 }
 type Item = PlainRow | TaskGroup
@@ -63,9 +64,6 @@ const fmtClock = (ms: number) => {
 }
 const shortTime = (ts?: string) => (ts ? fmtClock(Date.parse(ts) || 0) : '')
 const firstLine = (s: string) => (s || '').split('\n', 1)[0].trim()
-const fmtTok = (n: number) => (n >= 10000 ? (n / 10000).toFixed(1).replace(/\.0$/, '') + '万' : n.toLocaleString())
-// 缓存命中率：cached 是 prompt 的一部分（平台前缀缓存）；p=0 时不出百分号
-const pct = (cached: number, prompt: number) => (prompt > 0 ? Math.round((cached / prompt) * 100) + '%' : '—')
 
 const items = computed<Item[]>(() => {
   const out: Item[] = []
@@ -115,7 +113,7 @@ const items = computed<Item[]>(() => {
       openTasks.push({
         kind: 'task', key: `${ev.task}#${n}`, task: ev.task,
         label: ev.label || ev.task, startMs: ms, state: 'run',
-        promptTokens: 0, completionTokens: 0, calls: 0,
+        promptTokens: 0, completionTokens: 0, cachedTokens: 0, calls: 0,
       })
       out.push(openTasks[openTasks.length - 1])
       continue
@@ -127,6 +125,7 @@ const items = computed<Item[]>(() => {
         g.state = ev.state === 'fail' ? 'fail' : 'ok'
         g.promptTokens = ev.prompt_tokens || 0
         g.completionTokens = ev.completion_tokens || 0
+        g.cachedTokens = ev.cached_tokens || 0
         g.calls = ev.calls || 0
       }
       continue
@@ -370,10 +369,10 @@ const openLightbox = (path: string, label?: string) => {
       制作过程
       <span v-if="producing" class="ap-live"><i class="live-dot" />制作中</span>
       <span v-if="totals?.calls" class="ap-totals ap-total-all" title="这个项目全部智能体任务的 token 消耗累计（manifest 全量累计，含此前每一轮）">
-        全程：输入 {{ fmtTok(totals.prompt) }} · 输出 {{ fmtTok(totals.completion) }} tokens · {{ totals.calls }} 次调用<template v-if="totals.cached"> · 缓存命中 {{ pct(totals.cached, totals.prompt) }}</template>
+        全程：输入 {{ fmtTok(totals.prompt) }} · 输出 {{ fmtTok(totals.completion) }} tokens · {{ totals.calls }} 次调用<template v-if="totals.cached"> · 缓存命中 {{ cachePct(totals.cached, totals.prompt) }}</template>
       </span>
       <span v-if="roundTotals.n" class="ap-totals" :class="{ 'ap-totals-push': totals?.calls }" title="最近一次开工以来全部智能体任务的 token 消耗合计">
-        本轮：输入 {{ fmtTok(roundTotals.p) }} · 输出 {{ fmtTok(roundTotals.c) }} tokens · {{ roundTotals.n }} 次调用<template v-if="roundTotals.cd"> · 缓存命中 {{ pct(roundTotals.cd, roundTotals.p) }}</template>
+        本轮：输入 {{ fmtTok(roundTotals.p) }} · 输出 {{ fmtTok(roundTotals.c) }} tokens · {{ roundTotals.n }} 次调用<template v-if="roundTotals.cd"> · 缓存命中 {{ cachePct(roundTotals.cd, roundTotals.p) }}</template>
       </span>
     </div>
     <div v-if="itemsReversed.length" class="ap-scroll">
@@ -396,7 +395,7 @@ const openLightbox = (path: string, label?: string) => {
             <span class="task-title">{{ it.label }}</span>
             <span v-if="it.state === 'run'" class="task-dur run">{{ fmtDur(Math.max(0, now - it.startMs)) }}…</span>
             <span v-else-if="it.doneMs" class="task-dur">{{ fmtDur(it.doneMs - it.startMs) }}</span>
-            <span v-if="it.calls" class="task-tok">输入 {{ fmtTok(it.promptTokens) }} · 输出 {{ fmtTok(it.completionTokens) }} · {{ it.calls }} 次</span>
+            <span v-if="it.calls" class="task-tok">输入 {{ fmtTok(it.promptTokens) }} · 输出 {{ fmtTok(it.completionTokens) }}<template v-if="it.cachedTokens"> · 缓存 {{ cachePct(it.cachedTokens, it.promptTokens) }}</template> · {{ it.calls }} 次</span>
             <span v-else-if="it.state === 'run'" class="task-tok running">运行中</span>
           </div>
           <div v-if="openKeys[it.key]" class="task-body">
