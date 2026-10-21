@@ -130,9 +130,12 @@ func (s *Server) Router() *gin.Engine {
 	api.POST("/projects/:id/rework", s.startRework)
 	api.GET("/projects/:id/rework/last", s.reworkLast)
 	api.POST("/projects/:id/cancel", s.cancelProduce)
+	api.POST("/projects/:id/bgm", s.setProjectBGM)
 	api.GET("/projects/:id/video/main.mp4", s.video)
 	api.GET("/projects/:id/style/clips/:file", s.styleClip)
 	api.GET("/projects/:id/audio_meta", s.audioMeta)
+	api.GET("/bgm/library", s.bgmLibrary)
+	api.GET("/bgm/audio/:name", s.bgmAudio)
 	api.GET("/library", s.listLibrary)
 	api.DELETE("/library/:id", s.deleteLibraryEntry)
 	api.GET("/library/:id/frames", s.libraryFrames)
@@ -522,6 +525,7 @@ func (s *Server) createProject(c *gin.Context) {
 		Topic       string `json:"topic"`        // 一句话主题（文稿弹窗 AI 起草的种子）
 		Manuscript  string `json:"manuscript"`   // 可选：直接带稿创建（不走弹窗补）
 		Aspect      string `json:"aspect"`       // 9:16（默认，plan §7 M1）| 16:9
+		Mode        string `json:"mode"`         // script（默认，文稿驱动）| music（音乐驱动 PV）
 		StyleID     string `json:"style_id"`     // 风格库条目（可空 = 不选，样张阶段模型自由发挥）
 		StylePackID string `json:"stylepack_id"` // 旧字段名，过渡期兼容（applyStyle 同款双字段）
 	}
@@ -543,6 +547,12 @@ func (s *Server) createProject(c *gin.Context) {
 	}
 	if in.Aspect != "16:9" && in.Aspect != "9:16" {
 		in.Aspect = "9:16"
+	}
+	// 驱动模式：只认 script/music，空值与未知值一律回文稿驱动（老客户端不传
+	// mode、字段拼错都不能把项目建进半开状态）。music 可先建占位——准备工位
+	// （做曲→音乐地图→分镜）M1 上线，制作入口 startProduce 有显式拦截。
+	if in.Mode != "music" {
+		in.Mode = "script"
 	}
 	if styleID != "" {
 		if pack, ok := s.Lib.Get(styleID); !ok || !pack.Published {
@@ -595,13 +605,17 @@ func (s *Server) createProject(c *gin.Context) {
 	}
 	meta, _ := json.MarshalIndent(map[string]any{
 		"id": id, "name": in.Name, "status": "created", "aspect": in.Aspect,
-		"topic": in.Topic, "style_id": styleID,
+		"topic": in.Topic, "style_id": styleID, "mode": in.Mode,
 		"user_id":    func() string { uid, _ := s.currentUser(c); return uid }(), // 归属（磁盘事实源；projectGuard/listProjects 都读它）
 		"created_at": time.Now().Format(time.RFC3339),
 	}, "", "  ")
 	_ = os.WriteFile(p.Artifact("project.json"), meta, 0o644)
 	s.putArtifact(artifacts.ProjectKey(id, "project.json"), p.Artifact("project.json"))
-	p.Manifest("project.created", fmt.Sprintf("%s（%s）", in.Name, in.Aspect))
+	createdLabel := in.Aspect
+	if in.Mode == "music" {
+		createdLabel = "音乐驱动 PV · " + in.Aspect
+	}
+	p.Manifest("project.created", fmt.Sprintf("%s（%s）", in.Name, createdLabel))
 	uid, _ := s.currentUser(c)
 	_ = s.Store.CreateProject(id, in.Name, uid)
 	// 项目账行加厚：一行账 = 可检索元数据 + MinIO 桶内相对路径（内容不入库）
@@ -627,6 +641,7 @@ func (s *Server) listProjects(c *gin.Context) {
 		HasVideo    bool   `json:"has_video"`
 		LastProduce any    `json:"last_produce"`
 		Topic       string `json:"topic,omitempty"`
+		Mode        string `json:"mode,omitempty"` // music=音乐驱动 PV（其余/空=文稿，省字段）
 	}
 	// 预分配非 nil：空列表必须序列化成 [] 而不是 null（前端读 .length 会崩）
 	out := make([]row, 0, len(entries))
@@ -647,6 +662,7 @@ func (s *Server) listProjects(c *gin.Context) {
 			UserID    string `json:"user_id"`
 			Topic     string `json:"topic"`
 			Aspect    string `json:"aspect"`
+			Mode      string `json:"mode"`
 		}
 		if json.Unmarshal(b, &meta) != nil || meta.Name == "" {
 			continue
@@ -680,7 +696,7 @@ func (s *Server) listProjects(c *gin.Context) {
 		if ev, _, ts := produce.LastTerminal(pipeline.NewProject(s.DataDir, e.Name())); ev != "" {
 			lastProduce = gin.H{"event": ev, "ts": ts}
 		}
-		out = append(out, row{e.Name(), meta.Name, meta.Status, meta.CreatedAt, hasVideo, lastProduce, meta.Topic})
+		out = append(out, row{e.Name(), meta.Name, meta.Status, meta.CreatedAt, hasVideo, lastProduce, meta.Topic, meta.Mode})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
 	c.JSON(200, out)
@@ -724,25 +740,31 @@ func (s *Server) projectView(c *gin.Context) {
 	st := s.Agent.State(id)
 	aspect := "16:9" // 旧项目无字段，与已渲成片一致
 	topic := ""
+	bgmName, bgmReason := "", ""
 	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil {
 		var meta struct {
-			Aspect string `json:"aspect"`
-			Topic  string `json:"topic"`
+			Aspect    string `json:"aspect"`
+			Topic     string `json:"topic"`
+			BGM       string `json:"bgm"`
+			BGMReason string `json:"bgm_reason"`
 		}
 		if json.Unmarshal(b, &meta) == nil {
 			if meta.Aspect != "" {
 				aspect = meta.Aspect
 			}
 			topic = meta.Topic
+			bgmName, bgmReason = strings.TrimSpace(meta.BGM), meta.BGMReason
 		}
 	}
+	mode := projectMode(p)
 	var lastProduce any
 	if ev, _, ts := produce.LastTerminal(p); ev != "" {
 		lastProduce = gin.H{"event": ev, "ts": ts}
 	}
 	pt, ct, ncalls, ncached := agentTokenTotals(p.Artifact("manifest.jsonl"))
 	c.JSON(200, gin.H{
-		"id": id, "name": st.Name, "aspect": aspect, "topic": topic,
+		"id": id, "name": st.Name, "aspect": aspect, "topic": topic, "mode": mode,
+		"bgm": gin.H{"name": bgmName, "reason": bgmReason},
 		"gates": gin.H{
 			"manuscript": st.HasManuscript, "storyboard": st.HasStoryboard, "style_confirmed": st.StyleConfirmed,
 			"style_draft": st.HasStyle, "style_direction": st.StyleDirection,
@@ -757,6 +779,23 @@ func (s *Server) projectView(c *gin.Context) {
 		// 全程 token 消耗（manifest 全量 agent.done 累计，「过程」页头部展示）
 		"tokens": gin.H{"prompt": pt, "completion": ct, "calls": ncalls, "cached": ncached},
 	})
+}
+
+// projectMode 读 project.json 驱动模式（script=文稿驱动现行管线｜music=音乐
+// 驱动 PV）。缺失/读档失败/字段异常一律回 script——老项目无此字段，兼容
+// 语义就是"文档驱动是默认世界"。
+func projectMode(p *pipeline.Project) string {
+	b, err := os.ReadFile(p.Artifact("project.json"))
+	if err != nil {
+		return "script"
+	}
+	var meta struct {
+		Mode string `json:"mode"`
+	}
+	if json.Unmarshal(b, &meta) != nil || meta.Mode != "music" {
+		return "script"
+	}
+	return "music"
 }
 
 // agentTokenTotals manifest 全量扫 agent.done，累计整个项目所有智能体任务的 token
@@ -1567,6 +1606,13 @@ func (s *Server) messages(c *gin.Context) {
 // ── 制作 & 视频 ─────────────────────────────────────────────
 
 func (s *Server) startProduce(c *gin.Context) {
+	// 音乐驱动项目走 PV 管线（做曲→地图→分镜，M1 开发中）：前端不露文稿制作
+	// 入口，这里拦直调 API／带稿误建后手滑——明确报错比让文稿管线吞一个空
+	// 主题项目跑出怪片好。
+	if p, ok := s.project(c); ok && projectMode(p) == "music" {
+		c.JSON(400, gin.H{"error": "音乐驱动项目走 PV 管线（做曲→音乐地图→分镜，开发中），文稿制作入口不适用"})
+		return
+	}
 	id := c.Param("id")
 	st := s.Agent.State(id)
 	if !st.HasManuscript || !st.HasStoryboard || !st.StyleConfirmed {
@@ -1596,6 +1642,71 @@ func (s *Server) cancelProduce(c *gin.Context) {
 		return
 	}
 	c.JSON(202, gin.H{"ok": true})
+}
+
+// ── BGM 曲库与项目配乐（时间轴音乐轴/曲库下拉/试听的数据面）────────────
+
+// bgmLibrary 曲库清单（曲名/情绪/bpm/快慢/能量/时长）：下拉与试听数据源。
+func (s *Server) bgmLibrary(c *gin.Context) {
+	c.JSON(200, pipeline.ListBGMChoices())
+}
+
+// bgmAudio 曲库音频取件：曲名过曲库校验（防目录穿越），试听播放器用。
+func (s *Server) bgmAudio(c *gin.Context) {
+	path, err := pipeline.BGMFilePath(c.Param("name"))
+	if err != nil {
+		c.JSON(404, gin.H{"error": err.Error()})
+		return
+	}
+	c.File(path)
+}
+
+// setProjectBGM 项目配乐设置/更换/关闭（与对话工具 set_bgm 同语义同混音行为）：
+// 成片母版在 → StitchNow 立即重混（几秒到分钟级，画面不动）；不在 → 下次制作生效。
+func (s *Server) setProjectBGM(c *gin.Context) {
+	p, ok := s.project(c)
+	if !ok {
+		return
+	}
+	if s.Producer != nil && s.Producer.IsRunning(p.ID) {
+		c.JSON(409, gin.H{"error": "制作运行中，先等本条完成"})
+		return
+	}
+	var in struct {
+		Track string `json:"track"`
+	}
+	_ = c.ShouldBindJSON(&in)
+	if err := pipeline.SetBGM(p, in.Track); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	track := strings.ToLower(strings.TrimSpace(in.Track))
+	if track == "off" {
+		track = ""
+	}
+	remixed := false
+	var mixErr string
+	if track != "" {
+		if _, err := os.Stat(p.Artifact("renders/main_voice.mp4")); err == nil {
+			if err := pipeline.StitchNow(p); err != nil {
+				mixErr = err.Error()
+			} else {
+				remixed = true
+			}
+		}
+	}
+	msg := "已设置，下次制作生效"
+	if track == "" {
+		msg = "配乐已关闭"
+	}
+	if remixed {
+		msg = "已重混进成片（人声闪避自动压低音乐，画面未动）"
+	}
+	out := gin.H{"ok": mixErr == "", "bgm": track, "remixed": remixed, "message": msg}
+	if mixErr != "" {
+		out["error"] = "设置成功但混音失败：" + mixErr
+	}
+	c.JSON(200, out)
 }
 
 // startRework 一键段级重做（时间轴段块「重做」按钮直连，绕过对话轮）。

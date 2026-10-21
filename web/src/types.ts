@@ -24,6 +24,7 @@ export interface ProjectRow {
   has_video: boolean
   // 最近一轮制作终态（后端与 agent 状态摘要同源）：error/interrupted 时列表标"上次制作失败"
   last_produce?: { event: string; ts: string } | null
+  mode?: string // 'music' = 音乐驱动 PV（缺省/空 = 文稿驱动，后端老项目不回此字段）
 }
 
 // 文稿（GET/PUT /manuscript；api.ts / App.vue / StagePanel 共用）
@@ -37,6 +38,7 @@ export interface ProjectView {
   name: string
   aspect: string
   topic: string // 一句话主题（文稿弹窗 AI 起草的种子；老项目为空）
+  mode?: string // 'music' = 音乐驱动 PV：工作区走 PV 准备页签，文稿链页签全隐藏（后端老项目不回）
   gates: {
     manuscript: boolean
     storyboard: boolean
@@ -51,8 +53,23 @@ export interface ProjectView {
   video_stale: { manuscript: boolean; storyboard: boolean; style: boolean }
   // 最近一轮制作终态（error/interrupted = 失败/中断，与列表 last_produce 同源）
   last_produce?: { event: string; ts: string } | null
-  // 全程 token 消耗（manifest 全量 agent.done 累计；「过程」页头部展示）
+  // 项目配乐（配乐工位自动选/用户手动换；name 空 = 无配乐）
+  bgm?: { name: string; reason?: string } | null
+  // 全程 token 消耗（manifest 全量 agent.done 累计，「过程」页头部展示）
   tokens?: { prompt: number; completion: number; calls: number; cached?: number }
+}
+
+// 项目配乐（projectView.bgm：配乐工位自动选/用户手动换；name 空 = 无配乐）
+export interface BgmInfo { name: string; reason?: string }
+
+// 曲库条目（GET /bgm/library；下拉+试听+音乐轴循环块用）
+export interface BgmTrack {
+  name: string
+  mood: string
+  bpm: number
+  tempo: string // slow | mid | fast（v1 合成曲为空串=未标注）
+  energy: number
+  duration: number
 }
 
 // 工作区中央页签（想法/文稿/分镜/风格/终审/视频/过程——「想法」是准备工位的启动页）

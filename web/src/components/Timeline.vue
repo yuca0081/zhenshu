@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { AlignWord, AudioMeta, Storyboard } from '../types'
+import type { AlignWord, AudioMeta, BgmInfo, Storyboard } from '../types'
 import { segTable, type SegCol } from '../segtime'
 
 // 多轨时间轴：标尺（可点/拖擦洗）+ 分镜/字幕/配音三轨 + 播放头。
@@ -11,6 +11,8 @@ import { segTable, type SegCol } from '../segtime'
 const props = defineProps<{
   storyboard: Storyboard | null
   audioMeta: AudioMeta | null
+  bgm: BgmInfo | null
+  bgmDur: number
   currentTime: number
   pickedIdx: number[]
 }>()
@@ -48,6 +50,18 @@ const phrases = computed<Phrase[]>(() => {
 })
 
 const pct = (t: number) => `${(t / total.value) * 100}%`
+
+// 配乐轨：按曲库时长铺循环块（时长未知铺一整条）；头块带曲名，理由进 tooltip
+const bgmBlocks = computed(() => {
+  const b = props.bgm
+  if (!b?.name) return []
+  const dur = props.bgmDur > 0 ? props.bgmDur : total.value
+  const out: { start: number; dur: number; first: boolean }[] = []
+  for (let t = 0; t < total.value - 1e-6; t += dur) {
+    out.push({ start: t, dur: Math.min(dur, total.value - t), first: out.length === 0 })
+  }
+  return out
+})
 
 // 波形近似（配音轨细条 = 逐字时刻）：逐字 DOM 无上限（10 分钟片约 2000 节点），
 // 按固定步长采样封顶 ~500/段。绝对定位用采样词自身的 start——稀疏化只降低密度，
@@ -167,6 +181,7 @@ function onLaneDblClick(e: MouseEvent, start: number, dur: number) {
       <div class="lbl">分镜</div>
       <div v-if="phrases.length" class="lbl">字幕</div>
       <div v-if="audioMeta" class="lbl">配音</div>
+      <div v-if="bgmBlocks.length" class="lbl">配乐</div>
     </div>
 
     <div ref="viewportEl" class="viewport">
@@ -228,6 +243,20 @@ function onLaneDblClick(e: MouseEvent, start: number, dur: number) {
               height: `${38 + ((w.start * 37) % 55)}%`,
             }"
           />
+        </div>
+      </div>
+
+      <!-- 配乐轨：循环铺底（块=曲库时长），点击定位；理由在 tooltip -->
+      <div v-if="bgmBlocks.length" class="lane bgm">
+        <div
+          v-for="(b, i) in bgmBlocks" :key="i" class="bgmblk"
+          :class="{ head: b.first, alt: i % 2 === 1 }"
+          :style="{ left: pct(b.start), width: pct(b.dur) }"
+          :title="`♪ ${bgm!.name}（${bgmDur > 0 ? `曲长 ${bgmDur.toFixed(0)}s 循环铺底` : '铺底'}${bgm!.reason ? '；选曲理由：' + bgm!.reason : ''}）`"
+          @click="emit('seek', b.start + 0.01)"
+        >
+          <template v-if="b.first"><span class="note">♪</span>{{ bgm!.name }}</template>
+          <template v-else>♪</template>
         </div>
       </div>
 
@@ -299,6 +328,18 @@ function onLaneDblClick(e: MouseEvent, start: number, dur: number) {
   background: #3f6d94; min-width: 1px;
 }
 .wav.on i { background: #8fc7ff; }
+
+/* 配乐轨：紫调区分配音蓝调；head 块带曲名，后续循环块淡化只留 ♪ */
+.bgmblk {
+  position: absolute; top: 0; bottom: 0; cursor: pointer; overflow: hidden; white-space: nowrap;
+  display: flex; align-items: center; gap: 4px; padding: 0 6px;
+  background: #1a1424; border: 1px solid #4a3666; border-radius: 5px;
+  color: #c9b8e8; font-size: 10.5px; text-overflow: ellipsis;
+  transition: border-color .15s;
+}
+.bgmblk:hover { border-color: #b39ddb; }
+.bgmblk.alt { opacity: .62; }
+.bgmblk .note { font-size: 10px; color: #9d7fd0; }
 
 .handle {
   position: absolute; top: -1px; width: 11px; height: 22px; margin-left: -5px; z-index: 3;

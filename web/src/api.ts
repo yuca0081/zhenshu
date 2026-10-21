@@ -1,4 +1,4 @@
-import type { ActivityEvent, AudioMeta, TranscriptMsg, AuthStatus, ChatRef, Manuscript, Msg, PrepView, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, UserInfo, UserRow, VocabEntry } from './types'
+import type { ActivityEvent, AudioMeta, BgmTrack, TranscriptMsg, AuthStatus, ChatRef, Manuscript, Msg, PrepView, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, UserInfo, UserRow, VocabEntry } from './types'
 
 // ── 会话认证（cookie 会话，HttpOnly，浏览器自动携带）──────────
 // 凭据不进 JS：localStorage 存 token / ?token= 进 URL 的旧方案已废。
@@ -46,8 +46,8 @@ export const api = {
 
   listProjects: () => req<ProjectRow[]>('/api/projects'),
 
-  createProject: (name: string, topic: string, aspect = '9:16') =>
-    post<{ id: string; name: string }>('/api/projects', { name, topic, aspect }),
+  createProject: (name: string, topic: string, aspect = '9:16', mode = 'script') =>
+    post<{ id: string; name: string }>('/api/projects', { name, topic, aspect, mode }),
 
   project: (id: string) => req<ProjectView>(`/api/projects/${id}`),
 
@@ -68,6 +68,15 @@ export const api = {
     }),
 
   audioMeta: (id: string) => req<AudioMeta>(`/api/projects/${id}/audio_meta`),
+
+  // 项目配乐：设置/更换/关闭（track="off" 关闭）；成片母版在后端立即重混
+  setBGM: (id: string, track: string) =>
+    post<{ ok: boolean; bgm: string; remixed: boolean; message?: string; error?: string }>(
+      `/api/projects/${id}/bgm`, { track }),
+
+  // 曲库清单 + 试听音频地址（曲名过服务端曲库校验，无穿越面）
+  bgmLibrary: () => req<BgmTrack[]>('/api/bgm/library'),
+  bgmAudioURL: (name: string) => `/api/bgm/audio/${encodeURIComponent(name)}`,
 
   manuscript: (id: string) => req<Manuscript>(`/api/projects/${id}/manuscript`),
 

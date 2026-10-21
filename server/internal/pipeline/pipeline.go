@@ -1293,13 +1293,14 @@ type bgmTrack struct {
 	Source   string  `json:"source,omitempty"`
 }
 
-// BGMChoice 曲库结构化出口（配乐工位选曲用）：只暴露决策需要的字段。
+// BGMChoice 曲库结构化出口（配乐工位选曲/前端曲库下拉共用）：只暴露决策需要的字段。
 type BGMChoice struct {
-	Name   string
-	Mood   string
-	Bpm    int
-	Tempo  string // "" = 未标注
-	Energy int    // 0 = 未标注
+	Name     string  `json:"name"`
+	Mood     string  `json:"mood"`
+	Bpm      int     `json:"bpm"`
+	Tempo    string  `json:"tempo"` // "" = 未标注
+	Energy   int     `json:"energy"`
+	Duration float64 `json:"duration"`
 }
 
 // ListBGMChoices 曲库决策视图（加载失败回 nil = 无配乐可用，工位自行跳过）。
@@ -1311,9 +1312,20 @@ func ListBGMChoices() []BGMChoice {
 	out := make([]BGMChoice, 0, len(ts))
 	for _, t := range ts {
 		out = append(out, BGMChoice{Name: t.Name, Mood: t.Mood, Bpm: t.Bpm,
-			Tempo: t.Tempo, Energy: t.Energy})
+			Tempo: t.Tempo, Energy: t.Energy, Duration: t.Duration})
 	}
 	return out
+}
+
+// BGMFilePath 曲名 → 曲库音频全路径（曲库校验防目录穿越；未知曲名回错）。
+func BGMFilePath(name string) (string, error) {
+	want := strings.ToLower(strings.TrimSpace(name))
+	for _, t := range loadTracks() {
+		if t.Name == want {
+			return filepath.Join(musicDir(), t.File), nil
+		}
+	}
+	return "", fmt.Errorf("曲名 %q 不在曲库", name)
 }
 
 func musicDir() string { return filepath.Join(dataDir, "library", "media", "audio") }

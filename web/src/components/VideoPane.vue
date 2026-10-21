@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { NButton, NSpin } from 'naive-ui'
-import type { AudioMeta, ProjectView, Storyboard } from '../types'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { NButton, NSelect, NSpin, useMessage } from 'naive-ui'
+import type { AudioMeta, BgmTrack, ProjectView, Storyboard } from '../types'
 import { fmtClock } from '../segtime'
 import { lastProduceFailed, stageLabel } from '../format'
 import { api, videoURL } from '../api'
@@ -10,7 +10,7 @@ import Timeline from './Timeline.vue'
 // 视频页签（原 StagePanel 成片/制作中两态合并 + 过期重做入口）：
 // - 无视频未制作 → 开工引导；制作中 → 进度面板（含段级重做细进度）
 // - 失败/中断后没在跑 → 「制作暂停」面板（等用户在对话栏发话，不许误落开工引导）
-// - 有视频 → 播放器+时间轴；上游改过（video_stale）→ 黄条 + 「按最新内容重做」
+// - 有视频 → 播放器+配乐条+时间轴；上游改过（video_stale）→ 黄条 + 「按最新内容重做」
 const props = defineProps<{
   view: ProjectView | null
   storyboard: Storyboard | null
@@ -27,6 +27,54 @@ const emit = defineEmits<{
   cancel: []
   'go-tab': [tab: 'manuscript']
 }>()
+const message = useMessage()
+
+// ── 配乐：当前曲 + 换曲下拉 + 试听 + 应用（换曲=后端 StitchNow 重混，画面不动）──
+const bgmLib = ref<BgmTrack[] | null>(null)
+const bgmPick = ref<string | null>(null)
+const bgmBusy = ref(false)
+const bgmDur = computed(() =>
+  bgmLib.value?.find(t => t.name === props.view?.bgm?.name)?.duration ?? 0)
+const bgmOptions = computed(() => {
+  const cur = props.view?.bgm?.name
+  const lib = bgmLib.value ?? []
+  // 当前曲不在清单（被移库）也兜出选项，避免下拉显示成空
+  if (cur && !lib.some(t => t.name === cur)) {
+    return [{ label: `${cur}（当前）`, value: cur }, ...lib.map(t => ({ label: `${t.name} · ${t.mood}`, value: t.name }))]
+  }
+  return lib.map(t => ({ label: `${t.name} · ${t.mood}`, value: t.name }))
+})
+const auditionEl = ref<HTMLAudioElement | null>(null)
+const auditionName = ref('')
+function toggleAudition() {
+  const name = props.view?.bgm?.name
+  if (!name) return
+  if (auditionName.value === name && auditionEl.value) {
+    auditionEl.value.paused ? void auditionEl.value.play() : auditionEl.value.pause()
+    return
+  }
+  auditionEl.value?.pause()
+  const el = new Audio(api.bgmAudioURL(name))
+  auditionEl.value = el
+  auditionName.value = name
+  void el.play()
+  el.onended = () => { auditionName.value = '' }
+}
+onBeforeUnmount(() => auditionEl.value?.pause())
+async function applyBGM(track: string) {
+  if (!props.view || bgmBusy.value) return
+  bgmBusy.value = true
+  try {
+    const r = await api.setBGM(props.view.id, track)
+    if (r.error) message.error(r.error)
+    else message.success(r.message ?? '配乐已更新')
+    if (r.remixed) localRev.value++ // 重混完成 → 本地代次自增，播放器换 URL 重载（画面不动）
+  } catch (e) {
+    message.error(String(e))
+  } finally {
+    bgmBusy.value = false
+  }
+}
 
 // ── 视频播放 ↔ 时间轴播放头同步 ──
 const videoEl = ref<HTMLVideoElement | null>(null)
@@ -60,7 +108,9 @@ const readyToStart = computed(() =>
   !!props.view.gates?.style_confirmed && !lastProduceFailed(props.view))
 
 // ── 成片代次刷新：换 URL 重载并回到原播放位置（重做完立刻看新画面）──
-watch(() => props.videoRev, () => {
+// localRev：本页内自己的代次（换曲重混后画面不变但音轨变了，App 的 videoRev 不动）
+const localRev = ref(0)
+watch([() => props.videoRev, localRev], () => {
   const t = cur.value
   const el = videoEl.value
   if (!el) return
@@ -131,9 +181,29 @@ watch(() => props.videoRev, () => {
         <button v-if="view.producing" class="stop-btn" @click="emit('cancel')">■ 停止</button>
       </div>
       <div v-if="progressLine && stageSummary" class="progress-line">{{ progressLine }}</div>
+      <!-- 配乐条：当前曲+选曲理由 · 试听 · 换曲下拉 · 应用/关闭 -->
+      <div class="bgm-bar">
+        <span class="bgm-now" :title="view.bgm?.reason || ''">
+          ♪ {{ view.bgm?.name || '无配乐' }}<i v-if="view.bgm?.reason"> · {{ view.bgm.reason }}</i>
+        </span>
+        <button class="bgm-btn" :disabled="!view.bgm?.name" @click="toggleAudition">
+          {{ auditionName === view.bgm?.name ? '■ 停' : '▶ 试听' }}
+        </button>
+        <NSelect
+          v-model:value="bgmPick" size="tiny" style="width: 240px"
+          :options="bgmOptions" placeholder="换曲…" :loading="bgmBusy"
+          @focus="!bgmLib && api.bgmLibrary().then(l => (bgmLib = l)).catch(() => {})"
+        />
+        <NButton size="tiny" type="primary" :disabled="!bgmPick || bgmBusy" :loading="bgmBusy" @click="bgmPick && applyBGM(bgmPick)">
+          应用
+        </NButton>
+        <NButton v-if="view.bgm?.name" size="tiny" quaternary :disabled="bgmBusy" @click="applyBGM('off')">
+          关配乐
+        </NButton>
+      </div>
       <div class="player">
         <video
-          ref="videoEl" :src="videoURL(videoId, videoRev)" controls preload="metadata"
+          ref="videoEl" :src="videoURL(videoId, videoRev + localRev)" controls preload="metadata"
           @timeupdate="cur = videoEl!.currentTime"
           @play="playing = true" @pause="playing = false" @ended="playing = false"
         />
@@ -143,7 +213,8 @@ watch(() => props.videoRev, () => {
       </div>
       <Timeline
         v-if="storyboard"
-        :storyboard="storyboard" :audio-meta="audioMeta" :current-time="cur"
+        :storyboard="storyboard" :audio-meta="audioMeta" :bgm="view.bgm ?? null"
+        :bgm-dur="bgmDur" :current-time="cur"
         :picked-idx="pickedIdx" @seek="onSeek" @pick="pickSeg" @pick-time="pickTime"
       />
     </template>
@@ -172,6 +243,19 @@ watch(() => props.videoRev, () => {
 .rework-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .rework-hint { font-size: 12px; color: #f0c674; }
 .progress-line { flex: none; width: 100%; font-size: 12px; color: #8a8a96; padding: 0 4px; }
+/* 配乐条：当前曲（含选曲理由）+ 试听/换曲/应用，与时间轴同宽 */
+.bgm-bar {
+  flex: none; width: min(100%, 1080px); display: flex; align-items: center; gap: 8px;
+  font-size: 12px; padding: 0 4px;
+}
+.bgm-now { color: #c9b8e8; flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.bgm-now i { font-style: normal; color: #7c7c88; }
+.bgm-btn {
+  flex: none; cursor: pointer; font-size: 11px; padding: 2px 10px; border-radius: 999px;
+  color: #c9b8e8; background: #1a1424; border: 1px solid #4a3666;
+}
+.bgm-btn:hover:not(:disabled) { border-color: #b39ddb; }
+.bgm-btn:disabled { opacity: .4; cursor: default; }
 /* 制作暂停横幅（有旧成片）：琥珀警示，与 video_stale 黄灯同族色 */
 .paused-banner {
   flex: none; width: 100%; box-sizing: border-box; font-size: 13px; color: #ffcf87;
