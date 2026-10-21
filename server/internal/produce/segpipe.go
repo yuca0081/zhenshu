@@ -639,6 +639,7 @@ func (c *coordinator) run(ctx context.Context) error {
 	}
 
 	var finalErr error
+	var recheck []string // 上轮终审打回的重写段（复核轮据此瘦身帧格，空=全量帧格）
 	for round := 1; ; round++ {
 		// 等全部边界通过（或刹车/取消）。可多次进入：终审打回会让边界失效重审。
 		if err := c.waitAllPassed(cctx); err != nil {
@@ -650,8 +651,8 @@ func (c *coordinator) run(ctx context.Context) error {
 			finalErr = err
 			break
 		}
-		// 全片终审（≤2 轮或刹车）
-		rewrite, err := c.finalAudit(cctx, round)
+		// 全片终审（≤2 轮或刹车）。重进走复核轮：只注入重写段及邻段的帧+上轮意见单
+		rewrite, err := c.finalAudit(cctx, round, recheck)
 		if err != nil {
 			finalErr = err
 			break
@@ -668,6 +669,7 @@ func (c *coordinator) run(ctx context.Context) error {
 				c.dispatchRewrite(cctx, s, finalFeedback(c, segID, round))
 			}
 		}
+		recheck = rewrite // 下轮终审按此清单走复核轮（帧格瘦身）
 	}
 	ccancel() // 终局：停派发 + 排干在飞（刹车动作语义，§4.5）
 	// 排干顺序：dispatcher → 在飞审核（其间可能现起 worker，chainWg.Add）→ 工人 → 跟踪。
@@ -1475,8 +1477,9 @@ func (c *coordinator) takeStitchFixes() []string {
 
 // ── 全片终审（§7：12–16 帧四查；意见按时刻落段映射重写清单；≤2 轮）──
 
-// finalAudit 跑一轮终审。返回需重写的段 id 清单（空 = 全过）。
-func (c *coordinator) finalAudit(ctx context.Context, round int) ([]string, error) {
+// finalAudit 跑一轮终审。recheck 非空 = 复核轮（重进瘦身）：只注入重写段及
+// 邻段的帧 + 上轮意见单。返回需重写的段 id 清单（空 = 全过）。
+func (c *coordinator) finalAudit(ctx context.Context, round int, recheck []string) ([]string, error) {
 	if err := llm.CheckBudget(ctx); err != nil { // 预算耗尽=刹车（勿降级放行）
 		return nil, err
 	}
@@ -1489,6 +1492,17 @@ func (c *coordinator) finalAudit(ctx context.Context, round int) ([]string, erro
 	in := review.FinalInput{
 		Frames: frames, Paragraphs: paragraphs, TotalDur: total, Round: round,
 		LogPath: c.p.Artifact(fmt.Sprintf("reviews/final-r%d.tools.jsonl", round)),
+	}
+	if round > 1 && len(recheck) > 0 {
+		// 复核轮瘦身的前提是上轮意见单还在（它是复核的判卷基准）——意见单缺失
+		// 就退回全量帧格，宁可多付不少判。
+		if prior := c.loadVerdictFile("final", "all", round-1); prior != nil {
+			in.Prior = prior
+			in.Recheck = recheck
+			in.Frames = framesInSegs(frames, tl, recheck)
+			c.r.Manifest(c.p, "review.final_recheck", fmt.Sprintf("r%d: 重写段 %s，注入 %d/%d 帧", round, strings.Join(recheck, ","), len(in.Frames), len(frames)))
+			c.emit("progress", "review", fmt.Sprintf("终审复核轮：注入 %d/%d 帧（重写段及邻段）", len(in.Frames), len(frames)))
+		}
 	}
 	v, err := c.svc.AuditFinal(ctx, in)
 	if err != nil {
@@ -1553,6 +1567,35 @@ func (c *coordinator) finalAudit(ctx context.Context, round int) ([]string, erro
 	}
 	c.emit("progress", "review", fmt.Sprintf("终审 %d 条 high → 重写 %s（第 %d 轮）", len(high), strings.Join(ids, ","), round))
 	return ids, nil
+}
+
+// framesInSegs 复核轮帧格过滤：保留重写段**及其相邻段**的锚点帧——stitch/drift
+// 的邻段效应需要接缝上下文；更远的段上一轮已判过，不再付费注入（终审重进瘦身，
+// docs/cost-optimization-plan §八二阶）。ids 覆盖全部段时自然退化为全量帧格。
+func framesInSegs(frames []review.AnchorFrame, tl []pipeline.TimelineRow, ids []string) []review.AnchorFrame {
+	keep := map[int]bool{}
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	for i, row := range tl {
+		if want[row.ID] {
+			if i > 0 {
+				keep[i-1] = true
+			}
+			keep[i] = true
+			if i+1 < len(tl) {
+				keep[i+1] = true
+			}
+		}
+	}
+	var out []review.AnchorFrame
+	for _, f := range frames {
+		if idx := segIndexAt(tl, f.T); idx >= 0 && keep[idx] {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // segIndexAt 全片时刻 → 段序号。

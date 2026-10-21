@@ -486,6 +486,34 @@ func TestStaggerSlot(t *testing.T) {
 	}
 }
 
+// 复核轮帧格过滤（终审重进瘦身）：保留重写段及其相邻段的锚点，更远的段丢弃；
+// 重写段覆盖全片时自然退化为全量。
+func TestFramesInSegs(t *testing.T) {
+	tl := []pipeline.TimelineRow{
+		{ID: "seg01", Start: 0, End: 10},
+		{ID: "seg02", Start: 10, End: 20},
+		{ID: "seg03", Start: 20, End: 30},
+		{ID: "seg04", Start: 30, End: 40},
+		{ID: "seg05", Start: 40, End: 50},
+	}
+	frames := []review.AnchorFrame{
+		{T: 5, Label: "seg01"}, {T: 15, Label: "seg02"}, {T: 25, Label: "seg03"},
+		{T: 35, Label: "seg04"}, {T: 45, Label: "seg05"}, {T: 49.99, Label: "seg05尾"},
+	}
+	got := framesInSegs(frames, tl, []string{"seg03"})
+	if len(got) != 3 || got[0].Label != "seg02" || got[1].Label != "seg03" || got[2].Label != "seg04" {
+		t.Fatalf("重写 seg03 应保留邻段 seg02/03/04 的帧，实得 %+v", got)
+	}
+	all := framesInSegs(frames, tl, []string{"seg01", "seg02", "seg03", "seg04", "seg05"})
+	if len(all) != len(frames) {
+		t.Fatalf("全段重写应退化为全量帧格，实得 %d/%d", len(all), len(frames))
+	}
+	none := framesInSegs(frames, tl, nil)
+	if len(none) != 0 {
+		t.Fatalf("空清单应得空帧格，实得 %+v", none)
+	}
+}
+
 // 内容忠实条款（2026-10-20 降本 D1 对冲）与段间接续契约（2026-10-21 D5）：
 // 注入包必须带这些硬要求——锁文案在位，防后续改提示词时无声脱落。
 // 顺带锁稳定前缀布局的形状：段信息（含段 id）必须出现在所有共享块（契约摘要/

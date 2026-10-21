@@ -94,7 +94,12 @@ type FinalInput struct {
 	Paragraphs []string      // 段落主题列表（可空）
 	TotalDur   float64
 	Round      int
-	LogPath    string
+	// 复核轮（终审重进瘦身，docs/cost-optimization-plan §八二阶）：只注入被
+	// 重写段及其相邻段的锚点帧，Prior=上一轮意见单（进提示词作判卷基准，不进
+	// Validate——终审 schema 无 reassessment 字段，复核约束走提示词不走校验）。
+	Recheck []string
+	Prior   *Verdict
+	LogPath string
 }
 
 // provider 审核模型：RoleVisual 档（多模态），判卷低温。
@@ -629,6 +634,13 @@ func (s *Service) AuditFinal(ctx context.Context, in FinalInput) (Verdict, error
 		}
 		kick.WriteString("\n")
 	}
+	if in.Prior != nil {
+		// 复核轮（重进瘦身）：只注入重写段及邻段帧。未注入段的问题不凭空报，
+		// 以上轮意见单为准；stitch/drift 的邻段效应照常判（注入帧带接缝上下文）。
+		kick.WriteString("## 复核轮（终审重进瘦身）\n")
+		fmt.Fprintf(&kick, "本轮是第 %d 轮重进：上轮 %d 条 high 触发了部分段重写，本轮只注入**被重写段及其相邻段**的锚点帧，其余段你上一轮已判过、不再重复注入。\n", in.Round-1, len(in.Prior.HighFindings()))
+		kick.WriteString("复核重点：①被重写段是否修掉上轮问题 ②重写是否引入新伤 ③stitch/drift 在注入帧的相邻段界照常判。未注入段不凭空报新问题，以上一轮意见单为准。\n\n")
+	}
 	kick.WriteString("## 帧格（附图，按时间正序）\n")
 	var imgs []string
 	for i, f := range in.Frames {
@@ -653,6 +665,10 @@ func (s *Service) AuditFinal(ctx context.Context, in FinalInput) (Verdict, error
 		return nil
 	}); err != nil {
 		return Verdict{}, fmt.Errorf("终审抽帧失败: %w", err)
+	}
+	if in.Prior != nil {
+		b, _ := json.MarshalIndent(in.Prior, "", "  ")
+		kick.WriteString("\n## 上一轮意见单（本轮判卷的基准上下文）\n```json\n" + string(b) + "\n```\n")
 	}
 	loop := Loop{
 		System:      finalSystem,
