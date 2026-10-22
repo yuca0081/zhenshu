@@ -14,8 +14,8 @@ package produce
 // 默认 off——段间接缝交给固定机制（场景契约首帧即景/末帧定格 + 机检亮度闸 +
 // 拼接直切），不再靠审；on 回滚原边界审核链（跟踪器/代际/打回路由），代码不删。
 //
-// 与 legacy 栅栏管线的分工：prep 新项目（scripts/script.json 在）走本文件；
-// 老项目走 run() 原路径零改动（⑭：legacy 设计流程原样保留）。
+// 单路：全部项目走本文件（legacy 栅栏管线 2026-10-22 拍板退役，老项目不再
+// 支持重跑——run() 对非 prep 项目明确报错）。
 // 调度规则（§4.3）：三池独立限流（写≤4/审≤4/渲≤min(4,CPU-2)，皆环境变量）；
 // 写优先于审（写在飞时审核每周期最多放行一个）；段状态机与签名刹车见 §4.2/§4.5。
 // 可追溯与重放（§4.4）：reviews/journal.jsonl 追加只写，每次状态迁移与审核意见
@@ -129,8 +129,8 @@ func renderConcurrency() int {
 	return def
 }
 
-// IsPrepProject prep 新项目判定（段级流水线的路由条件）：文字稿工件在。
-// 老项目（legacy 分镜、无文字稿）照走原栅栏管线，行为不变。
+// IsPrepProject prep 新项目判定（文字稿工件在）。legacy 管线退役后它只用于
+// run() 的拒跑门：不在则明确报错引导新建，不再走任何旧路径。
 func IsPrepProject(p *pipeline.Project) bool {
 	_, err := os.Stat(p.Artifact("scripts/script.json"))
 	return err == nil

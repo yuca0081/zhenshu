@@ -1,10 +1,9 @@
 // Package produce：制作任务运行器（确定性编排，LLM 只在需要的点上介入）。
 //
-// 双路分发：prep 新项目（10-16 起的全部新项目）走 runSegmentPipeline（见
-// segpipe.go——逐段 写→审→渲 三池并发 + 边界审 + 全片终审）；本文件 run()
-// 的 v2 六道链路（tts → 场景 → 合成物 → 组装 → check → 渲染 → 成片）只服务
-// legacy 老项目重跑与段级 Rework 旁路。每步 SSE 广播 stage 事件；产物落盘可
-// 从任意步重放（manifest 记账）。
+// 双路分发退役为单路（2026-10-22 拍板：legacy 老项目不再重跑）：全部项目走
+// runSegmentPipeline（见 segpipe.go——逐段 写→审→渲 三池并发 + 边界审 + 全片
+// 终审）；本文件留守 runRework 段级重做旁路（与段级流水线共用组装/检查/渲染
+// 工位）。每步 SSE 广播 stage 事件；产物落盘可从任意步重放（manifest 记账）。
 package produce
 
 import (
@@ -784,128 +783,14 @@ func (r *Runner) jobTerminal(projectID, status, outputPath, errMsg string) {
 }
 
 func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
-	id := p.ID
-
-	// ── 0. 路由（production-stage-design ⑭）：prep 新项目走段级流水线
-	//（写→检→渲→段审→边界审→拼接→终审，见 segpipe.go）；老项目（legacy 分镜、
-	// 无文字稿）走原栅栏管线，行为不变。
-	if IsPrepProject(p) {
-		return r.runSegmentPipeline(ctx, p)
+	// ── 路由（production-stage-design ⑭）：全部项目走段级流水线（写→检→
+	// 渲→段审→边界审→拼接→终审，见 segpipe.go）。legacy 栅栏管线（老项目、
+	// 无文字稿分镜）2026-10-22 拍板退役：不再支持重跑，明确报错引导新建，
+	// 不给半途而废的假跑。
+	if !IsPrepProject(p) {
+		return fmt.Errorf("此项目是旧架构产物（legacy 管线已退役），不再支持制作——请新建项目；老项目目录仍在 data/projects 下，素材可自取")
 	}
-
-	// ── 1. TTS + 词级对齐（幂等：缺什么补什么）─────────────────
-	r.emit(id, "stage", "tts", "running")
-	r.Manifest(p, "stage.start", "tts")
-	if err := r.python(ctx, "ai/tts_align.py", p.Dir, 30*time.Minute); err != nil {
-		return fmt.Errorf("TTS/对齐失败: %w", err)
-	}
-	r.emit(id, "stage", "tts", "done")
-	r.Manifest(p, "stage.finish", "tts")
-	r.Manifest(p, "produce.tts", "done")
-
-	// ── 1.5 双语字幕（可选，M-C）：短语级英文翻译 → audio_meta（幂等；失败不挡片）
-	if err := r.translateSubtitles(ctx, p); err != nil {
-		r.emit(id, "progress", "tts", "双语字幕翻译跳过: "+err.Error())
-	}
-	// 配音是最耗时的外部服务产物：TTS 一完成就上正本（几十 MB 级 wav × N 段）
-	r.syncUp(p, "audio")
-	if r.Artifacts != nil && r.Artifacts.Available() {
-		if err := r.Artifacts.Put(artifacts.ProjectKey(id, "audio_meta.json"), p.Artifact("audio_meta.json")); err != nil {
-			log.Printf("[artifacts] 上传 audio_meta.json 失败: %v", err)
-		}
-	}
-
-	// ── 2. 语义 spec 生成（LLM）+ 确定性渲染 + 合成物落盘 ────────
-	// 真图素材不在此采购：场景生成两段式按需申请（materials.go），模型要才检索。
-	if err := r.compositions(ctx, p); err != nil {
-		return err
-	}
-
-	// ── 3. 组装 ─────────────────────────────────────────────
-	r.emit(id, "stage", "assemble", "running")
-	r.Manifest(p, "stage.start", "assemble")
-	if err := r.assemble(ctx, p); err != nil {
-		return fmt.Errorf("组装失败: %w", err)
-	}
-	r.emit(id, "stage", "assemble", "done")
-	r.Manifest(p, "stage.finish", "assemble")
-
-	// ── 3.5 导演审片（全片连环画 × 预期考卷，见 director.go）：有导演统筹的
-	//    长片才跑；意见 high 段重出画面，随后的 check 门禁统一兜机械问题。
-	//    审片类故障降级放行（非阻塞哲学同 prereview/frameQA）──────
-	if err := r.directorReview(ctx, p); err != nil {
-		return err
-	}
-
-	// ── 4. check 门禁（自修复：报错回喂重生成 spec）────────────
-	if err := r.checkWithRepair(ctx, p, "", ""); err != nil {
-		return err
-	}
-
-	// ── 4.5 渲染前预审（snapshot 截帧+视觉模型，自修复见 prereview.go）：
-	//    画面问题拦在最贵的渲染之前，渲后 frameQA 据此降级为薄保险 ───
-	pr, err := r.preReview(ctx, p)
-	if err != nil {
-		return err
-	}
-
-	// ── 5. 渲染成片（按段增量渲 + concat，段片复用见 stageRender）──
-	r.emit(id, "stage", "render", "running")
-	r.Manifest(p, "stage.start", "render")
-	if err := pipeline.Run(ctx, p, "render"); err != nil {
-		return fmt.Errorf("渲染失败: %w", err)
-	}
-	if err := pipeline.Run(ctx, p, "stitch"); err != nil {
-		return err
-	}
-	r.emit(id, "stage", "render", "done")
-	r.Manifest(p, "stage.finish", "render")
-
-	// ── 6. 画面审查（抽帧+视觉模型，自修复见 frameQA）：预审干净且无动态特色
-	//    判据 → 跳过（预审已覆盖；stitch 已在步骤 5 完成，无缺口）；预审动过的段
-	//    → 只复查这些；动态判据或预审未跑（pre_review=false/前置缺失）→ 全量现状
-	switch {
-	case pr.Ran && !pr.ReviewAll && len(pr.Repaired) == 0:
-		r.Manifest(p, "frameqa.skipped_by_prereview", "预审全过，渲后免审")
-	case pr.Ran && !pr.ReviewAll:
-		if err := r.frameQA(ctx, p, "", strings.Join(pr.Repaired, ",")); err != nil {
-			return err
-		}
-	default:
-		if err := r.frameQA(ctx, p, "", ""); err != nil {
-			return err
-		}
-	}
-	r.emit(id, "done", "", "renders/main.mp4")
-	r.Manifest(p, EventProduceDone, "renders/main.mp4")
-	r.jobTerminal(id, "done", "renders/main.mp4", "")
-	if r.OnDone != nil {
-		r.notifyOnDone(id, "video", "全片制作完成")
-	}
-	return nil
-}
-
-// compositions 生成/复用场景文件 → 清旧帧 → 管线落盘。
-func (r *Runner) compositions(ctx context.Context, p *pipeline.Project) error {
-	r.emit(p.ID, "stage", "compositions", "running")
-	r.Manifest(p, "stage.start", "compositions")
-	// 目录字体先行：下载缓存 + 按本文稿子集化（申请书由 LockDesign 落；vend 同款
-	// 铁律：模型只有申请权，执行在平台侧）。失败由 font_tool 自己剥族降级，不挡制作。
-	if err := r.python(ctx, "ai/font_tool.py", p.Dir, 4*time.Minute); err != nil {
-		r.Manifest(p, "fonts.prepare_error", err.Error())
-	} else {
-		r.Manifest(p, "fonts.prepared", "")
-	}
-	if err := r.sceneGen(ctx, p, "", "", ""); err != nil {
-		return err
-	}
-	r.clearFrames(p, "")
-	if err := pipeline.Run(ctx, p, "compositions"); err != nil {
-		return fmt.Errorf("合成物落盘失败: %w", err)
-	}
-	r.emit(p.ID, "stage", "compositions", "done")
-	r.Manifest(p, "stage.finish", "compositions")
-	return nil
+	return r.runSegmentPipeline(ctx, p)
 }
 
 // checkWithRepair check 失败 → 报错回喂 → 重生成 spec → 重渲染 → 重查（最多 3 轮，plan §4.5）。
@@ -1126,6 +1011,33 @@ func loadAudioMeta(p *pipeline.Project) (map[string]voiceMeta, error) {
 
 // ── scene 确定性回放硬闸（P1-1）───────────────────────────────────
 
+// snapMainFrames 主组合 snapshot 截帧（原 prereview.go 唯一幸存者，scene 回放
+// 门禁在用）。--no-browser-gpu 强制 SwiftShader：截到的帧必须和渲染器将产出的
+// 画面同源（渲染器 auto-detect 掷硬币是 seg07 事故根因，7f3b61d 已强制）。
+// 先清旧目录再截，防残留帧混入。返回 frame-*.png 文件名（不判空——按调用方
+// 语义处理）。
+func snapMainFrames(p *pipeline.Project, atArg, dir string) ([]string, error) {
+	if err := os.RemoveAll(p.Artifact(dir)); err != nil {
+		return nil, err
+	}
+	out, err := pipeline.RunCLI(p, "npx", pipeline.HyperframesPkg, "snapshot", ".",
+		"--at", atArg, "--no-end", "--no-browser-gpu", "-o", dir)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot 失败（--at %s）: %s", atArg, pipeline.TailLines(out, 8))
+	}
+	entries, err := os.ReadDir(p.Artifact(dir))
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "frame-") && strings.HasSuffix(e.Name(), ".png") {
+			names = append(names, e.Name())
+		}
+	}
+	return names, nil
+}
+
 // sceneReplayCheck 含 scene 的段：全片主组合上对每个 scene 段取 3 个全局时刻，
 // snapshot 两轮截帧（hyperframes snapshot 不支持 -c 单段，走主组合一次覆盖所有段），
 // 像素必须一致——LLM 代码若藏了绕过黑名单的非确定性，这里拦下进修复轮，不带病出片。
@@ -1179,9 +1091,9 @@ func (r *Runner) sceneReplayCheck(ctx context.Context, p *pipeline.Project) erro
 	}
 	frames := make([][]string, 2)
 	snap := func(atArg, dir string) ([]string, error) {
-		// 共用体在 prereview.snapMainFrames（2026-10-19 中-6）：--no-browser-gpu
-		// 强制 SwiftShader，渲染器 auto-detect 掷硬币是 seg07 事故根因——两处
-		// 必须同一份参数，升级只改 pipeline.HyperframesPkg。
+		// --no-browser-gpu 强制 SwiftShader（渲染器 auto-detect 掷硬币是
+		// seg07 事故根因）：截帧与渲染必须同一份参数，升级只改
+		// pipeline.HyperframesPkg。
 		return snapMainFrames(p, atArg, dir)
 	}
 	// 逐帧比对（带 LSB 容差 + 感知二级判据）：返回未过容差的帧名与按段去重的报错行。
