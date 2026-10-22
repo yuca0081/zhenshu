@@ -39,7 +39,9 @@ demo/aegis3d/renders/
 
 # 多风格验证管线产物（style_test_harness.py 可再生）
 demo/styletest/
-deploy/app-linux
+
+# 部署资产整目录只留本地（脚本/编排内含服务器 IP 等敏感信息，2026-10-22 退库）
+deploy/
 
 # demo 渲染产物（mp4/抽帧）不入库
 demo/custom-clips/

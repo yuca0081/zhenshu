@@ -1,4 +1,4 @@
-# 部署（47.94.247.12）
+# 部署（服务器 IP 见本地 deploy/ 脚本，不入库）
 
 一键部署（开发机 Git Bash）：
 
@@ -9,7 +9,7 @@ bash deploy/deploy.sh         # 日常发版
 
 前置（一次性）：
 
-1. **SSH 免密**：开发机 `ssh-copy-id root@47.94.247.12`（服务器只收 publickey）。
+1. **SSH 免密**：开发机 `ssh-copy-id root@<服务器IP>`（服务器只收 publickey）。
 2. **服务器 .env**（`--env` 上传即自动改写）：`PG_DSN` 的 host 自动替换为 `127.0.0.1`
    （容器 host 网络，本机回环直连宿主机 PG，不经安全组）；
    需有 `LLM_MODE=api`、`LLM_API_KEY`、`SILICONFLOW_API_KEY`（TTS 走 API 免本地模型）、
