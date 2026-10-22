@@ -34,10 +34,11 @@ func (p *Provider) ChatTempEffort(ctx context.Context, msgs []openai.ChatComplet
 }
 
 func (p *Provider) chatTemp(ctx context.Context, msgs []openai.ChatCompletionMessage, tools []openai.Tool, temp *float64, effort Effort) (openai.ChatCompletionMessage, openai.Usage, error) {
-	// 600s：判卷载荷比工位对话重（锚点帧/样张多图 + 深思考），端点忙时 300s 不够
-	// （段审实测死在 5 分钟线上）。Chat 与 ChatTemp 同走这档——旧注释宣称
-	// 「Chat 保持 300s」与实现不符，2026-10-19 对齐为如实描述。
-	ctx, cancel := context.WithTimeout(ctx, 600*time.Second)
+	// 900s：②风格工位真迹附图上线后（2026-10-22 实测），带图工位对话 + 深思考写
+	// 大 HTML 的单调用两连死在 600s 线（prep.style cold_retry×2，context deadline
+	// exceeded）。此前 300s 不够判卷载荷（段审实测死在 5 分钟线上）升到 600；
+	// 现在样张探索会话常驻 3 张真迹图，再放一档。Chat 与 ChatTemp 同走这档。
+	ctx, cancel := context.WithTimeout(ctx, 900*time.Second)
 	defer cancel()
 	// 消息逐条预序列化（含 tool_calls 等字段原样透传），再拼成 RawMessage 数组进统一壳。
 	// 预序列化前过一遍图片校验（P0-3）：非法 image_url 在这里拦下换占位，不让

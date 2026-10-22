@@ -14,10 +14,15 @@
 package pipeline
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
+	_ "image/png" // 解码简报证据帧（style_media 抽帧）
 	"os"
 	"regexp"
 	"sort"
@@ -44,11 +49,67 @@ func LoadStyleBrief(p *Project) *contract.StyleBrief {
 	return &brief
 }
 
+// ShrinkImageDataURL 图片文件 → 等比缩到 targetW 宽的 JPEG dataURL（最近邻采样，
+// 像素风的硬边不糊）。风格真迹/样张截图回喂多模态的统一入口：整图 base64 动辄
+// 半兆，多轮会话每回合重发会把成本滚起来；640 宽的检查分辨率足够判读配色/质感/密度。
+func ShrinkImageDataURL(path string, targetW, quality int) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	src, _, err := image.Decode(f)
+	if err != nil {
+		return "", err
+	}
+	b := src.Bounds()
+	w, h := b.Dx(), b.Dy()
+	tw := targetW
+	if tw > w {
+		tw = w
+	}
+	th := tw * h / w / 2 * 2
+	dst := image.NewRGBA(image.Rect(0, 0, tw, th))
+	for y := 0; y < th; y++ {
+		sy := b.Min.Y + y*h/th
+		for x := 0; x < tw; x++ {
+			dst.Set(x, y, src.At(b.Min.X+x*w/tw, sy))
+		}
+	}
+	var out bytes.Buffer
+	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: quality}); err != nil {
+		return "", err
+	}
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(out.Bytes()), nil
+}
+
+// BriefEvidenceImages 风格简报证据帧（原片真迹）→ 多模态附图 dataURL（≤maxN 张）。
+// 单张压图/读图失败跳过——真迹是对照物，缺一张不塌整链。全失败返回空，
+// 调用方回退纯文本调用（老项目/无媒体条目零感知）。
+func BriefEvidenceImages(p *Project, maxN, targetW int) []string {
+	brief := LoadStyleBrief(p)
+	if brief == nil {
+		return nil
+	}
+	var out []string
+	for i, src := range brief.Evidence {
+		if i >= maxN {
+			break
+		}
+		if u, err := ShrinkImageDataURL(src, targetW, 72); err == nil {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
 // designBrief 设计作业正文（API 直调与会话请求共用一份，防两处漂移）。
 // input/style_notes.txt 存在时追加用户修改要求（draft_style_samples 带 instruction 写入）。
 // 风格简报存在时追加「强参考」注入块（v3 §4.5）：气质基调（词表 brief）+ 必答特色清单。
-// 样张画布硬定 960×540：舞台 SampleFrame 缩放与 ai/snap_samples.py 截图都按此假设。
-func designBrief(p *Project, sb *contract.Storyboard) string {
+// evidenceN = 随本次消息实际附上的简报证据帧数（0 = 无附图——会话模式或全部压图失败，
+// 文案随之降级，不许谎称已附）。样张画布硬定 960×540：舞台 SampleFrame 缩放与
+// ai/snap_samples.py 截图都按此假设。
+func designBrief(p *Project, sb *contract.Storyboard, evidenceN int) string {
 	notes := ""
 	if b, err := os.ReadFile(p.Artifact("input/style_notes.txt")); err == nil && len(strings.TrimSpace(string(b))) > 0 {
 		notes = "\n\n## 用户修改要求（优先满足；未提及的方面保持连贯，不要推倒重来）\n" + string(b) + "\n"
@@ -115,13 +176,15 @@ func designBrief(p *Project, sb *contract.Storyboard) string {
 - 不用图片/网络资源，纯 CSS；多张样张构图版式必须明显不同，每张 desc 写明用了哪个版式；
 - 画布硬约束（违反必被裁切）：每张 html 是完整自包含文档，画布固定 960×540：
   html,body{width:960px;height:540px;overflow:hidden}；内容全部落在画布内，不依赖滚动；
-  禁 vw/vh；大字标题留边距；每张 html ≤2000 字符%s`, briefBlock(p), storyboardDigest(sb), directorDesignBlock(sb), FontCatalogList(), notes)
+  禁 vw/vh；大字标题留边距；每张 html ≤2000 字符%s`, briefBlock(p, evidenceN), storyboardDigest(sb), directorDesignBlock(sb), FontCatalogList(), notes)
 }
 
 // briefBlock 强参考注入块（v3 §4.5）：简报存在时给设计阶段立「用户选定的硬要求」。
 // 特色只给机制（物件换成本片内容——吸收机制而非临摹原片），落点登记要求随后由
-// designJSONShape 的 signature_absorption 字段承接。
-func briefBlock(p *Project) string {
+// designJSONShape 的 signature_absorption 字段承接。evidenceN>0 时本次消息带真迹附图，
+// 文案同步声明——「证据帧已附」必须与实际附图一致（历史教训：声称已附实际纯文本，
+// 设计阶段全程盲画，样张与风格库两张皮）。
+func briefBlock(p *Project, evidenceN int) string {
 	brief := LoadStyleBrief(p)
 	if brief == nil {
 		return ""
@@ -138,7 +201,13 @@ func briefBlock(p *Project) string {
 			fmt.Fprintf(&b, "；辅：%s", tb)
 		}
 	}
-	b.WriteString("\n- 吸收的是机制不是物件：参考风格的题材/物件与本项目无关，换成本片内容实现同款手法。\n")
+	b.WriteString("\n")
+	if evidenceN > 0 {
+		fmt.Fprintf(&b, "- 本消息随文附了 %d 张该条目的证据帧（风格来源视频的原片真迹）：配色、光影、质感、画面密度、字体气质**逐项对着真迹吸收**，不许凭文字想象；真迹里画的物件与题材是原片内容，禁止入画。\n", evidenceN)
+	} else {
+		b.WriteString("- （本条目的证据帧本次未能附图：配色/质感/密度/字体气质按词条简报从严执行）\n")
+	}
+	b.WriteString("- 吸收的是机制不是物件：参考风格的题材/物件与本项目无关，换成本片内容实现同款手法。\n")
 	if len(brief.Signatures) > 0 {
 		b.WriteString("必答特色（每条都必须被设计系统吸收，并在 signature_absorption 中登记落点）：\n")
 		for i, sg := range brief.Signatures {
@@ -146,7 +215,10 @@ func briefBlock(p *Project) string {
 			if strings.TrimSpace(sg.UseHint) != "" {
 				fmt.Fprintf(&b, "（适用：%s）", sg.UseHint)
 			}
-			b.WriteString("（证据帧已附）\n")
+			if evidenceN > 0 && len(sg.Frames) > 0 {
+				b.WriteString("（真迹附图中可见）")
+			}
+			b.WriteString("\n")
 		}
 	} else {
 		b.WriteString("（该条目没有开启的特色，气质对齐即可）\n")
@@ -270,8 +342,8 @@ func joinSigIDs(brief *contract.StyleBrief) string {
 	return strings.Join(ids, ",")
 }
 
-func designUserPrompt(p *Project, sb *contract.Storyboard) string {
-	return designBrief(p, sb) + "\n\n## 输出要求\n只输出 JSON，无 markdown 围栏：\n" + designJSONShape() + designAbsorptionNote(p)
+func designUserPrompt(p *Project, sb *contract.Storyboard, evidenceN int) string {
+	return designBrief(p, sb, evidenceN) + "\n\n## 输出要求\n只输出 JSON，无 markdown 围栏：\n" + designJSONShape() + designAbsorptionNote(p)
 }
 
 func designRequest(p *Project, sb *contract.Storyboard, out string) string {
@@ -290,7 +362,7 @@ func designRequest(p *Project, sb *contract.Storyboard, out string) string {
 - fonts.display/body 栈含中文字体；motion.ease/notes 非空、dur_in 0.1–1.5、dur_settle 0.05–1.0、stagger 0–0.5；
   entrances 3–5 条（name/how/use_for 三件齐、手法名互异）、rhythm/exits/camera/transition 各自非空
 - device.name/desc/per_seg 三件齐；entry_exit.entry/exit 非空（entry_dur 0.2–0.6）——标准开场/收尾状态是段间接续契约的载体（首帧即景/末帧定格）
-`, designBrief(p, sb), out, designJSONShape(), designAbsorptionNote(p))
+`, designBrief(p, sb, 0), out, designJSONShape(), designAbsorptionNote(p))
 }
 
 // DesignDocWithBrief 设计系统 → 注入文档（scene_gen 每段注入源 + 确认后 design.md

@@ -159,8 +159,11 @@ func mediaParts(user string, imageURLs []string, videoURL string) []glmMediaPart
 	return parts
 }
 
-// httpClient 包级复用（连接池）；10 分钟超时兜底端点偶发挂住，防 Agent 循环/管线永久卡死。
-var httpClient = &http.Client{Timeout: 10 * time.Minute}
+// httpClient 包级复用（连接池）；15 分钟超时兜底端点偶发挂住，防 Agent 循环/管线
+// 永久卡死。2026-10-22 从 10 分钟升档：②风格工位真迹附图后，带图工位对话 + 深思考
+// 写大 HTML 的单调用两连死在 600s（chatTemp 的 ctx 超时还没到线，这层先掐了——
+// 双层超时必须同步放宽，只改一层是无效修复）。
+var httpClient = &http.Client{Timeout: 15 * time.Minute}
 
 // StatusError 上游非 2xx 的结构化错误：状态码 + 响应体。重试策略按它分流——
 // 401/403/400 这类客户端错（key 错/欠费封禁/参数非法）重试也不会好，烧满 3 次

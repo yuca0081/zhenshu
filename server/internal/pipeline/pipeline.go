@@ -19,6 +19,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	openai "github.com/sashabaranov/go-openai"
+
 	"webpage-video-agent/server/internal/artifacts"
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
@@ -668,10 +670,20 @@ func stageStyleSamples(p *Project) error {
 	prov, perr := llm.FromEnv(llm.RolePlan)
 	if perr == nil {
 		var ss contract.StyleSamples
-		prompt := designUserPrompt(p, sb)
+		// 简报证据帧（原片真迹）随作业附图：v3 条目的风格本体在帧里不在文字里，
+		// 纯文本作业=设计阶段全程盲画（2026-10-22 实测样张与风格库两张皮的根因）。
+		// 全部压图失败（无媒体条目/读图炸）退回纯文本，文案随之降级不谎称已附。
+		evidence := BriefEvidenceImages(p, 6, 640)
+		prompt := designUserPrompt(p, sb, len(evidence))
 		var lastErr error
 		for round := 0; round < 3; round++ {
-			usage, gerr := prov.GenerateJSON(pctx(p), designSystemPrompt, prompt, &ss)
+			var usage openai.Usage
+			var gerr error
+			if len(evidence) > 0 {
+				usage, gerr = prov.GenerateJSONVisionEffort(pctx(p), designSystemPrompt, prompt, evidence, 0.7, &ss, llm.EffortDefault)
+			} else {
+				usage, gerr = prov.GenerateJSON(pctx(p), designSystemPrompt, prompt, &ss)
+			}
 			if gerr != nil {
 				lastErr = gerr
 				break
@@ -693,6 +705,9 @@ func stageStyleSamples(p *Project) error {
 					usage.PromptTokens, usage.CompletionTokens))
 				p.Manifest("style.drafted", ss.Direction)
 				p.Manifest("style_samples.api", prov.Name+"/"+prov.Model)
+				if len(evidence) > 0 {
+					p.Manifest("style_samples.evidence", fmt.Sprintf("真迹附图 %d 张", len(evidence)))
+				}
 				// 迷你真段：草稿落定后立刻出动态小样（任何失败只降级静态，见 styleclips.go），
 				// 完成后把 Video/ClipNote 回写进样张文件
 				if EnsureSampleClips(p, &ss, sb) {
@@ -701,7 +716,7 @@ func stageStyleSamples(p *Project) error {
 				return nil
 			}
 			lastErr = verr
-			prompt = designUserPrompt(p, sb) + "\n\n## 上一版被设计校验拒绝（缺项/越界必须补齐，其余保持不变）\n" + verr.Error()
+			prompt = designUserPrompt(p, sb, len(evidence)) + "\n\n## 上一版被设计校验拒绝（缺项/越界必须补齐，其余保持不变）\n" + verr.Error()
 		}
 		p.Manifest("style_samples.api.error", lastErr.Error())
 	}

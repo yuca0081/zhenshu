@@ -18,10 +18,10 @@ func TestDesignBriefInjection(t *testing.T) {
 		{ID: "seg01", Idx: 1, Key: "k", Narration: "n", DurationHint: 9},
 	}}
 	// 无简报：不得出现强参考块
-	if s := designBrief(p, sb); strings.Contains(s, "本片风格参考") {
+	if s := designBrief(p, sb, 0); strings.Contains(s, "本片风格参考") {
 		t.Fatalf("无简报不该注入强参考块")
 	}
-	if s := designUserPrompt(p, sb); strings.Contains(s, "signature_absorption：简报里每条开启的特色") {
+	if s := designUserPrompt(p, sb, 0); strings.Contains(s, "signature_absorption：简报里每条开启的特色") {
 		t.Fatalf("无简报不该提落点登记要求")
 	}
 
@@ -35,8 +35,10 @@ func TestDesignBriefInjection(t *testing.T) {
 		},
 		Signatures: []contract.Signature{
 			{ID: "sig1", Kind: contract.SigKindTransition, Name: "道具递接转场",
-				Mechanism: "前一画面主体推出画外，后一画面同位置跟进", UseHint: "段间切换"},
-			{ID: "sig2", Kind: contract.SigKindPalette, Name: "紫青撞色", Mechanism: "双色对撞铺底"},
+				Mechanism: "前一画面主体推出画外，后一画面同位置跟进", UseHint: "段间切换",
+				Frames: []string{"frame-03.png"}},
+			{ID: "sig2", Kind: contract.SigKindPalette, Name: "紫青撞色", Mechanism: "双色对撞铺底",
+				Frames: []string{"frame-07.png"}},
 		},
 	}
 	bj, _ := json.Marshal(brief)
@@ -47,21 +49,35 @@ func TestDesignBriefInjection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := designBrief(p, sb)
+	// evidenceN=0（会话/压图失败）：附图文案必须降级，不许谎称已附
+	s := designBrief(p, sb, 0)
 	for _, want := range []string{
 		"本片风格参考（用户选定，硬要求）",
 		"气质基调：故障风——数字撕裂与 RGB 错位", // main 词条 name + brief
 		"；辅：等距——轴测视角",            // aux 词条
 		"必答特色（每条都必须被设计系统吸收，并在 signature_absorption 中登记落点）",
-		"[transition] 道具递接转场——机制：前一画面主体推出画外，后一画面同位置跟进（适用：段间切换）（证据帧已附）",
-		"[palette] 紫青撞色——机制：双色对撞铺底（证据帧已附）",
+		"证据帧本次未能附图",
 		"吸收的是机制不是物件",
 	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("设计作业缺 %q\n---\n%s", want, s)
 		}
 	}
-	if got := designUserPrompt(p, sb); !strings.Contains(got, "sig1,sig2") ||
+	if strings.Contains(s, "随文附了") || strings.Contains(s, "证据帧已附") {
+		t.Fatalf("未附图不得谎称已附\n---\n%s", s)
+	}
+	// evidenceN>0（随作业附真迹）：附图声明 + 特色指向附图
+	s = designBrief(p, sb, 5)
+	for _, want := range []string{
+		"随文附了 5 张该条目的证据帧",
+		"配色、光影、质感、画面密度、字体气质",
+		"（真迹附图中可见）",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("附图模式设计作业缺 %q\n---\n%s", want, s)
+		}
+	}
+	if got := designUserPrompt(p, sb, 5); !strings.Contains(got, "sig1,sig2") ||
 		!strings.Contains(got, contract.AbsorptionLandNames()) {
 		t.Fatalf("输出要求应带落点登记说明（sig 清单+枚举）")
 	}

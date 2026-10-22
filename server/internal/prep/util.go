@@ -7,14 +7,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"image"
-	"image/jpeg"
-	_ "image/png" // 解码 snap_samples 产物
-	"os"
 	"path/filepath"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -78,33 +73,11 @@ func snapSamples(ctx context.Context, d Deps, p *pipeline.Project) error {
 // shrinkFrame 样张截图 → 宽 480 的 JPEG dataURL。整图 base64 动辄半兆，
 // 每回合消息重发会把多轮成本滚起来；480×270 的检查分辨率足够看构图配色。
 func shrinkFrame(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	src, _, err := image.Decode(f)
-	if err != nil {
-		return "", err
-	}
-	b := src.Bounds()
-	w, h := b.Dx(), b.Dy()
-	const targetW = 480
-	tw := targetW
-	if tw > w {
-		tw = w
-	}
-	th := tw * h / w / 2 * 2
-	dst := image.NewRGBA(image.Rect(0, 0, tw, th))
-	for y := 0; y < th; y++ {
-		sy := b.Min.Y + y*h/th
-		for x := 0; x < tw; x++ {
-			dst.Set(x, y, src.At(b.Min.X+x*w/tw, sy))
-		}
-	}
-	var out bytes.Buffer
-	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: 70}); err != nil {
-		return "", err
-	}
-	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(out.Bytes()), nil
+	return pipeline.ShrinkImageDataURL(path, 480, 70)
+}
+
+// shrinkRef 风格真迹 → 指定宽度的 JPEG dataURL（判卷对照物，比样张自检图
+// 留多一档分辨率：质感/颗粒/字形的判读全靠它）。
+func shrinkRef(path string, targetW int) (string, error) {
+	return pipeline.ShrinkImageDataURL(path, targetW, 72)
 }
