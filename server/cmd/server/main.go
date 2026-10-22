@@ -98,9 +98,6 @@ func main() {
 
 	producer := &produce.Runner{
 		DataDir: cfg.DataDir, RootDir: root, Hub: hub, Store: st, Artifacts: art,
-		// 自动续跑不开（用户要求 2026-10-17）：启动对账只补「中断」账+聊天通知，
-		// 要不要重跑由用户自己在界面上点，服务重启不再自动起任务。
-		AutoResume: false,
 	}
 	ag := &agent.Agent{
 		DataDir: cfg.DataDir, RootDir: root, Store: st, Lib: lib, Producer: producer, Artifacts: art,
@@ -109,7 +106,6 @@ func main() {
 	}
 	// 制作终态（成片/失败/取消）必须落进聊天框——异步管线跑完时对话轮早已结束
 	producer.OnDone = ag.NotifyResult
-	producer.OnNotice = ag.PostNotice // 非终态插话（如自动续跑通知）：让用户知道流程自己在走
 	// 启动对账：上次进程死在制作中途的项目补写终态+聊天通知（必须先于任何新任务）
 	producer.Reconcile()
 	refs := styleref.NewStore(cfg.DataDir, root)

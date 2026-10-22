@@ -694,15 +694,7 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
 3. 恰好一个 gsap.timeline({paused:true})，末尾注册 window.__timelines["<段id>"]
 4. 全屏轨道层（背景等）带 class="clip" + data-start/data-duration/data-track-index
 5. 每个有意义的可见元素带 data-hf-name="人话名"（≥3 个；元素级指认依赖它）
-6. 确定性：禁 Date.now/new Date/setTimeout/setInterval/requestAnimationFrame/performance.now；
-   禁 Math.random（随机一律种子化，如 __rng32(seed) 闭包）；禁 CSS animation/transition/@keyframes；
-   禁网络（fetch/XHR/WebSocket/外链 http(s)）；禁 Worker；禁 <video>/<audio>
-7. canvas 画布：绘制函数 = window["__draw_<id>"]=function(t,ctx,W,H,rng)——t 的纯函数，
-   每帧从零重画；运动一律写成 t 的函数。接线三行逐字照抄（只换尖括号占位），漏注册=lint 拒收 [F3]：
-   var tl=gsap.timeline({paused:true});
-   tl.to({},{duration:<段总时长秒>,ease:"none",onUpdate:function(){window["__draw_<id>"](tl.time(),ctx,W,H,rng);}},0);
-   window.__timelines["<段id>"]=tl;
-8. 字体：只准用渲染端实际安装的这些——微软雅黑 Microsoft YaHei、黑体 SimHei、宋体 SimSun、楷体 KaiTi、仿宋 FangSong、Consolas、Segoe UI、Georgia、Arial、Times New Roman、Courier New、Impact（外加 serif/sans-serif/monospace 通用族收尾）；
+%s8. 字体：只准用渲染端实际安装的这些——微软雅黑 Microsoft YaHei、黑体 SimHei、宋体 SimSun、楷体 KaiTi、仿宋 FangSong、Consolas、Segoe UI、Georgia、Arial、Times New Roman、Courier New、Impact（外加 serif/sans-serif/monospace 通用族收尾）；
    例外：注入的设计系统展示字体（如 ZCOOL QingKe HuangYou 等目录字体）可以直接用，平台保证声明与字体文件；
    引用即声明（@font-face{font-family:'X';src:local('X');}）；除此之外禁 PingFang SC、思源 Source Han/Noto 等未安装字体——lint 对未声明字体会一票否决整段；
    禁止在 CSS transform 里做居中（translateX(-50%%) 等）再让 GSAP 补间同一元素——GSAP 会整体覆盖 CSS transform，居中必须用 GSAP 的 xPercent/yPercent；
@@ -759,7 +751,7 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
 %s
 ## 输出（只输出一个 JSON 对象：第一个字符必须是 {、最后一个字符必须是 }，前后不许有任何字、标签、围栏或解释）
 {"note":"画面思路一句话",%s"html":"<template>…整段场景文件…</template>","elements":[{"id":"元素DOM id","name":"人话名（与 data-hf-name 一致）"}]}
-`, int(cv.W), int(cv.H), styleShared, goldenBlock, rules,
+`, int(cv.W), int(cv.H), pipeline.SceneContractCore("段总时长秒", "段id"), styleShared, goldenBlock, rules,
 		seg.ID, seg.Key, len(v.Words), v.DurationS, seg.Narration, v.DurationS+contract.SegTail, contract.SegTail, briefLabel, seg.VisualBrief,
 		styleSeg, sceneTpl, compMethods, wb.String(), instrBlock, askBlock, feedbackBlock(feedback, prevHTML), reqField)
 }

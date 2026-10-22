@@ -393,15 +393,7 @@ func clipUserPrompt(ss *contract.StyleSamples, sb *contract.Storyboard, need []i
 3. 恰好一个 gsap.timeline({paused:true})，末尾注册 window.__timelines["clip-<N>"]
 4. 全屏轨道层（背景等）带 class="clip" + data-start="0" data-duration="%.1f" data-track-index
 5. 每个有意义的可见元素带 data-hf-name="人话名"（≥3 个）
-6. 确定性：禁 Date.now/new Date/setTimeout/setInterval/requestAnimationFrame/performance.now；
-   禁 Math.random（随机一律种子化，如 __rng32(seed) 闭包）；禁 CSS animation/transition/@keyframes；
-   禁网络（fetch/XHR/WebSocket/外链 http(s)）；禁 Worker；禁 <video>/<audio>
-7. canvas 画布：绘制函数 = window["__draw_<id>"]=function(t,ctx,W,H,rng)——t 的纯函数，
-   每帧从零重画；运动一律写成 t 的函数。接线三行逐字照抄（只换尖括号占位），漏注册=拒收：
-   var tl=gsap.timeline({paused:true});
-   tl.to({},{duration:<小样总时长秒>,ease:"none",onUpdate:function(){window["__draw_<id>"](tl.time(),ctx,W,H,rng);}},0);
-   window.__timelines["<小样id>"]=tl;
-8. 字体只用设计系统给的字体栈；@font-face{src:local()} 引用即声明；
+%s8. 字体只用设计系统给的字体栈；@font-face{src:local()} 引用即声明；
    禁止在 CSS transform 里做居中（translateX(-50%%) 等）再让 GSAP 补间同一元素——
    GSAP 会整体覆盖 CSS transform，居中必须用 GSAP 的 xPercent/yPercent
 9. 不写字幕——底部字幕带由平台注入；内容留在上 83%%；顶部两角是平台角标保留区，%s
@@ -420,7 +412,7 @@ func clipUserPrompt(ss *contract.StyleSamples, sb *contract.Storyboard, need []i
 %s
 ## 输出（只输出一个 JSON 对象：第一个字符必须是 {、最后一个字符必须是 }，前后不许有任何字、标签、围栏或解释）
 {"clips":[{"tag":"clip-0","note":"画面思路一句话","html":"<template>…整段场景文件…</template>"}]}
-`, len(need), clipDuration, int(cv.W), int(cv.H), clipDuration, corners, clipDuration, clipDuration,
+`, len(need), clipDuration, int(cv.W), int(cv.H), clipDuration, SceneContractCore("小样总时长秒", "小样id"), corners, clipDuration, clipDuration,
 		rules, clipStyleBlock(ss), len(need), list.String())
 }
 

@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/jpeg"
 	"image/png"
 	"log"
 	"math"
@@ -42,14 +41,12 @@ import (
 )
 
 type Runner struct {
-	DataDir    string // 仓库根 data/（项目在 data/projects/<id>）
-	RootDir    string // 仓库根（ai/ 脚本所在）
-	Hub        *events.Hub
-	Store      store.Store                            // render_jobs 记账（nil = 不记账，测试场景）；manifest 仍是事实源
-	Artifacts  artifacts.Store                        // 产物正本后端（nil/本地 = 不上传，docs/storage-cloud-migration.md）
-	OnDone     func(projectID, status, detail string) // 终态回写（status: video|failed|cancelled；detail 供聊天汇报失败原因等）
-	OnNotice   func(projectID, content string)        // 非终态插话（如开机自动续跑通知），落聊天框但不改项目状态
-	AutoResume bool                                   // 启动对账时是否自动续跑被重启打断的整片制作（main 现置 false：只补账通知，不自动起任务；测试默认关，防拖起真管线）
+	DataDir   string // 仓库根 data/（项目在 data/projects/<id>）
+	RootDir   string // 仓库根（ai/ 脚本所在）
+	Hub       *events.Hub
+	Store     store.Store                            // render_jobs 记账（nil = 不记账，测试场景）；manifest 仍是事实源
+	Artifacts artifacts.Store                        // 产物正本后端（nil/本地 = 不上传，docs/storage-cloud-migration.md）
+	OnDone    func(projectID, status, detail string) // 终态回写（status: video|failed|cancelled；detail 供聊天汇报失败原因等）
 
 	wg       sync.WaitGroup // 在跑的制作/重做 goroutine（优雅停机等待终态落盘）
 	stopping atomic.Bool    // 停机中：取消语义从「用户取消」改「服务停机中断」，并拒绝新任务
@@ -564,18 +561,6 @@ func LoadReworkHistory(p *pipeline.Project) []ReworkHistoryEntry {
 	return es
 }
 
-// LastReworkInstruction 覆盖某段的最近一次重做指令（一键重做按钮预填）。
-func LastReworkInstruction(p *pipeline.Project, segID string) string {
-	for _, e := range LoadReworkHistory(p) {
-		for _, s := range e.Segs {
-			if s == segID {
-				return e.Instruction
-			}
-		}
-	}
-	return ""
-}
-
 func (r *Runner) appendReworkHistory(p *pipeline.Project, segIDs []string, instruction string) {
 	es := LoadReworkHistory(p)
 	es = append([]ReworkHistoryEntry{{Segs: segIDs, Instruction: instruction, At: time.Now()}}, es...)
@@ -737,22 +722,6 @@ func (r *Runner) Reconcile() {
 		r.Manifest(p, ev, detail)
 		r.jobTerminal(id, "failed", "", detail)
 		log.Printf("[produce] 对账：%s %s中断，已补写终态\n", id, what)
-		// 整片制作中断 → 自动续跑，用户不再需要打「继续」：续跑走的就是
-		// start_production 同一条路（manifest 按段复用产物）。上面已补写 interrupted
-		// 终态（幂等标记：续跑途中再崩，下次启动至多多续一轮，不会无限循环）。
-		// 重做不续：段级微调而已，该段旧画面仍在成片里，中断无害；且 rework.start
-		// 的 detail 只留了前 80 字指令，照它重跑会拿残缺指令。
-		if !isRework && r.AutoResume {
-			if ok, err := r.Start(id); ok {
-				log.Printf("[produce] 对账：%s 已自动续跑\n", id)
-				if r.OnNotice != nil {
-					r.OnNotice(id, "↻ 上次服务重启把制作打断了，已自动续跑——做完的段直接复用，不用重头再来。")
-				}
-				continue
-			} else if err != nil {
-				log.Printf("[produce] 对账：%s 自动续跑没起来（%v），退回通知用户\n", id, err)
-			}
-		}
 		if r.OnDone != nil {
 			r.notifyOnDone(id, "failed", detail)
 		}
@@ -1889,7 +1858,7 @@ func styleSampleImages(p *pipeline.Project) []visImg {
 		// 缩到 640px JPEG 再注入：原始 PNG 直接 base64 曾把每次多模态调用的
 		// 载荷白抬 ~200KB；样张是风格基准，640 宽足够看构图配色质感
 		url := ""
-		if u, err := shrinkSampleImage(path); err == nil {
+		if u, err := pipeline.ShrinkImageDataURL(path, 640, 75); err == nil {
 			url = u
 		} else if b, err := os.ReadFile(path); err == nil {
 			url = "data:image/png;base64," + base64.StdEncoding.EncodeToString(b)
@@ -1899,37 +1868,6 @@ func styleSampleImages(p *pipeline.Project) []visImg {
 		vis = append(vis, visImg{URL: url, Path: rel, Label: fmt.Sprintf("风格样张 %d", i+1)})
 	}
 	return vis
-}
-
-// shrinkSampleImage 样张 PNG → 640 宽 JPEG dataURL（读盘+缩图+编码一体）。
-func shrinkSampleImage(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	src, _, err := image.Decode(f)
-	if err != nil {
-		return "", err
-	}
-	b := src.Bounds()
-	w, h := b.Dx(), b.Dy()
-	tw, th := 640, 640*h/w
-	if tw > w {
-		tw, th = w, h
-	}
-	dst := image.NewRGBA(image.Rect(0, 0, tw, th))
-	for y := 0; y < th; y++ {
-		sy := b.Min.Y + y*h/th
-		for x := 0; x < tw; x++ {
-			dst.Set(x, y, src.At(b.Min.X+x*w/tw, sy))
-		}
-	}
-	var out bytes.Buffer
-	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: 75}); err != nil {
-		return "", err
-	}
-	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(out.Bytes()), nil
 }
 
 // feedbackBlock 回喂块：意见清单 + 上一版场景文件。prevHTML 非空时模型才看得见

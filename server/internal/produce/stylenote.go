@@ -15,16 +15,8 @@ import (
 	"webpage-video-agent/server/internal/pipeline"
 )
 
-// designNoteFor 段级风格注入（v2 笼子二入口，plan-v2 §4）：style_samples.json 含设计系统块
-// （fonts/motion/device 任一）→ DesignDoc 机械渲染——皮肤（含双皮肤切换规则）/字体三角色/
-// 动效语言/贯穿装置/版式轮换/负面清单一次给全，本段版式指派按段号内联；v3 起带强参考
-// 特色落点表（style_brief.json 存在时）。否则退 v1 兜底（方向+皮肤槽位——旧项目）。
-func designNoteFor(p *pipeline.Project, segIdx int) string {
-	shared, seg := designNotesFor(p, segIdx)
-	return shared + seg
-}
-
-// designNotesFor 设计系统注入拆两半（七刀#4 稳定前缀布局，docs/cost-optimization-plan
+// designNotesFor 段级风格注入（v2 笼子二入口，plan-v2 §4），拆两半（七刀#4 稳定前缀
+// 布局，docs/cost-optimization-plan
 // §6 表#4）：shared=全段逐字一致的主体（进写画面提示的共享前缀），seg=本段版式指派
 // （段变量，垫尾）——段信息插在共享文本中间曾把 GLM 前缀缓存斩断在 ≈2944 token。
 // v1 兜底（方向+皮肤槽位，旧项目）整块共享，seg 为空。

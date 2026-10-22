@@ -99,7 +99,8 @@ func bndAuditOn() bool {
 }
 
 // writeStagger 首写错峰间隔（PRODUCE_WRITE_STAGGER，默认 20s，0/negative 关闭）。
-// GLM 前缀缓存生效有几十秒传播延迟（ai/cache_probe.py 七组对照定案）：4 路首写
+// GLM 前缀缓存生效有几十秒传播延迟（2026-10 七组对照实验定案，记录在
+// docs/cost-optimization-plan-2026-10-20.md）：4 路首写
 // 同秒开跑互相踩传播窗口，谁也吃不到谁的共享前缀（实测一半调用连 2944 都没蹭上）。
 // 首写按开跑顺序错峰，后来者踩着先到者传播开的缓存价起跑；重写/修复轮不参与——
 // 那时共享前缀早已传播完。

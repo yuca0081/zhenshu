@@ -558,11 +558,6 @@ func readFileLoose(path string) []byte {
 }
 
 // resolveSegment 用户话里的段引用（3 / 段3 / seg03）→ 分镜里的段。
-// ResolveSegment 段引用解析（段号/段id/「第N段」→ segID+人话标签；API 一键重做复用）。
-func (a *Agent) ResolveSegment(p *pipeline.Project, ref string) (string, string, error) {
-	return a.resolveSegment(p, ref)
-}
-
 func (a *Agent) resolveSegment(p *pipeline.Project, ref string) (id, label string, err error) {
 	sb, lerr := p.LoadStoryboard()
 	if lerr != nil {

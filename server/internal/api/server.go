@@ -26,14 +26,12 @@ import (
 	"webpage-video-agent/server/internal/auth"
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/events"
-	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
 	"webpage-video-agent/server/internal/prep"
 	"webpage-video-agent/server/internal/produce"
 	"webpage-video-agent/server/internal/store"
 	"webpage-video-agent/server/internal/stylelib"
 	"webpage-video-agent/server/internal/styleref"
-	"webpage-video-agent/server/internal/webfetch"
 )
 
 type Server struct {
@@ -104,14 +102,12 @@ func (s *Server) Router() *gin.Engine {
 	api.GET("/projects", s.listProjects)
 	api.GET("/projects/:id", s.projectView)
 	api.DELETE("/projects/:id", s.deleteProject)
-	api.GET("/projects/:id/overview", s.overview)
 	api.GET("/projects/:id/manuscript", s.manuscript)
 	api.PUT("/projects/:id/manuscript", s.saveManuscript)
 	api.PUT("/projects/:id/storyboard", s.saveStoryboard)
 	api.GET("/projects/:id/storyboard", s.storyboard)
 	api.GET("/projects/:id/style", s.style)
 	api.POST("/projects/:id/style/apply", s.applyStyle)
-	api.POST("/projects/:id/style/confirm", s.confirmStyle)
 	// 准备阶段三工件（prep-agents-design）：打包终审视图与确认门
 	api.GET("/projects/:id/prep", s.prepView)
 	api.POST("/projects/:id/prep/confirm", s.confirmPrep)
@@ -120,15 +116,11 @@ func (s *Server) Router() *gin.Engine {
 	api.POST("/projects/:id/prep/cancel", s.cancelPrep)
 	api.POST("/projects/:id/chat", s.chat)
 	api.POST("/projects/:id/chat/cancel", s.cancelChat)
-	api.POST("/draft/manuscript", s.draftManuscript)
-	api.POST("/extract_link", s.extractLink)
 	api.GET("/projects/:id/messages", s.messages)
 	api.GET("/projects/:id/events", s.sse)
 	api.GET("/projects/:id/activity", s.activity)
 	api.GET("/projects/:id/transcript", s.transcript)
 	api.POST("/projects/:id/produce", s.startProduce)
-	api.POST("/projects/:id/rework", s.startRework)
-	api.GET("/projects/:id/rework/last", s.reworkLast)
 	api.POST("/projects/:id/cancel", s.cancelProduce)
 	api.POST("/projects/:id/bgm", s.setProjectBGM)
 	api.GET("/projects/:id/video/main.mp4", s.video)
@@ -1177,57 +1169,6 @@ func (s *Server) style(c *gin.Context) {
 	c.Data(200, "application/json", b)
 }
 
-// confirmStyle 用户在舞台点头确认风格——三前置硬门的唯一用户门。
-// §12.2：确认样张 = 确认风格文件，skin 锁定落盘 style/skin.json（渲染只读它）。
-// v2 笼子二：确认的是完整设计系统（皮肤/字体角色/动效/装置），lockDesign 机械
-// 渲染 design.md 并记版本指纹——设计一改，按旧版画的段自动过期。
-func (s *Server) confirmStyle(c *gin.Context) {
-	id := c.Param("id")
-	// 对话轮进行中拒绝确认：draft_style_samples 收尾时还会重写 style_samples.json，
-	// 半道确认会被最后一笔打回 confirmed=false（2026-10-11 夜跑竞态实录：
-	// 确认返回 200，两分钟后制作管线读到 false 硬门炸停）。等轮次说完再确认。
-	// TryLock 成功后必须持锁完成整个确认写操作再解锁：只探测不解锁就写，
-	// 探测与写入之间仍有窗口放进下一轮（TOCTOU）。确认是快操作，持锁期间
-	// 排队的对话轮自然等它写完；对话轮不会反过来拿这把锁做长操作，无死锁。
-	// LoadOrStore 与 chat 同源取锁：若确认先到且无人排过队，chat 随后取到的是同一把。
-	mu, _ := s.turnMu.LoadOrStore(id, &sync.Mutex{})
-	if !mu.(*sync.Mutex).TryLock() {
-		c.JSON(409, gin.H{"error": "对话轮还在进行（可能正在出样张），等它说完再确认"})
-		return
-	}
-	defer mu.(*sync.Mutex).Unlock()
-	p := pipeline.NewProject(s.DataDir, id)
-	path := p.Artifact("style/style_samples.json")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		c.JSON(400, gin.H{"error": "样张未出，先让 Agent 出样张"})
-		return
-	}
-	var ss contract.StyleSamples
-	if err := json.Unmarshal(b, &ss); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	// 严格档（设计系统四件套齐备）：老项目没有设计块的会被拒，重出样张即迁移。
-	if verr := contract.ValidateStyleSamplesDraft(&ss); verr != nil {
-		c.JSON(400, gin.H{"error": "设计系统不合格，请重新生成样张：" + verr.Error()})
-		return
-	}
-	ss.Confirmed = true
-	if err := os.WriteFile(path, pipeline.MustJSONBytes(ss), 0o644); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	if err := pipeline.LockDesign(p, &ss); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	p.Manifest("style.confirmed", ss.Direction)
-	s.updateStatus(id, "style")
-	s.Hub.Emit(id, "style_confirmed", "", ss.Direction)
-	c.JSON(200, gin.H{"ok": true, "direction": ss.Direction})
-}
-
 // runPrep 启动三工位链（想法页签「自动完成」按钮）：异步后台跑，进度走 SSE
 // （stage prep/*），完成/失败经 OnDone 落聊天框。对话侧重跑不经过这里——走
 // agent 工具的同步执行路径，与 Preps.running 同一把互斥（2026-10-19 高-6 收口）。
@@ -1444,43 +1385,6 @@ func (s *Server) confirmPrep(c *gin.Context) {
 }
 
 // ── 聊天 ─────────────────────────────────────────────────────
-
-// draftManuscript 主题 → 口播文稿草稿（创建前 AI 辅助起草）。
-// 文稿硬门不变：草稿仍进文稿框，用户可改可删，创建时照常校验非空。
-// 篇幅按字数直驱（分钟换算在 UI 侧，文稿环节不再出现时间概念）。
-func (s *Server) draftManuscript(c *gin.Context) {
-	var in struct {
-		Topic string `json:"topic"`
-		Words int    `json:"words"`
-	}
-	if err := c.ShouldBindJSON(&in); err != nil || strings.TrimSpace(in.Topic) == "" {
-		c.JSON(400, gin.H{"error": "主题不能为空"})
-		return
-	}
-	if in.Words <= 0 {
-		in.Words = 500
-	}
-	if in.Words > 5000 { // 上限：更长的一次性成稿后半段易注水，宜分段起草
-		in.Words = 5000
-	}
-	p, err := llm.FromEnv(llm.RoleDialogue)
-	if err != nil {
-		c.JSON(503, gin.H{"error": "LLM 未配置（LLM_API_KEY），请直接粘贴文稿"})
-		return
-	}
-	// 360s：撰稿工位是自主循环，时事题材会先联网核实（预算帽 2 次搜索，每次至多
-	// 90s）再成稿，收尾写稿一轮 high 思考就要 1-3 分钟——180s 总预算几乎必然砍死
-	// 最长的成稿轮（实测报 context deadline exceeded）。客户端断开（前端取消按钮）
-	// 时 c.Request.Context() 先死，请求随之中止。
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 360*time.Second)
-	defer cancel()
-	content, err := agent.DraftManuscript(ctx, p, in.Topic, in.Words)
-	if err != nil {
-		c.JSON(500, gin.H{"error": "起草失败：" + err.Error()})
-		return
-	}
-	c.JSON(200, gin.H{"content": content})
-}
 
 func (s *Server) chat(c *gin.Context) {
 	id := c.Param("id")
@@ -1709,117 +1613,6 @@ func (s *Server) setProjectBGM(c *gin.Context) {
 	c.JSON(200, out)
 }
 
-// startRework 一键段级重做（时间轴段块「重做」按钮直连，绕过对话轮）。
-// instruction 可空 = 依次取目标段的历史指令复用（「用上次的要求再试一次」）。
-func (s *Server) startRework(c *gin.Context) {
-	id := c.Param("id")
-	// prep 链运行中拒绝（中-30 守门家族的唯一缺口，2026-10-19 审查补齐）：
-	// force 重跑链开头 InvalidateFrom 作废三工件，期间段级重做会读到半作废工件
-	if s.Preps != nil && s.Preps.IsRunning(id) {
-		c.JSON(409, gin.H{"error": "准备阶段重跑中，先等完成再段级重做"})
-		return
-	}
-	var in struct {
-		Segments    []string `json:"segments"`
-		Instruction string   `json:"instruction"`
-	}
-	if err := c.ShouldBindJSON(&in); err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
-		return
-	}
-	if len(in.Segments) == 0 {
-		c.JSON(400, gin.H{"error": "缺少目标段"})
-		return
-	}
-	st := s.Agent.State(id)
-	if !st.HasVideo {
-		c.JSON(400, gin.H{"error": "成片未就绪，先制作"})
-		return
-	}
-	if s.Producer.IsRunning(id) {
-		c.JSON(409, gin.H{"error": "制作/重做已在运行中"})
-		return
-	}
-	p := pipeline.NewProject(s.DataDir, id)
-	seen := map[string]bool{}
-	var segIDs, labels []string
-	for _, ref := range in.Segments {
-		segID, label, err := s.Agent.ResolveSegment(p, ref)
-		if err != nil {
-			c.JSON(400, gin.H{"error": err.Error()})
-			return
-		}
-		if seen[segID] {
-			continue
-		}
-		seen[segID] = true
-		segIDs = append(segIDs, segID)
-		labels = append(labels, label)
-	}
-	instr := strings.TrimSpace(in.Instruction)
-	if instr == "" {
-		for _, segID := range segIDs {
-			if last := produce.LastReworkInstruction(p, segID); last != "" {
-				instr = last
-				break
-			}
-		}
-	}
-	if instr == "" {
-		c.JSON(400, gin.H{"error": "缺少修改要求（该段也没有历史指令可复用）"})
-		return
-	}
-	ok, err := s.Producer.Rework(id, segIDs, instr)
-	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	if !ok {
-		c.JSON(409, gin.H{"error": "制作/重做已在运行中"})
-		return
-	}
-	s.updateStatus(id, "producing")
-	c.JSON(202, gin.H{"ok": true, "segs": segIDs, "labels": labels, "instruction": instr})
-}
-
-// reworkLast 某段最近一次重做指令（按钮预填用）。
-func (s *Server) reworkLast(c *gin.Context) {
-	p, ok := s.project(c) // 与其余 :id 接口同语义：不存在的项目 404
-	if !ok {
-		return
-	}
-	c.JSON(200, gin.H{"instruction": produce.LastReworkInstruction(p, c.Query("seg"))})
-}
-
-// extractLink 链接提取（plan §10 开放问题落地）：抓网页 → readability 抽正文，
-// 文稿弹窗「从链接导入」用。提取失败让用户回退粘贴，不硬造。
-func (s *Server) extractLink(c *gin.Context) {
-	var in struct {
-		URL string `json:"url"`
-	}
-	if err := c.ShouldBindJSON(&in); err != nil || strings.TrimSpace(in.URL) == "" {
-		c.JSON(400, gin.H{"error": "链接不能为空"})
-		return
-	}
-	art, err := webfetch.Fetch(c.Request.Context(), in.URL)
-	if err != nil {
-		code := 502
-		switch {
-		case errors.Is(err, webfetch.ErrBadURL):
-			code = 400
-		case errors.Is(err, webfetch.ErrUnreadable):
-			code = 422
-		}
-		msg := err.Error()
-		if code == 422 {
-			msg += "，请直接粘贴"
-		}
-		c.JSON(code, gin.H{"error": msg})
-		return
-	}
-	c.JSON(200, gin.H{"title": art.Title, "content": art.Content, "words": art.Words})
-}
-
 // audioMeta 时间轴数据源：每段配音时长 + 字级时间戳（TTS 对齐产物），供前端画字幕/音频轨。
 // xfade 成片附带 renders/timeline.json（实际段边界，比裸配音累计每边界早 xfadeDur），
 // 合并为 timeline 字段——前端 segTable 有它就用真实边界。
@@ -1989,26 +1782,6 @@ func (s *Server) project(c *gin.Context) (*pipeline.Project, bool) {
 		return nil, false
 	}
 	return p, true
-}
-
-// serveFile 媒体/静态文件回源（打开失败 404；name 进 Content-Disposition 推断，
-// cache 为 Cache-Control 值）。video/frame/asset/媒体三 handler 共用。
-func serveFile(c *gin.Context, path, name, cache string) {
-	f, err := os.Open(path)
-	if err != nil {
-		c.JSON(404, gin.H{"error": "文件不存在"})
-		return
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil || st.IsDir() {
-		c.JSON(404, gin.H{"error": "文件不存在"})
-		return
-	}
-	c.Header("Cache-Control", cache)
-	// 条件请求吃文件真实 mtime：拿 time.Now() 当 modtime，If-Modified-Since
-	// 永远不可能命中，304 短路形同虚设
-	http.ServeContent(c.Writer, c.Request, name, st.ModTime(), f)
 }
 
 // serveArtifact 产物媒体回源：本地热路径直读（零网络开销）；本地被清理器删过
@@ -2198,7 +1971,7 @@ func (s *Server) llmVideo(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "文件不存在"})
 		return
 	}
-	serveFile(c, path, name, "no-store")
+	s.serveArtifact(c, artifacts.ReferenceKey(id, name), path, name, "no-store", "文件不存在")
 }
 
 // listVocab 风格词表（只读，前端展示词条 brief 用；空表 = 冷启动正常态）。

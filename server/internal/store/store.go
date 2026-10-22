@@ -145,10 +145,10 @@ type Store interface {
 	// ListMsgs 恒从最旧往后取，消息一超量最新对话永远进不了 LLM 上下文。
 	ListMsgsTail(projectID string, limit int) ([]Msg, error)
 	// render_jobs 记账：起跑插 running 行，终态回写该项目最近一行 running
-	//（同项目同时最多一个任务，见 produce.running 幂等锁）。
+	//（同项目同时最多一个任务，见 produce.running 幂等锁）。只写不读——
+	// PG 表是给运维 SQL 手查的镜像，manifest 才是事实源。
 	StartRenderJob(projectID, kind string) error
 	FinishRenderJob(projectID, status, outputPath, errMsg string) error
-	ListRenderJobs(projectID string) ([]RenderJobRow, error)
 	// 用户账号。UserByID 不需要：会话载荷自带角色（签名 cookie 无状态校验，零 DB 查询）。
 	CreateUser(u *User) error                  // ID 为空自动生成；用户名冲突回 ErrDuplicateUser
 	UserByName(username string) (*User, error) // 无此用户回 ErrNoUser
@@ -300,21 +300,6 @@ func (s *pgStore) FinishRenderJob(projectID, status, outputPath, errMsg string) 
 	return s.db.Exec(`UPDATE render_jobs SET status = ?, output_path = NULLIF(?, ''), error = NULLIF(?, ''), finished_at = now()
 		WHERE id = (SELECT max(id) FROM render_jobs WHERE project_id = ? AND status = 'running')`,
 		status, outputPath, errMsg, uuid).Error
-}
-
-// listJobsCap 渲染任务列表上限（PG LIMIT 与内存实现同源）。
-const listJobsCap = 50
-
-func (s *pgStore) ListRenderJobs(projectID string) ([]RenderJobRow, error) {
-	uuid, err := s.findUUID(projectID)
-	if err != nil {
-		return nil, err
-	}
-	var rows []RenderJobRow
-	err = s.db.Table("render_jobs").
-		Select("id, payload->>'kind' AS kind, status, output_path, error, started_at, finished_at").
-		Where("project_id = ?", uuid).Order("id DESC").Limit(listJobsCap).Scan(&rows).Error
-	return rows, err
 }
 
 func (s *pgStore) SaveMsg(m *Msg) error {
@@ -524,21 +509,6 @@ func (s *memStore) FinishRenderJob(projectID, status, outputPath, errMsg string)
 		}
 	}
 	return nil // 无 running 行（起跑未记账）：manifest 是事实源，不虚报
-}
-
-func (s *memStore) ListRenderJobs(projectID string) ([]RenderJobRow, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var out []RenderJobRow
-	for i := len(s.jobs) - 1; i >= 0; i-- { // 新在前，与 PG 的 id DESC 同序
-		if s.jobs[i].ProjectID == projectID {
-			out = append(out, s.jobs[i])
-			if len(out) >= listJobsCap { // 与 PG 的 LIMIT 50 同限：双实现不漂移
-				break
-			}
-		}
-	}
-	return out, nil
 }
 
 func (s *memStore) ListMsgs(projectID string, afterID int64, limit int) ([]Msg, error) {

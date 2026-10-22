@@ -55,7 +55,7 @@ func speechPace(sb *contract.Storyboard, voices map[string]voiceMeta) (float64, 
 		if !ok || v.DurationS <= 0 {
 			continue
 		}
-		chars += len([]rune(stripSpacesGo(seg.Narration)))
+		chars += len([]rune(stripSpaces(seg.Narration)))
 		secs += v.DurationS
 	}
 	if chars == 0 || secs <= 0 {
@@ -104,7 +104,7 @@ func pickByRule(choices []pipeline.BGMChoice, wantTempo string, wantEnergy int) 
 			s += 100
 		}
 		if c.Energy > 0 {
-			s += abs(c.Energy - wantEnergy)
+			s += absInt(c.Energy - wantEnergy)
 		} else {
 			s += 2
 		}
@@ -126,7 +126,7 @@ func overridePick(choices []pipeline.BGMChoice, wantTempo string, energyAnchor i
 		}
 		s := 0
 		if c.Energy > 0 {
-			s += abs(c.Energy - energyAnchor)
+			s += absInt(c.Energy - energyAnchor)
 		} else {
 			s += 2
 		}
@@ -138,13 +138,6 @@ func overridePick(choices []pipeline.BGMChoice, wantTempo string, energyAnchor i
 		return pickByRule(choices, wantTempo, energyAnchor)
 	}
 	return best
-}
-
-func abs(x int) int {
-	if x < 0 {
-		return -x
-	}
-	return x
 }
 
 func tempoLabel(t string) string {
@@ -192,7 +185,7 @@ func bgmScriptExcerpt(sb *contract.Storyboard) string {
 		if budget <= 0 {
 			break
 		}
-		r := []rune(stripSpacesGo(seg.Narration))
+		r := []rune(stripSpaces(seg.Narration))
 		if len(r) > 60 {
 			r = r[:60]
 		}
@@ -244,18 +237,6 @@ func arcSpine(sb *contract.Storyboard) string {
 		return strings.TrimSpace(sb.Arc.Spine)
 	}
 	return "（未提供）"
-}
-
-// stripSpacesGo 旁白字数统计去空白（contract.stripSpaces 未导出，本地同款）。
-func stripSpacesGo(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
 }
 
 // pickBGM 配乐工位入口：填空不推翻，失败兜底，永不挡片。

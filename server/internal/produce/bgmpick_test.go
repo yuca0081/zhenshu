@@ -205,8 +205,8 @@ func TestBuildBGMPrompt(t *testing.T) {
 	}
 }
 
-func TestStripSpacesGo(t *testing.T) {
-	if got := stripSpacesGo("a b\tc\nd\r\ne"); got != "abcde" {
-		t.Errorf("stripSpacesGo=%q", got)
+func TestStripSpaces(t *testing.T) {
+	if got := stripSpaces("a b\tc\nd\r\ne"); got != "abcde" {
+		t.Errorf("stripSpaces=%q", got)
 	}
 }
