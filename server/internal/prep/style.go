@@ -698,6 +698,7 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 			"properties": map[string]any{
 				"scene_brief": map[string]any{"type": "string", "description": "场景简述（一句话：这张样张画口播稿的哪个代表性内容）"},
 				"html":        map[string]any{"type": "string", "description": fmt.Sprintf("样张 HTML（完整自包含动态文档，画布 %d×%d，时长 %.1f 秒）", w, h, sampleDur)},
+				"replace":     map[string]any{"type": "integer", "description": "要替换的样张序号（1-based：2=样张B）；0/缺省=新增。同一张被判卷打回后的返工重渲必须带 replace，别新增重复样张"},
 			},
 			"required": []string{"scene_brief", "html"},
 		}),
@@ -705,6 +706,7 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 			var in struct {
 				SceneBrief string `json:"scene_brief"`
 				HTML       string `json:"html"`
+				Replace    int    `json:"replace"` // 1-based 样张序号；0=新增
 			}
 			if err := decodeArgs(args, &in); err != nil {
 				return Observation{Text: err.Error()}
@@ -719,20 +721,30 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 				return Observation{Text: "被拒：scene_brief 为空——样张场景必须取自口播稿代表性内容"}
 			}
 			draft := r.loadDraft()
-			if len(draft.Samples) >= styleSampleMax {
-				return Observation{Text: fmt.Sprintf("样张已满 %d 张（契约上限），直接 submit_style。", styleSampleMax)}
+			reworkIdx := -1 // ≥0 = 替换已有槽位（文件名不变，不多占一张）
+			if in.Replace > 0 {
+				if in.Replace < 1 || in.Replace > len(draft.Samples) {
+					return Observation{Text: fmt.Sprintf("被拒：replace=%d 越界（现有 %d 张，可选 1–%d）", in.Replace, len(draft.Samples), len(draft.Samples))}
+				}
+				reworkIdx = in.Replace - 1
+			}
+			if reworkIdx < 0 && len(draft.Samples) >= styleSampleMax {
+				return Observation{Text: fmt.Sprintf("样张已满 %d 张（契约上限）——要改其中一张就用 replace=序号 替换它（渲染额度照扣、不多占），或直接 submit_style。", styleSampleMax)}
 			}
 			// 同 HTML 已在草稿 = 连同其动态小样都在，防重复追加
 			for _, s := range draft.Samples {
 				if s.HTML == in.HTML {
-					return Observation{Text: fmt.Sprintf("%s 已在草稿里，无需重复渲染——要改就换 HTML 后重新 render_sample，或直接 submit_style。", s.Tag)}
+					return Observation{Text: fmt.Sprintf("%s 已在草稿里，无需重复渲染——要改就换 HTML 后带 replace=序号 重新 render_sample，或直接 submit_style。", s.Tag)}
 				}
 			}
 			if *snapLeft <= 0 {
 				return Observation{Text: fmt.Sprintf("渲染额度已用完（最多 %d 张），直接 submit_style。", styleSampleMax)}
 			}
 			*snapLeft--
-			idx := len(draft.Samples)
+			idx := len(draft.Samples) // 候选槽位（返工时改写为被替换槽位）
+			if reworkIdx >= 0 {
+				idx = reworkIdx
+			}
 
 			// vend 采购（模型申请，平台代购，机械闸把关）：失败把选择权交还模型
 			specs := vendSpecs(in.HTML)
@@ -795,12 +807,39 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 
 			// 落草稿 + 镜像。mp4 与海报（style/sample-N.png）已在渲染流程落盘；
 			// draft 保留带 vend 声明的模型源码（正式段复现的凭据）。
-			draft.Samples = append(draft.Samples, contract.Sample{
+			// 返工识别（仅新增路径）：场景简述一字相同，或构图感知哈希近重复
+			// （字体/小文案改动动不了低频结构），判定为同一张的返工——替换原槽位
+			// 而不是新增（2026-10-22 实测：模型修完字体重渲，E/F 两条同构图占双席）。
+			if reworkIdx < 0 {
+				if j := findReworkTarget(r.p, draft, in.SceneBrief, idx); j >= 0 {
+					reworkIdx = j
+					for _, f := range []struct{ from, to string }{
+						{fmt.Sprintf("style/clips/sample-%d.mp4", idx), fmt.Sprintf("style/clips/sample-%d.mp4", j)},
+						{fmt.Sprintf("style/sample-%d.png", idx), fmt.Sprintf("style/sample-%d.png", j)},
+					} {
+						_ = os.Remove(r.p.Artifact(f.to))
+						_ = os.Rename(r.p.Artifact(f.from), r.p.Artifact(f.to))
+					}
+					_ = os.Remove(r.p.Artifact(fmt.Sprintf(".hf-sample/sample-%d.html", idx)))
+					for k := 0; k < 3; k++ {
+						_ = os.Remove(r.p.Artifact(fmt.Sprintf("style/clips/sample-%d-f%d.jpg", idx, k)))
+					}
+					idx = j
+				}
+			}
+			entry := contract.Sample{
 				Tag:   fmt.Sprintf("样张 %c · %s", 'A'+idx, contract.FirstRunes(in.SceneBrief, 20)),
 				Desc:  in.SceneBrief,
 				HTML:  html,
 				Video: fmt.Sprintf("style/clips/sample-%d.mp4", idx),
-			})
+			}
+			replaced := ""
+			if reworkIdx >= 0 {
+				replaced = fmt.Sprintf("（检测到与「%s」同简述/同构图——已按返工处理：替换该张而非新增）", draft.Samples[idx].Tag)
+				draft.Samples[idx] = entry
+			} else {
+				draft.Samples = append(draft.Samples, entry)
+			}
 			if err := writeJSONFile(styleDraftPath(r.p), draft); err != nil {
 				return Observation{Text: "样张草稿落盘失败：" + err.Error()}
 			}
@@ -816,10 +855,37 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 			default:
 				note += "机检与判卷全过。"
 			}
-			note += fmt.Sprintf("附图为该样张首/中/尾三帧。不满意就调整后重新渲染这一张（渲染额度剩 %d 张）。已采库：%s。", *snapLeft, orNone(specs))
+			note += replaced
+			note += fmt.Sprintf("附图为该样张首/中/尾三帧。要改这张就带 replace=%d 重新渲染（额度剩 %d 张）。已采库：%s。", idx+1, *snapLeft, orNone(specs))
 			return Observation{Text: note, Images: judgeFrames}
 		},
 	}
+}
+
+// ahashReworkMax 构图近重复阈值（8×8 均值哈希汉明距离）。真机校准
+// （p20261022-183926 六张海报两两实测）：同构图换字体=12，不同构图对 ≥23——
+// 阈值取 14 居中；命中即判返工替换，误伤可用重渲恢复，代价不对称时从严。
+const ahashReworkMax = 14
+
+// findReworkTarget 返工识别：候选样张（已落 style/sample-<candidateIdx>.png）与
+// 草稿里哪一张同简述或构图近重复。返回被替换槽位下标；-1=全新构图。
+func findReworkTarget(p *pipeline.Project, draft *styleDraft, brief string, candidateIdx int) int {
+	for j, s := range draft.Samples {
+		if strings.TrimSpace(s.Desc) == strings.TrimSpace(brief) {
+			return j
+		}
+	}
+	candHash, err := aHash(p.Artifact(fmt.Sprintf("style/sample-%d.png", candidateIdx)))
+	if err != nil {
+		return -1
+	}
+	for j := range draft.Samples {
+		h, err := aHash(p.Artifact(fmt.Sprintf("style/sample-%d.png", j)))
+		if err == nil && hashDistance(candHash, h) <= ahashReworkMax {
+			return j
+		}
+	}
+	return -1
 }
 
 // orNone 空切片回显占位。

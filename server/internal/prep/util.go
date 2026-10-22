@@ -10,6 +10,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/jpeg" // 判卷帧/海报（ffmpeg 产物）
+	_ "image/png"  // 海报与样张截图
+	"os"
 	"path/filepath"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -80,4 +84,57 @@ func shrinkFrame(path string) (string, error) {
 // 留多一档分辨率：质感/颗粒/字形的判读全靠它）。
 func shrinkRef(path string, targetW int) (string, error) {
 	return pipeline.ShrinkImageDataURL(path, targetW, 72)
+}
+
+// aHash 感知哈希（8×8 灰度均值哈希，64 位）：构图近重复检测用——字体/小文案的
+// 改动动不了低频结构，同构图返工的距离是个位数，不同构图几十起步。
+func aHash(path string) (uint64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	src, _, err := image.Decode(f)
+	if err != nil {
+		return 0, err
+	}
+	b := src.Bounds()
+	const n = 8
+	var grid [n][n]uint8
+	for y := 0; y < n; y++ {
+		for x := 0; x < n; x++ {
+			// 格子中心采样：(2x+1)/(2n)——旧式 (x+1)/(2n) 只扫到左上 1/4 区域
+			r, g, bl, _ := src.At(b.Min.X+(2*x+1)*b.Dx()/(2*n), b.Min.Y+(2*y+1)*b.Dy()/(2*n)).RGBA()
+			r8, g8, b8 := r>>8, g>>8, bl>>8
+			// ITU-R 601 亮度，/1000 归一到 0-255（uint32 中间量，防溢出/截断）
+			grid[y][x] = uint8((r8*299 + g8*587 + b8*114) / 1000)
+		}
+	}
+	var sum uint64
+	for y := 0; y < n; y++ {
+		for x := 0; x < n; x++ {
+			sum += uint64(grid[y][x])
+		}
+	}
+	mean := sum / (n * n)
+	var h uint64
+	for y := 0; y < n; y++ {
+		for x := 0; x < n; x++ {
+			if uint64(grid[y][x]) > mean {
+				h |= 1 << uint(y*n+x)
+			}
+		}
+	}
+	return h, nil
+}
+
+// hashDistance 两个感知哈希的汉明距离（0-64，越小越像）。
+func hashDistance(a, b uint64) int {
+	d := a ^ b
+	n := 0
+	for d != 0 {
+		d &= d - 1
+		n++
+	}
+	return n
 }
