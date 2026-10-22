@@ -461,6 +461,7 @@ func clipStyleBlock(ss *contract.StyleSamples) string {
 		b.WriteString("- 本片版式：" + strings.Join(parts, "；") + "\n")
 	}
 	if len(ss.AntiPatterns) > 0 {
+		b.WriteString("- 样张自采库（货架优先，声明同款 vend 平台自动注入）：" + strings.Join(ss.VendLibs, "、") + "\n")
 		b.WriteString("- 负面清单（出现即返工）：" + strings.Join(ss.AntiPatterns, "；") + "\n")
 	}
 	return b.String()

@@ -320,7 +320,7 @@ type StyleSamples struct {
 	Direction string   `json:"direction"`          // 如「手绘叙事（纸面·马克笔）」
 	Desc      string   `json:"desc,omitempty"`
 	Concept   string   `json:"concept,omitempty"`   // 一句话：本片视觉概念，为什么这套系统配这部片
-	Samples   []Sample `json:"samples"`             // 1–3 张（用主皮肤渲出的所见即所得预览）
+	Samples   []Sample `json:"samples"`             // 1–6 张（用主皮肤渲出的所见即所得预览）
 	Skin      *Skin    `json:"skin,omitempty"`      // 旧字段（单皮肤，读兼容；EffectiveSkins 统一读口）
 	Skins     []Skin   `json:"skins,omitempty"`     // 1–2 套；双皮肤是穆阿蒂布式加分项（黑霓虹×米色图版按乐段交替）
 	SkinRule  string   `json:"skin_rule,omitempty"` // 双皮肤切换规则（哪类段/哪个节拍穿哪套）
@@ -344,6 +344,12 @@ type StyleSamples struct {
 	// Post 全片统一后期质感（可选）：暗角/颗粒/色差是设计决策不是平台默认——
 	// 设计没写 post = 成片不叠任何后期。写进 project.json "post"，stitch 消费。
 	Post *PostFXSpec `json:"post,omitempty"`
+
+	// VendLibs 样张自采的外部库清单（lib@精确版本，去重排序）：样张阶段经 vend
+	// 机械闸（许可证白名单/钉版/哈希/台账）采购入库的库，随设计系统携带——正式段
+	// 场景优先声明同款 vend 复现样张效果（货架优先），货架没有的才申请新采。
+	// 老文件无此字段，读侧一律按可选处理。
+	VendLibs []string `json:"vend_libs,omitempty"`
 
 	Confirmed bool `json:"confirmed"` // 硬门：用户点头后才允许开工
 }
@@ -548,8 +554,8 @@ func ValidateStyleSamplesBase(ss *StyleSamples) error {
 	if ss.Direction == "" {
 		return fmt.Errorf("direction 为空")
 	}
-	if len(ss.Samples) < 1 || len(ss.Samples) > 3 {
-		return fmt.Errorf("样张数量须为 1–3，得到 %d", len(ss.Samples))
+	if len(ss.Samples) < 1 || len(ss.Samples) > 6 {
+		return fmt.Errorf("样张数量须为 1–6，得到 %d", len(ss.Samples))
 	}
 	for i, s := range ss.Samples {
 		if s.HTML == "" {

@@ -10,6 +10,7 @@ package pipeline
 import (
 	"encoding/json"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -128,4 +129,40 @@ func writeFontAssetRequest(p *Project, matched map[string]*CatalogFont) error {
 		return err
 	}
 	return writeFile(p.Artifact("style/font_assets.request.json"), string(b))
+}
+
+// MatchSampleFonts 扫样张 HTML 的 font-family 声明 → 目录字体匹配（prep② 首渲前
+// 备字体的申请单来源：样张阶段还没有设计系统，LockDesign 的申请书尚未存在）。
+func MatchSampleFonts(htmls []string) map[string]*CatalogFont {
+	matched := map[string]*CatalogFont{}
+	for _, html := range htmls {
+		for _, m := range reFontFamilyDecl.FindAllStringSubmatch(html, -1) {
+			for _, tok := range strings.Split(m[2], ",") {
+				name := strings.Trim(strings.TrimSpace(tok), "'\"")
+				if name == "" {
+					continue
+				}
+				if c := matchCatalogFont(name); c != nil {
+					matched[c.Family] = c
+				}
+			}
+		}
+	}
+	return matched
+}
+
+// WriteFontAssetRequest 导出给 prep②：样张阶段按扫描结果写申请书（与 LockDesign
+// 同一文件同一格式，font_tool ensure 消费）。
+func WriteFontAssetRequest(p *Project, matched map[string]*CatalogFont) error {
+	return writeFontAssetRequest(p, matched)
+}
+
+// MapCatalogFonts manifest 回显用：匹配结果的家族名列表（排序）。
+func MapCatalogFonts(m map[string]*CatalogFont) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

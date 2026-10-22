@@ -7,14 +7,17 @@ package prep
 // 样张 render_sample 走现有渲染壳（ai/snap_samples.py），同参数哈希缓存。
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"webpage-video-agent/server/internal/contract"
@@ -28,10 +31,12 @@ import (
 // 一张一轮，探索+衍生+3 张样张+交稿的链不宽裕）。预算不进提示词。
 const styleBudget = 30
 
-// styleSampleMax 样张上限（与 contract.StyleSamples 契约一致）。
-const styleSampleMax = 3
+// styleSampleMax 样张上限（与 contract.StyleSamples 契约一致）：4–6 张是甜点区，
+// 6 是硬顶——探索要多张，但每张都是完整的「写→机检→渲 mp4→判卷→修复」链，
+// 张数乘的是整条链的成本。
+const styleSampleMax = 6
 
-const styleSystem = `你是美术指导。任务：为口播稿选定视觉风格，产出可直接指导制作的风格包。材料：get_script 拿口播稿；search_styles 按情绪与题材定分面、有筛选地浏览（不必遍历全库）；get_style_detail 看中的条目——描述、特色、样张图库、历史使用记录，**该条目的原片真迹帧会作为附图随观察给你**：配色、质感、画面密度、字体气质一律从真迹里来，禁止只凭文字想象风格。render_sample 用口播稿代表性内容验证本片落地效果；判卷官会拿真迹对照你的样张判风格贴合，样张被真迹对照打回时对着附图修。
+const styleSystem = `你是美术指导。任务：为口播稿选定视觉风格，产出可直接指导制作的风格包。材料：get_script 拿口播稿；search_styles 按情绪与题材定分面、有筛选地浏览（不必遍历全库）；get_style_detail 看中的条目——描述、特色、样张图库、历史使用记录，**该条目的原片真迹帧会作为附图随观察给你**：配色、质感、画面密度、字体气质一律从真迹里来，禁止只凭文字想象风格。render_sample 渲染 1.8 秒动态样张验证落地效果（与成片同一台渲染器，动效/字体/质感即所得）；判卷官抽首/中/尾三帧对照真迹判风格贴合，打回时对着附图修。样张 4–5 张为宜（上限 6），每张版式明显不同；需要外部库就用 vend 声明让平台采购，别硬手搓。
 库中没有合适的，从最接近的条目衍生一个并说明差异（register_style，单次限登记 1 个；衍生条目带「未验证」标签，出片后才转正）。
 产出四件（submit_style 一次交齐）：风格描述（视觉语言、色彩、质感、构图倾向，附选择理由——分镜工位靠它理解语境）；剪辑语法（切分密度 / 段长带秒数 / 同舞台延续强弱）；设计系统（皮肤、字体角色、动效语言、贯穿装置、版式、负面清单，以及本风格的**标准入场/收尾动画模板**——它是转场的载体，一套模板一段内生效，禁止逐段即兴发明）；样张 id 列表。
 规则：只在库内风格（含本次衍生登记）中选择；样张场景必须取自口播稿代表性内容，禁止通用示例；口播稿文本一个字不改。完成即调用 submit_style。`
@@ -467,30 +472,232 @@ func (r *styleRun) getStyleUsageTool() Tool {
 
 // 样张 HTML 字符预算：12000 目标给像素精灵点阵留余地（一个 32×32 精灵 ≈1-2KB
 // 的字符串编码），30000 硬顶防跑飞。旧值 2000 实测只能画出彩色方块摆一摆。
+// sampleDur 动态样张时长：1–2 秒区间取 1.8——够走完一次完整揭示节拍，渲染压在
+// 分钟级（hyperframes 软光栅）。
 const (
 	sampleHTMLTarget = 12000
 	sampleHTMLMax    = 30000
 	sampleRepairMax  = 2 // 样张内循环修复轮上限（机械检查与判卷共用预算）；轮数已封顶，不再另设调用保险丝
+	sampleDur        = 1.8
 )
+
+// vendSpecRe 样张 HTML 里的 vend 声明（lib@精确版本；与 scene_lint A3 同词汇）。
+var vendSpecRe = regexp.MustCompile(`(?i)<!--\s*vend:\s*([A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+)\s*-->`)
+
+// vendSpecs 提取去重保序的采购申请单。
+func vendSpecs(html string) []string {
+	seen, out := map[string]bool{}, []string{}
+	for _, m := range vendSpecRe.FindAllStringSubmatch(html, -1) {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			out = append(out, m[1])
+		}
+	}
+	return out
+}
+
+// sampleVendLibs 汇总草稿样张里声明的 vend 库（去重排序）：submit 时进设计系统
+// （contract.StyleSamples.VendLibs），正式段 sceneGen 按货架优先复现样张效果。
+func sampleVendLibs(samples []contract.Sample) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range samples {
+		for _, spec := range vendSpecs(s.HTML) {
+			if !seen[spec] {
+				seen[spec] = true
+				out = append(out, spec)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// vendMu 采购串行化：vendor manifest 写与 tarball 落盘防竞态（与 scenegen 同口径）。
+var vendMu sync.Mutex
+
+// vendEnsure 平台代为采购（模型只有申请权）：npm 钉版+许可证白名单+哈希+台账，
+// 与正式段 sceneLintWithVend 同一工具同一闸。失败原样上抛——调用方把「换已登记库/
+// 纯 CSS 实现」的选择权交还模型。
+func (r *styleRun) vendEnsure(ctx context.Context, specs []string) error {
+	for _, spec := range specs {
+		vendMu.Lock()
+		cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		cmd := pipeline.CommandContext(cctx, pipeline.PythonExe(),
+			filepath.Join(r.d.RootDir, "ai", "vendor_tool.py"), "ensure", spec, "--allow-pending-replay")
+		cmd.Dir = r.d.RootDir
+		out, err := cmd.CombinedOutput()
+		cancel()
+		vendMu.Unlock()
+		if err != nil {
+			if cctx.Err() != nil {
+				return cctx.Err()
+			}
+			return fmt.Errorf("%s: %s", spec, pipeline.FirstLine(string(out), 140))
+		}
+		r.p.Manifest("prep.vend", "样张自采入库 "+spec)
+	}
+	return nil
+}
+
+// vendInline 渲染副本的就地内联（声明注释 → <script> 库源码）：样张页自包含，
+// 渲染器无需工程 assets 目录。draft 里保留的是带声明的模型版（正式段复现的凭据）。
+func (r *styleRun) vendInline(ctx context.Context, relPath string) error {
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	cmd := pipeline.CommandContext(cctx, pipeline.PythonExe(),
+		filepath.Join(r.d.RootDir, "ai", "vendor_tool.py"), "inline", r.p.Artifact(relPath))
+	cmd.Dir = r.d.RootDir
+	var buf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &buf, &buf
+	if err := cmd.Run(); err != nil {
+		if cctx.Err() != nil {
+			return cctx.Err()
+		}
+		return fmt.Errorf("%s", pipeline.FirstLine(buf.String(), 160))
+	}
+	return nil
+}
+
+// ensureSampleShell 渲染工程底座（与 assemble_samples.py 同款，prep 阶段先于正式
+// assemble 跑得自备）：assets/gsap.min.js+hf.js、package.json、index.html（渲染器
+// 从它提取 render shell，缺它整批渲染必炸）。
+func (r *styleRun) ensureSampleShell() {
+	assets := r.p.Artifact("assets")
+	_ = os.MkdirAll(assets, 0o755)
+	for _, f := range []string{"gsap.min.js", "hf.js"} {
+		dst := filepath.Join(assets, f)
+		if _, err := os.Stat(dst); err == nil {
+			continue
+		}
+		if b, err := os.ReadFile(filepath.Join(r.d.RootDir, "ai", "assets", f)); err == nil {
+			_ = os.WriteFile(dst, b, 0o644)
+		}
+	}
+	if _, err := os.Stat(r.p.Artifact("package.json")); err != nil {
+		_ = os.WriteFile(r.p.Artifact("package.json"), []byte(fmt.Sprintf(
+			`{"name":%q,"private":true,"type":"module"}`, r.p.ID)), 0o644)
+	}
+}
+
+// ensureSampleFonts 首渲前备字体：样张阶段还没有设计系统（LockDesign 的申请书
+// 不存在），按样张 HTML 里声明的目录字体现场写申请书 + font_tool ensure（下载/
+// 子集化走机器级缓存，首项目冷启动慢、后续项目快）。不备的代价 = 目录字体静默
+// 回退雅黑渲染进 mp4，判卷的字体气质意见全部失真（2026-10-22 真机实测复犯）。
+// 备不齐不挡样张：回退渲染照常出，降级如实记账。
+func (r *styleRun) ensureSampleFonts(ctx context.Context, htmls []string) {
+	if _, err := os.Stat(r.p.Artifact("style/font_assets.json")); err == nil {
+		return // 已备
+	}
+	matched := pipeline.MatchSampleFonts(htmls)
+	if len(matched) == 0 {
+		return // 样张只用系统字体，无需备料
+	}
+	if err := pipeline.WriteFontAssetRequest(r.p, matched); err != nil {
+		r.p.Manifest("prep.style_font_degrade", "申请书落盘失败: "+pipeline.FirstLine(err.Error(), 160))
+		return
+	}
+	if err := r.runAIScript(ctx, 6*time.Minute, "font_tool.py", "ensure", r.p.Dir); err != nil {
+		r.p.Manifest("prep.style_font_degrade", pipeline.FirstLine(err.Error(), 160))
+		return
+	}
+	r.p.Manifest("prep.style_fonts", "样张字体已备("+strings.Join(pipeline.MapCatalogFonts(matched), "、")+")")
+}
+
+// grabFrame ffmpeg 抽帧：mp4 指定时刻 → 一帧 jpg（判卷三帧/海报共用）。
+func (r *styleRun) grabFrame(ctx context.Context, mp4 string, t float64, out string) error {
+	ff, err := pipeline.FFmpegPath()
+	if err != nil {
+		return err
+	}
+	cctx, cancel := context.WithTimeout(ctx, 40*time.Second)
+	defer cancel()
+	cmd := pipeline.CommandContext(cctx, ff, "-y", "-ss", strconv.FormatFloat(t, 'f', 2, 64),
+		"-i", r.p.Artifact(mp4), "-frames:v", "1", "-q:v", "3", out)
+	var buf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &buf, &buf
+	if err := cmd.Run(); err != nil {
+		if cctx.Err() != nil {
+			return cctx.Err()
+		}
+		return fmt.Errorf("%s", pipeline.FirstLine(buf.String(), 120))
+	}
+	return nil
+}
+
+// renderSampleVideo 动态样张渲染管线：机械整形 → 落渲染页 → vend 内联 →
+// hyperframes 软光栅出 mp4 → 抽海报（style/sample-N.png，旧契约位）+ 首/中/尾三帧。
+// 返回判卷帧 dataURL。
+func (r *styleRun) renderSampleVideo(ctx context.Context, html string, idx int) ([]string, error) {
+	page := fmt.Sprintf(".hf-sample/sample-%d.html", idx)
+	mp4 := fmt.Sprintf("style/clips/sample-%d.mp4", idx)
+	if err := os.MkdirAll(r.p.Artifact(".hf-sample"), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(r.p.Artifact("style/clips"), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(r.p.Artifact(page), []byte(pipeline.PrepareSamplePage(html, sampleDur)), 0o644); err != nil {
+		return nil, err
+	}
+	r.ensureSampleShell()
+	if len(vendSpecs(html)) > 0 {
+		if err := r.vendInline(ctx, page); err != nil {
+			return nil, fmt.Errorf("vend 内联失败: %w", err)
+		}
+	}
+	outLog, err := pipeline.RunCLI(r.p, "npx", pipeline.HyperframesPkg, "render", ".",
+		"-c", page, "-o", mp4, "--no-browser-gpu")
+	if err != nil {
+		return nil, fmt.Errorf("%s", pipeline.FirstLine(pipeline.TailLines(outLog, 6), 200))
+	}
+	// 海报（70% 时长的落定态，旧 png 契约位）+ 判卷三帧（首/中/尾）
+	poster := fmt.Sprintf("style/sample-%d.png", idx)
+	if err := r.grabFrame(ctx, mp4, sampleDur*0.7, r.p.Artifact(poster)); err != nil {
+		return nil, fmt.Errorf("抽海报失败: %w", err)
+	}
+	frames := []string{}
+	for i, t := range []float64{0.05, sampleDur * 0.55, sampleDur - 0.15} {
+		f := fmt.Sprintf("style/clips/sample-%d-f%d.jpg", idx, i)
+		if err := r.grabFrame(ctx, mp4, t, r.p.Artifact(f)); err != nil {
+			return nil, fmt.Errorf("抽判卷帧失败: %w", err)
+		}
+		if u, err := shrinkFrame(r.p.Artifact(f)); err == nil {
+			frames = append(frames, u)
+		}
+	}
+	if len(frames) == 0 {
+		return nil, fmt.Errorf("判卷帧全部抽取失败")
+	}
+	return frames, nil
+}
 
 // sampleJudgeSystem 样张判卷官（NoThink 快档；系统提示词全项目固定——同一前缀
 // 反复出现是平台前缀缓存最好命中的形态）。
-const sampleJudgeSystem = `你是样张质检员。给一张短视频样张截图判卷：可读性与构图是硬伤；随消息附有原片真迹时，样张对真迹的风格贴合（配色/质感/密度/字体气质）同为准绳。只输出 JSON。`
+const sampleJudgeSystem = `你是样张质检员。给一条短视频动态样张的首/中/尾三帧判卷：可读性与构图是硬伤；随消息附有原片真迹时，样张对真迹的风格贴合（配色/质感/密度/字体气质）同为准绳。只输出 JSON。`
 
-// renderSampleTool render_sample：样张渲染验证管线（渲染壳 + 机械检查 + 截图判卷
-// + 修复轮，与成片 segCheck「写→检→修」同构）。样张 HTML 由模型现写（与设计系统
-// 同一套皮肤色值）；先过机械检查（视口单位/字体可解析/文字压叠——2026-10-21 实测
-// 模型看图自检抓不住叠字，必须机械拦），再 Edge 截图回喂多模态判卷，不合格带
-// 诊断自动修复重验，≤2 轮，同类问题连续两轮刹车保留现版。
+// renderSampleTool render_sample：动态样张渲染验证管线（1.8 秒 mp4——样张即动效，
+// 与成片同一台渲染器同一套工序：场景页 → 机械检查 → vend 采购内联 → hyperframes
+// 软光栅 → 抽首/中/尾三帧判卷（对照条目真迹判风格贴合）→ 修复轮 ≤2 同类刹车）。
+// 模型只写带 vend 声明的源码（正式段复现的凭据），渲染副本由平台内联库源码。
 func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 	cv := pipeline.ProjectCanvas(r.p) // 画幅跟项目走：横版样张上验竖版版式=无效验证（2026-10-15 实测 P1）
 	w, h := int(cv.W), int(cv.H)
+	desc := fmt.Sprintf(`渲染一张动态样张（%.1f 秒 mp4，与成片同一台渲染器同一套工序）。scene_brief=场景简述（必须取自口播稿代表性内容）；html=%d×%d 自包含动态页面：
+- 根元素 <div data-composition-id="main" data-width="%d" data-height="%d" data-start="0" data-duration="%.1f">，%.1f 秒走完一次完整揭示节拍（开场视觉锚点即亮，收尾定格在内容帧不拖尾）
+- <head> 里保留 <script src="assets/gsap.min.js"></script> 与 <script src="assets/hf.js"></script>（漏写平台会机械补）
+- 动效全写进一条 gsap 时间轴：var tl=gsap.timeline({paused:true}); …; window.__timelines=window.__timelines||{}; window.__timelines["main"]=tl; 可补间只有 opacity/x/y/scale/rotation；禁 CSS animation/transition/@keyframes；禁 rAF/setTimeout/setInterval/Date.now；Math.random 必须种子化
+- <canvas> 绘制 = window.__draw_xxx=function(t,ctx,W,H,rng) 纯函数，由时间轴 onUpdate 驱动逐帧重画
+- 需要外部库（three.js/物理/图表等）：在 html 里写 <!-- vend: 包名@精确版本 --> 声明，平台自动采购注入（许可证白名单：MIT/Apache/BSD/CC0 等，白名单外拒收）；静态画面能解决的别引大库
+- 字体只能用：目录字体（%s——像素风标题用它）＋微软雅黑/黑体/宋体/楷体＋monospace；颜色/字体与本片设计系统皮肤槽位逐字一致；自包含无图片无外链
+- 提交后自动过机械检查并渲染判卷（抽首/中/尾三帧对照真迹判风格贴合），不合格带诊断回喂你修复（≤%d 轮）；构图版式必须与本组其他样张明显不同。目标 ≤%d 字符，上限 %d`,
+		sampleDur, w, h, w, h, sampleDur, sampleDur, pipeline.FontCatalogList(), sampleRepairMax, sampleHTMLTarget, sampleHTMLMax)
 	return Tool{
-		Def: toolSchema("render_sample", fmt.Sprintf("渲染一张样张验证落地效果：scene_brief=场景简述（必须取自口播稿代表性内容）；html=%d×%d 自包含样张页面（画幅必须与本项目一致，颜色/字体必须与本片设计系统皮肤槽位逐字一致，自包含无图片无外链，画布 html,body{width:%dpx;height:%dpx;overflow:hidden}，目标 ≤%d 字符，上限 %d）。字体只能用：目录字体（%s——像素风标题用它）＋微软雅黑/黑体/宋体/楷体＋monospace。可用 <canvas>，绘制必须写成 window.__draw_xxx=function(t){…} 纯函数（静态画面即 t=0 的样子）。提交后自动过机械检查并截图判卷（真迹对照条目可用时，判卷官拿原片真迹核对配色/质感/密度/字体气质），不合格会带诊断回喂你修复（≤%d 轮）；构图版式必须与本组其他样张明显不同。", w, h, w, h, sampleHTMLTarget, sampleHTMLMax, pipeline.FontCatalogList(), sampleRepairMax), map[string]any{
+		Def: toolSchema("render_sample", desc, map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"scene_brief": map[string]any{"type": "string", "description": "场景简述（一句话：这张样张画口播稿的哪个代表性内容）"},
-				"html":        map[string]any{"type": "string", "description": fmt.Sprintf("样张 HTML（完整自包含文档，画布 %d×%d）", w, h)},
+				"html":        map[string]any{"type": "string", "description": fmt.Sprintf("样张 HTML（完整自包含动态文档，画布 %d×%d，时长 %.1f 秒）", w, h, sampleDur)},
 			},
 			"required": []string{"scene_brief", "html"},
 		}),
@@ -515,63 +722,57 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 			if len(draft.Samples) >= styleSampleMax {
 				return Observation{Text: fmt.Sprintf("样张已满 %d 张（契约上限），直接 submit_style。", styleSampleMax)}
 			}
-			idx := len(draft.Samples)
-			// 缓存命中两分支（2026-10-19 中-22）——语义不变：同一 HTML 不重渲。
-			if hit, note, dup := r.cachedRender(in.HTML, draft); hit {
-				if dup >= 0 {
-					return Observation{Text: note}
+			// 同 HTML 已在草稿 = 连同其动态小样都在，防重复追加
+			for _, s := range draft.Samples {
+				if s.HTML == in.HTML {
+					return Observation{Text: fmt.Sprintf("%s 已在草稿里，无需重复渲染——要改就换 HTML 后重新 render_sample，或直接 submit_style。", s.Tag)}
 				}
-				draft.Samples = append(draft.Samples, contract.Sample{
-					Tag:  fmt.Sprintf("样张 %c · %s", 'A'+idx, contract.FirstRunes(in.SceneBrief, 20)),
-					Desc: in.SceneBrief,
-					HTML: in.HTML,
-				})
-				if err := writeJSONFile(styleDraftPath(r.p), draft); err != nil {
-					return Observation{Text: "样张草稿落盘失败：" + err.Error()}
-				}
-				_ = writeJSONFile(r.p.Artifact("style/style_samples.json"), map[string]any{
-					"samples": draft.Samples, "confirmed": false,
-				})
-				backfill := fmt.Sprintf("样张 %d 沿用缓存渲染结果（同参数已渲过），已重新挂入草稿。", idx+1)
-				var images []string
-				if serr := snapSamples(ctx, r.d, r.p); serr == nil {
-					if dataURL, err := shrinkFrame(r.p.Artifact(fmt.Sprintf("style/sample-%d.png", idx))); err == nil {
-						images = append(images, dataURL)
-						backfill += "附图见下，可目检。"
-					}
-				} else {
-					backfill += "补截图失败——凭代码自查后提交。"
-				}
-				return Observation{Text: backfill, Images: images}
 			}
 			if *snapLeft <= 0 {
-				return Observation{Text: "渲染额度已用完（最多 3 张），直接 submit_style。"}
+				return Observation{Text: fmt.Sprintf("渲染额度已用完（最多 %d 张），直接 submit_style。", styleSampleMax)}
 			}
 			*snapLeft--
+			idx := len(draft.Samples)
 
-			// ── 渲染验证内循环：机检 → 截图 → 判卷 → 修复（≤sampleRepairMax 轮，同类刹车）
-			html, shot := in.HTML, ""
-			carried := []string(nil) // 最后一轮没能修掉的问题（如实回喂，不静默）
-			skipNote := ""           // 截图失败/判卷不可用——说明走了哪条降级路，不许谎称「全过」
+			// vend 采购（模型申请，平台代购，机械闸把关）：失败把选择权交还模型
+			specs := vendSpecs(in.HTML)
+			if len(specs) > 0 {
+				if err := r.vendEnsure(ctx, specs); err != nil {
+					return Observation{Text: "vend 采购失败：" + err.Error() +
+						"。换台账里已登记的库、或去掉该库用纯 CSS/Canvas 实现后重新 render_sample（其余样张不受影响）。"}
+				}
+			}
+
+			// 首渲前备字体（含本组已有样张的声明，一次备齐）
+			fontHTMLs := []string{in.HTML}
+			for _, s0 := range draft.Samples {
+				fontHTMLs = append(fontHTMLs, s0.HTML)
+			}
+			r.ensureSampleFonts(ctx, fontHTMLs)
+
+			// 渲染验证内循环：机检 → 渲 mp4 → 抽三帧判卷 → 修复（≤sampleRepairMax 轮，同类刹车）
+			html, carried, skipNote := in.HTML, []string(nil), ""
+			var judgeFrames []string
 			for round := 0; ; round++ {
 				fixed, mechIssues := pipeline.CheckSampleHTML(html, pipeline.SampleCanvas{W: w, H: h},
 					pipeline.LoadSampleFontAssets(r.p))
 				html = fixed
-				s, serr := r.snapOne(ctx, html, idx)
-				if serr != nil {
-					carried = mechIssues // 截图失败：机检已过的 html 照常入库，没修掉的机检项如实带出
-					skipNote = "截图失败，判卷未跑"
+				if !strings.Contains(html, "__timelines") {
+					mechIssues = append(mechIssues, `动态样张缺 gsap 时间轴注册（window.__timelines["main"]=tl）——没有时间轴渲出来是静帧`)
+				}
+				frames, rerr := r.renderSampleVideo(ctx, html, idx)
+				if rerr != nil {
+					carried, skipNote = mechIssues, "渲染失败："+pipeline.FirstLine(rerr.Error(), 160)
 					break
 				}
-				shot = s
+				judgeFrames = frames
 				if len(mechIssues) > 0 {
 					carried = mechIssues
-				} else if verdict, jok := r.judgeSample(ctx, loop, in.SceneBrief, shot, w, h); !jok {
+				} else if verdict, jok := r.judgeSample(ctx, loop, in.SceneBrief, frames, w, h); !jok {
 					skipNote = "判卷通道不可用（LLM 调用失败），机检过检即放行"
-					break // 判卷不可用（LLM 未配/调用失败）：机械过检即放行，降级同旧版
+					break
 				} else if verdict.Pass {
-					carried = nil
-					skipNote = ""
+					carried, skipNote = nil, ""
 					break
 				} else {
 					carried = verdict.IssueLines()
@@ -584,7 +785,7 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 					break // 刹车：同类问题两轮原样重现=原地打转，保留现版不再烧
 				}
 				r.lastRepairSig = sig
-				fixed2, ok := r.repairSample(ctx, loop, in.SceneBrief, html, shot, carried)
+				fixed2, ok := r.repairSample(ctx, loop, in.SceneBrief, html, frames, carried)
 				if !ok {
 					break // 修复调用失败：带问题说明放行
 				}
@@ -592,12 +793,13 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 			}
 			r.lastRepairSig = ""
 
-			// 落草稿 + 镜像。样张 PNG 已在内循环最后一轮截好（提交的 html 就是
-			// 最后一次过检的 html），不再重截。
+			// 落草稿 + 镜像。mp4 与海报（style/sample-N.png）已在渲染流程落盘；
+			// draft 保留带 vend 声明的模型源码（正式段复现的凭据）。
 			draft.Samples = append(draft.Samples, contract.Sample{
-				Tag:  fmt.Sprintf("样张 %c · %s", 'A'+idx, contract.FirstRunes(in.SceneBrief, 20)),
-				Desc: in.SceneBrief,
-				HTML: html,
+				Tag:   fmt.Sprintf("样张 %c · %s", 'A'+idx, contract.FirstRunes(in.SceneBrief, 20)),
+				Desc:  in.SceneBrief,
+				HTML:  html,
+				Video: fmt.Sprintf("style/clips/sample-%d.mp4", idx),
 			})
 			if err := writeJSONFile(styleDraftPath(r.p), draft); err != nil {
 				return Observation{Text: "样张草稿落盘失败：" + err.Error()}
@@ -605,13 +807,7 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 			_ = writeJSONFile(r.p.Artifact("style/style_samples.json"), map[string]any{
 				"samples": draft.Samples, "confirmed": false,
 			})
-			var images []string
-			note := fmt.Sprintf("样张 %d 已渲染（style/sample-%d.png）：", idx+1, idx)
-			if shot != "" {
-				images = append(images, shot)
-			} else {
-				note += "截图失败（凭代码自查），"
-			}
+			note := fmt.Sprintf("动态样张 %d 已渲染（style/clips/sample-%d.mp4，%.1f 秒）：", idx+1, idx, sampleDur)
 			switch {
 			case len(carried) > 0:
 				note += fmt.Sprintf("机检/判卷还有 %d 项未修掉（已到修复轮上限或同类刹车）：%s。", len(carried), strings.Join(carried, "；"))
@@ -620,14 +816,18 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 			default:
 				note += "机检与判卷全过。"
 			}
-			note += "附图见下。不满意就调整后重新渲染这一张（渲染额度剩 " + strconv.Itoa(*snapLeft) + " 张）。"
-			// 缓存键必须跟入库的 html（修复后的最终版）对齐：记原始版的话，模型
-			// 重发原始 HTML 会走缓存回填分支，把没过机检的原始版当新样张塞回草稿
-			//（2026-10-21 巡检 d 项实害路径）。
-			r.markRenderCache(html)
-			return Observation{Text: note, Images: images}
+			note += fmt.Sprintf("附图为该样张首/中/尾三帧。不满意就调整后重新渲染这一张（渲染额度剩 %d 张）。已采库：%s。", *snapLeft, orNone(specs))
+			return Observation{Text: note, Images: judgeFrames}
 		},
 	}
+}
+
+// orNone 空切片回显占位。
+func orNone(ss []string) string {
+	if len(ss) == 0 {
+		return "（无）"
+	}
+	return strings.Join(ss, "、")
 }
 
 // sampleIssue 判卷问题一条。
@@ -652,10 +852,10 @@ func (v sampleJudge) IssueLines() []string {
 	return out
 }
 
-// judgeSample 截图判卷（多模态 NoThink，结构化结论）。refs 非空时图1=样张截图、
-// 图2..N=对照条目的原片真迹，判卷含风格贴合项；refs 为空降级为旧口径（可读性/
-// 构图）。ok=false = 判卷通道不可用，调用方降级为「机械过检即放行」。
-func (r *styleRun) judgeSample(ctx context.Context, loop *Loop, brief, shot string, w, h int) (sampleJudge, bool) {
+// judgeSample 动态样张判卷（多模态 NoThink，结构化结论）。frames=首/中/尾三帧
+// dataURL；refs 非空时真迹跟在样张帧之后，判卷含风格贴合项；refs 为空降级为旧口径
+// （可读性/构图）。ok=false = 判卷通道不可用，调用方降级为「机械过检即放行」。
+func (r *styleRun) judgeSample(ctx context.Context, loop *Loop, brief string, frames []string, w, h int) (sampleJudge, bool) {
 	prov, err := llm.FromEnv(llm.RoleVisual)
 	if err != nil {
 		return sampleJudge{}, false
@@ -666,15 +866,14 @@ func (r *styleRun) judgeSample(ctx context.Context, loop *Loop, brief, shot stri
 		Score   float64       `json:"score"`
 		Issues  []sampleIssue `json:"issues"`
 	}
-	criteria := `看图判卷：1 文字是否全部可读（字号/对比度/贴边裁切）；2 构图是否成立（主体清晰，无大片失衡空洞）；3 画面元素是否溢出或破图；4 整体是否贴合场景描述。`
+	var criteria string
 	if len(refs) > 0 {
-		criteria = fmt.Sprintf(`图1 是样张截图；图2–图%d 是该风格来源视频的原片真迹（对照物）。看图判卷：1 文字是否全部可读（字号/对比度/贴边裁切）；2 构图是否成立（主体清晰，无大片失衡空洞）；3 画面元素是否溢出或破图；4 整体是否贴合场景描述；5 风格贴合——对照真迹核配色（底色/强调色/文字色）、质感（颗粒/描边/纹理）、画面密度、字体气质四个维度；样张画的题材内容与真迹不同是应该的，不算偏离，但这四个维度明显两路（如真迹是粗像素位图字、样张用平滑衬线体）必须 fail。`, 1+len(refs))
+		criteria = fmt.Sprintf("图1–图%d 是同一条 %.1f 秒动态样张的首/中/尾三帧；图%d–图%d 是该风格来源视频的原片真迹（对照物）。看图判卷：1 文字是否全部可读（字号/对比度/贴边裁切）；2 构图是否成立（主体清晰，无大片失衡空洞）；3 画面元素是否溢出或破图；4 尾帧是否定格在内容帧（尾帧黑屏/空屏=收尾拖尾事故）；5 整体是否贴合场景描述；6 风格贴合——对照真迹核配色（底色/强调色/文字色）、质感（颗粒/描边/纹理）、画面密度、字体气质四个维度；样张画的题材内容与真迹不同是应该的，不算偏离，但这四个维度明显两路（如真迹是粗像素位图字、样张用平滑衬线体）必须 fail。", len(frames), sampleDur, len(frames)+1, len(frames)+len(refs))
+	} else {
+		criteria = fmt.Sprintf("图1–图%d 是同一条 %.1f 秒动态样张的首/中/尾三帧。看图判卷：1 文字是否全部可读（字号/对比度/贴边裁切）；2 构图是否成立（主体清晰，无大片失衡空洞）；3 画面元素是否溢出或破图；4 尾帧是否定格在内容帧（尾帧黑屏/空屏=收尾拖尾事故）；5 整体是否贴合场景描述。", len(frames), sampleDur)
 	}
-	user := fmt.Sprintf(`样张场景：%s
-画幅 %d×%d。该图已通过机械检查（无文字互相压叠、无禁用单位、字体可解析）。
-%s
-输出：{"verdict":"pass"或"fail","score":0到10,"issues":[{"kind":"unreadable|overlap|overflow|offstyle|blank|other","detail":"一句人话"}]}，没问题 issues 给空数组；风格贴合问题用 offstyle，detail 写清哪个维度和真迹差在哪。`, brief, w, h, criteria)
-	images := append([]string{shot}, refs...)
+	user := fmt.Sprintf("样张场景：%s\n画幅 %d×%d。该图已通过机械检查（无文字互相压叠、无禁用单位、字体可解析）。\n%s\n输出：{\"verdict\":\"pass\"或\"fail\",\"score\":0到10,\"issues\":[{\"kind\":\"unreadable|overlap|overflow|offstyle|blank|other\",\"detail\":\"一句人话\"}]}，没问题 issues 给空数组；风格贴合问题用 offstyle，detail 写清哪个维度和真迹差在哪。", brief, w, h, criteria)
+	images := append(append([]string{}, frames...), refs...)
 	usage, err := prov.GenerateJSONVisionNoThink(ctx, sampleJudgeSystem, user, images, 0.2, &out)
 	llm.AccumulateUsage(&loop.Usage, usage)
 	if err == nil {
@@ -684,9 +883,9 @@ func (r *styleRun) judgeSample(ctx context.Context, loop *Loop, brief, shot stri
 		return sampleJudge{}, false
 	}
 	j := sampleJudge{Pass: strings.EqualFold(out.Verdict, "pass"), Score: out.Score, Issues: out.Issues}
-	for _, is := range j.Issues { // 压叠/不可读是硬伤，判卷官放行也不算过
+	for _, is := range j.Issues { // 压叠/不可读/空帧是硬伤，判卷官放行也不算过
 		k := strings.ToLower(is.Kind)
-		if k == "overlap" || k == "unreadable" {
+		if k == "overlap" || k == "unreadable" || k == "blank" {
 			j.Pass = false
 		}
 	}
@@ -705,7 +904,7 @@ const sampleRepairSystem = `你是样张修复师。重写完整样张 HTML，�
 
 // repairSample 按诊断重写样张 HTML。refs 非空时随附真迹——修复师对着对照物修，
 // 不是凭一句「风格不贴合」瞎猜。
-func (r *styleRun) repairSample(ctx context.Context, loop *Loop, brief, html, shot string, issues []string) (string, bool) {
+func (r *styleRun) repairSample(ctx context.Context, loop *Loop, brief, html string, frames []string, issues []string) (string, bool) {
 	prov, err := llm.FromEnv(llm.RoleVisual)
 	if err != nil {
 		return "", false
@@ -715,7 +914,7 @@ func (r *styleRun) repairSample(ctx context.Context, loop *Loop, brief, html, sh
 	var out struct {
 		HTML string `json:"html"`
 	}
-	user := fmt.Sprintf(`你写的样张（场景：%s）判卷未过，重写完整 HTML 修复全部问题（没被点名的部分保持不变）。
+	user := fmt.Sprintf(`你写的样张（场景：%s；附图其后 %d 帧为它的首/中/尾三帧，再往后是真迹对照物）判卷未过，重写完整 HTML 修复全部问题（没被点名的部分保持不变）。
 
 问题清单：
 - %s
@@ -724,8 +923,8 @@ func (r *styleRun) repairSample(ctx context.Context, loop *Loop, brief, html, sh
 %s
 
 只输出 JSON：{"html":"<完整新HTML>"}（无围栏）。画布 %d×%d；字体只能用目录字体（%s）与系统字体（微软雅黑/黑体/宋体/楷体）与 monospace。`,
-		brief, strings.Join(issues, "\n- "), html, int(cv.W), int(cv.H), pipeline.FontCatalogList())
-	images := append([]string{shot}, refs...)
+		brief, len(frames), strings.Join(issues, "\n- "), html, int(cv.W), int(cv.H), pipeline.FontCatalogList())
+	images := append(append([]string{}, frames...), refs...)
 	usage, err := prov.GenerateJSONVisionNoThink(ctx, sampleRepairSystem, user, images, 0.5, &out)
 	llm.AccumulateUsage(&loop.Usage, usage)
 	if err == nil {
@@ -755,21 +954,6 @@ func (r *styleRun) runAIScript(ctx context.Context, timeout time.Duration, scrip
 	return nil
 }
 
-// snapOne 单张截图：html → style/sample-{idx}.png（--one 模式：python 侧按
-// 现成 font_assets 补字体声明后 Edge headless 出图——字体下载只在 submit 后
-// 的 6 分钟档 ensure 做，这 90 秒档掐不过冷启动下载），返回缩略 dataURL 供回喂判卷。
-func (r *styleRun) snapOne(ctx context.Context, html string, idx int) (string, error) {
-	tmp := r.p.Artifact("style/.render-draft.html")
-	if err := os.WriteFile(tmp, []byte(html), 0o644); err != nil {
-		return "", err
-	}
-	out := r.p.Artifact(fmt.Sprintf("style/sample-%d.png", idx))
-	if err := r.runAIScript(ctx, 90*time.Second, "snap_samples.py", "--one", r.p.Dir, tmp, out); err != nil {
-		return "", err
-	}
-	return shrinkFrame(out)
-}
-
 // issueSignature 问题清单归一化签名（刹车判据）：逐行取前 16 rune 排序拼接——
 // 同一批问题两轮原样重现即视为原地打转。
 func issueSignature(issues []string) string {
@@ -784,35 +968,6 @@ func issueSignature(issues []string) string {
 		parts = append(parts, string(r))
 	}
 	return strings.Join(parts, "|")
-}
-
-// cachedRender 同 HTML 命中判定（§3.2 同参数哈希缓存）：
-//   - dup>=0：这张 HTML 已在草稿（返回说明与下标，防重复追加）；
-//   - dup==-1：缓存标记在但样张不在草稿（级联作废清了）——调用方走幂等回填；
-//   - hit=false：真没渲过。
-func (r *styleRun) cachedRender(html string, draft *styleDraft) (hit bool, note string, dup int) {
-	for i, s := range draft.Samples {
-		if s.HTML == html {
-			return true, fmt.Sprintf("%s 已在草稿里，无需重复渲染——要改就换 HTML 后重新 render_sample，或直接 submit_style。", s.Tag), i
-		}
-	}
-	key := renderHash(html)
-	if b, err := os.ReadFile(r.p.Artifact("llm/prep-render-cache/" + key + ".txt")); err == nil {
-		_ = b
-		return true, "", -1
-	}
-	return false, "", -2
-}
-
-func (r *styleRun) markRenderCache(html string) {
-	key := renderHash(html)
-	dir := r.p.Artifact("llm/prep-render-cache")
-	_ = os.MkdirAll(dir, 0o755)
-	_ = os.WriteFile(dir+"/"+key+".txt", []byte("同参数样张已渲染过（缓存命中，未重渲）"), 0o644)
-}
-
-func renderHash(html string) string {
-	return contentHash8(html)
 }
 
 func (r *styleRun) loadDraft() *styleDraft {
@@ -1013,6 +1168,10 @@ func (r *styleRun) submitStyleTool() Tool {
 					"type": "array", "items": map[string]any{"type": "string"},
 					"description": "样张 id 列表（本次 render_sample 渲过的张，如 [\"样张 A · …\"]；≥1）",
 				},
+				"font_requests": map[string]any{
+					"type": "array", "items": map[string]any{"type": "string"},
+					"description": "缺字体申请单（可空）：样张效果确实需要目录里没有的字体时才申请，每条格式「字体名 | 开源协议 | 来源URL」，只申请 OFL/IPA 等开源协议。申请≠可用——人工入库前，样张与成片都用最接近的目录字体兜底",
+				},
 			},
 			"required": []string{"style_id", "description", "grammar", "design_system"},
 		}),
@@ -1031,6 +1190,7 @@ func (r *styleRun) submitStyleTool() Tool {
 				Grammar      contract.EditGrammar  `json:"grammar"`
 				DesignSystem contract.StyleSamples `json:"design_system"`
 				SampleIDs    []string              `json:"sample_ids"`
+				FontRequests []string              `json:"font_requests"`
 			}
 			if err := decodeArgs(normArgs, &in); err != nil {
 				return reply(err.Error())
@@ -1058,7 +1218,16 @@ func (r *styleRun) submitStyleTool() Tool {
 			ds := in.DesignSystem
 			ds.StyleID = sid
 			ds.Samples = draft.Samples
-			ds.Confirmed = false // 打包终审硬门：确认前禁止开工
+			ds.VendLibs = sampleVendLibs(draft.Samples) // 样张自采货架：正式段优先复现
+			ds.Confirmed = false                        // 打包终审硬门：确认前禁止开工
+			// 字体申请台账（申请-人工入库）：模型没有字体安装权，登记后等用户点头
+			if len(in.FontRequests) > 0 {
+				req := map[string]any{"style_id": sid, "requests": in.FontRequests,
+					"at": time.Now().Format("2006-01-02 15:04")}
+				if err := writeJSONFile(r.p.Artifact("style/font_requests.json"), req); err == nil {
+					r.p.Manifest("prep.font_request", fmt.Sprintf("%d 条待人工入库：%s", len(in.FontRequests), strings.Join(in.FontRequests, "；")))
+				}
+			}
 			sp := contract.NewStylePack(sid, in.Description, in.Grammar, &ds, ids)
 			if err := contract.ValidateStylePack(sp); err != nil {
 				return reply("被拒：" + err.Error())
@@ -1109,8 +1278,9 @@ func (r *styleRun) submitStyleTool() Tool {
 			}
 			r.d.emit(r.p.ID, "stage", "prep/style", fmt.Sprintf("done：%s「%s」语法[%s %.0f-%.0fs] 样张×%d",
 				sid, ds.Direction, in.Grammar.Density, in.Grammar.BandMin, in.Grammar.BandMax, len(draft.Samples)))
-			done := reply(fmt.Sprintf("风格包已提交：%s（%s）；剪辑语法 %s / %.0f–%.0f 秒 / %s；样张 %d 张；设计系统含入场/收尾模板。样张未经用户终审确认前禁止开工。",
-				sid, ds.Direction, in.Grammar.Density, in.Grammar.BandMin, in.Grammar.BandMax, in.Grammar.Continuity, len(draft.Samples)))
+			done := reply(fmt.Sprintf("风格包已提交：%s（%s）；剪辑语法 %s / %.0f–%.0f 秒 / %s；样张 %d 张（自采库：%s）；设计系统含入场/收尾模板。%s 样张未经用户终审确认前禁止开工。",
+				sid, ds.Direction, in.Grammar.Density, in.Grammar.BandMin, in.Grammar.BandMax, in.Grammar.Continuity, len(draft.Samples), orNone(ds.VendLibs),
+				map[bool]string{true: "字体申请已登记，等人工入库（入库前用目录字体兜底）。", false: ""}[len(in.FontRequests) > 0]))
 			done.Done = true
 			return done
 		},

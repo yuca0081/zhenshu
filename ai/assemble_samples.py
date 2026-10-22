@@ -15,7 +15,7 @@ import shutil
 import sys
 
 AI_DIR = pathlib.Path(__file__).resolve().parent
-from assemble import GSAP_SRC, _esc_html, ensure_font_faces, fontface_css, load_font_assets, load_style_tokens, subtitle_text_color
+from assemble import GSAP_SRC, VEND_RE, _esc_html, ensure_font_faces, fontface_css, load_font_assets, load_style_tokens, subtitle_text_color, vend_tags_for
 
 
 def _write_atomic(path: pathlib.Path, text: str):
@@ -68,7 +68,7 @@ def caption_block(clip_id, dur, narration, slots):
     return body, js
 
 
-def mini_html(w, h, dur, clip_id, frag_src, cap_body, cap_js, xfade, fontface, bg):
+def mini_html(w, h, dur, clip_id, frag_src, cap_body, cap_js, xfade, fontface, bg, vend_head=''):
     """单段工程壳：与 assemble.py project_html 同构（gsap/hf.js 资产、黑场微叠化、
     scene div 以 data-composition-src 挂片段）。bg = 皮肤底色槽位——片段 HTML 不铺
     满屏底色，露出的就是这层；硬编码浅色会把深色系样张整体衬成浅色。"""
@@ -84,7 +84,7 @@ def mini_html(w, h, dur, clip_id, frag_src, cap_body, cap_js, xfade, fontface, b
     <meta charset="UTF-8" />
     <meta name="viewport" content="width={w}, height={h}" />
     <script src="assets/gsap.min.js"></script>
-    <script src="assets/hf.js"></script>
+    <script src="assets/hf.js"></script>{vend_head}
     <style>
       * {{ margin: 0; padding: 0; box-sizing: border-box; }}
       html, body {{ width: {w}px; height: {h}px; overflow: hidden; background: #000; }}
@@ -148,10 +148,14 @@ def main(proj_dir: str) -> int:
                 _write_atomic(frag, fixed)
         cap_body, cap_js = caption_block(clip_id, dur, (e.get('narration') or '').strip(), slots)
         out = segdir / f'{clip_id}.html'
+        # 片段 vend 注入（兑现场景契约第 11 条的承诺）：片段声明了库，这里查 manifest
+        # 拷贝+挂 head；未入册响亮死——上层 EnsureSampleClips 捕获后该条降级静态预览
+        frag_html = frag.read_text(encoding='utf-8')
+        vend_head = vend_tags_for(proj, [frag_html]) if VEND_RE.search(frag_html) else ''
         # 壳底色取皮肤 bg 槽位；槽位缺失（样张读不出/老数据）回退米白保旧行为
         _write_atomic(out, mini_html(W, H, dur, clip_id, f'style/clips/{e["file"]}',
                                      cap_body, cap_js, xfade, fontface,
-                                     slots.get('bg') or '#FDF6E3'))
+                                     slots.get('bg') or '#FDF6E3', vend_head=vend_head))
         done += 1
 
     # 渲染器要的工程底座（与 assemble.py 同款；样张阶段先于正式 assemble 跑，得自备）

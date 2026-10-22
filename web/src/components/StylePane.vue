@@ -329,7 +329,7 @@ async function draftStyle() {
 .chip i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid rgba(255,255,255,.18); }
 
 /* 样张（B 态：一列大图；迷你真段 mp4 原生比例，静态兜底 16:9） */
-.samples.col { display: flex; flex-direction: column; gap: 20px; }
+.samples.col { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .sample { width: 100%; max-width: 560px; margin: 0 auto; }
 .clip-video { display: block; width: 100%; border: 1px solid #2b2b33; border-radius: 8px; background: #000; }
 .sample :deep(.sf) { border: 1px solid #2b2b33; border-radius: 8px; }

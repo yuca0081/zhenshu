@@ -1046,6 +1046,7 @@ func (s *Server) applyStyle(c *gin.Context) {
 	}
 	_ = os.RemoveAll(p.Artifact("style/clips"))
 	_ = os.RemoveAll(p.Artifact(".hf-clip"))
+	_ = os.RemoveAll(p.Artifact(".hf-sample"))
 	// 远端正本跟着作废（防清理过的老项目回源时旧样张复活）
 	if s.Artifacts != nil && s.Artifacts.Available() {
 		var keys []string
@@ -1648,9 +1649,9 @@ func (s *Server) video(c *gin.Context) {
 	s.serveArtifact(c, artifacts.ProjectKey(id, "renders/main.mp4"), path, "main.mp4", "no-store", "成片未就绪")
 }
 
-// styleClip 迷你真段 mp4（样张动态小样）。文件名白名单 clip-<N>.mp4——
-// style/clips/ 里还有场景片段 html 和装配清单，那些不对外。
-var styleClipRe = regexp.MustCompile(`^clip-\d+\.mp4$`)
+// styleClip 动态样张 mp4（prep② 直渲的 sample-<N> 与 legacy 迷你真段 clip-<N>）。
+// 文件名白名单——style/clips/ 里还有场景片段 html 和装配清单，那些不对外。
+var styleClipRe = regexp.MustCompile(`^(?:clip|sample)-\d+\.mp4$`)
 
 func (s *Server) styleClip(c *gin.Context) {
 	name := c.Param("file")

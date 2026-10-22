@@ -126,9 +126,14 @@ func rewriteAssetFontDecls(html string, assets map[string]string) (string, int) 
 			return block
 		}
 		dataURL, ok := assets[strings.ToLower(strings.TrimSpace(m[1]))]
-		if !ok || strings.Contains(block, "url(") {
+		if !ok {
 			return block
 		}
+		if strings.Contains(block, "data:") {
+			return block // 已是真字体，幂等跳过
+		}
+		// 模型猜写的相对路径 url（assets/Xxx.ttf 之类）= 空头支票：渲染时 404
+		// 静默回退雅黑（2026-10-22 动态样张实测复犯）——备了真字体的族一律改写
 		n++
 		return fmt.Sprintf("@font-face{font-family:'%s';src:url(\"%s\") format('woff2');}",
 			strings.TrimSpace(m[1]), dataURL)

@@ -78,6 +78,7 @@ async function sendFeedback() {
 }
 
 const samples = computed(() => props.prep?.design?.samples ?? [])
+const clipSrc = (video: string) => `/api/projects/${props.projectId}/style/clips/${video.split('/').pop() ?? video}`
 const segs = computed(() => props.prep?.draft?.segments ?? [])
 const paragraphs = computed(() => props.prep?.draft?.paragraphs ?? [])
 const sentences = computed(() => props.prep?.script?.sentences ?? [])
@@ -129,7 +130,12 @@ const sentences = computed(() => props.prep?.script?.sentences ?? [])
           </div>
           <div v-if="samples.length" class="samples">
             <figure v-for="(s, i) in samples" :key="i" class="sample">
-              <SampleFrame :html="s.html" />
+              <!-- 动态样张优先：mp4（prep② 直渲/迷你真段）；没有再降级静态 -->
+              <video
+                v-if="s.video" :src="clipSrc(s.video)" loop muted autoplay
+                playsinline controls class="clip-video"
+              />
+              <SampleFrame v-else :html="s.html" />
               <figcaption>{{ s.tag }} — {{ s.desc }}</figcaption>
             </figure>
           </div>

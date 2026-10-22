@@ -157,6 +157,7 @@ func InvalidateFrom(p *pipeline.Project, station string) {
 	if station != StationStoryboard {
 		_ = os.RemoveAll(p.Artifact("style/clips"))
 		_ = os.RemoveAll(p.Artifact(".hf-clip"))
+		_ = os.RemoveAll(p.Artifact(".hf-sample"))
 	}
 	// legacy 分镜随 draft 作废（翻译产物，重跑后重写）
 	if station != "" {

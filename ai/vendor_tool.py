@@ -9,6 +9,9 @@ vend 铁律:模型只有申请权(场景内 <!-- vend: lib@x.y.z -->),执行永�
   python ai/vendor_tool.py ensure three@0.152.2 --file build/three.min.js
                                                        # 缺则采购+验收+入册;已登记则复核放行
   python ai/vendor_tool.py exam three --replay 证据路径  # 补录确定性回放证据后复验
+  python ai/vendor_tool.py inline <html路径> [--keep-missing]
+                                                       # 把 html 内 vend 声明替换为内联 <script>
+                                                       # (样张/小样等自包含文档用;缺册默认严格失败)
 
 vendor 布局(挂卷 data/library,容器重建不丢——vend-stage.md §4):
   data/library/vendor/<lib>/<version>/<file>
@@ -17,6 +20,7 @@ vendor 布局(挂卷 data/library,容器重建不丢——vend-stage.md §4):
 import hashlib
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import tarfile
@@ -211,6 +215,58 @@ def exam_cmd(spec: str, replay_evidence: str) -> int:
     return bad
 
 
+VEND_RE = re.compile(r'<!--\s*vend:\s*([A-Za-z0-9_.-]+)@([^\s>]+?)\s*-->')
+
+
+def inline_cmd(path: str, keep_missing: bool) -> int:
+    """把 html 内的 vend 声明替换为内联 <script>(样张截图/自包含文档的注入形态:
+    渲染侧没有工程 assets 目录可挂,内联后文档依旧自包含)。入库库逐个复验哈希
+    (防盘上文件被换血后静默内联);缺册默认严格失败——调用方(平台代码)负责先
+    ensure 采购,失败走到这就是 bug/竞态,响亮死好过静默产出坏帧。--keep-missing
+    降级给无采购环节的批量路径:缺册声明原样保留并告警(画面空转,由判卷兜底)。
+    同库多次声明只内联首处,其余声明原地删除(重复加载白付体积)。"""
+    p = pathlib.Path(path)
+    html = p.read_text(encoding='utf-8')
+    m = load_manifest()
+    specs, seen = [], set()
+    for mm in VEND_RE.finditer(html):
+        spec = (mm.group(1), mm.group(2))
+        if spec not in seen:
+            seen.add(spec)
+            specs.append(spec)
+    if not specs:
+        print('inline: 无 vend 声明,原样返回')
+        return 0
+    inlined, removed = 0, 0
+    done = set()
+
+    def repl(mm):
+        nonlocal inlined, removed
+        lib, ver = mm.group(1), mm.group(2)
+        ent = m['libs'].get(lib, {}).get(ver)
+        if ent is None:
+            if keep_missing:
+                print(f'  ⚠ {lib}@{ver} 未入册,声明保留(--keep-missing)——画面大概率空转,判卷兜底')
+                return mm.group(0)
+            print(f'✗ {lib}@{ver} 未入册——先跑 python ai/vendor_tool.py ensure {lib}@{ver}')
+            raise SystemExit(1)
+        f = VENDOR / lib / ver / ent['file']
+        if not f.exists() or sha256_of(f) != ent['sha256']:
+            print(f'✗ {lib}@{ver} 盘上文件缺失/哈希不符——安全事件,拒收(§5)')
+            raise SystemExit(1)
+        if (lib, ver) in done:  # 同库重复声明:首处已内联,此处删除(重复加载白付体积)
+            removed += 1
+            return '<!-- vend ' + lib + '@' + ver + ' 已内联于首处 -->'
+        done.add((lib, ver))
+        inlined += 1
+        return '<script>\n' + f.read_text(encoding='utf-8') + '\n</script>'
+
+    out = VEND_RE.sub(repl, html)
+    p.write_text(out, encoding='utf-8')
+    print(f'inline: 内联 {inlined} 个库,去重 {removed} 处声明 → {p.name}')
+    return 0
+
+
 def list_cmd() -> int:
     m = load_manifest()
     if not m['libs']:
@@ -254,5 +310,11 @@ if __name__ == '__main__':
         spec = a[1] if len(a) > 1 else ''
         ev = opt_val('--replay') if '--replay' in a else ''
         sys.exit(exam_cmd(spec, ev))
+    if cmd == 'inline':
+        path = a[1] if len(a) > 1 else ''
+        if not path:
+            print('用法: inline <html路径> [--keep-missing]')
+            sys.exit(1)
+        sys.exit(inline_cmd(path, '--keep-missing' in a))
     print(__doc__)
     sys.exit(1)

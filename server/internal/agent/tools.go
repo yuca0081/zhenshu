@@ -1221,6 +1221,7 @@ var tools = []tool{
 			}
 			_ = os.RemoveAll(p.Artifact("style/clips"))
 			_ = os.RemoveAll(p.Artifact(".hf-clip"))
+			_ = os.RemoveAll(p.Artifact(".hf-sample"))
 			a.invalidateArtifacts(p,
 				"style/style_samples.json", "style/skin.json", "style/design.md", "llm/style_samples.json",
 				"style/sample-0.png", "style/sample-1.png", "style/sample-2.png")

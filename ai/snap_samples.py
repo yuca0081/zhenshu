@@ -23,7 +23,24 @@ import subprocess
 import sys
 import tempfile
 
-from assemble import ensure_font_faces, load_font_assets
+from assemble import VEND_RE, ensure_font_faces, load_font_assets
+
+
+def inline_vend_keep_missing(proj: pathlib.Path, html_path: pathlib.Path) -> None:
+    """legacy 静态样张的 vend 兜底（best-effort，就地改写）：有 vend 声明才调
+    vendor_tool inline(--keep-missing=未入册库保留声明，画面空转由判卷兜底)。
+    prep② 动态链路在 Go 侧严格采购内联，不经过这里。失败打印降级原因不挡截图。"""
+    try:
+        if not VEND_RE.search(html_path.read_text(encoding='utf-8')):
+            return
+        r = subprocess.run(
+            [sys.executable, str(pathlib.Path(__file__).resolve().parent / 'vendor_tool.py'),
+             'inline', '--keep-missing', str(html_path)],
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120)
+        if r.returncode != 0:
+            print('vend 内联降级:', (r.stdout or r.stderr or '').strip()[:160])
+    except Exception as e:
+        print('vend 内联降级:', e)
 import font_tool
 
 BROWSERS = [
@@ -83,6 +100,7 @@ def snap_one(proj: pathlib.Path, html_path: str, out_path: str) -> int:
         html = ensure_font_faces(html, resolved)
     tmp = proj / 'style' / '.snap-one.html'
     tmp.write_text(html, encoding='utf-8')
+    inline_vend_keep_missing(proj, tmp)
     out = pathlib.Path(out_path)
     had_out = out.exists()
     try:
@@ -138,6 +156,7 @@ def main(proj_dir: str) -> int:
             html = ensure_font_faces(html, resolved)
         tmp = proj / 'style' / f'.snap-{i}.html'
         tmp.write_text(html, encoding='utf-8')
+        inline_vend_keep_missing(proj, tmp)
         try:
             shoot(browser, tmp, out, win_w, win_h)
         except Exception as e:

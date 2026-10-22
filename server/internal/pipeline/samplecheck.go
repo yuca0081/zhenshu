@@ -350,3 +350,41 @@ func firstRunes(s string, n int) string {
 	}
 	return string(r[:n]) + "…"
 }
+
+// PrepareSamplePage 动态样张页面的机械整形（prep② 渲染前的确定性补齐，幂等）：
+//   - gsap/hf.js 资产引用缺失时注入 <head>（模型漏写=渲染器没有 gsap 必炸，纯样板代码
+//     不值得烧修复轮）；
+//   - 根元素缺 data-duration 时补样张时长（hyperframes 按它定录制时长）。
+//
+// 动画本体（timeline/__timelines 注册）不在这里补——那是有内容的创作决定，缺了进
+// 机检 issues 回喂模型重写。
+func PrepareSamplePage(html string, dur float64) string {
+	if !strings.Contains(html, "assets/gsap.min.js") {
+		inject := "<script src=\"assets/gsap.min.js\"></script>\n    <script src=\"assets/hf.js\"></script>"
+		if i := strings.Index(strings.ToLower(html), "<head>"); i >= 0 {
+			j := i + len("<head>")
+			html = html[:j] + "\n    " + inject + html[j:]
+		} else if i := strings.Index(strings.ToLower(html), "<html"); i >= 0 {
+			if j := strings.Index(html[i:], ">"); j >= 0 {
+				j += i + 1
+				html = html[:j] + "\n  <head>" + inject + "</head>" + html[j:]
+			}
+		}
+	}
+	if !sampleRootDurRe.MatchString(html) {
+		html = sampleRootRe.ReplaceAllStringFunc(html, func(m string) string {
+			if !strings.Contains(m, "data-duration") {
+				return strings.TrimSuffix(m, ">") + fmt.Sprintf(" data-duration=\"%.2f\"", dur) + ">"
+			}
+			return m
+		})
+	}
+	return html
+}
+
+// sampleRootRe/sampleRootDurRe 根元素定位（data-composition-id="main" 的开标签）与
+// duration 已存在判定。
+var (
+	sampleRootRe    = regexp.MustCompile(`(?i)<div[^>]*data-composition-id=["']main["'][^>]*>`)
+	sampleRootDurRe = regexp.MustCompile(`(?i)<div[^>]*data-composition-id=["']main["'][^>]*data-duration`)
+)

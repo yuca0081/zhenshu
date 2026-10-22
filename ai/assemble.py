@@ -15,6 +15,53 @@ import sys
 AI_DIR = pathlib.Path(__file__).resolve().parent
 GSAP_SRC = AI_DIR / 'assets' / 'gsap.min.js'
 
+# vend 注入（vend-stage.md §3 缺环补齐）：Go 侧 sceneLintWithVend 负责缺库采购，
+# 这里负责把已入册库真正送进页面——此前只有 demo(style-samples) 做了注入，
+# 生产线场景声明 vend 后渲染时库根本不在（2026-10-22 发现的潜伏断点）。
+VEND_RE = re.compile(r'<!--\s*vend:\s*([A-Za-z0-9_.-]+)@([^\s>]+?)\s*-->')
+VENDOR_ROOT = AI_DIR.parent / 'data' / 'library' / 'vendor'
+
+
+def vend_head_for(proj, sids):
+    htmls = []
+    for sid in sids:
+        src = proj / 'compositions' / 'frames' / (sid + '.html')
+        if src.exists():
+            htmls.append(src.read_text(encoding='utf-8'))
+    return vend_tags_for(proj, htmls)
+
+
+def vend_tags_for(proj, htmls):
+    """vend 注入核心：扫源码 vend 声明 → 查 manifest → 哈希复核 → 拷贝进
+    assets/vendor/ → 返回 head <script> 标签串。声明了未入册 = 响亮死（采购本应
+    已由 Go 代购先行，走到这=竞态/bug，静默产出无库页面比炸更难查）。"""
+    try:
+        manifest = json.loads((VENDOR_ROOT / 'manifest.json').read_text(encoding='utf-8'))
+    except Exception:
+        manifest = {'libs': {}}
+    tags, seen = [], set()
+    vendir = proj / 'assets' / 'vendor'
+    for html in htmls:
+        for m in VEND_RE.finditer(html):
+            lib, ver = m.group(1), m.group(2)
+            if (lib, ver) in seen:
+                continue
+            seen.add((lib, ver))
+            ent = manifest.get('libs', {}).get(lib, {}).get(ver)
+            if ent is None:
+                raise SystemExit('✗ vend ' + lib + '@' + ver + ' 未入册——先跑 python ai/vendor_tool.py ensure ' +
+                                 lib + '@' + ver + '（Go 侧 sceneLintWithVend 应已代购，走到这=竞态/bug）')
+            f = VENDOR_ROOT / lib / ver / ent['file']
+            data = f.read_bytes()
+            if hashlib.sha256(data).hexdigest() != ent['sha256']:
+                raise SystemExit('✗ vend ' + lib + '@' + ver + ' 盘上哈希不符——安全事件拒收（vend-stage.md §5）')
+            vendir.mkdir(parents=True, exist_ok=True)
+            dst = vendir / (lib + '-' + ver + '.js')
+            if not dst.exists() or dst.read_bytes() != data:
+                dst.write_bytes(data)
+            tags.append('<script src="assets/vendor/' + lib + '-' + ver + '.js"></script>')
+    return ('' if not tags else '\n    ' + '\n'.join(tags))
+
 
 def write_atomic(path: pathlib.Path, text: str):
     """tmp+os.replace 原子写（2026-10-19 中-15）：Go 写池 ≤4 worker 并发全量跑
@@ -180,8 +227,11 @@ def ensure_font_faces(html, resolved):
             return block
         fam = fm.group(1).strip().strip('\'"')
         url = resolved.get(fam.lower())
-        if not url or 'url(' in block:
+        if not url:
             return block
+        if 'data:' in block:
+            return block  # 已是真字体，幂等跳过
+        # 猜写的相对路径 url 同样是空头支票（渲染 404 回退雅黑），备了真字体就改写
         n += 1
         return "@font-face{font-family:'%s';src:url('%s') format('woff2');}" % (fam, url)
 
@@ -433,7 +483,7 @@ def main(proj_dir: str) -> int:
                 f'        data-start="{start}" data-duration="{adur}" data-track-index="10" data-volume="1"></audio>')
         return chr(10).join(out)
 
-    def project_html(w, h, total_dur, body, ovl_body='', ovl_js='', cap_body='', cap_js='', xfade=True):
+    def project_html(w, h, total_dur, body, ovl_body='', ovl_js='', cap_body='', cap_js='', xfade=True, vend_head=''):
         # KaTeX 本地供给（formula 元素用；外链被禁，必须离线打包）
         katex_head = ''
         if (AI_DIR / 'assets' / 'katex' / 'katex.min.js').exists():
@@ -453,7 +503,7 @@ def main(proj_dir: str) -> int:
     <meta name="viewport" content="width={w}, height={h}" />
     <script src="assets/gsap.min.js"></script>
     <script src="assets/hf.js"></script>
-{katex_head}    <style>
+{katex_head}{vend_head}    <style>
       * {{ margin: 0; padding: 0; box-sizing: border-box; }}
       html, body {{ width: {w}px; height: {h}px; overflow: hidden; background: #000; }}
       #root {{ position: relative; width: {w}px; height: {h}px; overflow: hidden; background: {slots.get('bg') or '#FDF6E3'}; }}
@@ -496,7 +546,8 @@ def main(proj_dir: str) -> int:
     write_atomic(proj / 'index.html',
                  project_html(W, H, total,
                               scenes_html(seg_scenes),
-                              *overlay_block(first_chapter, total, 0.0), cap_body, cap_js, xfade=xfade))
+                              *overlay_block(first_chapter, total, 0.0), cap_body, cap_js, xfade=xfade,
+                              vend_head=vend_head_for(proj, ids)))
 
     # 单段工程（段级局部重渲）：.hf-seg/segNN.html = 只含该段的 index，
     # hyperframes render -c 出带音轨段片，段间 concat 出成片（见 pipeline stageRender）。
@@ -520,7 +571,7 @@ def main(proj_dir: str) -> int:
                                 scenes_html([(sid, 0, scene[sid], durs[sid])]),
                                 *overlay_block(chapters.get(sid, ''), scene[sid], starts[sid]),
                                 *subtitle_blocks([(sid, 0, scene[sid], durs[sid])], meta['voices'], slots, proj, W, H),
-                                xfade=xfade)
+                                xfade=xfade, vend_head=vend_head_for(proj, [sid]))
         seg_html += f'\n<!-- src-fp:{src_fp.hexdigest()[:16]} -->\n'
         out = segdir / f'{sid}.html'
         # 内容没变就保住 mtime：段级重渲缓存按"段片旧于段工程"判旧（pipeline segStale），

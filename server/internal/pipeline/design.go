@@ -22,7 +22,8 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
-	_ "image/png" // 解码简报证据帧（style_media 抽帧）
+	_ "image/jpeg"
+	_ "image/png" // 解码简报证据帧/样张判卷帧（style_media 抽帧 png、渲染抽帧 jpg）
 	"os"
 	"regexp"
 	"sort"
@@ -530,6 +531,10 @@ func writeDesignDoc(b *strings.Builder, ss *contract.StyleSamples, brief *contra
 				w("  - 声明叠层：%s\n", l.Layered)
 			}
 		}
+	}
+	if len(ss.VendLibs) > 0 {
+		w("\n### 本片样张自采库（货架优先）\n")
+		w("- 样张效果用了这些已采购入库的库：%s。需要同款效果的场景直接声明同款 vend（平台自动注入，零新增采购）；货架实在没有的库才申请新采（同一套许可证/哈希闸）。\n", strings.Join(ss.VendLibs, "、"))
 	}
 	if len(ss.AntiPatterns) > 0 {
 		w("\n### 本片负面清单（出现即返工）\n")
