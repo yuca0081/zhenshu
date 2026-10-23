@@ -33,6 +33,7 @@ func SetCloudStore(s artifacts.Store) { cloudStore = s }
 
 // 工位名（反馈路由的寻址单位）。
 const (
+	StationMusic      = "music"
 	StationScript     = "script"
 	StationStyle      = "style"
 	StationStoryboard = "storyboard"
@@ -114,6 +115,8 @@ func HasArtifact(p *pipeline.Project, station string) bool {
 
 func artifactPath(p *pipeline.Project, station string) string {
 	switch station {
+	case StationMusic:
+		return musicMapPath(p)
 	case StationScript:
 		return scriptPath(p)
 	case StationStyle:
@@ -130,6 +133,9 @@ func artifactPath(p *pipeline.Project, station string) string {
 func InvalidateFrom(p *pipeline.Project, station string) {
 	var files []string
 	switch station {
+	case StationMusic:
+		// PV 音乐工位：三件套一锅端。下游（分镜/制作）M2 才接，暂无级联。
+		files = []string{musicBriefPath(p), musicMapPath(p), musicTrackPath(p)}
 	case StationScript:
 		files = []string{
 			scriptPath(p), stylePackPath(p), draftPath(p),
@@ -141,8 +147,8 @@ func InvalidateFrom(p *pipeline.Project, station string) {
 	default:
 		return
 	}
-	// 设计/样张衍生品：style 工位及更早失效时全部作废（storyboard 失效不碰设计）
-	if station != StationStoryboard {
+	// 设计/样张衍生品：style 工位及更早失效时全部作废（storyboard/music 失效不碰设计）
+	if station == StationScript || station == StationStyle {
 		files = append(files,
 			p.Artifact("style/style_samples.json"), p.Artifact("style/skin.json"),
 			p.Artifact("style/design.md"), p.Artifact("style/prep-draft.json"),
@@ -154,13 +160,13 @@ func InvalidateFrom(p *pipeline.Project, station string) {
 	for _, f := range files {
 		_ = os.Remove(f)
 	}
-	if station != StationStoryboard {
+	if station == StationScript || station == StationStyle {
 		_ = os.RemoveAll(p.Artifact("style/clips"))
 		_ = os.RemoveAll(p.Artifact(".hf-clip"))
 		_ = os.RemoveAll(p.Artifact(".hf-sample"))
 	}
 	// legacy 分镜随 draft 作废（翻译产物，重跑后重写）
-	if station != "" {
+	if station != "" && station != StationMusic {
 		_ = os.Remove(p.Artifact("storyboards/storyboard.json"))
 	}
 	// 远端正本跟着作废（best-effort）：防清理过的老项目回源时陈旧工件复活

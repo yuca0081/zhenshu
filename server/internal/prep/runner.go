@@ -90,15 +90,22 @@ func (r *Runner) Start(id, idea string, force bool) (bool, error) {
 		release()
 		return false, ErrPrepNoLLM
 	}
-	if HasArtifact(p, StationStoryboard) && !force {
+	// 终站按驱动模式分流：音乐 PV 的完成标记是音乐地图（不是分镜稿）。
+	doneStation := StationStoryboard
+	forceFrom := StationScript
+	if ProjectMode(p) == "music" {
+		doneStation = StationMusic
+		forceFrom = StationMusic
+	}
+	if HasArtifact(p, doneStation) && !force {
 		release()
 		return false, errors.New("准备工件已生成——去「终审」页签确认，或勾选「按新想法重跑」")
 	}
 	if force {
-		// force 无条件作废三工件：上轮失败停在①②（分镜工件缺）时，旧写法只在
-		// HasArtifact(Storyboard) 为真才 InvalidateFrom，新想法只落 input 不被
-		// 消费（2026-10-19 中-1）。无任何工件时 InvalidateFrom 是幂等空操作。
-		InvalidateFrom(p, StationScript)
+		// force 无条件作废：上轮失败停在半途时，旧写法只在终站工件为真才
+		// InvalidateFrom，新想法只落 input 不被消费（2026-10-19 中-1）。
+		// 无任何工件时 InvalidateFrom 是幂等空操作。
+		InvalidateFrom(p, forceFrom)
 	}
 	if idea = strings.TrimSpace(idea); idea != "" {
 		if err := os.MkdirAll(filepath.Dir(p.Artifact(IdeaFile)), 0o755); err != nil {
@@ -111,7 +118,11 @@ func (r *Runner) Start(id, idea string, force bool) (bool, error) {
 		}
 		applyIdeaDuration(p, idea)
 	}
-	p.Manifest("prep.start", "启动三工位链（想法页/对话入口）")
+	startMsg := "启动三工位链（想法页/对话入口）"
+	if ProjectMode(p) == "music" {
+		startMsg = "启动音乐工位（做曲→音乐地图）"
+	}
+	p.Manifest("prep.start", startMsg)
 	r.Deps.emit(id, "stage", "prep", "running")
 	// 总闸：回合预算放宽后（①30/②12/③10），单站烧穿预算的最坏墙钟很可观，
 	// 再叠一次冷重试必须有个链级上限兜底——60 分钟覆盖正常长链绰绰有余，

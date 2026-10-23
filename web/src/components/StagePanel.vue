@@ -79,9 +79,13 @@ function tabState(id: TabID): { cls: string[]; title: string; label: string } {
   switch (id) {
     case 'idea':
       if (isMusic.value) {
+        // PV 状态灯：黄=还没曲子；蓝跑=做曲中；绿=三件套就绪（试听在想法页签）
+        const m = props.prep?.music
         return {
-          cls: ['wait'],
-          title: '音乐驱动 PV：做曲 → 音乐地图 → 分镜（准备工位 M1 开发中）',
+          cls: [props.prep?.running ? 'run' : m?.map ? 'ok' : 'wait'],
+          title: props.prep?.running
+            ? '做曲中（brief → 编曲 → 音乐地图 → 自检环）'
+            : m?.map ? '整曲与音乐地图已就绪——「想法」页签试听' : '说一句话主题，AI 做曲＋出音乐地图',
           label: 'PV',
         }
       }

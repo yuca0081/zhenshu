@@ -65,10 +65,20 @@ func run(ctx context.Context, p *pipeline.Project, d Deps, strict bool) error {
 		run   func(context.Context) error
 		after func()
 	}
+	// 驱动模式分流：音乐驱动 PV 走单站音乐工位（做曲→地图，一站三交付），
+	// 文稿三工位整条不进——PV 的分镜工位（M2）与打包门上线前，制作入口另有
+	// 拦截，半条链跑出来只会污染工件区。
+	doneMsg := "三工件就绪，等待打包终审"
 	stations := []station{
 		{StationScript, func(c context.Context) error { return runScriptStation(c, p, d) }, nil},
 		{StationStyle, func(c context.Context) error { return runStyleStation(c, p, d) }, nil},
 		{StationStoryboard, func(c context.Context) error { return runStoryboardStation(c, p, d) }, nil},
+	}
+	if ProjectMode(p) == "music" {
+		stations = []station{
+			{StationMusic, func(c context.Context) error { return runMusicStation(c, p, d) }, nil},
+		}
+		doneMsg = "音乐三件套就绪（brief/曲/地图）——分镜工位上线后接续"
 	}
 	d.emit(p.ID, "stage", "prep", "running")
 	for _, st := range stations {
@@ -82,7 +92,7 @@ func run(ctx context.Context, p *pipeline.Project, d Deps, strict bool) error {
 			return err
 		}
 	}
-	p.Manifest("prep.done", "三工件就绪，等待打包终审")
+	p.Manifest("prep.done", doneMsg)
 	d.emit(p.ID, "stage", "prep", "done")
 	return nil
 }
@@ -111,8 +121,14 @@ func runWithColdRetry(ctx context.Context, p *pipeline.Project, name string, f f
 	return f(ctx)
 }
 
-// Summary 三工件就绪态一行账（agent/终审 UI 用）。
+// Summary 工件就绪态一行账（agent/终审 UI 用）。
 func Summary(p *pipeline.Project) string {
+	if ProjectMode(p) == "music" {
+		if mp, err := loadMusicMap(p); err == nil {
+			return fmt.Sprintf("整曲 %dBPM %.0f 秒 %d 段（brief/曲/地图三件套就绪）", mp.Bpm, mp.Duration, len(mp.Sections))
+		}
+		return "音乐三件套缺"
+	}
 	s := ""
 	if HasArtifact(p, StationScript) {
 		if sc, err := LoadScript(p); err == nil {

@@ -128,6 +128,7 @@ func (s *Server) Router() *gin.Engine {
 	api.GET("/projects/:id/audio_meta", s.audioMeta)
 	api.GET("/bgm/library", s.bgmLibrary)
 	api.GET("/bgm/audio/:name", s.bgmAudio)
+	api.GET("/projects/:id/music/audio", s.musicAudio)
 	api.GET("/library", s.listLibrary)
 	api.DELETE("/library/:id", s.deleteLibraryEntry)
 	api.GET("/library/:id/frames", s.libraryFrames)
@@ -774,20 +775,9 @@ func (s *Server) projectView(c *gin.Context) {
 }
 
 // projectMode 读 project.json 驱动模式（script=文稿驱动现行管线｜music=音乐
-// 驱动 PV）。缺失/读档失败/字段异常一律回 script——老项目无此字段，兼容
-// 语义就是"文档驱动是默认世界"。
+// 驱动 PV）。实现收在 prep 包（prep 链按它分流），api 这层只是转接。
 func projectMode(p *pipeline.Project) string {
-	b, err := os.ReadFile(p.Artifact("project.json"))
-	if err != nil {
-		return "script"
-	}
-	var meta struct {
-		Mode string `json:"mode"`
-	}
-	if json.Unmarshal(b, &meta) != nil || meta.Mode != "music" {
-		return "script"
-	}
-	return "music"
+	return prep.ProjectMode(p)
 }
 
 // agentTokenTotals manifest 全量扫 agent.done，累计整个项目所有智能体任务的 token
@@ -1204,6 +1194,13 @@ func (s *Server) runPrep(c *gin.Context) {
 		Force bool   `json:"force"`
 	}
 	_ = c.ShouldBindJSON(&in)
+	// 音乐驱动 PV：主题必填（地图推不出情绪色彩层，主题+终审门人工纠正才是
+	// 三层兜底的地基——pv-music-driven-design 模式A契约）。
+	music := projectMode(pipeline.NewProject(s.DataDir, id)) == "music"
+	if music && strings.TrimSpace(in.Idea) == "" {
+		c.JSON(400, gin.H{"error": "音乐驱动项目要先给主题（一句话，做什么氛围的曲子）"})
+		return
+	}
 	started, err := s.Preps.Start(id, in.Idea, in.Force)
 	if err != nil {
 		switch {
@@ -1223,7 +1220,9 @@ func (s *Server) runPrep(c *gin.Context) {
 		return
 	}
 	note := "准备阶段已启动：文稿 → 风格 → 分镜，进度在「想法」页签与事件流。"
-	if in.Idea != "" {
+	if music {
+		note = "PV 准备工位已启动：做曲 → 音乐地图，完成后在「想法」页签试听。"
+	} else if in.Idea != "" {
 		note = "准备阶段已带着你的想法启动：文稿 → 风格 → 分镜，完成后去「终审」页签确认。"
 	}
 	s.Hub.Emit(id, "msg", "", note)
@@ -1255,6 +1254,16 @@ func (s *Server) prepView(c *gin.Context) {
 		"running": s.Preps != nil && s.Preps.IsRunning(p.ID),
 		"legacy":  prep.LegacyProject(p),
 		"idea":    strings.TrimSpace(readFileLoose(p.Artifact("input/prep_idea.txt"))),
+		"mode":    projectMode(p),
+	}
+	// 音乐驱动 PV：文稿三工件不适用，回三件套视图（想法页签的做曲面板）
+	if state["mode"] == "music" {
+		out := gin.H{"exists": false, "confirmed": false, "music": prep.MusicPrepView(p)}
+		for k, v := range state {
+			out[k] = v
+		}
+		c.JSON(200, out)
+		return
 	}
 	script, err := prep.LoadScript(p)
 	if err != nil {
@@ -1322,6 +1331,12 @@ func (s *Server) confirmPrep(c *gin.Context) {
 	}
 	defer mu.(*sync.Mutex).Unlock()
 	p := pipeline.NewProject(s.DataDir, id)
+	// 音乐驱动 PV 的打包门（brief+试听+地图+镜头表）随分镜工位（M2）上线，
+	// 现在没有可确认的包——明确报错比假装确认好。
+	if projectMode(p) == "music" {
+		c.JSON(400, gin.H{"error": "PV 打包终审门随分镜工位（M2）上线——现在可在「想法」页签试听做曲结果"})
+		return
+	}
 	if _, err := prep.LoadScript(p); err != nil {
 		c.JSON(400, gin.H{"error": "这个项目没有准备工件（非新路径），在「风格」页签走样张确认"})
 		return
@@ -1561,6 +1576,20 @@ func (s *Server) bgmAudio(c *gin.Context) {
 	path, err := pipeline.BGMFilePath(c.Param("name"))
 	if err != nil {
 		c.JSON(404, gin.H{"error": err.Error()})
+		return
+	}
+	c.File(path)
+}
+
+// musicAudio 音乐驱动 PV 的整曲试听（音乐工位产物 music/track.mp3）。
+func (s *Server) musicAudio(c *gin.Context) {
+	p, ok := s.project(c)
+	if !ok {
+		return
+	}
+	path := p.Artifact("music/track.mp3")
+	if _, err := os.Stat(path); err != nil {
+		c.JSON(404, gin.H{"error": "曲子还没做好（先在「想法」页签跑准备工位）"})
 		return
 	}
 	c.File(path)

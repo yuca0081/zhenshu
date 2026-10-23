@@ -104,12 +104,40 @@ export interface PrepDraftSeg {
   duration_hint: number
 }
 
+export interface PrepMusicSection {
+  name: string
+  start: number
+  end: number
+  energy: number
+}
+
+export interface PrepMusic {
+  brief: boolean // 曲 brief（创作意图）已落盘
+  audio: boolean // 整曲 mp3 已落盘（试听走 /projects/:id/music/audio）
+  brief_summary?: {
+    name: string
+    key: string
+    bpm: number
+    bars: number
+    sections: { name: string; bars: number; energy: number }[]
+  }
+  map?: {
+    name: string
+    key: string
+    bpm: number
+    duration: number
+    sections: PrepMusicSection[]
+  }
+}
+
 export interface PrepView {
   exists: boolean // scripts/script.json 在 = 项目走准备工位（终审页签的显示条件）
   confirmed: boolean // 打包终审是否已确认（=开工硬门）
   running?: boolean // 三工位链在跑（想法页签的进度态）
   legacy?: boolean // 老项目（legacy 分镜已在，不走准备工位——隐藏想法页签）
   idea?: string // 已落盘的用户想法（回填文本框）
+  mode?: string // script=文稿驱动（默认，老项目缺省）｜music=音乐驱动 PV
+  music?: PrepMusic // 音乐驱动 PV 的三件套视图（brief/曲/地图）
   style_name?: string
   script?: PrepScript
   stylepack?: {
@@ -325,4 +353,5 @@ export interface TemplateDetailData {
   confirmed?: boolean
   editable?: boolean // 解析草稿（未入库）：特色可增删改
   draft?: RefVideoStyle // editable 时的完整草稿（含 name/subject）
+  selectMode?: boolean // 选风格模式（风格页签用）：特色开关搬进抽屉（看着截图点菜）+「就选它」
 }

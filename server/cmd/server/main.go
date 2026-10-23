@@ -127,6 +127,10 @@ func main() {
 		switch {
 		case err == nil:
 			agent.WriteProjectStatus(cfg.DataDir, st, id, "style")
+			if prep.ProjectMode(pp) == "music" {
+				ag.PostNotice(id, "✅ 整曲完成（"+prep.Summary(pp)+"）——「想法」页签可试听；分镜工位（M2）上线后接续制作")
+				return
+			}
 			ag.PostNotice(id, "✅ 准备阶段完成（"+prep.Summary(pp)+"）——在「终审」页签打包确认后即可开工")
 		case errors.Is(err, context.Canceled):
 			ag.PostNotice(id, "⏹ 准备阶段已取消，可在「想法」页签随时重来")
