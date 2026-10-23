@@ -687,13 +687,27 @@ func anchorFrames(sents []contract.Sentence, ends map[string]float64, dur float6
 
 // segSentences 段的句编号旁白：prep 分镜稿翻译时旁白 = 句文本按序拼接（无分隔），
 // 逐句前缀匹配还原 N 编号；对不上（老分镜/手改稿）从断点截断。
+// 段首句先全表定位再顺序吃——旧实现从 N1 起匹配，seg02 起第一句就对不上直接断，
+// 段审旁白节与锚点 N 标签对全片除 seg01 外都是空的（seg10 实测：审片员被告知
+// 无旁白，把自己段的烧入字幕判成上一段残留，修复轮永不可解 → 签名刹车）。
 func segSentences(script *contract.Script, seg contract.Segment) []contract.Sentence {
 	if script == nil {
 		return nil
 	}
-	var out []contract.Sentence
 	rest := seg.Narration
-	for _, sen := range script.Sentences {
+	start := -1
+	for i, sen := range script.Sentences {
+		text := strings.TrimSpace(sen.Text)
+		if text != "" && strings.HasPrefix(rest, text) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return nil
+	}
+	var out []contract.Sentence
+	for _, sen := range script.Sentences[start:] {
 		text := strings.TrimSpace(sen.Text)
 		if text == "" {
 			continue

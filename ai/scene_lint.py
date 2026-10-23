@@ -127,6 +127,23 @@ def lint_text(html: str, seg_hint: str = '') -> list:
             if re.search(r"['\"]#" + re.escape(eid) + r"['\"]", script):
                 errs.append(('T9', f'#{eid} 的 CSS transform 与 GSAP 补间混用（GSAP 会覆盖 CSS transform）；居中用 GSAP 的 xPercent/yPercent，CSS 里删掉 transform'))
 
+    # T11：CSS 语境（style 属性值 / <style> 块）里出现驼峰属性名（zIndex: 5
+    # 之类——那是 JS 属性名，CSS 声明必须连字符 z-index；CSS 解析器静默丢弃
+    # 驼峰整条声明，层级/定位悄悄失效。实测：canvas 内联 zIndex 失效被卡片
+    # 盖住，审片判剪影缺失，两轮修复不可解 → 签名刹车）。只扫 CSS 语境：
+    # JS 里的 element.style.zIndex 是合法驼峰，扫全文会误伤。
+    body_no_js = re.sub(r'<script.*?</script>', '', html, flags=re.S)
+    css_chunks = re.findall(r'style\s*=\s*"([^"]*)"', body_no_js)
+    css_chunks += re.findall(r'<style[^>]*>(.*?)</style>', body_no_js, re.S)
+    camel = set()
+    for chunk in css_chunks:
+        camel.update(re.findall(r'(?<![-\w])([a-z]+[A-Z][a-zA-Z]*)\s*:', chunk))
+    camel = sorted(camel)
+    if camel:
+        errs.append(('T11', f'样式里出现驼峰 CSS 属性名 {camel[:5]}（JS 名≠CSS 名，'
+                            f'CSS 解析器静默丢弃整条声明）：改连字符写法 zIndex→z-index、'
+                            f'fontSize→font-size、backgroundColor→background-color'))
+
     # A2：@font-face 存在性提示（弱规则：只在用了 font-family 且无任何声明时提示）
     ff_used = set(t.lower() for t in re.findall(r"font-family\s*:\s*['\"]([^'\"]+)['\"]", html))
     if ff_used and '@font-face' not in html:
