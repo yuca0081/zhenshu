@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"webpage-video-agent/server/internal/contract"
 )
@@ -37,7 +38,9 @@ func (l *Library) BuildBrief(id string, disabled map[string]bool) (*contract.Sty
 		b.Signatures = append(b.Signatures, sg)
 	}
 	seen := map[string]bool{}
-	add := func(names []string) {
+	// note 与帧同行进简报：标签证据带打标指认，特色证据自报家门——附图侧按帧
+	// 配字幕的原料（策展笔记不随图走，附图就退化成一把裸图）。
+	add := func(names []string, note string) {
 		if len(b.Evidence) >= maxBriefEvidence { // 上限检查必须在入口：写在循环尾只挡得住本组
 			return
 		}
@@ -51,16 +54,21 @@ func (l *Library) BuildBrief(id string, disabled map[string]bool) (*contract.Sty
 			}
 			seen[n] = true
 			b.Evidence = append(b.Evidence, p)
+			b.EvidenceNotes = append(b.EvidenceNotes, note)
 			if len(b.Evidence) >= maxBriefEvidence {
 				return
 			}
 		}
 	}
 	for _, ev := range st.TagEvidence { // 标签证据优先（气质基调的对照物）
-		add(ev.Frames)
+		note := ev.Note
+		if strings.TrimSpace(note) == "" {
+			note = "「" + ev.Tag + "」标签的例证帧"
+		}
+		add(ev.Frames, note)
 	}
 	for _, sg := range b.Signatures {
-		add(sg.Frames)
+		add(sg.Frames, "特色「"+sg.Name+"」的例证帧")
 	}
 	return b, nil
 }

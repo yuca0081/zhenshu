@@ -609,7 +609,7 @@ var tools = []tool{
 				return "提炼失败：" + terr.Error()
 			}
 			pack, err := a.Lib.DraftFromProject(p.Dir, p.ID, stylelib.ProjectDraftIn{
-				Name: d.Name, Subject: d.Subject, Tags: d.Tags,
+				Name: d.Name, Subject: d.Subject, Facets: d.Facets, Tags: d.Tags,
 				TagEvidence: d.TagEvidence, Signatures: d.Signatures,
 			})
 			if err != nil {

@@ -36,6 +36,11 @@ const styleBudget = 30
 // 张数乘的是整条链的成本。
 const styleSampleMax = 6
 
+// styleGrabWindow 抢收窗口（2026-10-23 中-2）：工位预算到期前这么多分钟起，
+// render_sample 拒起新活并回喂「立即 submit_style」——带伤提交优先于撞线全烧。
+// 一张样张带修复 ~7 分钟（真机实测），窗口必须盖过一次收尾提交的回合开销。
+const styleGrabWindow = 4 * time.Minute
+
 const styleSystem = `你是美术指导。任务：为口播稿选定视觉风格，产出可直接指导制作的风格包。材料：get_script 拿口播稿；search_styles 按情绪与题材定分面、有筛选地浏览（不必遍历全库）；get_style_detail 看中的条目——描述、特色、样张图库、历史使用记录，**该条目的原片真迹帧会作为附图随观察给你**：配色、质感、画面密度、字体气质一律从真迹里来，禁止只凭文字想象风格。render_sample 渲染 1.8 秒动态样张验证落地效果（与成片同一台渲染器，动效/字体/质感即所得）；判卷官抽首/中/尾三帧对照真迹判风格贴合，打回时对着附图修。样张 4–5 张为宜（上限 6），每张版式明显不同；需要外部库就用 vend 声明让平台采购，别硬手搓。
 库中没有合适的，从最接近的条目衍生一个并说明差异（register_style，单次限登记 1 个；衍生条目带「未验证」标签，出片后才转正）。
 产出四件（submit_style 一次交齐）：风格描述（视觉语言、色彩、质感、构图倾向，附选择理由——分镜工位靠它理解语境）；剪辑语法（切分密度 / 段长带秒数 / 同舞台延续强弱）；设计系统（皮肤、字体角色、动效语言、贯穿装置、版式、负面清单，以及本风格的**标准入场/收尾动画模板**——它是转场的载体，一套模板一段内生效，禁止逐段即兴发明）；样张 id 列表。
@@ -48,6 +53,10 @@ func runStyleStation(ctx context.Context, p *pipeline.Project, d Deps) error {
 		return fmt.Errorf("风格工位依赖文字稿: %w", err)
 	}
 	r := &styleRun{p: p, d: d, script: script}
+	// 抢收线从工位预算 ctx 的 deadline 推（无 deadline=无抢收，直测兼容）
+	if dl, ok := ctx.Deadline(); ok {
+		r.grabAt = dl.Add(-styleGrabWindow)
+	}
 	// 用户选定条目三层恢复：简报在 → 直接用（applyStyle 落的硬要求）；简报被反馈
 	// 重跑作废但 project.json style_id 还在 → 重建简报（选型是项目级决定，不随
 	// 工件作废）；都没有 → ②自主探索。chosen 是判卷对照物的起点。
@@ -126,6 +135,10 @@ type styleRun struct {
 	registered string
 	// lastRepairSig 上一轮修复前的问题签名（样张刹车判据；每张样张渲染完清零）。
 	lastRepairSig string
+	// grabAt 抢收线（2026-10-23 中-2）：工位预算 deadline 前 styleGrabWindow 的
+	// 时刻点。过后 render_sample 拒起新活——逼模型立即 submit_style 带伤交付，
+	// 优先于撞预算线全烧（三次真机两轮超时的直接对策）。
+	grabAt time.Time
 }
 
 // refDetailMax get_style_detail 随观察附的真迹帧数：探索期一条 3 张，看几条
@@ -703,6 +716,11 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 			"required": []string{"scene_brief", "html"},
 		}),
 		Run: func(ctx context.Context, args string) Observation {
+			// 抢收门（2026-10-23 中-2）：预算窗口将尽，拒起新样张——渲一张带修复
+			// ~7 分钟，撞线时开新活等于整链作废。回喂直接指路 submit_style。
+			if !r.grabAt.IsZero() && time.Now().After(r.grabAt) {
+				return Observation{Text: fmt.Sprintf("时间预算将尽（剩不足 %s）——不要再渲新样张也不要再修旧的，立即调用 submit_style 提交当前成果：带伤提交优先于超时全烧，缺一张样张是小事，链超时是全烧。", styleGrabWindow)}
+			}
 			var in struct {
 				SceneBrief string `json:"scene_brief"`
 				HTML       string `json:"html"`

@@ -106,7 +106,7 @@ func (e errFake) Error() string { return string(e) }
 func TestDesignBriefDirectorBlock(t *testing.T) {
 	p := NewProject(t.TempDir(), "dtest")
 	sb := passStoryboard()
-	if s := designBrief(p, sb, 0); strings.Contains(s, "导演统筹") {
+	if s := designBrief(p, sb, nil); strings.Contains(s, "导演统筹") {
 		t.Fatal("无导演字段不该注入统筹块")
 	}
 	if err := applyDirectorPlan(sb, validPlan()); err != nil {
@@ -114,7 +114,7 @@ func TestDesignBriefDirectorBlock(t *testing.T) {
 	}
 	sb.Motifs = []contract.Motif{{Name: "全知之眼", Desc: "金色眼睛",
 		Appearances: []contract.MotifApp{{SegID: "seg01", Role: "establish"}, {SegID: "seg02", Role: "echo"}}}}
-	s := designBrief(p, sb, 0)
+	s := designBrief(p, sb, nil)
 	for _, want := range []string{
 		"导演统筹（本片叙事结构——设计系统要呼应它）",
 		"从立到破",

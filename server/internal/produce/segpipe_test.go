@@ -187,7 +187,7 @@ func TestFinalFramesDistribution(t *testing.T) {
 		sb.Segments = append(sb.Segments, contract.Segment{ID: id, Key: "段" + id})
 		tl = append(tl, pipeline.TimelineRow{ID: id, Start: float64(i-1) * 10, End: float64(i) * 10})
 	}
-	frames, _ := finalFrames(nil, sb, tl)
+	frames, _, _ := finalFrames(nil, sb, tl)
 	if len(frames) != 12 {
 		t.Fatalf("帧格应补足 12，得到 %d", len(frames))
 	}
@@ -210,7 +210,7 @@ func TestFinalFramesSkipFadeInBlack(t *testing.T) {
 		tl = append(tl, pipeline.TimelineRow{ID: id, Start: float64(i-1) * 7, End: float64(i) * 7})
 	}
 	tl[8].End = tl[8].Start + 1.0 // 末段压成 1s 短段：夹住 +0.4 不越界
-	frames, _ := finalFrames(nil, sb, tl)
+	frames, _, _ := finalFrames(nil, sb, tl)
 	byStart := map[float64]bool{}
 	for _, r := range tl {
 		byStart[round2(r.Start)] = true

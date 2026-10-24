@@ -44,8 +44,9 @@ type Ref struct {
 // StyleDraft 解析产出的标签+特色草稿（入库前形态；确认页可增删改）。
 // Tags 是已解析落表的词表 id；Signatures 的 ID 在入库时统一编 sig1..sigN。
 type StyleDraft struct {
-	Name        string                 `json:"name"`              // 条目名（缺省用主标签正式名）
+	Name        string                 `json:"name"`              // 条目名（LLM 起的独特名；缺省用主标签正式名）
 	Subject     string                 `json:"subject,omitempty"` // 原片题材一句话（只供检索，永不进生成提示词）
+	Facets      stylelib.StyleFacets   `json:"facets,omitempty"`  // 分面三轴（2026-10-24：search_styles 检索轴，此前解析链整层不产）
 	Tags        contract.StyleTags     `json:"tags"`
 	TagEvidence []contract.TagEvidence `json:"tag_evidence,omitempty"`
 	Signatures  []contract.Signature   `json:"signatures,omitempty"`
@@ -55,6 +56,7 @@ type StyleDraft struct {
 type taggerOutput struct {
 	Subject    string               `json:"subject"`
 	Name       string               `json:"name,omitempty"`
+	Facets     stylelib.StyleFacets `json:"facets,omitempty"`
 	Tags       []rawTag             `json:"tags"`
 	Signatures []contract.Signature `json:"signatures"`
 }
@@ -501,12 +503,21 @@ func synthesizeUserPrompt(lib *stylelib.Library, name string, feats videoFeature
   在该风格之上的独门绝活」，没有就少给甚至不给（signatures 可以为空数组）；
 - camera/transition/motion 类手法的判断%s。
 
+## 条目名
+- name 是这支片在库里的陈列名（≤12 字）：概括它独有气质的独特名（如「卡带未来主义」），
+  不要写主标签家族名（粘土定格——同标签多条目会同名撞车），也不要照抄视频标题。
+
+## 分面三轴（检索用，各 ≤6 字短语）
+- mood 情绪（如 沉稳/明快/悬疑/热血/治愈）、tone 色调（如 黑金/低饱和暖色/冷蓝/高对比黑白）、
+  density 密度（如 疏朗/中密/高密）——从真迹观察里归纳，措辞贴近示例便于筛选命中。
+
 ## 题材只进 subject
 - subject：一句话记录原片画的是什么（≤30 字，如「等距视角的城市宣传动画」）——
   它只供人浏览与检索，下游不会注入生成模型；除 subject 外任何字段禁写题材词。%s
 
 ## 输出（只输出 JSON，无围栏）
-{"name":"条目名（≤12 字，主标签正式名）","subject":"原片题材一句话（≤30字）",
+{"name":"条目名（≤12 字，独特名）","subject":"原片题材一句话（≤30字）",
+"facets":{"mood":"..","tone":"..","density":".."},
 "tags":[{"id":"词表id 或空","new":{"id":"..","name":"..","aliases":[".."],"brief":"..","tells":".."},"note":"人话指认","frames":["frame-xx.png"]}],
 "signatures":[{"kind":"六类之一","name":"人话短名","mechanism":"机制描述","frames":["frame-xx.png"],"use_hint":"什么节拍适合用"}]}%s`,
 		name, spanTxt, feats.SpanS[1]-feats.SpanS[0], feats.NShots, strings.Join(pal, "、"),

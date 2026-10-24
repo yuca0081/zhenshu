@@ -92,8 +92,12 @@ type BndInput struct {
 type FinalInput struct {
 	Frames     []AnchorFrame // 全片时刻 + 人话标注（帧由 service 从成片抽取）
 	Paragraphs []string      // 段落主题列表（可空）
-	TotalDur   float64
-	Round      int
+	// SegBriefs 逐段内容清单（可空，2026-10-23 低-1/高-1③）：每段一行
+	// 「第N段「key」旁白：…；画面构想：…」——content 查项（图文核对）的对照底稿。
+	// 旧画面配新旁白的错位片在此现形（高-1 的兜底腿）。
+	SegBriefs []string
+	TotalDur  float64
+	Round     int
 	// 复核轮（终审重进瘦身，docs/cost-optimization-plan §八二阶）：只注入被
 	// 重写段及其相邻段的锚点帧，Prior=上一轮意见单（进提示词作判卷基准，不进
 	// Validate——终审 schema 无 reassessment 字段，复核约束走提示词不走校验）。
@@ -586,10 +590,11 @@ const finalSystem = `你是成片审片员，对整部成片判卷，产出结�
 ## 输入材料（开场已注入）
 1. 帧格 12–16 张——每帧标注「此刻=第几段/段落界」（t 为全片秒）
 2. 段落主题列表（全片结构）
+3. 逐段内容清单（该段旁白讲什么、画面该有什么——content 查项的对照底稿）
 
 ## 判卷流程
 1. 先读段落主题列表，明确全片结构：几章、每段该是什么气质。
-2. 逐帧过一遍四查项。
+2. 逐帧过五查项。
 3. 段间对照看 drift：相邻段的色彩/字体/质感/装饰密度是否在同一部片里（渐变跑偏=每段都及格但连起来像换了片子）。
 4. 汇总意见单，调用 submit_verdict。无工具：以注入帧格为准，拿不准的不写。
 
@@ -600,10 +605,11 @@ const finalSystem = `你是成片审片员，对整部成片判卷，产出结�
 | ② | deadair | 单点长时间无信息空转：某一帧附近画面长时间静止且旁白也无推进 |
 | ③ | stitch | 段序错、黑帧、音画错位、拼接点闪跳 |
 | ④ | drift | 段间风格渐变：相邻段风格要素（色系/字体/质感/密度）像两部片 |
+| ⑤ | content | 图文不符：抽到的帧所属段，画面内容与该段内容清单明显对不上（旁白讲 A 画面还是早前的 B）。风格化演绎、比喻可视化不算不符；一帧只是片段，看不出违和不硬报 |
 
 ## 意见条目
 每条 fail 写一条 finding：
-- category：四查之一（pacing / deadair / stitch / drift）
+- category：五查之一（pacing / deadair / stitch / drift / content）
 - anchor：t=全片秒（问题最明显的时刻；drift 写在跑偏开始的边界时刻）
 - severity：high = 观众直接察觉；low = 挑剔级。只有 high 会触发重渲。
 - evidence：时刻 + 现状 vs 期望，一句话。
@@ -612,7 +618,9 @@ const finalSystem = `你是成片审片员，对整部成片判卷，产出结�
 {
   "findings": [
     { "category": "drift", "anchor": "t=83.5", "severity": "high",
-      "evidence": "第4段起底色从米纸面跳到深霓虹且再没回来——与前3段像两部片" }
+      "evidence": "第4段起底色从米纸面跳到深霓虹且再没回来——与前3段像两部片" },
+    { "category": "content", "anchor": "t=12.0", "severity": "high",
+      "evidence": "第2段旁白讲被窝引力，画面仍是第1稿的技能卡战斗界面，找不到任何床/被窝意象" }
   ]
 }
 
@@ -631,6 +639,13 @@ func (s *Service) AuditFinal(ctx context.Context, in FinalInput) (Verdict, error
 		kick.WriteString("## 段落主题\n")
 		for i, p := range in.Paragraphs {
 			fmt.Fprintf(&kick, "%d. %s\n", i+1, p)
+		}
+		kick.WriteString("\n")
+	}
+	if len(in.SegBriefs) > 0 {
+		kick.WriteString("## 逐段内容清单（content 查项的对照底稿）\n")
+		for _, b := range in.SegBriefs {
+			kick.WriteString("- " + b + "\n")
 		}
 		kick.WriteString("\n")
 	}

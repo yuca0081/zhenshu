@@ -1,17 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useMessage, NButton, NInput, NScrollbar, NSelect, NSwitch, NTag } from 'naive-ui'
+import { useMessage, NButton, NInput, NScrollbar, NSelect, NTag } from 'naive-ui'
 import { api, libraryMediaURL, styleClipURL } from '../api'
-import type { ProjectView, Style, StyleSamples, VocabEntry } from '../types'
+import type { ProjectView, Style, StyleSamples, TemplateDetailData, VocabEntry } from '../types'
 import { errMsg } from '../format'
 import SampleFrame from './SampleFrame.vue'
+import TemplateDetail from './TemplateDetail.vue'
 
 // 风格页签（原 GatesModal 风格段 + StagePanel 样张段合并，弹窗退役）。
 // 两态视图 + 迷你步骤条（① 选风格 → ② 出样张 → ③ 确认开工），先后顺序长在界面上：
-// A 态（未出样张/正在换）= 风格库（翻页/标签筛选/搜索）+ 特色开关 + 一句话方向；
+// A 态（未出样张/正在换）= 风格库（翻页/标签筛选/搜索）+ 详情抽屉选风格 + 一句话方向；
 // B 态（已出样张）= 样张大图预览（迷你真段 mp4，降级显示静态）+ 确认硬门 + 换风格入口。
 // 两路同一交互：确认 → 自动出样张（聊天通道异步驱动 Agent）→ 用户在此页确认样张
 // （唯一必须拍板的门；设计系统始终本片现发明）。
+// 选风格交互：点卡片开详情抽屉（标签证据/特色截图都能看，特色开关在抽屉里默认全开）
+// ——盲选退役：选之前先看见里面是什么。
 const props = defineProps<{
   projectId: string
   view: ProjectView | null
@@ -61,12 +64,56 @@ const clipSrc = (video: string) => styleClipURL(props.projectId, video.split('/'
 // ── 库内条目（懒加载一次；开页时拉，apply 后不重拉——库不常变）──
 const packs = ref<Style[]>([])
 const vocab = ref<VocabEntry[]>([])
-const picked = ref('')
-const sigOff = ref<Record<string, boolean>>({}) // 关掉的特色 id（默认全开）
 const applying = ref(false)
-const applyErr = ref('')
 const vEntry = (id: string) => vocab.value.find(v => v.id === id)
-const pickedPack = computed(() => packs.value.find(p => p.id === picked.value))
+
+// 详情抽屉（选风格模式）：点卡片打开，看完点「就选它」
+const showDetail = ref(false)
+const detail = ref<TemplateDetailData | null>(null)
+function openDetail(p: Style) {
+  detail.value = {
+    title: p.name,
+    status: { label: '已入库', type: 'success' },
+    subject: p.subject,
+    tags: [p.tags.main, ...(p.tags.aux ?? [])]
+      .filter(Boolean)
+      .map(id => ({ id, name: vEntry(id)?.name ?? id, brief: vEntry(id)?.brief })),
+    tagEvidence: p.tag_evidence ?? [],
+    signatures: p.signatures ?? [],
+    originLabel: '来源 ' + (p.origin_project || '—'),
+    createdAt: new Date(p.created_at).toLocaleDateString(),
+    libMediaId: p.origin_project?.startsWith('video:') ? p.id : undefined,
+    packId: p.id,
+    published: true,
+    selectMode: true,
+  }
+  showDetail.value = true
+}
+
+async function apply(packId: string, disabled: string[]) {
+  if (applying.value) return
+  applying.value = true
+  const pack = packs.value.find(p => p.id === packId)
+  try {
+    await api.applyStyle(props.projectId, packId, disabled)
+    message.success('风格已确认，正在出样张——出好后回此页确认')
+    emit('saved')
+    requested.value = true
+    // 确认即出样张：applyStyle 只落简报不触发生成，这里补一发聊天让 Agent 跑设计
+    // 阶段（异步 202 秒回）；分镜没出时 Agent 会在对话里说明先出分镜
+    const offNote = pack?.signatures?.length
+      ? (disabled.length ? `特色关掉了 ${disabled.length} 条，其余全开` : '特色全开')
+      : '该条目没有特色清单'
+    await api.chat(props.projectId,
+      `风格已选定：库内条目「${pack?.name ?? ''}」（${offNote}）。请按它出风格样张，出好后提醒我确认。`)
+    showDetail.value = false
+    emit('chat-sent')
+  } catch (e) {
+    message.error(errMsg(e))
+  } finally {
+    applying.value = false
+  }
+}
 
 // 翻页 + 标签筛选 + 搜索（客户端做——库列表是全量小 JSON，几百条内无压力；
 // 标签用下拉不用 chips——标签会越养越多，铺开放不下）
@@ -102,39 +149,6 @@ onMounted(async () => {
   packs.value = (await api.listLibrary().catch(() => [] as Style[])).filter(p => p.published)
   vocab.value = await api.listVocab().catch(() => [] as VocabEntry[])
 })
-
-function pick(id: string) {
-  picked.value = picked.value === id ? '' : id
-  sigOff.value = {} // 换条目重置开关（默认全开）
-}
-
-async function apply() {
-  if (!picked.value || applying.value) return
-  applying.value = true
-  applyErr.value = ''
-  const pack = pickedPack.value
-  const off = Object.entries(sigOff.value).filter(([, v]) => v).map(([id]) => id)
-  try {
-    await api.applyStyle(props.projectId, picked.value, off)
-    message.success('风格已确认，正在出样张——出好后回此页确认')
-    emit('saved')
-    requested.value = true
-    // 确认即出样张：applyStyle 只落简报不触发生成，这里补一发聊天让 Agent 跑设计
-    // 阶段（异步 202 秒回）；分镜没出时 Agent 会在对话里说明先出分镜
-    const offNote = pack?.signatures?.length
-      ? (off.length ? `特色关掉了 ${off.length} 条，其余全开` : '特色全开')
-      : '该条目没有特色清单'
-    await api.chat(props.projectId,
-      `风格已选定：库内条目「${pack?.name ?? ''}」（${offNote}）。请按它出风格样张，出好后提醒我确认。`)
-    picked.value = ''
-    sigOff.value = {}
-    emit('chat-sent')
-  } catch (e) {
-    applyErr.value = errMsg(e)
-  } finally {
-    applying.value = false
-  }
-}
 
 // ── 方向描述：确认 → Agent 出样张 ──
 const direction = ref('')
@@ -220,7 +234,7 @@ async function draftStyle() {
           风格库还是空的——去「风格库」页上传参考视频解析入库，或直接用下面的文字描述方向。
         </div>
         <template v-else>
-          <div class="sec-head picker-head">从风格库选 <span class="ph-sub">标签定气质，特色清单逐条吸收；不想要的特色可关掉</span></div>
+          <div class="sec-head picker-head">从风格库选 <span class="ph-sub">点卡片看截图和特色再决定；不想要的特色在详情里关掉</span></div>
           <div class="filter-bar">
             <NSelect v-model:value="tagFilter" :options="tagOptions" size="small" class="tag-select" />
             <NInput v-model:value="search" size="small" clearable placeholder="搜风格名" class="search" />
@@ -228,7 +242,7 @@ async function draftStyle() {
           <div v-if="pagedPacks.length" class="style-cards">
             <button
               v-for="p in pagedPacks" :key="p.id" type="button"
-              class="style-card" :class="{ on: picked === p.id }" @click="pick(p.id)"
+              class="style-card" @click="openDetail(p)"
             >
               <!-- 封面 = 入库时原片代表帧；兜底文字在下垫层，图加载成功即盖住它 -->
               <div class="cover">
@@ -258,29 +272,13 @@ async function draftStyle() {
           </div>
         </template>
 
-        <!-- 选中条目：气质 brief + 特色开关面板（默认全开） -->
-        <div v-if="pickedPack" class="sig-panel">
-          <p v-if="vEntry(pickedPack.tags.main)?.brief" class="panel-brief">
-            {{ vEntry(pickedPack.tags.main)!.name }}：{{ vEntry(pickedPack.tags.main)!.brief }}
-          </p>
-          <template v-if="pickedPack.signatures?.length">
-            <div class="picker-label">特色开关（关掉的不再要求吸收）</div>
-            <div v-for="sg in pickedPack.signatures" :key="sg.id" class="sig-row">
-              <NSwitch size="small" :value="!sigOff[sg.id]" @update:value="(v: boolean) => (sigOff[sg.id] = !v)" />
-              <div class="sig-txt">
-                <b>{{ sg.name }} <NTag size="tiny" :bordered="false" type="info">{{ sg.kind }}</NTag></b>
-                <span>{{ sg.mechanism }}</span>
-              </div>
-            </div>
-          </template>
-          <p v-else class="panel-brief">该条目没有特色清单——只对齐气质基调。</p>
+        <div v-if="packs.length" class="foot">
+          <span class="ms-hint">点卡片先看详情（截图/特色），抽屉里拍板；确认后自动出样张，出好后回此页再确认一次才能开工</span>
         </div>
 
-        <div v-if="packs.length" class="foot">
-          <span class="ms-hint">确认后按它「强参考」现发明设计系统并自动出样张；样张出来后在此页再确认一次才能开工</span>
-          <NButton type="primary" :disabled="!picked" :loading="applying" @click="apply">确认风格，出样张</NButton>
-        </div>
-        <div v-if="applyErr" class="ms-err">{{ applyErr }}</div>
+        <!-- 选风格详情抽屉：特色开关+证据截图都在里面，看着点菜 -->
+        <TemplateDetail :show="showDetail" :detail="detail" :applying="applying"
+          @close="showDetail = false" @apply="apply" />
 
         <!-- 方向描述 -->
         <div class="sec-head picker-head">或者用一句话描述方向（AI 出样张后你确认）</div>
@@ -346,7 +344,7 @@ figcaption span { font-size: 12px; color: #8a8a96; }
   border-radius: 8px; padding: 8px 12px; display: flex; align-items: center; gap: 10px;
 }
 
-/* 库内条目卡 + 特色开关面板（自 GatesModal 迁入） */
+/* 库内条目卡（点卡片开详情抽屉） */
 .ms-hint { font-size: 11.5px; color: #55555f; line-height: 1.6; }
 .empty-lib { background: #101016; border: 1px dashed #2b2b33; border-radius: 10px; padding: 12px 16px; }
 .style-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); gap: 10px; padding: 2px; }
@@ -355,7 +353,6 @@ figcaption span { font-size: 12px; color: #8a8a96; }
   background: #101016; border: 1px solid #232329; border-radius: 10px; overflow: hidden; color: #c9c9d1;
 }
 .style-card:hover { border-color: #3a3a45; }
-.style-card.on { border-color: #f0c674; box-shadow: 0 0 0 1px #f0c674; }
 /* 封面随卡宽走 16:9；兜底文字垫底，真图盖上（同 LibraryPanel 卡片） */
 .cover { position: relative; aspect-ratio: 16 / 9; background: #0d0d12; }
 .cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
@@ -367,15 +364,6 @@ figcaption span { font-size: 12px; color: #8a8a96; }
 .meta { padding: 7px 9px 9px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .meta b { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .meta span { font-size: 10.5px; color: #6f6f7c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.style-card.on .meta b { color: #f0c674; }
 .tagline { display: flex; gap: 4px; flex-wrap: wrap; }
-.sig-panel { background: #101016; border: 1px solid #232329; border-radius: 10px; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
-.panel-brief { margin: 0; font-size: 12px; color: #8a8a96; line-height: 1.6; }
-.picker-label { font-size: 12px; color: #9a9aa6; }
-.sig-row { display: flex; gap: 10px; align-items: flex-start; }
-.sig-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.sig-txt b { font-size: 12px; color: #d9d9e0; display: flex; align-items: center; gap: 6px; }
-.sig-txt span { font-size: 11.5px; color: #7c7c88; line-height: 1.6; }
 .foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.ms-err { color: #ff9d9d; font-size: 12.5px; }
 </style>

@@ -62,6 +62,9 @@ type Loop struct {
 	MaxRounds int    // 回合预算（一次模型调用 = 一回合；nudge 也占回合，防无限光说不做）
 	// OnStep 每步记账钩子（kind: action|observation|text|note）。nil = 只跑不记。
 	OnStep func(round int, kind, detail string)
+	// OnCall 每次模型调用返回后的用量钩子（成功失败都给——失败的调用有没有
+	// 用量由端点定，有就记）。宿主接 agentlog.Task.Add 做增量落账（中-4）。
+	OnCall func(u openai.Usage)
 	// Rec 对话留痕（可空）：开场消息与每轮模型消息/工具观察逐条追加。
 	Rec Sink
 	// Usage/Calls 本轮累计 token 用量与模型调用次数（Run 返回后宿主读）。
@@ -90,6 +93,9 @@ func (l *Loop) Run(ctx context.Context) error {
 		msg, u, err := l.Prov.Chat(ctx, msgs, schemas)
 		llm.AccumulateUsage(&l.Usage, u)
 		l.Calls++
+		if l.OnCall != nil {
+			l.OnCall(u) // 逐调用用量钩子（宿主做增量落账——中-4：进程死亡不再丢账）
+		}
 		if err != nil {
 			l.recNote("模型调用失败（第 %d 回合）: %v", round, err)
 			return err

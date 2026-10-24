@@ -649,14 +649,22 @@ func (r *Runner) runRework(ctx context.Context, p *pipeline.Project, segs []cont
 	r.Manifest(p, "stage.finish", "render")
 
 	// 4. 画面审查：只审重做段，不过带要求重出（用户要求经 instr 一路带到修复轮）
-	if err := r.frameQA(ctx, p, instr, only); err != nil {
+	wounds, err := r.frameQA(ctx, p, instr, only)
+	if err != nil {
 		return err
 	}
 	r.emit(id, "done", "", "renders/main.mp4")
 	r.Manifest(p, EventReworkDone, only)
 	r.jobTerminal(id, "done", "renders/main.mp4", "")
 	if r.OnDone != nil {
-		r.notifyOnDone(id, "video", strings.Join(labels, "、")+" 画面重做完成")
+		// 带伤交付必须带伤情进对话（2026-10-23 中-3）：修复上限到了仍不过，
+		// 成片照常交付，但用户得知道这片还带着已知问题、明细在哪。
+		if wounds != "" {
+			r.notifyOnDone(id, "video", strings.Join(labels, "、")+" 画面重做完成（"+wounds+
+				"；问题明细见过程页与项目 reviews/ 意见单——可预览决定是否再重做一轮）")
+		} else {
+			r.notifyOnDone(id, "video", strings.Join(labels, "、")+" 画面重做完成")
+		}
 	}
 	return nil
 }

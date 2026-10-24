@@ -291,7 +291,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		// 稳定前缀布局（七刀#4）：跨段不变的（样张源码/真迹说明/设计系统主体）连成
 		// 整块进共享前缀；段变量（导演统筹/本段版式指派/素材注记）全部垫尾——
 		// 导演统筹块先前置是可读性取舍，缓存计价下让位（语义由提示词行文自明）。
-		styleShared := sampleSrc + keyframeNote(len(keyImgs)) + designShared
+		styleShared := sampleSrc + keyframeNote(keyImgs) + designShared
 		_, styleSeg := designNotesFor(p, seg.Idx)
 		styleSeg = directorNoteFor(sb, seg) + styleSeg
 		segMats := materialsForSeg(p, seg.ID)

@@ -51,6 +51,11 @@ func (l *Library) Derive(in DeriveInput) (*Style, error) {
 		s.Tags = st.Tags
 		s.Facets = st.Facets
 		s.Signatures = append([]contract.Signature(nil), st.Signatures...)
+		// 标签证据一并继承（2026-10-24）：衍生=基风格调个方向，标签所指的气质
+		// 没变，例证帧同源适用——此前不继承，库里衍生条目 tag_evidence 全空，
+		// 简报的「标签证据优先」对它们整层落空。覆盖了标签的衍生，旧证据描述的
+		// 是被换掉的标签，留给库页人工修剪——机械层不做猜谜。
+		s.TagEvidence = append([]contract.TagEvidence(nil), st.TagEvidence...)
 	}
 	if in.Tags != nil {
 		if strings.TrimSpace(in.Tags.Main) != "" {
@@ -110,6 +115,22 @@ func (l *Library) Derive(in DeriveInput) (*Style, error) {
 	return &s, nil
 }
 
+// RefillFacets 存量分面回填（-backfill-facets 子命令用）：只写 Facets，其余字段
+// 不动。已有任一分面轴的条目拒绝写——人工填过的值不被机械回填覆盖。
+func (l *Library) RefillFacets(id string, facets StyleFacets) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	st, ok := l.Get(id)
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNoEntry, id)
+	}
+	if st.Facets != (StyleFacets{}) {
+		return fmt.Errorf("条目 %s 已有分面，拒绝覆盖（人工值优先）", id)
+	}
+	st.Facets = facets
+	return l.cat.PutStyle(st)
+}
+
 // BumpUsage 使用记账：出片即 count++（passed=true 时 passes 同步）。score>0 记为
 // 最近审核分。promote=true 且条目是「未验证」的衍生/自定义 → 转正（published=true，
 // unverified 保持史实字段不清——出处链不受影响）。条目不存在静默返回（记账不拦制作）。
@@ -141,6 +162,25 @@ func (l *Library) Search(query string, facets StyleFacets, page, size int) ([]St
 	if err != nil {
 		return nil, 0, err
 	}
+	// 标签检索走词条展开（2026-10-24）：Tags 存的是词条 id（如 claymation），中文
+	// 查询「粘土」对 id 做子串永远 miss——词条名+别名一并进检索键，词表养的
+	// 同义词这才真正参战。词表读失败降级纯子串，检索不被词表故障挡死。
+	vocab, _ := l.LoadVocab()
+	if vocab == nil {
+		vocab = &Vocab{Entries: map[string]VocabEntry{}}
+	}
+	tagWords := func(ids ...string) string {
+		parts := make([]string, 0, len(ids)*3)
+		for _, id := range ids {
+			if e, hit := vocab.Entries[id]; hit {
+				parts = append(parts, e.Name)
+				parts = append(parts, e.Aliases...)
+			} else {
+				parts = append(parts, id) // 词条被删/自定义原值：按原值参战
+			}
+		}
+		return strings.Join(parts, " ")
+	}
 	terms := strings.Fields(strings.ToLower(strings.TrimSpace(query)))
 	match := func(hay, needle string) bool {
 		return needle == "" || strings.Contains(strings.ToLower(hay), needle)
@@ -149,7 +189,7 @@ func (l *Library) Search(query string, facets StyleFacets, page, size int) ([]St
 	for _, st := range styles {
 		ok := true
 		for _, q := range terms {
-			keys := []string{st.ID, st.Name, st.Subject, st.Tags.Main, st.Facets.Mood, st.Facets.Tone, st.Facets.Density}
+			keys := []string{st.ID, st.Name, st.Subject, tagWords(st.Tags.Main), tagWords(st.Tags.Aux...), st.Facets.Mood, st.Facets.Tone, st.Facets.Density}
 			keys = append(keys, st.Tags.Aux...)
 			for _, sg := range st.Signatures {
 				keys = append(keys, sg.Name, sg.Mechanism)

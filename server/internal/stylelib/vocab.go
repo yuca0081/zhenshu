@@ -173,7 +173,7 @@ func (l *Library) VocabBriefs(ids ...string) []contract.TagBrief {
 	var out []contract.TagBrief
 	for _, id := range ids {
 		if e, ok := v.Entries[id]; ok {
-			out = append(out, contract.TagBrief{ID: e.ID, Name: e.Name, Brief: e.Brief})
+			out = append(out, contract.TagBrief{ID: e.ID, Name: e.Name, Brief: e.Brief, Tells: e.Tells})
 		}
 	}
 	return out

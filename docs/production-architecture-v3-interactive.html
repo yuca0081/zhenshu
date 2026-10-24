@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>制作架构 · 交互总图（新手导读 / 文稿驱动 v3.1 / 音乐驱动 PV / 代码调用链 · 同步 2026-10-23）</title>
+<title>制作架构 · 交互总图（文稿驱动 v3.1 / 音乐驱动 PV / 代码调用链 · 同步 2026-10-24）</title>
 <style>
   :root {
     --bg: #f7f7f8; --panel: #ffffff; --band: #eef0f4; --text: #1c1c1e; --muted: #6e6e73;
@@ -22,88 +22,128 @@
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
-    padding: 24px 20px 60px;
+    font: 14px/1.65 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
   }
-  code { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font-size: 12.5px; }
-  header { max-width: 1220px; margin: 0 auto 18px; }
-  header h1 { font-size: 20px; margin: 0 0 4px; }
-  header .src { color: var(--muted); font-size: 13px; margin: 0; }
+  code { background: var(--band); border-radius: 4px; padding: 0 5px; font-size: 12.5px; }
 
-  .layout {
-    max-width: 1220px; margin: 0 auto; display: flex;
-    flex-direction: column; gap: 16px; align-items: stretch;
+  /* ===== 粘性页头 + 页签 ===== */
+  header {
+    position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
   }
-
-  .diagram-wrap {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-    padding: 10px; overflow-x: auto;
+  .hwrap {
+    max-width: 1480px; margin: 0 auto; padding: 10px 20px;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
   }
-  .flowsvg { display: block; width: 100%; min-width: 960px; height: auto; font-family: inherit; }
-
-  /* SVG 图元样式 */
-  .flowsvg .band { fill: var(--band); rx: 12; }
-  .flowsvg .bandlabel { fill: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 2px; }
-  .flowsvg .edge { stroke: var(--edge); stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
-  #flowsvg2 .edge { marker-end: url(#arrow2); }
-  .flowsvg .fnode.newk .box { stroke: var(--accent); stroke-width: 2; }
-  .flowsvg .fnode.resh .box { stroke: var(--warn); stroke-width: 2; }
-  .flowsvg .arrowfill { fill: var(--edge); }
-  .flowsvg .fnode { cursor: pointer; }
-  .flowsvg .fnode:focus { outline: none; }
-  .flowsvg .fnode .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; rx: 10; transition: stroke .12s; }
-  .flowsvg .fnode:hover .box { stroke: var(--accent); }
-  .flowsvg .fnode.active .box { stroke: var(--accent); stroke-width: 2.5; }
-  .flowsvg .fnode.prog .box { fill: transparent; stroke-dasharray: 5 4; }
-  .flowsvg .fnode.start .box { fill: var(--accent-soft); stroke: var(--accent-soft); }
-  .flowsvg .t { fill: var(--text); font-size: 12.5px; font-weight: 600; text-anchor: middle; }
-  .flowsvg .ts { fill: var(--muted); font-size: 11px; text-anchor: middle; }
-  .flowsvg .to { fill: var(--ok); font-size: 11px; text-anchor: middle; }
-  .flowsvg .chipbox { fill: var(--bg); stroke: var(--line); stroke-dasharray: 4 3; rx: 7; }
-  .flowsvg .chiptx { fill: var(--muted); font-size: 11px; text-anchor: middle; }
-  .flowsvg .pill rect { rx: 9; }
-  .flowsvg .pill text { font-size: 11px; text-anchor: middle; }
-  .flowsvg .pill.gate rect { fill: var(--warn); } .flowsvg .pill.gate text { fill: #ffffff; }
-  @media (prefers-color-scheme: dark) { .flowsvg .pill.gate rect { fill: var(--warn); } .flowsvg .pill.gate text { fill: #161618; } }
-  .flowsvg .lg-line { stroke: var(--text); opacity: .5; stroke-width: 2; }
-  .flowsvg .lg-line.dash { stroke-dasharray: 5 4; }
-  .flowsvg .lg-t { fill: var(--muted); font-size: 11px; }
-  .flowsvg .hint { fill: var(--muted); font-size: 11px; }
-
-  /* 页签 */
-  .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .hwrap h1 { font-size: 16px; margin: 0; white-space: nowrap; }
+  .hwrap .sub { color: var(--muted); font-size: 12px; margin: 2px 0 0; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; }
   .tab {
-    font: inherit; font-size: 13.5px; padding: 6px 16px; cursor: pointer;
-    border-radius: 9px; border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+    font: inherit; font-size: 13px; padding: 6px 14px; cursor: pointer;
+    border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+    transition: color .12s, border-color .12s;
   }
+  .tab:hover { color: var(--accent); }
   .tab.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+
+  main { max-width: 1480px; margin: 0 auto; padding: 16px 20px 60px; }
   .page.hidden { display: none; }
 
-  .detail { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
-  .d-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 2px 28px; }
-  @media (max-width: 760px) { .d-rows { grid-template-columns: 1fr; } }
+  /* ===== 导语：一句可见 + 折叠长文 ===== */
+  .lead { font-size: 14px; margin: 2px 2px 8px; }
+  .lead b { color: var(--accent); }
+  details.ctx { margin: 0 2px 12px; font-size: 13px; }
+  details.ctx > summary {
+    cursor: pointer; color: var(--muted); user-select: none; padding: 2px 0;
+    list-style: none;
+  }
+  details.ctx > summary::before { content: "▸ "; font-size: 11px; }
+  details.ctx[open] > summary::before { content: "▾ "; }
+  details.ctx > summary:hover { color: var(--accent); }
+  .ctx-body {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 14px; margin-top: 6px; font-size: 13px; line-height: 1.75; color: var(--text);
+  }
+  .ctx-body p { margin: 0 0 8px; }
+  .ctx-body p:last-child { margin: 0; }
+  .ctx-body em { font-style: normal; color: var(--accent); }
+
+  /* ===== 主工作区：图 + 右侧详情栏 ===== */
+  .workbench {
+    display: grid; grid-template-columns: minmax(0, 1fr) 348px; gap: 14px; align-items: start;
+  }
+  @media (max-width: 1120px) {
+    .workbench { grid-template-columns: 1fr; }
+    .side { position: static !important; max-height: none !important; }
+  }
+  .diagram-wrap {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 12px; overflow-x: auto;
+  }
+  .flowsvg { display: block; width: 100%; min-width: 980px; height: auto; font-family: inherit; }
+  .figcap { margin: 8px 4px 0; font-size: 12.5px; color: var(--muted); }
+
+  /* 图例条（HTML 化，替代 SVG 内部图例） */
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 8px 4px 0; font-size: 12px; color: var(--muted); }
+  .legend .li { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { display: inline-block; width: 20px; height: 0; border-top: 2px solid var(--edge); }
+  .sw.dash { border-top-style: dashed; border-top-color: var(--warn); }
+  .sw.box { width: 16px; height: 11px; border: 1.5px solid var(--line); border-radius: 3px; background: var(--panel); }
+  .sw.box.bandbg { background: var(--band); }
+  .sw.box.dashb { border-style: dashed; }
+  .sw.box.llm { border: 2px solid var(--accent); }
+  .sw.box.add { border: 2px solid var(--accent); background: var(--accent-soft); }
+  .sw.box.resh { border: 2px solid var(--warn); }
+  .sw.bar { width: 16px; height: 11px; border-radius: 3px; background: var(--accent-soft); border: 1.5px solid var(--accent); }
+
+  /* 右侧详情栏 */
+  .side {
+    position: sticky; top: 64px;
+    display: flex; flex-direction: column; gap: 8px;
+    max-height: calc(100vh - 80px);
+  }
+  .side-head {
+    font-size: 11px; letter-spacing: 3px; color: var(--muted); font-weight: 600; padding: 0 4px;
+  }
+  .detail {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px 16px; overflow-y: auto;
+  }
   .d-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
   .d-head h3 { font-size: 15px; margin: 0; }
   .d-type { font-size: 11px; padding: 1px 8px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
   .d-type.good { background: var(--ok-bg); color: var(--ok); }
+  .plain { background: var(--accent-soft); border-radius: 8px; padding: 8px 12px; margin: 2px 0 10px; font-size: 13px; }
   .d-row { display: flex; gap: 10px; margin-top: 9px; }
-  .d-k { flex: 0 0 4.2em; color: var(--muted); font-size: 12px; padding-top: 2px; }
-  .d-v { flex: 1; font-size: 13px; min-width: 0; }
+  .d-k { flex: 0 0 5.4em; color: var(--muted); font-size: 12px; padding-top: 2px; }
+  .d-v { flex: 1; font-size: 13px; min-width: 0; line-height: 1.7; }
   .d-v em { font-style: normal; color: var(--accent); }
 
-  /* 新手导读 · 名词小抄 */
-  .gloss { border-collapse: collapse; width: 100%; margin-top: 10px; }
+  /* 名词小抄（折叠表格） */
+  .gloss { border-collapse: collapse; width: 100%; }
   .gloss th, .gloss td { border: 1px solid var(--line); padding: 6px 10px; font-size: 13px; text-align: left; vertical-align: top; }
   .gloss th { background: var(--band); font-weight: 600; white-space: nowrap; }
   .gloss td:first-child { white-space: nowrap; color: var(--muted); font-weight: 600; }
 
-  /* 详情卡：大白话行 */
-  .plain { background: var(--accent-soft); border-radius: 8px; padding: 8px 12px; margin: 2px 0 8px; font-size: 13px; }
-  .plain b { color: var(--accent); }
+  /* 代码页签：子页签 + 分图 */
+  .subtabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 2px 12px; }
+  .subtab {
+    font: inherit; font-size: 12.5px; padding: 4px 12px; cursor: pointer;
+    border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+  }
+  .subtab:hover { color: var(--accent); }
+  .subtab.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+  figure.codefig { margin: 0; }
+  figure.codefig.hidden { display: none; }
+  figure.codefig figcaption { margin: 8px 4px 0; font-size: 12.5px; color: var(--muted); }
 
-  /* 代码调用链页签 */
-  .zoomhead { font-size: 14.5px; margin: 18px 0 6px; color: var(--text); font-weight: 700; }
-  .zoomhead span { color: var(--muted); font-weight: 400; font-size: 12.5px; }
+  /* ===== SVG 图元 ===== */
+  .flowsvg .band { fill: var(--band); rx: 12; }
+  .flowsvg .bandlabel { fill: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 2px; }
+  .flowsvg .edge { stroke: var(--edge); stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
+  #flowsvg2 .edge { marker-end: url(#arrow2); }
   #svgI .edge { marker-end: url(#arrowI); }
   #svgA .edge { marker-end: url(#arrowA); }
   #svgB .edge { marker-end: url(#arrowB); }
@@ -112,1228 +152,1218 @@
   #svgE .edge { marker-end: url(#arrowE); }
   #svgF .edge { marker-end: url(#arrowF); }
   .flowsvg .edge.back { stroke: var(--warn); stroke-dasharray: 6 4; }
-  .flowsvg .tref { fill: var(--muted); font-size: 10.5px; text-anchor: middle; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
-  .flowsvg .trefl { fill: var(--warn); font-size: 11px; text-anchor: start; }
+  .flowsvg .arrowfill { fill: var(--edge); }
+  .flowsvg .fnode { cursor: pointer; }
+  .flowsvg .fnode:focus { outline: none; }
+  .flowsvg .fnode .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; rx: 10; transition: stroke .12s, fill .12s; }
+  .flowsvg .fnode:hover .box { stroke: var(--accent); }
+  .flowsvg .fnode.active .box { stroke: var(--accent); stroke-width: 2.5; fill: var(--accent-soft); }
+  .flowsvg .fnode.newk .box { stroke: var(--accent); stroke-width: 2; }
+  .flowsvg .fnode.resh .box { stroke: var(--warn); stroke-width: 2; }
+  .flowsvg .fnode.prog .box { fill: transparent; stroke-dasharray: 5 4; }
+  .flowsvg .fnode.start .box { fill: var(--accent-soft); stroke: var(--accent-soft); }
+  .flowsvg .fnode.start.active .box { stroke: var(--accent); }
   .flowsvg .fnode.llm .box { stroke: var(--accent); stroke-width: 2; }
   .flowsvg .fnode.ext .box { stroke-dasharray: 5 4; }
-  .flowsvg .container { fill: var(--band); stroke: var(--line); stroke-width: 1.5; rx: 12; }
+  .flowsvg .t { fill: var(--text); font-size: 12.5px; font-weight: 600; text-anchor: middle; }
+  .flowsvg .ts { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+  .flowsvg .to { fill: var(--ok); font-size: 11px; text-anchor: middle; }
+  .flowsvg .chipbox { fill: var(--bg); stroke: var(--line); stroke-dasharray: 4 3; rx: 7; }
+  .flowsvg .fnode:hover .chipbox { stroke: var(--accent); }
+  .flowsvg .fnode.active .chipbox { stroke: var(--accent); stroke-width: 2; }
+  .flowsvg .chiptx { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+  .flowsvg .pill rect { rx: 9; }
+  .flowsvg .pill text { font-size: 11px; text-anchor: middle; }
+  .flowsvg .pill.gate rect { fill: var(--warn); }
+  .flowsvg .pill.gate text { fill: #ffffff; }
+  @media (prefers-color-scheme: dark) { .flowsvg .pill.gate rect { fill: var(--warn); } .flowsvg .pill.gate text { fill: #161618; } }
+  .flowsvg .tref { fill: var(--muted); font-size: 10.5px; text-anchor: middle; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+  .flowsvg .trefl { fill: var(--warn); font-size: 11px; text-anchor: start; }
+  .flowsvg .container { fill: transparent; stroke: var(--line); stroke-width: 1.5; rx: 12; stroke-dasharray: 6 4; }
   .flowsvg .joinbar { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; rx: 10; }
   .flowsvg .diamond { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
 
-  footer { max-width: 1220px; margin: 18px auto 0; color: var(--muted); font-size: 12px; }
+  footer {
+    max-width: 1480px; margin: 0 auto; padding: 14px 20px 40px;
+    color: var(--muted); font-size: 12px; border-top: 1px solid var(--line);
+  }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>制作架构 · 交互总图 <span style="color:var(--muted);font-size:14px;font-weight:400">（新手导读 / 文稿驱动 v3.1 / 音乐驱动 PV 草案 / 代码调用链 · 同步 2026-10-23）</span></h1>
-  <nav class="tabs">
-    <button class="tab active" data-page="intro" type="button">🏠 新手导读 · 三分钟</button>
-    <button class="tab" data-page="script" type="button">文稿驱动 · 现行 v3.1</button>
-    <button class="tab" data-page="music" type="button">音乐驱动 · PV 草案</button>
-    <button class="tab" data-page="code" type="button">⌨ 代码调用链 · 函数级</button>
-  </nav>
+  <div class="hwrap">
+    <div>
+      <h1>制作架构 · 交互总图</h1>
+      <p class="sub">自动短视频流水线 · 文稿驱动 v3.1 ／ 音乐驱动 PV · 同步 2026-10-24</p>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-page="intro" type="button">🏠 新手导读</button>
+      <button class="tab" data-page="script" type="button">文稿驱动 · 现行</button>
+      <button class="tab" data-page="music" type="button">音乐驱动 · PV</button>
+      <button class="tab" data-page="code" type="button">⌨ 代码调用链</button>
+    </nav>
+  </div>
 </header>
 
-<main class="layout">
+<main>
 
+  <!-- ================= 新手导读 ================= -->
   <section class="page" id="page-intro">
-    <p class="src">这个项目是一条<b>自动做短视频的流水线</b>：你给它一个主题（或一篇稿子），它自动查资料写口播稿、定画风、切分镜、配音、画画面、自己质检自己审片，最后交出一部带配音、字幕、配乐的成片（竖屏/横屏都行）。全流程只有<b>一次人工参与</b>——制作开始前的「打包终审门」，其余全部自动。准备阶段像<b>设计部</b>：写手 → 美术指导 → 分镜师三位 AI 接力，各自产出一份「工件」（文件），最后打包给你过目；制作阶段像<b>自动车间</b>：先配音定时间轴，然后几十个「画师」同时开工，每段画面独立走 质检→渲染→审片 的迷你流水线，<b>谁做完谁先走、不等齐</b>；全部段落过审后拼成一整部、混上配乐，最后总监审抽帧把关。点击下面任一方块可看更细的解释。</p>
-    <aside class="detail" id="detailIntro" aria-live="polite"></aside>
+    <p class="lead">给一个主题或一篇稿子 → 三位 AI 接力做出<b>文字稿 · 风格包 · 分镜稿</b> → 你拍板一次 → 全自动配音、并行画画面、自检自审 → 出片。<b>点击图中任一方块，右侧看解释。</b></p>
+    <details class="ctx">
+      <summary>完整背景（大白话）</summary>
+      <div class="ctx-body">
+        <p>这个项目是一条<b>自动做短视频的流水线</b>：你给它一个主题（或一篇稿子），它自动查资料写口播稿、定画风、切分镜、配音、画画面、自己质检自己审片，最后交出一部带配音、字幕、配乐的成片（竖屏/横屏都行）。全流程只有<b>一次人工参与</b>——制作开始前的「打包终审门」，其余全部自动。</p>
+        <p>准备阶段像<b>设计部</b>：写手 → 美术指导 → 分镜师三位 AI 接力，各自产出一份「工件」（文件），最后打包给你过目。制作阶段像<b>自动车间</b>：先配音定时间轴，然后几十个「画师」同时开工，每段画面独立走 质检→渲染→审片 的迷你流水线，<b>谁做完谁先走、不等齐</b>；全部段落过审后拼成一整部、混上配乐，最后总监审抽帧把关。</p>
+      </div>
+    </details>
 
-    <div class="diagram-wrap">
-    <svg id="svgI" class="flowsvg" viewBox="0 0 1180 460" role="img" aria-label="三分钟看懂：主题→写稿→定画风→切分镜→你拍板→配音→写画面并行→质检审片→渲染→拼接配乐→终审→出片">
-      <defs>
-        <marker id="arrowI" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
-        </marker>
-      </defs>
+    <div class="workbench">
+      <div>
+        <div class="diagram-wrap">
+        <svg id="svgI" class="flowsvg" viewBox="0 0 1180 460" role="img" aria-label="三分钟看懂：主题→写稿→定画风→切分镜→你拍板→配音→写画面并行→质检审片→渲染→拼接配乐→终审→出片">
+          <defs>
+            <marker id="arrowI" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
+            </marker>
+          </defs>
 
-      <rect class="band" x="8" y="24" width="1164" height="130"></rect>
-      <text class="bandlabel" x="24" y="44">准备阶段 · 设计部 —— 三位 AI 接力，你只在最后拍板一次</text>
+          <rect class="band" x="8" y="24" width="1164" height="130"></rect>
+          <text class="bandlabel" x="24" y="44">准备阶段 · 设计部 —— 三位 AI 接力，你只在最后拍板一次</text>
 
-      <g class="fnode start" data-k="iv_what" tabindex="0" role="button" aria-label="你给一个主题">
-        <rect class="box" x="24" y="56" width="180" height="80"></rect>
-        <text class="t" x="114" y="82">你给一个主题</text>
-        <text class="ts" x="114" y="100">（或直接给一篇稿子）</text>
-        <text class="ts" x="114" y="118">想法页签 · 新建项目</text>
-      </g>
-      <path class="edge" d="M204,96 L240,96"></path>
+          <g class="fnode start" data-k="iv_what" tabindex="0" role="button" aria-label="你给一个主题">
+            <rect class="box" x="24" y="56" width="180" height="80"></rect>
+            <text class="t" x="114" y="86">你给一个主题</text>
+            <text class="ts" x="114" y="106">（或直接给一篇稿子）</text>
+            <text class="ts" x="114" y="124">想法页签 · 新建项目</text>
+          </g>
+          <path class="edge" d="M204,96 L240,96"></path>
 
-      <g class="fnode" data-k="iv_w" tabindex="0" role="button" aria-label="写手">
-        <rect class="box" x="244" y="56" width="190" height="80"></rect>
-        <text class="t" x="339" y="82">✍ ① 写手</text>
-        <text class="ts" x="339" y="100">查资料 → 写成口播稿</text>
-        <text class="ts" x="339" y="118">产出：文字稿</text>
-      </g>
-      <path class="edge" d="M434,96 L470,96"></path>
+          <g class="fnode" data-k="iv_w" tabindex="0" role="button" aria-label="写手">
+            <rect class="box" x="244" y="56" width="190" height="80"></rect>
+            <text class="t" x="339" y="86">✍ ① 写手</text>
+            <text class="ts" x="339" y="106">查资料 → 写成口播稿</text>
+            <text class="ts" x="339" y="124">产出：文字稿</text>
+          </g>
+          <path class="edge" d="M434,96 L470,96"></path>
 
-      <g class="fnode" data-k="iv_s" tabindex="0" role="button" aria-label="定画风">
-        <rect class="box" x="474" y="56" width="190" height="80"></rect>
-        <text class="t" x="569" y="82">🎨 ② 定画风</text>
-        <text class="ts" x="569" y="100">风格库挑选 + 动态样张验证</text>
-        <text class="ts" x="569" y="118">产出：风格包（含动态样张）</text>
-      </g>
-      <path class="edge" d="M664,96 L700,96"></path>
+          <g class="fnode" data-k="iv_s" tabindex="0" role="button" aria-label="定画风">
+            <rect class="box" x="474" y="56" width="190" height="80"></rect>
+            <text class="t" x="569" y="86">🎨 ② 定画风</text>
+            <text class="ts" x="569" y="106">风格库挑选 + 动态样张验证</text>
+            <text class="ts" x="569" y="124">产出：风格包</text>
+          </g>
+          <path class="edge" d="M664,96 L700,96"></path>
 
-      <g class="fnode" data-k="iv_f" tabindex="0" role="button" aria-label="切分镜">
-        <rect class="box" x="704" y="56" width="190" height="80"></rect>
-        <text class="t" x="799" y="82">🎬 ③ 切分镜</text>
-        <text class="ts" x="799" y="100">切成 5–20 秒的小段</text>
-        <text class="ts" x="799" y="118">产出：分镜稿（逐段画面规划）</text>
-      </g>
-      <path class="edge" d="M894,96 L930,96"></path>
+          <g class="fnode" data-k="iv_f" tabindex="0" role="button" aria-label="切分镜">
+            <rect class="box" x="704" y="56" width="190" height="80"></rect>
+            <text class="t" x="799" y="86">🎬 ③ 切分镜</text>
+            <text class="ts" x="799" y="106">切成 5–20 秒的小段</text>
+            <text class="ts" x="799" y="124">产出：分镜稿</text>
+          </g>
+          <path class="edge" d="M894,96 L930,96"></path>
 
-      <g class="fnode" data-k="iv_g" tabindex="0" role="button" aria-label="你拍板">
-        <rect class="box" x="934" y="56" width="214" height="80"></rect>
-        <text class="t" x="1041" y="82">👤 你拍板</text>
-        <text class="ts" x="1041" y="100">稿+画风+分镜一次确认</text>
-        <text class="ts" x="1041" y="118">全流程唯一人工环节</text>
-      </g>
+          <g class="fnode" data-k="iv_g" tabindex="0" role="button" aria-label="你拍板">
+            <rect class="box" x="934" y="56" width="214" height="80"></rect>
+            <text class="t" x="1041" y="86">👤 你拍板</text>
+            <text class="ts" x="1041" y="106">稿+画风+分镜一次确认</text>
+            <text class="ts" x="1041" y="124">全流程唯一人工环节</text>
+          </g>
 
-      <rect class="band" x="8" y="182" width="1164" height="264"></rect>
-      <text class="bandlabel" x="24" y="202">制作阶段 · 自动车间 —— 点完确认到出片，全程无人</text>
+          <rect class="band" x="8" y="182" width="1164" height="264"></rect>
+          <text class="bandlabel" x="24" y="202">制作阶段 · 自动车间 —— 点完确认到出片，全程无人</text>
 
-      <g class="fnode" data-k="iv_tts" tabindex="0" role="button" aria-label="配音">
-        <rect class="box" x="24" y="248" width="190" height="80"></rect>
-        <text class="t" x="119" y="272">🎙 配音 TTS</text>
-        <text class="ts" x="119" y="290">整稿朗读录成音频</text>
-        <text class="ts" x="119" y="308">每个字的时间点 = 全片时间轴</text>
-      </g>
-      <path class="edge" d="M214,288 L250,288"></path>
+          <g class="fnode" data-k="iv_tts" tabindex="0" role="button" aria-label="配音">
+            <rect class="box" x="24" y="248" width="190" height="80"></rect>
+            <text class="t" x="119" y="276">🎙 配音 TTS</text>
+            <text class="ts" x="119" y="296">整稿朗读录成音频</text>
+            <text class="ts" x="119" y="314">每个字的时间点 = 全片时间轴</text>
+          </g>
+          <path class="edge" d="M214,288 L250,288"></path>
 
-      <g class="fnode" data-k="iv_gen" tabindex="0" role="button" aria-label="写画面并行">
-        <rect class="box" x="254" y="216" width="340" height="132"></rect>
-        <text class="t" x="424" y="238">🎨 写画面 ×N 段同时开工</text>
-        <rect class="chipbox" x="270" y="250" width="150" height="30"></rect>
-        <text class="chiptx" x="345" y="269">第1段画师</text>
-        <rect class="chipbox" x="430" y="250" width="150" height="30"></rect>
-        <text class="chiptx" x="505" y="269">第2段画师</text>
-        <rect class="chipbox" x="270" y="288" width="150" height="30"></rect>
-        <text class="chiptx" x="345" y="307">第3段画师</text>
-        <rect class="chipbox" x="430" y="288" width="150" height="30"></rect>
-        <text class="chiptx" x="505" y="307">……（最多4个同跑）</text>
-        <text class="chiptx" x="424" y="334">谁画完谁先送检 · 不等齐</text>
-      </g>
-      <path class="edge" d="M594,288 L630,288"></path>
+          <g class="fnode" data-k="iv_gen" tabindex="0" role="button" aria-label="写画面并行">
+            <rect class="box" x="254" y="216" width="340" height="132"></rect>
+            <text class="t" x="424" y="238">🎨 写画面 ×N 段同时开工</text>
+            <rect class="chipbox" x="270" y="250" width="150" height="30"></rect>
+            <text class="chiptx" x="345" y="269">第1段画师</text>
+            <rect class="chipbox" x="430" y="250" width="150" height="30"></rect>
+            <text class="chiptx" x="505" y="269">第2段画师</text>
+            <rect class="chipbox" x="270" y="288" width="150" height="30"></rect>
+            <text class="chiptx" x="345" y="307">第3段画师</text>
+            <rect class="chipbox" x="430" y="288" width="150" height="30"></rect>
+            <text class="chiptx" x="505" y="307">……（最多4个同跑）</text>
+            <text class="chiptx" x="424" y="334">谁画完谁先送检 · 不等齐</text>
+          </g>
+          <path class="edge" d="M594,288 L630,288"></path>
 
-      <g class="fnode" data-k="iv_chk" tabindex="0" role="button" aria-label="质检加审片">
-        <rect class="box" x="634" y="248" width="190" height="80"></rect>
-        <text class="t" x="729" y="272">🔍 质检 + 审片</text>
-        <text class="ts" x="729" y="290">机器先查硬伤（黑场/字幕）</text>
-        <text class="ts" x="729" y="308">AI 审片员看截图挑毛病</text>
-      </g>
-      <path class="edge" d="M824,288 L860,288"></path>
+          <g class="fnode" data-k="iv_chk" tabindex="0" role="button" aria-label="质检加审片">
+            <rect class="box" x="634" y="248" width="190" height="80"></rect>
+            <text class="t" x="729" y="276">🔍 质检 + 审片</text>
+            <text class="ts" x="729" y="296">机器先查硬伤（黑场/字幕）</text>
+            <text class="ts" x="729" y="314">AI 审片员看截图挑毛病</text>
+          </g>
+          <path class="edge" d="M824,288 L860,288"></path>
 
-      <g class="fnode" data-k="iv_render" tabindex="0" role="button" aria-label="渲染">
-        <rect class="box" x="864" y="248" width="150" height="80"></rect>
-        <text class="t" x="939" y="272">🎥 渲染</text>
-        <text class="ts" x="939" y="290">一段段录成小视频</text>
-        <text class="ts" x="939" y="308">约 20 秒/段</text>
-      </g>
-      <path class="edge" d="M1014,288 L1050,288"></path>
+          <g class="fnode" data-k="iv_render" tabindex="0" role="button" aria-label="渲染">
+            <rect class="box" x="864" y="248" width="150" height="80"></rect>
+            <text class="t" x="939" y="276">🎥 渲染</text>
+            <text class="ts" x="939" y="296">一段段录成小视频</text>
+            <text class="ts" x="939" y="314">约 20 秒/段</text>
+          </g>
+          <path class="edge" d="M1014,288 L1050,288"></path>
 
-      <g class="fnode" data-k="iv_stitch" tabindex="0" role="button" aria-label="拼接配乐">
-        <rect class="box" x="1054" y="248" width="102" height="80"></rect>
-        <text class="t" x="1105" y="272">🧩 拼接</text>
-        <text class="ts" x="1105" y="290">拼成一整部</text>
-        <text class="ts" x="1105" y="308">混音配乐</text>
-      </g>
+          <g class="fnode" data-k="iv_stitch" tabindex="0" role="button" aria-label="拼接配乐">
+            <rect class="box" x="1054" y="248" width="102" height="80"></rect>
+            <text class="t" x="1105" y="276">🧩 拼接</text>
+            <text class="ts" x="1105" y="296">拼成一整部</text>
+            <text class="ts" x="1105" y="314">混音配乐</text>
+          </g>
 
-      <path class="edge" d="M1105,328 L1105,372 L134,372 L134,392"></path>
+          <path class="edge" d="M1105,328 L1105,372 L134,372 L134,392"></path>
 
-      <g class="fnode" data-k="iv_final" tabindex="0" role="button" aria-label="全片终审">
-        <rect class="box" x="24" y="396" width="220" height="56"></rect>
-        <text class="t" x="134" y="418">🕵 全片终审</text>
-        <text class="ts" x="134" y="436">抽十几帧看节奏/拼接/风格</text>
-      </g>
-      <path class="edge" d="M244,424 L282,424"></path>
+          <g class="fnode" data-k="iv_final" tabindex="0" role="button" aria-label="全片终审">
+            <rect class="box" x="24" y="396" width="220" height="56"></rect>
+            <text class="t" x="134" y="418">🕵 全片终审</text>
+            <text class="ts" x="134" y="436">抽十几帧看节奏/拼接/风格</text>
+          </g>
+          <path class="edge" d="M244,424 L282,424"></path>
 
-      <g class="fnode start" data-k="iv_out" tabindex="0" role="button" aria-label="出片">
-        <rect class="box" x="286" y="396" width="210" height="56"></rect>
-        <text class="t" x="391" y="418">🎞 出片 · 可下载</text>
-        <text class="ts" x="391" y="436">renders/main.mp4</text>
-      </g>
+          <g class="fnode start" data-k="iv_out" tabindex="0" role="button" aria-label="出片">
+            <rect class="box" x="286" y="396" width="210" height="56"></rect>
+            <text class="t" x="391" y="418">🎞 出片 · 可下载</text>
+            <text class="ts" x="391" y="436">renders/main.mp4</text>
+          </g>
 
-      <g pointer-events="none">
-        <rect class="chipbox" x="540" y="396" width="616" height="56"></rect>
-        <text class="chiptx" x="848" y="416">打回会循环：审片不合格 → 只重画问题那一段（最多 2 轮）；</text>
-        <text class="chiptx" x="848" y="434">整片有问题 → 只重渲问题段再重拼（最多 2 轮）。老不过就刹车等人，绝不无限烧钱。</text>
-      </g>
-    </svg>
+          <g pointer-events="none">
+            <rect class="chipbox" x="540" y="404" width="616" height="40"></rect>
+            <text class="chiptx" x="848" y="428">打回只重做问题那一段（最多 2 轮）；老不过就刹车等人，绝不无限烧钱。</text>
+          </g>
+        </svg>
+        </div>
+        <div class="legend">
+          <span class="li"><i class="sw"></i>做完才到下一步</span>
+          <span class="li">👤 = 人工环节</span>
+          <span class="li">点击方块 → 右侧看解释</span>
+        </div>
+      </div>
+
+      <aside class="side">
+        <div class="side-head">节点详情</div>
+        <div class="detail" id="detailIntro" aria-live="polite"></div>
+      </aside>
     </div>
 
-    <table class="gloss">
-      <tr><th style="width:9em">名词</th><th>大白话解释</th></tr>
-      <tr><td>工件</td><td>每个阶段交出的<b>产物文件</b>：文字稿、风格包、分镜稿。后面的环节只看工件、不看前面探索的过程——所以改某一环时，别的环不用重做。</td></tr>
-      <tr><td>工位</td><td>一道工序。准备阶段三个工位（文稿/风格/分镜），制作阶段按段流转的写画面/质检/渲染/审片也是工位。</td></tr>
-      <tr><td>段（seg）</td><td>5–20 秒的一小节画面。<b>一个段 = 一个 HTML 文件 = 一次渲染 = 一份缓存</b>。打回只重做出问题的那段，绝不整片重来——省钱省时的根基。</td></tr>
-      <tr><td>ReAct</td><td>一种让大模型「边想边干活」的方式：想一步 → 调一个工具 → 看结果 → 再想……直到交出作业（submit）。准备阶段三位 AI、制作阶段的审片员都是这么干活的。</td></tr>
-      <tr><td>submit-or-die</td><td>工位的唯一合法出口是交作业工具。光说不交 = 白跑，预算烧完就报错，防止 AI 空转。</td></tr>
-      <tr><td>check（机检）</td><td><b>程序质检</b>：查画面代码的语法、黑场、字幕缺失、动画不守规矩等硬伤。纯机器活，不花大模型的钱——便宜的门挡在昂贵的环节前面。</td></tr>
-      <tr><td>段审 / 终审</td><td>「AI 审片员」（多模态大模型）看截图挑毛病：段审逐段看，终审拼完看整部。打回走「只改问题处」的循环，有轮次上限。</td></tr>
-      <tr><td>续写 + patch</td><td>打回时不许整份重写：在原来的对话上续写，AI 只回一张「改哪几处」的改动单，程序照单套用。改动小、不引入新毛病。</td></tr>
-      <tr><td>签名刹车</td><td>同一毛病连续两轮原样出现 → 判定「系统性问题」，立即停车报人，不再反复重掷骰子烧钱。</td></tr>
-      <tr><td>journal / manifest</td><td>流水线<b>账本</b>：每一段的状态迁移、每一次审查取证都有记录。中途崩了能从断点续跑（做好的段不重做），事后能查每一步。</td></tr>
-      <tr><td>并发上限</td><td>写画面最多 4 路同时（云端 API 限额）、审片最多 4 路、渲染按本机 CPU（≤min(4, CPU−2)）——三类资源互不抢嘴。</td></tr>
-    </table>
-
-    <p class="src" style="margin-top:14px"><b>看图指南：</b>上面四个页签——本页 = 三分钟总览；「文稿驱动 v3.1」= 现行架构设计图（点节点看设计细节）；「音乐驱动 PV」= 尚未动工的草案；「代码调用链」= 真实函数级调用图（标了 <code>文件:行号</code>），串行/并行/循环上限全部按代码标注。图例约定（后三个页签通用）：<b>实线箭头</b> = 串行（做完才轮到下一步）；<b>灰底大框</b> = 并行容器（框内多路同时跑）；<b>橙色虚线箭头</b> = 打回/重跑回边（旁边标了轮次上限）；<b>虚线框</b> = 会启动外部进程（python / node / ffmpeg）。所有节点都可以点击，详情显示在对应图上方。</p>
+    <details class="ctx" style="margin-top:14px">
+      <summary>名词小抄 · 11 个词（大白话）</summary>
+      <div class="ctx-body">
+        <table class="gloss">
+          <tr><th style="width:9em">名词</th><th>大白话解释</th></tr>
+          <tr><td>工件</td><td>每个阶段交出的<b>产物文件</b>：文字稿、风格包、分镜稿。后面的环节只看工件、不看前面探索的过程——所以改某一环时，别的环不用重做。</td></tr>
+          <tr><td>工位</td><td>一道工序。准备阶段三个工位（文稿/风格/分镜），制作阶段按段流转的写画面/质检/渲染/审片也是工位。</td></tr>
+          <tr><td>段（seg）</td><td>5–20 秒的一小节画面。<b>一个段 = 一个 HTML 文件 = 一次渲染 = 一份缓存</b>。打回只重做出问题的那段，绝不整片重来——省钱省时的根基。</td></tr>
+          <tr><td>ReAct</td><td>一种让大模型「边想边干活」的方式：想一步 → 调一个工具 → 看结果 → 再想……直到交出作业（submit）。准备阶段三位 AI、制作阶段的审片员都是这么干活的。</td></tr>
+          <tr><td>submit-or-die</td><td>工位的唯一合法出口是交作业工具。光说不交 = 白跑，预算烧完就报错，防止 AI 空转。</td></tr>
+          <tr><td>check（机检）</td><td><b>程序质检</b>：查画面代码的语法、黑场、字幕缺失、动画不守规矩等硬伤。纯机器活，不花大模型的钱——便宜的门挡在昂贵的环节前面。</td></tr>
+          <tr><td>段审 / 终审</td><td>「AI 审片员」（多模态大模型）看截图挑毛病：段审逐段看，终审拼完看整部。打回走「只改问题处」的循环，有轮次上限。</td></tr>
+          <tr><td>续写 + patch</td><td>打回时不许整份重写：在原来的对话上续写，AI 只回一张「改哪几处」的改动单，程序照单套用。改动小、不引入新毛病。</td></tr>
+          <tr><td>签名刹车</td><td>同一毛病连续两轮原样出现 → 判定「系统性问题」，立即停车报人，不再反复重掷骰子烧钱。</td></tr>
+          <tr><td>journal / manifest</td><td>流水线<b>账本</b>：每一段的状态迁移、每一次审查取证都有记录。中途崩了能从断点续跑（做好的段不重做），事后能查每一步。</td></tr>
+          <tr><td>并发上限</td><td>写画面最多 4 路同时（云端 API 限额）、审片最多 4 路、渲染按本机 CPU（≤min(4, CPU−2)）——三类资源互不抢嘴。</td></tr>
+        </table>
+      </div>
+    </details>
   </section>
 
+  <!-- ================= 文稿驱动 · 现行 v3.1 ================= -->
   <section class="page hidden" id="page-script">
-    <p class="src">依据 <code>docs/production-stage-design.md</code>（制作阶段定稿）与 <code>docs/cost-optimization-plan-2026-10-20.md</code>（2026-10-20 降本改造 + 10-21 动工）绘制。准备阶段＝三个 ReAct agent 工件链（文字稿 → 风格包 → 分镜稿）+ 打包终审门；制作阶段＝段级流水线：TTS 一次全局，写画面 ×N 段并行，谁写完谁往下流（check（含接缝亮度闸）→ 渲染 → 段审），全部段过审即拼接 + 全片终审。段审已恢复（<code>PRODUCE_SEG_AUDIT</code> 默认 on）；边界审已撤（D5：<code>PRODUCE_BND_AUDIT</code> 默认 off，段间接缝交固定契约——首帧即景/末帧定格 + 机检亮度闸 + 统一直切）；打回修复走<b>续写 + patch 改动单</b>（D2）；TTS 后配乐工位自动选曲（曲库 LLM 挑选＋机械改判，拼接层闪避垫底，永不挡片）。点击任一节点，详情显示在图上方。</p>
-    <aside class="detail" id="detailScript" aria-live="polite"></aside>
+    <p class="lead">现行架构：准备阶段 = 三个 ReAct 工位工件链 + <b>打包终审门</b>；制作阶段 = <b>段级流水线</b>（写 ≤4 ∥ 审 ≤4 ∥ 渲按 CPU，谁写完谁往下流）。点击节点，右侧看设计细节。</p>
+    <details class="ctx">
+      <summary>背景与依据</summary>
+      <div class="ctx-body">
+        <p>依据 <code>docs/production-stage-design.md</code>（制作阶段定稿）与 <code>docs/cost-optimization-plan-2026-10-20.md</code>（降本改造）绘制。制作阶段＝段级流水线：TTS 一次全局，写画面 ×N 段并行，谁写完谁往下流（check（含接缝亮度闸）→ 渲染 → 段审），全部段过审即拼接 + 全片终审。</p>
+        <p>段审已恢复（<code>PRODUCE_SEG_AUDIT</code> 默认 on）；边界审已撤（D5：<code>PRODUCE_BND_AUDIT</code> 默认 off，段间接缝交固定契约——首帧即景/末帧定格 + 机检亮度闸 + 统一直切）；打回修复走<em>续写 + patch 改动单</em>（D2）；TTS 后配乐工位自动选曲（曲库 LLM 挑选＋机械改判，拼接层闪避垫底，永不挡片）。</p>
+      </div>
+    </details>
 
-    <div class="diagram-wrap">
-    <svg id="flowsvg" class="flowsvg" viewBox="0 0 1180 540" role="img" aria-label="五工位 v3.1 制作流程图：准备阶段三 ReAct agent 工件链 + 打包终审门 + 制作阶段段级流水线 + 渲染后单场审核 + 全片终审">
-      <defs>
-        <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
-        </marker>
-      </defs>
+    <div class="workbench">
+      <div>
+        <div class="diagram-wrap">
+        <svg id="flowsvg" class="flowsvg" viewBox="0 0 1180 540" role="img" aria-label="五工位 v3.1 制作流程图：准备阶段三 ReAct agent 工件链 + 打包终审门 + 制作阶段段级流水线 + 全片终审">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
+            </marker>
+          </defs>
 
-      <!-- 阶段底带 -->
-      <rect class="band" x="8" y="24" width="1164" height="116"></rect>
-      <text class="bandlabel" x="24" y="44">准备阶段 · 三步走 · 三个 ReAct AGENT · 工件链</text>
-      <rect class="band" x="8" y="168" width="1164" height="348"></rect>
-      <text class="bandlabel" x="24" y="188">制作阶段 · 段级流水线 · 写≤4 · 审≤4 · 渲按CPU</text>
+          <rect class="band" x="8" y="24" width="1164" height="116"></rect>
+          <text class="bandlabel" x="24" y="44">准备阶段 · 三步走 · 三个 ReAct AGENT · 工件链</text>
+          <rect class="band" x="8" y="168" width="1164" height="348"></rect>
+          <text class="bandlabel" x="24" y="188">制作阶段 · 段级流水线 · 写≤4 · 审≤4 · 渲按CPU</text>
 
-      <!-- 连线 -->
-      <path class="edge" d="M124,90 L168,90"></path>
-      <path class="edge" d="M338,90 L382,90"></path>
-      <path class="edge" d="M572,90 L616,90"></path>
-      <path class="edge" d="M846,90 L890,90"></path>
-      <path class="edge" d="M1015,122 L1015,154 L88,154 L88,251"></path>
-      <path class="edge" d="M88,321 L88,333"></path>
-      <path class="edge" d="M152,289 L194,289"></path>
-      <path class="edge" d="M390,249 L432,285"></path>
-      <path class="edge" d="M390,289 L432,289"></path>
-      <path class="edge" d="M390,329 L432,293"></path>
-      <path class="edge" d="M558,289 L602,289"></path>
-      <path class="edge" d="M726,289 L770,289"></path>
-      <path class="edge" d="M999,380 L999,420 L149,420 L149,426"></path>
-      <path class="edge" d="M149,432 L149,400 L230,400 L230,386"></path>
-      <path class="edge" d="M590,432 L590,400 L360,400 L360,386"></path>
-      <path class="edge" d="M274,468 L316,468"></path>
-      <path class="edge" d="M432,468 L474,468"></path>
-      <path class="edge" d="M700,468 L742,468"></path>
+          <path class="edge" d="M124,90 L168,90"></path>
+          <path class="edge" d="M338,90 L382,90"></path>
+          <path class="edge" d="M572,90 L616,90"></path>
+          <path class="edge" d="M846,90 L890,90"></path>
+          <path class="edge" d="M1015,122 L1015,154 L88,154 L88,251"></path>
+          <path class="edge" d="M88,321 L88,333"></path>
+          <path class="edge" d="M152,289 L194,289"></path>
+          <path class="edge" d="M390,249 L432,285"></path>
+          <path class="edge" d="M390,289 L432,289"></path>
+          <path class="edge" d="M390,329 L432,293"></path>
+          <path class="edge" d="M558,289 L602,289"></path>
+          <path class="edge" d="M726,289 L770,289"></path>
+          <path class="edge" d="M999,380 L999,420 L149,420 L149,426"></path>
+          <path class="edge" d="M149,432 L149,400 L230,400 L230,386"></path>
+          <path class="edge" d="M590,432 L590,400 L360,400 L360,386"></path>
+          <path class="edge" d="M274,468 L316,468"></path>
+          <path class="edge" d="M432,468 L474,468"></path>
+          <path class="edge" d="M700,468 L742,468"></path>
 
-      <!-- 工件/流水线标签 -->
-      <g pointer-events="none">
-        <text class="ts" x="360" y="80">文字稿</text>
-        <text class="ts" x="594" y="80">风格包</text>
-        <text class="ts" x="868" y="80">分镜稿</text>
-        <text class="ts" x="173" y="280">逐段</text>
-        <text class="ts" x="580" y="280">逐段</text>
-        <text class="ts" x="215" y="394">redraw≤1</text>
-        <text class="ts" x="475" y="394">终审打回·按段重渲</text>
-      </g>
+          <g pointer-events="none">
+            <text class="ts" x="360" y="80">文字稿</text>
+            <text class="ts" x="594" y="80">风格包</text>
+            <text class="ts" x="868" y="80">分镜稿</text>
+            <text class="ts" x="173" y="280">逐段</text>
+            <text class="ts" x="580" y="280">逐段</text>
+            <text class="ts" x="215" y="394">redraw≤1</text>
+            <text class="ts" x="475" y="394">终审打回·按段重渲</text>
+          </g>
 
-      <!-- 图例（右下空档） -->
-      <g pointer-events="none">
-        <text class="lg-t" x="916" y="440" style="font-weight:600">图例</text>
-        <line class="lg-line" x1="916" y1="456" x2="944" y2="456"></line>
-        <text class="lg-t" x="950" y="460">LLM 工位</text>
-        <line class="lg-line dash" x1="1030" y1="456" x2="1058" y2="456"></line>
-        <text class="lg-t" x="1064" y="460">程序化</text>
-        <text class="hint" x="916" y="484">点击节点看详情</text>
-      </g>
+          <g class="fnode start" data-k="input" tabindex="0" role="button" aria-label="用户输入">
+            <rect class="box" x="24" y="58" width="100" height="64"></rect>
+            <text class="t" x="74" y="86">用户输入</text>
+            <text class="ts" x="74" y="106">主题 / 稿件</text>
+          </g>
 
-      <!-- 起点 -->
-      <g class="fnode start" data-k="input" tabindex="0" role="button" aria-label="用户输入">
-        <rect class="box" x="24" y="58" width="100" height="64"></rect>
-        <text class="t" x="74" y="84">用户输入</text>
-        <text class="ts" x="74" y="104">主题 / 稿件</text>
-      </g>
+          <g class="fnode" data-k="g1" tabindex="0" role="button" aria-label="文稿工位 ReAct agent">
+            <rect class="box" x="168" y="58" width="170" height="64"></rect>
+            <text class="t" x="253" y="86">① 文稿工位</text>
+            <text class="ts" x="253" y="106">联网研究 · 口播稿</text>
+          </g>
 
-      <!-- ① 文稿工位 -->
-      <g class="fnode" data-k="g1" tabindex="0" role="button" aria-label="文稿工位 ReAct agent">
-        <rect class="box" x="168" y="58" width="170" height="64"></rect>
-        <text class="t" x="253" y="78">① 文稿工位</text>
-        <text class="ts" x="253" y="96">联网研究 · 口语化改写</text>
-        <text class="ts" x="253" y="112">产出：文字稿+事实清单</text>
-      </g>
+          <g class="fnode" data-k="g2" tabindex="0" role="button" aria-label="风格工位 ReAct agent">
+            <rect class="box" x="382" y="58" width="190" height="64"></rect>
+            <text class="t" x="477" y="86">② 风格工位</text>
+            <text class="ts" x="477" y="106">风格库探索 · 动态样张</text>
+          </g>
 
-      <!-- ② 风格工位 -->
-      <g class="fnode" data-k="g2" tabindex="0" role="button" aria-label="风格工位 ReAct agent">
-        <rect class="box" x="382" y="58" width="190" height="64"></rect>
-        <text class="t" x="477" y="78">② 风格工位</text>
-        <text class="ts" x="477" y="96">风格库全探索 · 动态样张验证</text>
-        <text class="ts" x="477" y="112">风格包：描述+语法+设计系统</text>
-      </g>
+          <g class="fnode" data-k="g3" tabindex="0" role="button" aria-label="分镜工位 ReAct agent">
+            <rect class="box" x="616" y="58" width="230" height="64"></rect>
+            <text class="t" x="731" y="86">③ 分镜工位</text>
+            <text class="ts" x="731" y="106">段落 · 切段 · 场景 brief（纯内容）</text>
+          </g>
 
-      <!-- ③ 分镜工位 -->
-      <g class="fnode" data-k="g3" tabindex="0" role="button" aria-label="分镜工位 ReAct agent">
-        <rect class="box" x="616" y="58" width="230" height="64"></rect>
-        <text class="t" x="731" y="78">③ 分镜工位</text>
-        <text class="ts" x="731" y="96">段落 · 切段 · 场景规划（纯内容）</text>
-        <text class="ts" x="731" y="112">首拍/末拍写进 brief · 不出现缝</text>
-      </g>
+          <g class="fnode" data-k="gate" tabindex="0" role="button" aria-label="打包终审门，唯一人工门">
+            <rect class="box" x="890" y="58" width="250" height="64"></rect>
+            <text class="t" x="1015" y="86">打包终审门</text>
+            <text class="ts" x="1015" y="106">三工件一次确认 · 反馈按工件路由</text>
+            <g class="pill gate"><rect x="894" y="49" width="96" height="18"></rect><text x="942" y="62">👤 唯一人工门</text></g>
+          </g>
 
-      <!-- 👤 打包终审门 -->
-      <g class="fnode" data-k="gate" tabindex="0" role="button" aria-label="打包终审门，唯一人工门">
-        <rect class="box" x="890" y="58" width="250" height="64"></rect>
-        <text class="t" x="1015" y="78">打包终审门</text>
-        <text class="ts" x="1015" y="96">文字稿+风格包+分镜稿 一次确认</text>
-        <text class="ts" x="1015" y="112">反馈按工件路由</text>
-        <g class="pill gate"><rect x="894" y="49" width="96" height="18"></rect><text x="942" y="62">👤 唯一人工门</text></g>
-      </g>
+          <g class="fnode prog" data-k="tts" tabindex="0" role="button" aria-label="TTS 与词级对齐">
+            <rect class="box" x="24" y="257" width="128" height="64"></rect>
+            <text class="t" x="88" y="287">TTS + 词级对齐</text>
+            <text class="ts" x="88" y="307">程序化 · 一次 · 全局</text>
+          </g>
 
-      <!-- TTS -->
-      <g class="fnode prog" data-k="tts" tabindex="0" role="button" aria-label="TTS 与词级对齐">
-        <rect class="box" x="24" y="257" width="128" height="64"></rect>
-        <text class="t" x="88" y="285">TTS + 词级对齐</text>
-        <text class="ts" x="88" y="305">程序化 · 一次 · 全局</text>
-      </g>
+          <g class="fnode prog" data-k="bgm" tabindex="0" role="button" aria-label="配乐工位，TTS 后自动选曲">
+            <rect class="box" x="24" y="333" width="128" height="64"></rect>
+            <text class="t" x="88" y="361">配乐 · 自动选曲</text>
+            <text class="ts" x="88" y="381">曲库挑选 · 永不挡片</text>
+          </g>
 
-      <!-- 配乐工位 · BGM 自动选曲（2026-10-21） -->
-      <g class="fnode prog" data-k="bgm" tabindex="0" role="button" aria-label="配乐工位，TTS 后自动选曲">
-        <rect class="box" x="24" y="333" width="128" height="64"></rect>
-        <text class="t" x="88" y="357">配乐 · 自动选曲</text>
-        <text class="ts" x="88" y="375">曲库挑选 · 机械改判</text>
-        <text class="ts" x="88" y="391">垫底闪避 · 永不挡片</text>
-      </g>
+          <g class="fnode" data-k="gen" tabindex="0" role="button" aria-label="写画面工位，N 段并行，并发上限4">
+            <rect class="box" x="200" y="200" width="190" height="180"></rect>
+            <text class="t" x="295" y="222">④ 写画面 ×N 并行 ≤4</text>
+            <rect class="chipbox" x="216" y="232" width="158" height="34"></rect>
+            <text class="chiptx" x="295" y="253">seg01.html</text>
+            <rect class="chipbox" x="216" y="272" width="158" height="34"></rect>
+            <text class="chiptx" x="295" y="293">seg02.html</text>
+            <rect class="chipbox" x="216" y="312" width="158" height="34"></rect>
+            <text class="chiptx" x="295" y="333">seg03.html</text>
+            <text class="chiptx" x="295" y="366">谁写完谁往下流 · 不等齐</text>
+          </g>
 
-      <!-- ④ 写画面 ×N 并行（扇出容器） -->
-      <g class="fnode" data-k="gen" tabindex="0" role="button" aria-label="写画面工位，N 段并行，并发上限4">
-        <rect class="box" x="200" y="200" width="190" height="180"></rect>
-        <text class="t" x="295" y="222">④ 写画面 ×N 并行 ≤4</text>
-        <rect class="chipbox" x="216" y="232" width="158" height="34"></rect>
-        <text class="chiptx" x="295" y="253">seg01.html</text>
-        <rect class="chipbox" x="216" y="272" width="158" height="34"></rect>
-        <text class="chiptx" x="295" y="293">seg02.html</text>
-        <rect class="chipbox" x="216" y="312" width="158" height="34"></rect>
-        <text class="chiptx" x="295" y="333">seg03.html</text>
-        <text class="chiptx" x="295" y="366">谁写完谁往下流 · 不等齐</text>
-      </g>
+          <g class="fnode prog" data-k="chk" tabindex="0" role="button" aria-label="程序 check，逐段">
+            <rect class="box" x="438" y="257" width="120" height="64"></rect>
+            <text class="t" x="498" y="287">程序 check</text>
+            <text class="ts" x="498" y="307">逐段 · lint+不变量</text>
+          </g>
 
-      <!-- 程序 check -->
-      <g class="fnode prog" data-k="chk" tabindex="0" role="button" aria-label="程序 check，逐段">
-        <rect class="box" x="438" y="257" width="120" height="64"></rect>
-        <text class="t" x="498" y="285">程序 check</text>
-        <text class="ts" x="498" y="305">逐段 · lint+不变量</text>
-      </g>
+          <g class="fnode prog" data-k="render" tabindex="0" role="button" aria-label="段渲染">
+            <rect class="box" x="606" y="257" width="120" height="64"></rect>
+            <text class="t" x="666" y="287">段渲染</text>
+            <text class="ts" x="666" y="307">程序化 · ~20s/段</text>
+          </g>
 
-      <!-- 段渲染 -->
-      <g class="fnode prog" data-k="render" tabindex="0" role="button" aria-label="段渲染">
-        <rect class="box" x="606" y="257" width="120" height="64"></rect>
-        <text class="t" x="666" y="285">段渲染</text>
-        <text class="ts" x="666" y="305">程序化 · ~20s/段</text>
-      </g>
+          <g class="fnode llm" data-k="segaudit" tabindex="0" role="button" aria-label="段审已恢复，判卷">
+            <rect class="box" x="774" y="200" width="250" height="180"></rect>
+            <text class="t" x="899" y="222">段审 · 判卷（多模态）</text>
+            <text class="ts" x="899" y="262">锚点帧判卷 · 默认 on</text>
+            <text class="ts" x="899" y="296">打回重写 ≤2 轮 · 续写+patch</text>
+            <text class="ts" x="899" y="330">超限带伤放行 · 签名刹车</text>
+          </g>
 
-      <!-- 段审·已恢复（2026-10-21 用户拍板，开关保留） -->
-      <g class="fnode prog" data-k="segaudit" tabindex="0" role="button" aria-label="段审已恢复">
-        <rect class="box" x="774" y="200" width="250" height="180"></rect>
-        <text class="t" x="899" y="222">段审 · 已恢复（判卷 ReAct）</text>
-        <rect class="chipbox" x="790" y="232" width="218" height="34"></rect>
-        <text class="chiptx" x="899" y="253">PRODUCE_SEG_AUDIT 默认 on</text>
-        <rect class="chipbox" x="790" y="272" width="218" height="34"></rect>
-        <text class="chiptx" x="899" y="293">分段质量第一道多模态闸 · 值得花钱</text>
-        <rect class="chipbox" x="790" y="312" width="218" height="34"></rect>
-        <text class="chiptx" x="899" y="333">回滚＝环境变量 off（D1 机检直过）</text>
-        <text class="chiptx" x="899" y="366">重写 ≤2 轮 + 签名刹车 · 打回走续写+patch</text>
-      </g>
+          <g class="fnode prog" data-k="s4post" tabindex="0" role="button" aria-label="边界审已撤，固定转场契约">
+            <rect class="box" x="24" y="432" width="250" height="72"></rect>
+            <text class="t" x="149" y="458">边界审 · 已撤（D5 固定转场）</text>
+            <text class="ts" x="149" y="478">PRODUCE_BND_AUDIT 默认 off</text>
+            <text class="ts" x="149" y="494">段间=统一直切+亮度闸执法</text>
+          </g>
 
-      <!-- ⑤ 审核工位 · 边界审·已撤（D5 固定转场契约，开关保留） -->
-      <g class="fnode prog" data-k="s4post" tabindex="0" role="button" aria-label="边界审已撤，固定转场契约">
-        <rect class="box" x="24" y="432" width="250" height="72"></rect>
-        <text class="t" x="149" y="454">边界审 · 已撤（D5 固定转场）</text>
-        <text class="ts" x="149" y="472">PRODUCE_BND_AUDIT 默认 off · 段间=直切</text>
-        <text class="ts" x="149" y="490">首帧即景/末帧定格 → 机检亮度闸执法</text>
-      </g>
+          <g class="fnode prog" data-k="stitch" tabindex="0" role="button" aria-label="拼接">
+            <rect class="box" x="322" y="432" width="110" height="72"></rect>
+            <text class="t" x="377" y="466">拼接</text>
+            <text class="ts" x="377" y="486">全部过审才拼 · 零改动</text>
+          </g>
 
-      <!-- 拼接 -->
-      <g class="fnode prog" data-k="stitch" tabindex="0" role="button" aria-label="拼接">
-        <rect class="box" x="322" y="432" width="110" height="72"></rect>
-        <text class="t" x="377" y="462">拼接</text>
-        <text class="ts" x="377" y="484">末对过审才拼 · 零改动</text>
-      </g>
+          <g class="fnode" data-k="final" tabindex="0" role="button" aria-label="全片终审">
+            <rect class="box" x="480" y="432" width="220" height="72"></rect>
+            <text class="t" x="590" y="460">全片终审（瘦身）</text>
+            <text class="ts" x="590" y="480">12–16 帧 · 查节奏/拼接/渐变</text>
+          </g>
 
-      <!-- 全片终审 -->
-      <g class="fnode" data-k="final" tabindex="0" role="button" aria-label="全片终审">
-        <rect class="box" x="480" y="432" width="220" height="72"></rect>
-        <text class="t" x="590" y="456">全片终审（瘦身）</text>
-        <text class="ts" x="590" y="474">12–16 帧（段界 + 段落界）</text>
-        <text class="ts" x="590" y="492">查节奏 / 空转 / 拼接 / 渐变跑偏</text>
-      </g>
+          <g class="fnode start" data-k="out" tabindex="0" role="button" aria-label="渲染出片">
+            <rect class="box" x="748" y="432" width="128" height="72"></rect>
+            <text class="t" x="812" y="473">渲染出片</text>
+          </g>
+        </svg>
+        </div>
+        <div class="legend">
+          <span class="li"><i class="sw"></i>串行</span>
+          <span class="li"><i class="sw box bandbg"></i>并行容器</span>
+          <span class="li"><i class="sw box llm"></i>LLM 工位</span>
+          <span class="li"><i class="sw box dashb"></i>程序化</span>
+          <span class="li"><i class="sw dash"></i>打回回边（标上限）</span>
+        </div>
+      </div>
 
-      <!-- 出片 -->
-      <g class="fnode start" data-k="out" tabindex="0" role="button" aria-label="渲染出片">
-        <rect class="box" x="748" y="432" width="128" height="72"></rect>
-        <text class="t" x="812" y="473">渲染出片</text>
-      </g>
-    </svg>
+      <aside class="side">
+        <div class="side-head">节点详情</div>
+        <div class="detail" id="detailScript" aria-live="polite"></div>
+      </aside>
     </div>
   </section>
 
+  <!-- ================= 音乐驱动 · PV ================= -->
   <section class="page hidden" id="page-music">
-    <p class="src">音乐驱动（PV）架构 · 2026-10-21 讨论定稿；<b>M1 音乐工位 2026-10-23 已落地</b>（AI 做曲→地图全链真机过，见想法页签），②分镜工位（M2）未动工。发令枪从文稿换成音乐——<b>舞台还是那个舞台（渲染引擎/素材/风格库不动），换的是指挥</b>。准备阶段：主题（或主题＋上传曲子：跳过做曲直进地图，「给一首曲子做片子」模式）→ ① 音乐工位（<b>一个 ReAct 会话调两个白名单工具</b>：曲brief → 做曲/选曲 → 音乐地图，一次交付三件套；地图对 brief 闭环自检，做曲重做 ≤2；<code>demo/agi-mv-repro/analyze_audio.py</code> 已验证节拍分析；自家曲库 v2（MIDI 做曲）＝首个后端，谱面直出节拍地图）→ ② 分镜工位（镜头边界钉在节拍上，<b>只认地图不认 brief</b>——曲先行不是偏好是唯一解）→ 打包终审门。制作阶段全链复用段级流水线机器：写画面注入节拍事件、check 新增<b>卡点机械闸</b>、镜头审判卷骨架照搬、拼接挂原曲音轨、终审判据换血。纯音乐无歌词：TTS / 歌词 / 字幕整个退场，时间轴来源唯一化。框色：<em style="color:var(--accent)">蓝＝新增工位</em>、<em style="color:var(--warn)">橙＝判据换血</em>、默认＝直接复用。点击节点看详情。</p>
-    <aside class="detail" id="detailMusic" aria-live="polite"></aside>
+    <p class="lead">音乐驱动（PV）：<b>M1 音乐工位已落地</b>（2026-10-23），②分镜工位（M2）未动工。发令枪从文稿换成音乐——<b>舞台还是那个舞台，换的是指挥</b>。</p>
+    <details class="ctx">
+      <summary>背景与依据</summary>
+      <div class="ctx-body">
+        <p>2026-10-21 讨论定稿，方案汇总见 <code>docs/pv-music-driven-design.md</code>。准备阶段：主题（或主题＋上传曲子：跳过做曲直进地图，「给一首曲子做片子」模式）→ ① 音乐工位（<em>一个 ReAct 会话调白名单工具</em>：曲brief → 做曲/选曲 → 音乐地图，一次交付三件套；地图对 brief 闭环自检，做曲重做 ≤2）→ ② 分镜工位（镜头边界钉在节拍上，<em>只认地图不认 brief</em>——曲先行不是偏好是唯一解）→ 打包终审门。</p>
+        <p>制作阶段全链复用段级流水线机器：写画面注入节拍事件、check 新增<em>卡点机械闸</em>、镜头审判卷骨架照搬、拼接挂原曲音轨、终审判据换血。纯音乐无歌词：TTS / 歌词 / 字幕整个退场，时间轴来源唯一化。</p>
+      </div>
+    </details>
 
-    <div class="diagram-wrap">
-      <svg id="flowsvg2" class="flowsvg" viewBox="0 0 1180 600" role="img" aria-label="音乐驱动 PV 架构草案：主题→曲brief→做曲→音乐地图→分镜→打包终审门；制作阶段复用段级流水线机器，卡点机械闸 + 镜头审 + 原曲拼接 + 终审判据换血">
-        <defs>
-          <marker id="arrow2" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
-          </marker>
-        </defs>
+    <div class="workbench">
+      <div>
+        <div class="diagram-wrap">
+        <svg id="flowsvg2" class="flowsvg" viewBox="0 0 1180 600" role="img" aria-label="音乐驱动 PV 架构：主题→音乐工位三件套→分镜→打包终审门；制作阶段复用段级流水线机器">
+          <defs>
+            <marker id="arrow2" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
+            </marker>
+          </defs>
 
-        <!-- 阶段底带 -->
-        <rect class="band" x="8" y="24" width="1164" height="116"></rect>
-        <text class="bandlabel" x="24" y="44">准备阶段 · 曲先行</text>
-        <rect class="band" x="8" y="168" width="1164" height="430"></rect>
-        <text class="bandlabel" x="24" y="188">制作阶段 · 流水线机器全复用 · TTS/歌词退场 · 时间轴=节拍</text>
+          <rect class="band" x="8" y="24" width="1164" height="116"></rect>
+          <text class="bandlabel" x="24" y="44">准备阶段 · 曲先行</text>
+          <rect class="band" x="8" y="168" width="1164" height="430"></rect>
+          <text class="bandlabel" x="24" y="188">制作阶段 · 流水线机器全复用 · TTS/歌词退场 · 时间轴=节拍</text>
 
-        <!-- 连线 -->
-        <path class="edge" d="M116,90 L150,90"></path>
-        <path class="edge" d="M700,90 L730,90"></path>
-        <path class="edge" d="M930,90 L960,90"></path>
-        <path class="edge" d="M1058,122 L1058,154 L88,154 L88,253"></path>
-        <path class="edge" d="M152,289 L200,289"></path>
-        <path class="edge" d="M390,289 L438,289"></path>
-        <path class="edge" d="M568,289 L608,289"></path>
-        <path class="edge" d="M728,289 L768,289"></path>
-        <path class="edge" d="M883,210 L883,196 L295,196 L295,210"></path>
-        <path class="edge" d="M883,400 L883,440 L387,440 L387,480"></path>
-        <path class="edge" d="M452,516 L500,516"></path>
-        <path class="edge" d="M730,516 L790,516"></path>
-        <path class="edge" d="M500,516 L452,516"></path>
+          <path class="edge" d="M116,90 L150,90"></path>
+          <path class="edge" d="M700,90 L730,90"></path>
+          <path class="edge" d="M930,90 L960,90"></path>
+          <path class="edge" d="M1058,122 L1058,154 L88,154 L88,253"></path>
+          <path class="edge" d="M152,289 L200,289"></path>
+          <path class="edge" d="M390,289 L438,289"></path>
+          <path class="edge" d="M568,289 L608,289"></path>
+          <path class="edge" d="M728,289 L768,289"></path>
+          <path class="edge" d="M883,210 L883,196 L295,196 L295,210"></path>
+          <path class="edge" d="M883,400 L883,440 L387,440 L387,480"></path>
+          <path class="edge" d="M452,516 L500,516"></path>
+          <path class="edge" d="M730,516 L790,516"></path>
+          <path class="edge" d="M500,516 L452,516"></path>
 
-        <!-- 工件/回路标签 -->
-        <g pointer-events="none">
-          <text class="ts" x="715" y="80">三件套</text>
-          <text class="ts" x="945" y="80">镜头表</text>
-          <text class="ts" x="176" y="280">逐镜头</text>
-          <text class="ts" x="600" y="192">打回 · 续写+patch</text>
-          <text class="ts" x="640" y="436">全过审才拼 · 挂原曲</text>
-          <text class="ts" x="476" y="505">打回重拼</text>
-        </g>
+          <g pointer-events="none">
+            <text class="ts" x="715" y="80">三件套</text>
+            <text class="ts" x="945" y="80">镜头表</text>
+            <text class="ts" x="176" y="280">逐镜头</text>
+            <text class="ts" x="600" y="192">打回 · 续写+patch</text>
+            <text class="ts" x="640" y="436">全过审才拼 · 挂原曲</text>
+            <text class="ts" x="476" y="505">打回重拼</text>
+          </g>
 
-        <!-- 图例（右下） -->
-        <g pointer-events="none">
-          <text class="lg-t" x="1010" y="430" style="font-weight:600">图例</text>
-          <line class="lg-line" x1="1010" y1="448" x2="1038" y2="448"></line>
-          <text class="lg-t" x="1044" y="452">LLM 工位</text>
-          <line class="lg-line dash" x1="1010" y1="472" x2="1038" y2="472"></line>
-          <text class="lg-t" x="1044" y="476">程序化</text>
-          <rect x="1010" y="490" width="28" height="16" rx="5" style="fill:var(--panel);stroke:var(--accent);stroke-width:2"></rect>
-          <text class="lg-t" x="1044" y="502">新增工位</text>
-          <rect x="1010" y="514" width="28" height="16" rx="5" style="fill:var(--panel);stroke:var(--warn);stroke-width:2"></rect>
-          <text class="lg-t" x="1044" y="526">判据换血</text>
-          <rect x="1010" y="538" width="28" height="16" rx="5" style="fill:var(--panel);stroke:var(--line);stroke-width:1.5"></rect>
-          <text class="lg-t" x="1044" y="550">直接复用</text>
-          <text class="hint" x="1010" y="576">点击节点看详情</text>
-        </g>
+          <g class="fnode start" data-k="m_input" tabindex="0" role="button" aria-label="新建项目选驱动模式，文稿或音乐">
+            <rect class="box" x="24" y="58" width="92" height="64"></rect>
+            <text class="t" x="70" y="82">新建选模式</text>
+            <text class="ts" x="70" y="100">文稿｜音乐·PV</text>
+            <text class="ts" x="70" y="116">主题（或＋曲子）</text>
+          </g>
 
-        <!-- 起点 -->
-        <g class="fnode start" data-k="m_input" tabindex="0" role="button" aria-label="新建项目选驱动模式，文稿或音乐">
-          <rect class="box" x="24" y="58" width="92" height="64"></rect>
-          <text class="t" x="70" y="80">新建选模式</text>
-          <text class="ts" x="70" y="98">文稿｜音乐·PV</text>
-          <text class="ts" x="70" y="114">主题（或＋曲子）</text>
-        </g>
+          <g class="fnode newk" data-k="m_music" tabindex="0" role="button" aria-label="音乐工位，一个会话交付 brief 做曲 地图三件套">
+            <rect class="box" x="150" y="40" width="550" height="96"></rect>
+            <text class="t" x="425" y="62">① 音乐工位 · ReAct Agent（M1 已落地）</text>
+            <rect class="chipbox" x="166" y="74" width="160" height="30"></rect>
+            <text class="chiptx" x="246" y="93">曲brief（意图）</text>
+            <path class="edge" d="M326,89 L346,89"></path>
+            <rect class="chipbox" x="346" y="74" width="160" height="30"></rect>
+            <text class="chiptx" x="426" y="93">做曲·选曲（工具）</text>
+            <path class="edge" d="M506,89 L526,89"></path>
+            <rect class="chipbox" x="526" y="74" width="160" height="30"></rect>
+            <text class="chiptx" x="606" y="93">地图（脚本）</text>
+            <text class="chiptx" x="425" y="126">一次交付三件套 · 地图对 brief 自检 · 重做≤2</text>
+          </g>
 
-        <!-- ① 音乐工位（一站三交付容器） -->
-        <g class="fnode newk" data-k="m_music" tabindex="0" role="button" aria-label="音乐工位，一个会话交付 brief 做曲 地图三件套">
-          <rect class="box" x="150" y="40" width="550" height="96"></rect>
-          <text class="t" x="425" y="62">① 音乐工位 · ReAct Agent</text>
-          <rect class="chipbox" x="166" y="74" width="160" height="30"></rect>
-          <text class="chiptx" x="246" y="93">曲brief（意图）</text>
-          <path class="edge" d="M326,89 L346,89"></path>
-          <rect class="chipbox" x="346" y="74" width="160" height="30"></rect>
-          <text class="chiptx" x="426" y="93">做曲·选曲（工具）</text>
-          <path class="edge" d="M506,89 L526,89"></path>
-          <rect class="chipbox" x="526" y="74" width="160" height="30"></rect>
-          <text class="chiptx" x="606" y="93">地图（脚本）</text>
-          <text class="chiptx" x="425" y="126">一次交付三件套 · 地图对 brief 自检 · 重做≤2</text>
-        </g>
+          <g class="fnode resh" data-k="m_sb" tabindex="0" role="button" aria-label="分镜工位，判据换血">
+            <rect class="box" x="730" y="58" width="200" height="64"></rect>
+            <text class="t" x="830" y="84">② 分镜工位</text>
+            <text class="ts" x="830" y="104">地图×风格包→镜头表</text>
+            <text class="ts" x="830" y="118">镜头边界钉在节拍上</text>
+          </g>
 
-        <!-- ④ 分镜工位 -->
-        <g class="fnode resh" data-k="m_sb" tabindex="0" role="button" aria-label="分镜工位，判据换血">
-          <rect class="box" x="730" y="58" width="200" height="64"></rect>
-          <text class="t" x="830" y="78">② 分镜工位</text>
-          <text class="ts" x="830" y="96">地图×风格包→镜头表</text>
-          <text class="ts" x="830" y="112">镜头边界钉在节拍上</text>
-        </g>
+          <g class="fnode" data-k="m_gate" tabindex="0" role="button" aria-label="打包终审门，唯一人工门">
+            <rect class="box" x="960" y="58" width="196" height="64"></rect>
+            <text class="t" x="1058" y="86">打包终审门</text>
+            <text class="ts" x="1058" y="106">brief+试听+地图+镜头表</text>
+            <text class="ts" x="1058" y="120">一次确认 · 反馈按工件路由</text>
+            <g class="pill gate"><rect x="964" y="49" width="96" height="18"></rect><text x="1012" y="62">👤 唯一人工门</text></g>
+          </g>
 
-        <!-- 👤 打包终审门 -->
-        <g class="fnode" data-k="m_gate" tabindex="0" role="button" aria-label="打包终审门，唯一人工门">
-          <rect class="box" x="960" y="58" width="196" height="64"></rect>
-          <text class="t" x="1058" y="78">打包终审门</text>
-          <text class="ts" x="1058" y="96">brief+试听+地图+镜头表</text>
-          <text class="ts" x="1058" y="112">一次确认 · 反馈按工件路由</text>
-          <g class="pill gate"><rect x="964" y="49" width="96" height="18"></rect><text x="1012" y="62">👤 唯一人工门</text></g>
-        </g>
+          <g class="fnode start newk" data-k="m_ax" tabindex="0" role="button" aria-label="音乐地图加音轨，制作阶段发令枪">
+            <rect class="box" x="24" y="253" width="128" height="72"></rect>
+            <text class="t" x="88" y="279">音乐地图+音轨</text>
+            <text class="ts" x="88" y="297">来自① · 发令枪</text>
+            <text class="ts" x="88" y="313">时间轴=节拍/能量</text>
+          </g>
 
-        <!-- 制作起点：音乐地图+音轨 -->
-        <g class="fnode start newk" data-k="m_ax" tabindex="0" role="button" aria-label="音乐地图加音轨，制作阶段发令枪">
-          <rect class="box" x="24" y="253" width="128" height="72"></rect>
-          <text class="t" x="88" y="279">音乐地图+音轨</text>
-          <text class="ts" x="88" y="297">来自① · 发令枪</text>
-          <text class="ts" x="88" y="313">时间轴=节拍/能量</text>
-        </g>
+          <g class="fnode" data-k="m_gen" tabindex="0" role="button" aria-label="写画面工位，N 镜头并行，并发上限4">
+            <rect class="box" x="200" y="210" width="190" height="190"></rect>
+            <text class="t" x="295" y="232">写画面 ×N 并行 ≤4</text>
+            <rect class="chipbox" x="216" y="244" width="158" height="34"></rect>
+            <text class="chiptx" x="295" y="265">shot01.html</text>
+            <rect class="chipbox" x="216" y="284" width="158" height="34"></rect>
+            <text class="chiptx" x="295" y="305">shot02.html</text>
+            <rect class="chipbox" x="216" y="324" width="158" height="34"></rect>
+            <text class="chiptx" x="295" y="345">shot03.html</text>
+            <text class="chiptx" x="295" y="378">谁写完谁往下流 · 不等齐</text>
+          </g>
 
-        <!-- 写画面 ×N 并行（扇出容器） -->
-        <g class="fnode" data-k="m_gen" tabindex="0" role="button" aria-label="写画面工位，N 镜头并行，并发上限4">
-          <rect class="box" x="200" y="210" width="190" height="190"></rect>
-          <text class="t" x="295" y="232">写画面 ×N 并行 ≤4</text>
-          <rect class="chipbox" x="216" y="244" width="158" height="34"></rect>
-          <text class="chiptx" x="295" y="265">shot01.html</text>
-          <rect class="chipbox" x="216" y="284" width="158" height="34"></rect>
-          <text class="chiptx" x="295" y="305">shot02.html</text>
-          <rect class="chipbox" x="216" y="324" width="158" height="34"></rect>
-          <text class="chiptx" x="295" y="345">shot03.html</text>
-          <text class="chiptx" x="295" y="378">谁写完谁往下流 · 不等齐</text>
-        </g>
+          <g class="fnode resh" data-k="m_chk" tabindex="0" role="button" aria-label="程序 check，判据换血">
+            <rect class="box" x="438" y="253" width="130" height="72"></rect>
+            <text class="t" x="503" y="283">程序 check</text>
+            <text class="ts" x="503" y="301">工程门 · 复用</text>
+            <text class="ts" x="503" y="317">卡点机械闸 · 新</text>
+          </g>
 
-        <!-- 程序 check -->
-        <g class="fnode resh" data-k="m_chk" tabindex="0" role="button" aria-label="程序 check，判据换血">
-          <rect class="box" x="438" y="253" width="130" height="72"></rect>
-          <text class="t" x="503" y="281">程序 check</text>
-          <text class="ts" x="503" y="299">工程门 · 复用</text>
-          <text class="ts" x="503" y="315">卡点机械闸 · 新</text>
-        </g>
+          <g class="fnode" data-k="m_render" tabindex="0" role="button" aria-label="段渲染，复用">
+            <rect class="box" x="608" y="253" width="120" height="72"></rect>
+            <text class="t" x="668" y="285">段渲染</text>
+            <text class="ts" x="668" y="305">复用 · ~20s/镜头</text>
+          </g>
 
-        <!-- 段渲染 -->
-        <g class="fnode" data-k="m_render" tabindex="0" role="button" aria-label="段渲染，复用">
-          <rect class="box" x="608" y="253" width="120" height="72"></rect>
-          <text class="t" x="668" y="283">段渲染</text>
-          <text class="ts" x="668" y="303">复用 · ~20s/镜头</text>
-        </g>
+          <g class="fnode" data-k="m_shot" tabindex="0" role="button" aria-label="镜头审，判卷复用骨架新判据">
+            <rect class="box" x="768" y="210" width="230" height="190"></rect>
+            <text class="t" x="883" y="232">镜头审 · 判卷（复用骨架）</text>
+            <text class="ts" x="883" y="262">复用段审判卷骨架</text>
+            <text class="ts" x="883" y="288">画面对情绪 · 节拍感 · 段落匹配</text>
+            <text class="ts" x="883" y="314">重写≤2轮 · 续写+patch</text>
+            <text class="ts" x="883" y="340">超限带伤放行 · 签名刹车</text>
+          </g>
 
-        <!-- 镜头审（判卷容器） -->
-        <g class="fnode" data-k="m_shot" tabindex="0" role="button" aria-label="镜头审，判卷复用骨架新判据">
-          <rect class="box" x="768" y="210" width="230" height="190"></rect>
-          <text class="t" x="883" y="232">镜头审 · 判卷（复用骨架）</text>
-          <rect class="chipbox" x="784" y="244" width="198" height="34"></rect>
-          <text class="chiptx" x="883" y="265">画面对情绪 · 段落匹配</text>
-          <rect class="chipbox" x="784" y="284" width="198" height="34"></rect>
-          <text class="chiptx" x="883" y="305">节拍感 · 动效落在重拍上</text>
-          <rect class="chipbox" x="784" y="324" width="198" height="34"></rect>
-          <text class="chiptx" x="883" y="345">重写≤2轮 · 续写+patch</text>
-          <text class="chiptx" x="883" y="378">超限带伤放行 · 签名刹车</text>
-        </g>
+          <g class="fnode" data-k="m_stitch" tabindex="0" role="button" aria-label="拼接，挂原曲音轨">
+            <rect class="box" x="322" y="480" width="130" height="72"></rect>
+            <text class="t" x="387" y="510">拼接</text>
+            <text class="ts" x="387" y="528">镜头视频+原曲音轨</text>
+            <text class="ts" x="387" y="542">ffmpeg · 复用</text>
+          </g>
 
-        <!-- 拼接 -->
-        <g class="fnode" data-k="m_stitch" tabindex="0" role="button" aria-label="拼接，挂原曲音轨">
-          <rect class="box" x="322" y="480" width="130" height="72"></rect>
-          <text class="t" x="387" y="508">拼接</text>
-          <text class="ts" x="387" y="526">镜头视频+原曲音轨</text>
-          <text class="ts" x="387" y="542">ffmpeg · 复用</text>
-        </g>
+          <g class="fnode resh" data-k="m_final" tabindex="0" role="button" aria-label="全片终审，判据换血">
+            <rect class="box" x="500" y="480" width="230" height="72"></rect>
+            <text class="t" x="615" y="508">全片终审（判据换血）</text>
+            <text class="ts" x="615" y="526">卡点/节奏/段落能量匹配</text>
+            <text class="ts" x="615" y="540">抽帧=镜头界+段落界+副歌界</text>
+          </g>
 
-        <!-- 全片终审 -->
-        <g class="fnode resh" data-k="m_final" tabindex="0" role="button" aria-label="全片终审，判据换血">
-          <rect class="box" x="500" y="480" width="230" height="72"></rect>
-          <text class="t" x="615" y="504">全片终审（判据换血）</text>
-          <text class="ts" x="615" y="522">卡点/节奏/段落能量匹配</text>
-          <text class="ts" x="615" y="538">抽帧=镜头界+段落界+副歌界</text>
-        </g>
+          <g class="fnode start" data-k="m_out" tabindex="0" role="button" aria-label="渲染出片">
+            <rect class="box" x="790" y="480" width="128" height="72"></rect>
+            <text class="t" x="854" y="513">渲染出片</text>
+            <text class="ts" x="854" y="533">纯音乐 PV</text>
+          </g>
+        </svg>
+        </div>
+        <p class="figcap">全链复用：成本闸 · 磁盘缓存 · 事件流 · 风格库 · 样张 · 素材工位 · patch 修复——舞台不变，换的是指挥。</p>
+        <div class="legend">
+          <span class="li"><i class="sw"></i>串行</span>
+          <span class="li"><i class="sw box bandbg"></i>并行容器</span>
+          <span class="li"><i class="sw box add"></i>新增工位</span>
+          <span class="li"><i class="sw box resh"></i>判据换血</span>
+          <span class="li"><i class="sw box"></i>直接复用</span>
+          <span class="li"><i class="sw dash"></i>打回回边</span>
+        </div>
+      </div>
 
-        <!-- 出片 -->
-        <g class="fnode start" data-k="m_out" tabindex="0" role="button" aria-label="渲染出片">
-          <rect class="box" x="790" y="480" width="128" height="72"></rect>
-          <text class="t" x="854" y="513">渲染出片</text>
-          <text class="ts" x="854" y="533">纯音乐 PV</text>
-        </g>
-
-        <!-- 复用注记（左下） -->
-        <g pointer-events="none">
-          <rect class="chipbox" x="24" y="466" width="290" height="52"></rect>
-          <text class="chiptx" x="169" y="486">全链复用：成本闸 · 磁盘缓存 · 事件流</text>
-          <text class="chiptx" x="169" y="504">风格库 · 样张 · 素材工位 · patch 修复</text>
-        </g>
-      </svg>
+      <aside class="side">
+        <div class="side-head">节点详情</div>
+        <div class="detail" id="detailMusic" aria-live="polite"></div>
+      </aside>
     </div>
   </section>
 
+  <!-- ================= 代码调用链 ================= -->
   <section class="page hidden" id="page-code">
-    <p class="src">按<b>工作区真实代码（2026-10-22）</b>绘制：每格标注 <code>函数名 (文件:行号)</code>——重构后行号会漂移，以函数名为准。先看骨架图，再按 ①–⑤ 顺序看分区图。<b>图例：</b>实线框 = Go 函数；蓝实线框 = 调用大模型（LLM）；虚线框 = 启动外部进程（⚙ python / node / ffmpeg）；橙虚线箭头 = 打回/重跑回边（旁标轮次上限）；灰蓝长条 = 并行汇合点；灰底大框 = 并行容器。点击任一节点看调用链详情。准备阶段代码在 <code>server/internal/prep/</code>，制作阶段在 <code>server/internal/produce/</code>，渲染/拼接在 <code>server/internal/pipeline/</code>，审片在 <code>server/internal/review/</code>。</p>
-    <aside class="detail" id="detailCode" aria-live="polite"></aside>
-
-    <h3 class="zoomhead">全链骨架 <span>—— 先看这张地图，下面五张图依次放大 ①–⑤</span></h3>
-    <div class="diagram-wrap">
-    <svg id="svgA" class="flowsvg" viewBox="0 0 1180 390" role="img" aria-label="全链骨架：新建项目→准备三工位→人工门→开始制作→自动重跑闸→串行前段→并行区→拼接终审→出片">
-      <defs>
-        <marker id="arrowA" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
-        </marker>
-      </defs>
-
-      <rect class="band" x="8" y="24" width="1164" height="120"></rect>
-      <text class="bandlabel" x="24" y="44">准备 · 每格下方 = 代码落点（文件:行号）</text>
-
-      <g class="fnode start" data-k="ca_new" tabindex="0" role="button" aria-label="新建项目">
-        <rect class="box" x="24" y="64" width="140" height="76"></rect>
-        <text class="t" x="94" y="88">新建项目</text>
-        <text class="ts" x="94" y="106">前端发命令</text>
-        <text class="tref" x="94" y="126">NewProjectModal.vue:50</text>
-      </g>
-      <path class="edge" d="M164,102 L200,102"></path>
-
-      <g class="fnode" data-k="ca_prep" tabindex="0" role="button" aria-label="准备三工位串行">
-        <rect class="box" x="204" y="64" width="240" height="76"></rect>
-        <text class="t" x="324" y="88">准备：三工位串行</text>
-        <text class="ts" x="324" y="106">文稿→风格→分镜 · ReAct</text>
-        <text class="tref" x="324" y="126">prep/run.go:50（for ①②③）</text>
-      </g>
-      <path class="edge" d="M444,102 L480,102"></path>
-
-      <g class="fnode" data-k="ca_gate" tabindex="0" role="button" aria-label="打包终审门">
-        <rect class="box" x="484" y="64" width="190" height="76"></rect>
-        <text class="t" x="579" y="88">👤 打包终审门</text>
-        <text class="ts" x="579" y="106">三工件一次确认</text>
-        <text class="tref" x="579" y="126">api/server.go:1314</text>
-      </g>
-      <path class="edge" d="M674,102 L710,102"></path>
-
-      <g class="fnode" data-k="ca_start" tabindex="0" role="button" aria-label="开始制作">
-        <rect class="box" x="714" y="64" width="200" height="76"></rect>
-        <text class="t" x="814" y="88">开始制作</text>
-        <text class="ts" x="814" y="106">硬门：三件齐+风格确认</text>
-        <text class="tref" x="814" y="126">api/server.go:1513</text>
-      </g>
-      <path class="edge" d="M914,102 L950,102"></path>
-
-      <g class="fnode" data-k="ca_retry" tabindex="0" role="button" aria-label="自动重跑闸">
-        <rect class="box" x="954" y="64" width="190" height="76"></rect>
-        <text class="t" x="1049" y="88">自动重跑闸</text>
-        <text class="ts" x="1049" y="106">真失败 ≤2 次(10s/30s)</text>
-        <text class="tref" x="1049" y="126">produce/produce.go:269</text>
-      </g>
-
-      <path class="edge" d="M1049,140 L1049,160 L94,160 L94,216"></path>
-
-      <rect class="band" x="8" y="180" width="1164" height="196"></rect>
-      <text class="bandlabel" x="24" y="200">制作 · 串行前段 → 并行区 → 拼接终审（谁写完谁往下流）</text>
-
-      <g class="fnode" data-k="ca_serial" tabindex="0" role="button" aria-label="串行前段">
-        <rect class="box" x="24" y="216" width="190" height="84"></rect>
-        <text class="t" x="119" y="240">串行前段 ③</text>
-        <text class="ts" x="119" y="258">TTS→字幕→选曲→样张</text>
-        <text class="tref" x="119" y="278">produce/segpipe.go:316</text>
-      </g>
-      <path class="edge" d="M214,258 L250,258"></path>
-
-      <g class="fnode" data-k="ca_par" tabindex="0" role="button" aria-label="并行区">
-        <rect class="box" x="254" y="216" width="230" height="84"></rect>
-        <text class="t" x="369" y="240">并行区 coordinator ④</text>
-        <text class="ts" x="369" y="258">写×N ∥ 检 ∥ 渲 ∥ 段审</text>
-        <text class="tref" x="369" y="278">produce/segpipe.go:600</text>
-      </g>
-      <path class="edge" d="M484,258 L520,258"></path>
-
-      <g class="fnode" data-k="ca_fin" tabindex="0" role="button" aria-label="拼接终审">
-        <rect class="box" x="524" y="216" width="230" height="84"></rect>
-        <text class="t" x="639" y="240">拼接→全片终审 ⑤</text>
-        <text class="ts" x="639" y="258">concat+mixBGM→抽帧判卷</text>
-        <text class="tref" x="639" y="278">segpipe.go:649（主循环）</text>
-      </g>
-      <path class="edge" d="M754,258 L790,258"></path>
-
-      <g class="fnode start" data-k="ca_out" tabindex="0" role="button" aria-label="出片">
-        <rect class="box" x="794" y="216" width="160" height="84"></rect>
-        <text class="t" x="874" y="240">出片</text>
-        <text class="ts" x="874" y="258">renders/main.mp4</text>
-        <text class="tref" x="874" y="278">segpipe.go:394 film.ready</text>
-      </g>
-
-      <g pointer-events="none">
-        <text class="lg-t" x="990" y="232" style="font-weight:600">图例</text>
-        <line class="lg-line" x1="990" y1="248" x2="1018" y2="248"></line>
-        <text class="lg-t" x="1024" y="252">串行：做完才下一步</text>
-        <rect x="990" y="264" width="28" height="16" rx="5" style="fill:var(--band);stroke:var(--line);stroke-width:1.5"></rect>
-        <text class="lg-t" x="1024" y="276">并行容器：多路同时</text>
-        <line class="lg-line dash" x1="990" y1="296" x2="1018" y2="296" style="stroke:var(--warn)"></line>
-        <text class="lg-t" x="1024" y="300">打回/重跑回边（标上限）</text>
-        <rect x="990" y="312" width="28" height="16" rx="5" style="fill:var(--panel);stroke:var(--line);stroke-width:1.5;stroke-dasharray:5 4"></rect>
-        <text class="lg-t" x="1024" y="324">虚线框 = ⚙ 外部进程</text>
-        <rect x="990" y="336" width="28" height="16" rx="5" style="fill:var(--panel);stroke:var(--accent);stroke-width:2"></rect>
-        <text class="lg-t" x="1024" y="348">蓝框 = 调大模型</text>
-        <text class="hint" x="990" y="368">点击节点看 文件:行号</text>
-      </g>
-    </svg>
-    </div>
-
-    <h3 class="zoomhead">① 准备阶段 <span>—— 严格串行的三个 ReAct 工位（server/internal/prep/）</span></h3>
-    <div class="diagram-wrap">
-    <svg id="svgB" class="flowsvg" viewBox="0 0 1180 648" role="img" aria-label="准备阶段：Runner.Start goroutine → run() 三工位 for 循环 → ①文稿 ②风格 ③分镜 → OnDone">
-      <defs>
-        <marker id="arrowB" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
-        </marker>
-      </defs>
-
-      <rect class="band" x="8" y="24" width="1164" height="612"></rect>
-      <text class="bandlabel" x="24" y="44">准备阶段 · HTTP 异步化（goroutine 后台跑，前端看 SSE+轮询）</text>
-
-      <g class="fnode" data-k="cb_async" tabindex="0" role="button" aria-label="Runner.Start">
-        <rect class="box" x="24" y="56" width="300" height="64"></rect>
-        <text class="t" x="174" y="78">Runner.Start → goroutine</text>
-        <text class="ts" x="174" y="96">HTTP 立即返回 · 云端工件先回源</text>
-        <text class="tref" x="174" y="114">prep/runner.go:65 · goroutine :120</text>
-      </g>
-      <path class="edge" d="M174,120 L174,148"></path>
-
-      <g class="fnode" data-k="cb_run" tabindex="0" role="button" aria-label="prep.run 编排器">
-        <rect class="box" x="24" y="152" width="300" height="80"></rect>
-        <text class="t" x="174" y="174">prep.run：三工位 for 循环</text>
-        <text class="ts" x="174" y="192">严格串行 ①→②→③ · 工件在即跳过</text>
-        <text class="ts" x="174" y="208">单工位失败 → 冷重试 ≤1 次</text>
-        <text class="tref" x="174" y="226">prep/run.go:74 · runWithColdRetry :105</text>
-      </g>
-      <path class="edge" d="M324,192 L360,192"></path>
-      <text class="ts" x="342" y="182">文字稿</text>
-
-      <g class="fnode" data-k="cb_s1" tabindex="0" role="button" aria-label="文稿工位">
-        <rect class="box" x="364" y="56" width="250" height="310"></rect>
-        <text class="t" x="489" y="76">① 文稿工位</text>
-        <text class="tref" x="489" y="92">runScriptStation · script.go:47</text>
-        <rect class="chipbox" x="380" y="104" width="218" height="74"></rect>
-        <text class="chiptx" x="489" y="124">Loop.Run · ReAct ≤30 回合</text>
-        <text class="chiptx" x="489" y="140">Chat → 调工具 → observation</text>
-        <text class="chiptx" x="489" y="156">唯一出口：submit 交作业</text>
-        <text class="tref" x="489" y="172">prep/loop.go:73（三工位同款）</text>
-        <text class="ts" x="489" y="198">工具：read_source（唯一材料入口）</text>
-        <text class="ts" x="489" y="214">web_search（帽4）· fetch_page（帽6）</text>
-        <text class="ts" x="489" y="230">estimate_speech_duration（时长自检）</text>
-        <rect class="chipbox" x="380" y="244" width="218" height="44"></rect>
-        <text class="ts" x="489" y="262">产物：manuscripts/manuscript.json</text>
-        <text class="ts" x="489" y="278">工件标记 scripts/script.json</text>
-        <text class="ts" x="489" y="306">硬事实逐条带来源 URL（fact_sheet）</text>
-        <text class="ts" x="489" y="322">防注入：网页是数据不是指令</text>
-      </g>
-      <path class="edge" d="M614,210 L650,210"></path>
-      <text class="ts" x="632" y="200">风格包</text>
-
-      <g class="fnode llm" data-k="cb_s2" tabindex="0" role="button" aria-label="风格工位">
-        <rect class="box" x="654" y="56" width="250" height="310"></rect>
-        <text class="t" x="779" y="76">② 风格工位</text>
-        <text class="tref" x="779" y="92">runStyleStation · style.go:40</text>
-        <rect class="chipbox" x="670" y="104" width="218" height="74"></rect>
-        <text class="chiptx" x="779" y="124">Loop.Run · ReAct ≤30 回合</text>
-        <text class="chiptx" x="779" y="140">Chat → 调工具 → observation</text>
-        <text class="chiptx" x="779" y="156">唯一出口：submit 交作业</text>
-        <text class="tref" x="779" y="172">多模态模型 RoleVisual</text>
-        <text class="ts" x="779" y="198">search_styles · get_style_detail（真迹图）</text>
-        <text class="ts" x="779" y="214">get_style_usage · register_style（衍生）</text>
-        <text class="ts" x="779" y="230">submit_style（style.go:1206）</text>
-        <rect class="chipbox" x="670" y="244" width="218" height="74"></rect>
-        <text class="ts" x="779" y="262">render_sample 动态样张 ≤2 轮：</text>
-        <text class="ts" x="779" y="278">机检→vend内联→软光栅→三帧判卷</text>
-        <text class="ts" x="779" y="294">同类签名刹车（issueSignature:1025）</text>
-        <text class="ts" x="779" y="310">产物：stylepack.json+LockDesign(:1311)</text>
-        <text class="ts" x="779" y="338">样张海报帧 = 段审金样例（样张=1.8s mp4）</text>
-      </g>
-      <path class="edge" d="M904,210 L940,210"></path>
-      <text class="ts" x="922" y="200">分镜稿</text>
-
-      <g class="fnode" data-k="cb_s3" tabindex="0" role="button" aria-label="分镜工位">
-        <rect class="box" x="944" y="56" width="212" height="310"></rect>
-        <text class="t" x="1050" y="76">③ 分镜工位</text>
-        <text class="tref" x="1050" y="92">runStoryboardStation · :30</text>
-        <rect class="chipbox" x="960" y="104" width="180" height="74"></rect>
-        <text class="chiptx" x="1050" y="124">Loop.Run · ReAct ≤30 回合</text>
-        <text class="chiptx" x="1050" y="140">Chat → 调工具 → observation</text>
-        <text class="chiptx" x="1050" y="156">唯一出口：submit 交作业</text>
-        <text class="tref" x="1050" y="172">storyboard.go:30（纯文本）</text>
-        <text class="ts" x="1050" y="198">get_script · get_style_package</text>
-        <text class="ts" x="1050" y="214">estimate_speech_duration</text>
-        <text class="ts" x="1050" y="230">validate_storyboard（修到零错）</text>
-        <rect class="chipbox" x="960" y="244" width="180" height="60"></rect>
-        <text class="ts" x="1050" y="262">submit → final.Translate(:148)</text>
-        <text class="ts" x="1050" y="278">→ 制作契约校验(:149)</text>
-        <text class="ts" x="1050" y="294">产物 storyboards/draft.json</text>
-        <text class="ts" x="1050" y="322">纯内容：首拍/末拍写进 brief</text>
-        <text class="ts" x="1050" y="338">旁白只引句编号 N3-N4 不抄文</text>
-      </g>
-
-      <g class="fnode" data-k="cb_ondone" tabindex="0" role="button" aria-label="链终态 OnDone">
-        <rect class="box" x="24" y="420" width="300" height="64"></rect>
-        <text class="t" x="174" y="442">链终态 OnDone</text>
-        <text class="ts" x="174" y="460">状态→style · 聊天框通知</text>
-        <text class="tref" x="174" y="478">main.go:129 · agent.go:827</text>
-      </g>
-      <path class="edge" d="M174,232 L174,416"></path>
-      <path class="edge" d="M1050,366 L1050,452 L328,452"></path>
-
-      <g pointer-events="none">
-        <rect class="chipbox" x="364" y="420" width="792" height="84"></rect>
-        <text class="chiptx" x="760" y="446">重放语义：HasArtifact（artifacts.go:110）工件在即跳过——断点续跑 / 反馈路由只补作废部分的根基</text>
-        <text class="chiptx" x="760" y="466">InvalidateFrom（artifacts.go:130）级联作废：改文字→①②③ · 改风格→②③ · 改分镜→③</text>
-        <text class="chiptx" x="760" y="486">每步记账 manifestStep（artifacts.go:260）· 会话留痕 llm/prep-*.jsonl · token 预算账挂 ctx（run.go:61）</text>
-      </g>
-    </svg>
-    </div>
-
-    <h3 class="zoomhead">② 打包终审门 <span>—— 唯一人工确认与反馈按工件路由（api/server.go）</span></h3>
-    <div class="diagram-wrap">
-    <svg id="svgC" class="flowsvg" viewBox="0 0 1180 388" role="img" aria-label="打包终审门：前端轮询 prepView → confirmPrep 校验确认 → 制作解锁；反馈三条路汇入 InvalidateFrom 级联作废">
-      <defs>
-        <marker id="arrowC" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
-        </marker>
-      </defs>
-
-      <rect class="band" x="8" y="24" width="1164" height="352"></rect>
-      <text class="bandlabel" x="24" y="44">打包终审门 · 你点头之前不烧制作的钱 · 意见精准路由回对应工位</text>
-
-      <g class="fnode" data-k="cc_view" tabindex="0" role="button" aria-label="前端轮询三工件">
-        <rect class="box" x="24" y="56" width="250" height="72"></rect>
-        <text class="t" x="149" y="80">前端轮询三工件</text>
-        <text class="ts" x="149" y="98">GET /projects/:id/prep</text>
-        <text class="tref" x="149" y="116">s.prepView · api/server.go:1248</text>
-      </g>
-      <path class="edge" d="M274,92 L310,92"></path>
-
-      <g class="fnode" data-k="cc_confirm" tabindex="0" role="button" aria-label="confirmPrep 确认链">
-        <rect class="box" x="314" y="48" width="330" height="144"></rect>
-        <text class="t" x="479" y="70">确认 s.confirmPrep</text>
-        <text class="tref" x="479" y="86">api/server.go:1314</text>
-        <text class="ts" x="479" y="106">TryLock 对话互斥 → Load 三工件</text>
-        <text class="ts" x="479" y="122">StyleStale 换风格过期侦测（:1341）</text>
-        <text class="ts" x="479" y="138">Validate 风格包/分镜/样张 ×3（:1348）</text>
-        <text class="ts" x="479" y="154">LockDesign 设计冻结（:1364）</text>
-        <text class="ts" x="479" y="170">stylepack.json Confirmed=true（:1373）</text>
-        <text class="tref" x="479" y="186">→ Emit "prep_confirmed"（:1384）</text>
-      </g>
-      <path class="edge" d="M644,92 L680,92"></path>
-
-      <g class="fnode start" data-k="cc_unlock" tabindex="0" role="button" aria-label="制作硬门解锁">
-        <rect class="box" x="684" y="56" width="250" height="72"></rect>
-        <text class="t" x="809" y="80">制作硬门解锁</text>
-        <text class="ts" x="809" y="98">startProduce 校验三件齐</text>
-        <text class="tref" x="809" y="116">+ StyleConfirmed（server.go:1522）</text>
-      </g>
-
-      <g class="fnode" data-k="cc_r1" tabindex="0" role="button" aria-label="改文字">
-        <rect class="box" x="24" y="220" width="340" height="72"></rect>
-        <text class="t" x="194" y="244">「文字要改」</text>
-        <text class="ts" x="194" y="262">PUT manuscript → ReplaceManuscript</text>
-        <text class="tref" x="194" y="280">server.go:953 → artifacts.go:52</text>
-      </g>
-      <g class="fnode" data-k="cc_r2" tabindex="0" role="button" aria-label="改风格">
-        <rect class="box" x="404" y="220" width="340" height="72"></rect>
-        <text class="t" x="574" y="244">「风格换一个」</text>
-        <text class="ts" x="574" y="262">POST style/apply 清样张+设计</text>
-        <text class="tref" x="574" y="280">server.go:1001（另：对话 rerun_prep）</text>
-      </g>
-      <g class="fnode" data-k="cc_r3" tabindex="0" role="button" aria-label="对话重做">
-        <rect class="box" x="784" y="220" width="340" height="72"></rect>
-        <text class="t" x="954" y="244">对话：「重做分镜」</text>
-        <text class="ts" x="954" y="262">工具 rerun_prep → RunInline</text>
-        <text class="tref" x="954" y="280">agent/tools.go:51 · runner.go:157</text>
-      </g>
-      <path class="edge" d="M194,292 L194,312"></path>
-      <path class="edge" d="M574,292 L574,312"></path>
-      <path class="edge" d="M954,292 L954,312"></path>
-
-      <g class="fnode" data-k="cc_invalidate" tabindex="0" role="button" aria-label="InvalidateFrom 级联作废">
-        <rect class="joinbar" x="24" y="316" width="1100" height="56"></rect>
-        <text class="t" x="574" y="338">InvalidateFrom 级联作废（artifacts.go:130）</text>
-        <text class="ts" x="574" y="356">改文字→①②③ 全重做 · 改风格→②③ · 改分镜→③ —— 没作废的工件直接复用，不花重复的钱</text>
-        <text class="ts" x="574" y="370">→ 回到 ① 图 prep.run（run.go:74）重放：只重跑被作废的工位</text>
-      </g>
-    </svg>
-    </div>
-
-    <h3 class="zoomhead">③ 制作 · 串行前段 <span>—— 配音→字幕→选曲→样张，全部完成才进并行区（produce/segpipe.go:316）</span></h3>
-    <div class="diagram-wrap">
-    <svg id="svgD" class="flowsvg" viewBox="0 0 1180 432" role="img" aria-label="制作串行前段：startProduce→Producer.Start→runWithAutoRetry→run 分流；TTS→字幕→选曲→字体样张→并行区入口">
-      <defs>
-        <marker id="arrowD" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
-        </marker>
-      </defs>
-
-      <rect class="band" x="8" y="24" width="1164" height="160"></rect>
-      <text class="bandlabel" x="24" y="44">制作入口 · 异步化 + 自动重跑闸（produce/produce.go）</text>
-
-      <g class="fnode" data-k="cd_start" tabindex="0" role="button" aria-label="POST produce">
-        <rect class="box" x="24" y="56" width="260" height="84"></rect>
-        <text class="t" x="154" y="80">POST /produce</text>
-        <text class="ts" x="154" y="98">硬门：文字稿+分镜稿+风格确认</text>
-        <text class="ts" x="154" y="114">prep 在跑 / 已在制作 → 拒绝</text>
-        <text class="tref" x="154" y="132">api/server.go:1513</text>
-      </g>
-      <path class="edge" d="M284,98 L320,98"></path>
-
-      <g class="fnode" data-k="cd_claim" tabindex="0" role="button" aria-label="Producer.Start">
-        <rect class="box" x="324" y="56" width="240" height="84"></rect>
-        <text class="t" x="444" y="80">Producer.Start</text>
-        <text class="ts" x="444" y="98">claimRun 占号防双开 · goroutine</text>
-        <text class="ts" x="444" y="114">重启后 Reconcile 对账(:675)</text>
-        <text class="tref" x="444" y="132">produce/produce.go:164 · :193</text>
-      </g>
-      <path class="edge" d="M564,98 L600,98"></path>
-
-      <g class="fnode" data-k="cd_retry" tabindex="0" role="button" aria-label="runWithAutoRetry">
-        <rect class="box" x="604" y="56" width="280" height="84"></rect>
-        <text class="t" x="744" y="80">runWithAutoRetry</text>
-        <text class="ts" x="744" y="98">真失败自动重跑 ≤2 次（10s/30s）</text>
-        <text class="ts" x="744" y="114">预算耗尽 / check 不收敛 → 不重跑</text>
-        <text class="tref" x="744" y="132">produce.go:269 · maxAutoRetries :252</text>
-      </g>
-      <path class="edge back" d="M654,56 Q744,18 834,56"></path>
-      <text class="ts" x="744" y="34">重跑 ≤2</text>
-      <path class="edge" d="M884,98 L920,98"></path>
-
-      <g class="fnode" data-k="cd_run" tabindex="0" role="button" aria-label="Runner.run 分流">
-        <rect class="box" x="924" y="56" width="228" height="84"></rect>
-        <text class="t" x="1038" y="80">Runner.run</text>
-        <text class="ts" x="1038" y="98">IsPrepProject 分流（produce.go:790）</text>
-        <text class="ts" x="1038" y="114">新项目 → 段级流水线</text>
-        <text class="tref" x="1038" y="132">produce.go:790 · segpipe.go:134</text>
-      </g>
-
-      <path class="edge" d="M1038,140 L1038,166 L139,166 L139,208"></path>
-
-      <rect class="band" x="8" y="180" width="1164" height="240"></rect>
-      <text class="bandlabel" x="24" y="200">串行前段 · 有严格依赖（时间轴/分镜弧线喂下游），一件做完才做下一件</text>
-
-      <g class="fnode ext" data-k="cd_tts" tabindex="0" role="button" aria-label="TTS">
-        <rect class="box" x="24" y="212" width="230" height="100"></rect>
-        <text class="t" x="139" y="236">TTS + 词级对齐 ⚙</text>
-        <text class="ts" x="139" y="254">ai/tts_align.py · 30min 超时</text>
-        <text class="ts" x="139" y="270">百炼 websocket + FunASR 字级锚点</text>
-        <text class="ts" x="139" y="286">指纹未变 → 直接复用（:338）</text>
-        <text class="tref" x="139" y="304">segpipe.go:336-358</text>
-      </g>
-      <path class="edge" d="M254,262 L290,262"></path>
-
-      <g class="fnode" data-k="cd_sub" tabindex="0" role="button" aria-label="字幕翻译">
-        <rect class="box" x="294" y="212" width="170" height="100"></rect>
-        <text class="t" x="379" y="236">双语字幕翻译</text>
-        <text class="ts" x="379" y="254">失败只记账</text>
-        <text class="ts" x="379" y="270">不挡片</text>
-        <text class="tref" x="379" y="304">produce.go:1429</text>
-      </g>
-      <path class="edge" d="M464,262 L500,262"></path>
-
-      <g class="fnode llm" data-k="cd_bgm" tabindex="0" role="button" aria-label="配乐选曲">
-        <rect class="box" x="504" y="212" width="250" height="100"></rect>
-        <text class="t" x="629" y="236">配乐选曲 pickBGM</text>
-        <text class="ts" x="629" y="254">用户拍板优先 → LLM 选曲（回喂2）</text>
-        <text class="ts" x="629" y="270">→ 规则兜底 → 机械改判</text>
-        <text class="ts" x="629" y="286">永不覆盖人 · 永不挡片</text>
-        <text class="tref" x="629" y="304">produce/bgmpick.go:243</text>
-      </g>
-      <path class="edge" d="M754,262 L790,262"></path>
-
-      <g class="fnode ext" data-k="cd_font" tabindex="0" role="button" aria-label="字体样张">
-        <rect class="box" x="794" y="212" width="190" height="100"></rect>
-        <text class="t" x="889" y="236">字体 + 样张 ⚙</text>
-        <text class="ts" x="889" y="254">ai/font_tool.py 字体子集</text>
-        <text class="ts" x="889" y="270">snapSamples 截图=段审金样例</text>
-        <text class="tref" x="889" y="304">segpipe.go:381 · scenegen.go:461</text>
-      </g>
-      <path class="edge" d="M984,262 L1020,262"></path>
-
-      <g class="fnode" data-k="cd_coord" tabindex="0" role="button" aria-label="进入并行区">
-        <rect class="box" x="1024" y="212" width="132" height="100"></rect>
-        <text class="t" x="1090" y="236">进入并行区</text>
-        <text class="ts" x="1090" y="254">newCoordinator</text>
-        <text class="ts" x="1090" y="270">三池信号量</text>
-        <text class="tref" x="1090" y="304">segpipe.go:516→c.run :600</text>
-      </g>
-    </svg>
-    </div>
-
-    <h3 class="zoomhead">④ 制作 · 并行区 <span>—— 段级流水线，全片最核心的一张（produce/segpipe.go:600 coordinator.run）</span></h3>
-    <div class="diagram-wrap">
-    <svg id="svgE" class="flowsvg" viewBox="0 0 1180 748" role="img" aria-label="并行区：journal 恢复后，每段一个 chainWorker 走 写→检→渲→入队，auditDispatcher 单只消费审核，打回沿 feedCh 回边，waitAllPassed 汇合">
-      <defs>
-        <marker id="arrowE" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
-        </marker>
-      </defs>
-
-      <rect class="band" x="8" y="24" width="1164" height="712"></rect>
-      <text class="bandlabel" x="24" y="44">并行区 · 段 = 文件 = 时间轴 = 渲染单位 = 缓存单位 = 调度单位 · 谁写完谁往下流，不等齐</text>
-
-      <g class="fnode" data-k="ce_journal" tabindex="0" role="button" aria-label="断点恢复">
-        <rect class="box" x="24" y="52" width="350" height="52"></rect>
-        <text class="t" x="199" y="72">断点恢复</text>
-        <text class="ts" x="199" y="90">journal 里 audited 的段直接进场不重做（:611）</text>
-      </g>
-      <g class="fnode" data-k="ce_flags" tabindex="0" role="button" aria-label="审核开关">
-        <rect class="box" x="414" y="52" width="380" height="52"></rect>
-        <text class="t" x="604" y="72">两个审核开关</text>
-        <text class="ts" x="604" y="90">段审 SEG_AUDIT 默认 on(:80) · 边界审 BND 默认 off(:93)</text>
-      </g>
-      <g class="fnode" data-k="ce_spawn" tabindex="0" role="button" aria-label="扇出拓扑">
-        <rect class="box" x="834" y="52" width="322" height="52"></rect>
-        <text class="t" x="995" y="72">扇出拓扑</text>
-        <text class="ts" x="995" y="90">每段 1 个 worker(:627) + 1 只审核 dispatcher(:637)</text>
-      </g>
-
-      <rect class="container" x="24" y="120" width="560" height="500"></rect>
-      <text class="t" x="304" y="142">chainWorker × 每段一个 goroutine</text>
-      <text class="ts" x="304" y="158">谁写完谁往下流 · 不等齐（segpipe.go:600）</text>
-
-      <g class="fnode llm" data-k="ce_write" tabindex="0" role="button" aria-label="writeSegment 写画面">
-        <rect class="box" x="56" y="172" width="496" height="108"></rect>
-        <text class="t" x="304" y="194">writeSegment · 写画面</text>
-        <text class="tref" x="304" y="210">segpipe.go:883 · 写信号量 ≤4（PRODUCE_WRITE_CONCURRENCY :71）</text>
-        <text class="ts" x="304" y="228">CheckBudget 预算闸(:891) → 首写错峰 stagger 默认 20s(:897)</text>
-        <text class="ts" x="304" y="244">sceneGen 写画面 LLM(scenegen.go:85)：首稿 + lint 回喂修复 ≤2 轮(:352)</text>
-        <text class="ts" x="304" y="260">续写+patch：GenerateJSONContinue → applyScenePatches(scenepatch.go:35)</text>
-        <text class="ts" x="304" y="276">assemble.py 组装单段工程 ⚙(produce.go:1809) · 全局锁串行</text>
-      </g>
-      <path class="edge" d="M304,280 L304,296"></path>
-
-      <g class="fnode" data-k="ce_check" tabindex="0" role="button" aria-label="checkSegment 程序质检">
-        <rect class="box" x="56" y="300" width="496" height="112"></rect>
-        <text class="t" x="304" y="322">checkSegment · 程序质检（逐段）</text>
-        <text class="tref" x="304" y="338">segpipe.go:985 · segCheck(segcheck.go:148) ≤3 次 attempt(:196)</text>
-        <text class="ts" x="304" y="356">机械修复先行：对比度/opacity 回填，不烧 LLM（:211）</text>
-        <text class="ts" x="304" y="372">npx hyperframes check ⚙(:161) → 回放门禁：snapshot 两轮截帧比对(:367)</text>
-        <text class="ts" x="304" y="388">接缝亮度闸：首/末帧 5 帧 luma(:420) · 同签名刹车→回退 lastgood(:320)</text>
-      </g>
-      <path class="edge" d="M304,412 L304,428"></path>
-
-      <g class="fnode ext" data-k="ce_render" tabindex="0" role="button" aria-label="renderSegment 段渲染">
-        <rect class="box" x="56" y="432" width="496" height="100"></rect>
-        <text class="t" x="304" y="454">renderSegment · 段渲染</text>
-        <text class="tref" x="304" y="470">segpipe.go:1003 · 渲信号量 ≤ min(4, CPU−2)（:117）</text>
-        <text class="ts" x="304" y="488">SegStale 指纹判旧(pipeline.go:1020)：没改的段直接复用旧 mp4</text>
-        <text class="ts" x="304" y="504">RenderSeg(pipeline.go:939)：npx hyperframes render ⚙ --no-browser-gpu 强制软件光栅</text>
-        <text class="ts" x="304" y="520">verifySegFrames：ffprobe 帧数核对（:1037）</text>
-      </g>
-      <path class="edge" d="M304,532 L304,548"></path>
-
-      <g class="fnode" data-k="ce_queue" tabindex="0" role="button" aria-label="入审核队列">
-        <rect class="box" x="56" y="552" width="496" height="56"></rect>
-        <text class="t" x="304" y="572">入审核队列 / 待命</text>
-        <text class="ts" x="304" y="590">auditCh←段审请求(:866)；worker 停在 feedCh 等打回(:872)</text>
-        <text class="tref" x="304" y="604">状态：written → checked → rendered（journal.jsonl）</text>
-      </g>
-
-      <rect class="container" x="616" y="120" width="540" height="500"></rect>
-      <text class="t" x="886" y="142">auditDispatcher × 1 只 goroutine</text>
-      <text class="ts" x="886" y="158">写优先闸 · 审信号量 ≤4（segpipe.go:1067）</text>
-
-      <g class="fnode" data-k="ce_gate" tabindex="0" role="button" aria-label="auditGate 写优先">
-        <rect class="box" x="648" y="176" width="220" height="64"></rect>
-        <text class="t" x="758" y="198">auditGate 写优先</text>
-        <text class="ts" x="758" y="216">写在飞：每 200ms 放行 ≤1 审</text>
-        <text class="tref" x="758" y="232">segpipe.go:965</text>
-      </g>
-      <path class="edge" d="M868,208 L904,208"></path>
-
-      <g class="fnode llm" data-k="ce_audit" tabindex="0" role="button" aria-label="auditSegment 段审">
-        <rect class="box" x="908" y="176" width="220" height="88"></rect>
-        <text class="t" x="1018" y="196">auditSegment 段审</text>
-        <text class="ts" x="1018" y="214">→ review 判卷 Loop.Run</text>
-        <text class="ts" x="1018" y="230">预算 6 回合 · 锚点帧首/句末/末</text>
-        <text class="tref" x="1018" y="248">segpipe.go:1099 · review/agent.go:151</text>
-      </g>
-      <path class="edge" d="M1018,264 L1018,280"></path>
-
-      <g class="fnode" data-k="ce_verdict" tabindex="0" role="button" aria-label="段审结论分支">
-        <polygon class="diamond" points="1018,284 1110,324 1018,364 926,324"></polygon>
-        <text class="t" x="1018" y="320">段审结论</text>
-        <text class="ts" x="1018" y="338">有 high？</text>
-      </g>
-      <path class="edge" d="M926,324 L832,324"></path>
-
-      <g class="fnode start" data-k="ce_pass" tabindex="0" role="button" aria-label="过审">
-        <rect class="box" x="648" y="296" width="180" height="56"></rect>
-        <text class="t" x="738" y="318">过审 stAudited</text>
-        <text class="ts" x="738" y="336">journal 记账（:1154）</text>
-      </g>
-      <path class="edge" d="M1018,364 L1018,384"></path>
-
-      <g class="fnode" data-k="ce_round" tabindex="0" role="button" aria-label="打回轮次判断">
-        <rect class="box" x="908" y="388" width="220" height="76"></rect>
-        <text class="t" x="1018" y="410">round ≤ 2 ？</text>
-        <text class="ts" x="1018" y="428">maxSegRework=2（segpipe.go:57）</text>
-        <text class="ts" x="1018" y="444">超限 → 带伤放行 + wounded 账(:1164)</text>
-        <text class="tref" x="1018" y="458">派发即 round++/gen++(:1108)</text>
-      </g>
-      <path class="edge" d="M908,426 L852,426"></path>
-
-      <g class="fnode" data-k="ce_rew" tabindex="0" role="button" aria-label="dispatchRewrite">
-        <rect class="box" x="648" y="398" width="200" height="56"></rect>
-        <text class="t" x="748" y="418">dispatchRewrite</text>
-        <text class="ts" x="748" y="436">feedCh 投递打回反馈</text>
-        <text class="tref" x="748" y="450">segpipe.go:1218 · 30s 超时刹车</text>
-      </g>
-      <path class="edge back" d="M648,426 L600,426 L600,226 L560,226"></path>
-      <text class="trefl" x="618" y="374">↩ feedCh 打回回边（≤2 轮）</text>
-
-      <g class="fnode" data-k="ce_brake" tabindex="0" role="button" aria-label="签名刹车">
-        <rect class="box" x="648" y="486" width="480" height="64"></rect>
-        <text class="t" x="888" y="508">brakeTracker 签名刹车（segpipe.go:204）</text>
-        <text class="ts" x="888" y="526">同轨道同签名连续两轮 high → trip(:234)；≥max(3,段数/4) 轨道同类 → trip</text>
-        <text class="ts" x="888" y="542">trip 保错误链经 brakes.failure 上抛 → 管线失败，不无限烧钱（:282）</text>
-      </g>
-      <g class="fnode" data-k="ce_gen" tabindex="0" role="button" aria-label="代际机制">
-        <rect class="box" x="648" y="560" width="480" height="48"></rect>
-        <text class="ts" x="888" y="578">打回后代际 gen++：journal 只认当前代际，旧审查结果不复活；</text>
-        <text class="ts" x="888" y="594">waitAllPassed 要求全部段 audited 且代际对齐（:791）</text>
-      </g>
-
-      <path class="edge" d="M304,620 L304,640"></path>
-      <path class="edge" d="M886,620 L886,640"></path>
-      <g class="fnode" data-k="ce_wait" tabindex="0" role="button" aria-label="waitAllPassed 汇合">
-        <rect class="joinbar" x="24" y="644" width="1132" height="52"></rect>
-        <text class="t" x="590" y="666">waitAllPassed 汇合（segpipe.go:769）· 300ms 轮询</text>
-        <text class="ts" x="590" y="684">全部段 audited + 代际对齐才放行 → 进 ⑤ 拼接；任何刹车 → 立即失败上抛</text>
-      </g>
-
-      <g pointer-events="none">
-        <rect class="chipbox" x="24" y="706" width="356" height="34"></rect>
-        <text class="chiptx" x="202" y="720">边界跟踪 boundaryTracker 默认关(:642)</text>
-        <text class="chiptx" x="202" y="734">开 = PRODUCE_BND_AUDIT=on（D5 已撤岗）</text>
-        <rect class="chipbox" x="404" y="706" width="376" height="34"></rect>
-        <text class="chiptx" x="592" y="720">段状态机 segpipe.go:51-58：written/checked/rendered</text>
-        <text class="chiptx" x="592" y="734">audited/rewriting · log 追加 reviews/journal.jsonl(:561)</text>
-        <rect class="chipbox" x="804" y="706" width="352" height="34"></rect>
-        <text class="chiptx" x="980" y="720">看门狗 watchdog(:700)：静默 &gt;32min → trip(:734)</text>
-        <text class="chiptx" x="980" y="734">再 2 分钟仍卡 → forceFinishStall 强制终态</text>
-      </g>
-    </svg>
-    </div>
-
-    <h3 class="zoomhead">⑤ 拼接 → 全片终审 → 出片 <span>—— 以及贯穿全程的安全网（segpipe.go:649 主循环）</span></h3>
-    <div class="diagram-wrap">
-    <svg id="svgF" class="flowsvg" viewBox="0 0 1180 540" role="img" aria-label="拼接与终审：waitAllPassed→c.stitch→stageRender→concatSegs→stageStitch/mixBGM→成片；finalAudit 抽帧判卷，有 high 按段打回 ≤2 轮">
-      <defs>
-        <marker id="arrowF" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
-        </marker>
-      </defs>
-
-      <rect class="band" x="8" y="24" width="1164" height="190"></rect>
-      <text class="bandlabel" x="24" y="44">拼接 · 每轮终审前都重拼，已渲段零成本复用（pipeline/）</text>
-
-      <g class="fnode" data-k="cf_stitch" tabindex="0" role="button" aria-label="c.stitch">
-        <rect class="box" x="24" y="56" width="200" height="88"></rect>
-        <text class="t" x="124" y="82">c.stitch</text>
-        <text class="ts" x="124" y="100">主循环 for round(:649)</text>
-        <text class="ts" x="124" y="116">stitch_fix 意见 → 重 assemble</text>
-        <text class="tref" x="124" y="134">segpipe.go:751</text>
-      </g>
-      <path class="edge" d="M224,100 L260,100"></path>
-
-      <g class="fnode" data-k="cf_rs" tabindex="0" role="button" aria-label="stageRender">
-        <rect class="box" x="264" y="56" width="230" height="88"></rect>
-        <text class="t" x="379" y="82">RunFrom("render")</text>
-        <text class="ts" x="379" y="100">stageRender：指纹判旧跳过</text>
-        <text class="ts" x="379" y="116">只有重写段真重渲</text>
-        <text class="tref" x="379" y="134">pipeline.go:313 · :896</text>
-      </g>
-      <path class="edge" d="M494,100 L530,100"></path>
-
-      <g class="fnode ext" data-k="cf_concat" tabindex="0" role="button" aria-label="concatSegs">
-        <rect class="box" x="534" y="56" width="230" height="88"></rect>
-        <text class="t" x="649" y="82">concatSegs ⚙ ffmpeg</text>
-        <text class="ts" x="649" y="100">concat -c copy 零转码硬拼</text>
-        <text class="ts" x="649" y="116">→ renders/main_voice.mp4</text>
-        <text class="tref" x="649" y="134">pipeline.go:1045 · 实测时间轴 :1079</text>
-      </g>
-      <path class="edge" d="M764,100 L800,100"></path>
-
-      <g class="fnode ext" data-k="cf_mix" tabindex="0" role="button" aria-label="stageStitch 终装">
-        <rect class="box" x="804" y="56" width="200" height="88"></rect>
-        <text class="t" x="904" y="82">stageStitch 终装 ⚙</text>
-        <text class="ts" x="904" y="100">stitchFinal + mixBGM</text>
-        <text class="ts" x="904" y="116">sidechain 人声优先闪避</text>
-        <text class="tref" x="904" y="134">pipeline.go:1261 · mixBGM :1394</text>
-      </g>
-      <path class="edge" d="M1004,100 L1040,100"></path>
-
-      <g class="fnode start" data-k="cf_film" tabindex="0" role="button" aria-label="成片">
-        <rect class="box" x="1044" y="56" width="112" height="88"></rect>
-        <text class="t" x="1100" y="82">成片</text>
-        <text class="ts" x="1100" y="100">renders/main.mp4</text>
-        <text class="ts" x="1100" y="116">film.ready(:1281)</text>
-      </g>
-
-      <path class="edge" d="M1100,144 L1100,180 L174,180 L174,242"></path>
-
-      <rect class="band" x="8" y="210" width="1164" height="196"></rect>
-      <text class="bandlabel" x="24" y="230">全片终审循环 · 打回只重写问题段（±邻段），重拼复核</text>
-
-      <g class="fnode llm" data-k="cf_final" tabindex="0" role="button" aria-label="finalAudit">
-        <rect class="box" x="24" y="246" width="300" height="96"></rect>
-        <text class="t" x="174" y="268">finalAudit · 全片终审</text>
-        <text class="ts" x="174" y="286">finalFrames 12–16 帧：段界+段落界</text>
-        <text class="ts" x="174" y="302">段起点 +0.4s 锚(:1710) · 实测时间轴</text>
-        <text class="ts" x="174" y="318">CheckBudget 前置(:1488)</text>
-        <text class="tref" x="174" y="334">segpipe.go:1487</text>
-      </g>
-      <path class="edge" d="M324,294 L360,294"></path>
-
-      <g class="fnode llm" data-k="cf_af" tabindex="0" role="button" aria-label="svc.AuditFinal">
-        <rect class="box" x="364" y="246" width="260" height="96"></rect>
-        <text class="t" x="494" y="268">svc.AuditFinal</text>
-        <text class="ts" x="494" y="286">review/agent.go:623 · 回合预算 4</text>
-        <text class="ts" x="494" y="302">查节奏/空转/拼接/渐变跑偏</text>
-        <text class="ts" x="494" y="318">审查器自身故障 → 降级放行(:1520)</text>
-      </g>
-      <path class="edge" d="M624,294 L638,294"></path>
-
-      <g class="fnode" data-k="cf_rew" tabindex="0" role="button" aria-label="有 high 分支">
-        <polygon class="diamond" points="734,254 826,294 734,334 642,294"></polygon>
-        <text class="t" x="734" y="290">有 high？</text>
-        <text class="ts" x="734" y="308">findings → 落段</text>
-      </g>
-      <path class="edge" d="M826,294 L862,294"></path>
-
-      <g class="fnode start" data-k="cf_done" tabindex="0" role="button" aria-label="出片终态">
-        <rect class="box" x="866" y="246" width="290" height="96"></rect>
-        <text class="t" x="1011" y="268">出片 · 任务终态</text>
-        <text class="ts" x="1011" y="286">emit done + Manifest(film.ready)(:394)</text>
-        <text class="ts" x="1011" y="302">finishJob → render_jobs 回写(:488)</text>
-        <text class="ts" x="1011" y="318">OnDone → NotifyResult 聊天汇报</text>
-        <text class="tref" x="1011" y="334">segpipe.go:394 · produce.go:488</text>
-      </g>
-      <path class="edge" d="M734,334 L734,352"></path>
-
-      <g class="fnode" data-k="cf_rew" tabindex="0" role="button" aria-label="按段打回">
-        <rect class="box" x="594" y="356" width="280" height="44"></rect>
-        <text class="t" x="734" y="374">按段 dispatchRewrite(:675)</text>
-        <text class="ts" x="734" y="392">drift 连带相邻段 ±1(:1547) → 回 waitAllPassed 重拼复核</text>
-      </g>
-      <path class="edge back" d="M594,378 L120,378 L120,346"></path>
-      <text class="trefl" x="130" y="370">round ≤ maxFinalRd=2(:58) · 超限报「刹车待人工」(:1565)</text>
-
-      <rect class="band" x="8" y="414" width="1164" height="112"></rect>
-      <text class="bandlabel" x="24" y="434">全程安全网 · 贯穿所有阶段</text>
-
-      <g class="fnode" data-k="cf_s1" tabindex="0" role="button" aria-label="自动重跑闸">
-        <rect class="box" x="24" y="446" width="270" height="68"></rect>
-        <text class="t" x="159" y="468">自动重跑闸</text>
-        <text class="ts" x="159" y="486">真失败 10s/30s 后重跑 ≤2 次</text>
-        <text class="tref" x="159" y="504">produce.go:252-254</text>
-      </g>
-      <g class="fnode" data-k="cf_s2" tabindex="0" role="button" aria-label="预算闸">
-        <rect class="box" x="310" y="446" width="270" height="68"></rect>
-        <text class="t" x="445" y="468">预算闸 800 万 token</text>
-        <text class="ts" x="445" y="486">CheckBudget：写/审/终审/选曲前</text>
-        <text class="tref" x="445" y="504">llm/budget.go:30 · :118</text>
-      </g>
-      <g class="fnode" data-k="cf_s3" tabindex="0" role="button" aria-label="磁盘缓存">
-        <rect class="box" x="596" y="446" width="270" height="68"></rect>
-        <text class="t" x="731" y="468">磁盘缓存 + 单飞</text>
-        <text class="ts" x="731" y="486">cachedChat：sha256 命中即复用</text>
-        <text class="tref" x="731" y="504">llm/diskcache.go:187 · :143</text>
-      </g>
-      <g class="fnode" data-k="cf_s4" tabindex="0" role="button" aria-label="取消看门狗账本">
-        <rect class="box" x="882" y="446" width="274" height="68"></rect>
-        <text class="t" x="1019" y="468">取消 · 看门狗 · 账本</text>
-        <text class="ts" x="1019" y="486">Cancel 60s 宽限 · 静默 32min trip</text>
-        <text class="tref" x="1019" y="504">produce.go:311 · segpipe.go:701</text>
-      </g>
-    </svg>
+    <p class="lead">按工作区真实代码绘制，每格标 <b>函数（文件:行号）</b>；重构后行号会漂移，以函数名为准。子页签依次放大 ①–⑤。</p>
+    <details class="ctx">
+      <summary>背景与代码落点</summary>
+      <div class="ctx-body">
+        <p>准备阶段代码在 <code>server/internal/prep/</code>，制作阶段在 <code>server/internal/produce/</code>，渲染/拼接在 <code>server/internal/pipeline/</code>，审片在 <code>server/internal/review/</code>（按 2026-10-22 工作区代码绘制）。</p>
+        <p>实线框 = Go 函数；蓝框 = 调大模型（LLM）；虚线框 = 启动外部进程（⚙ python / node / ffmpeg）；橙虚线箭头 = 打回/重跑回边（旁标轮次上限）；灰蓝长条 = 并行汇合点；灰底大框 = 并行容器。点击任一节点，右侧看调用链详情。</p>
+      </div>
+    </details>
+
+    <nav class="subtabs">
+      <button class="subtab active" data-sub="a" type="button">全链骨架</button>
+      <button class="subtab" data-sub="b" type="button">① 准备三工位</button>
+      <button class="subtab" data-sub="c" type="button">② 打包终审门</button>
+      <button class="subtab" data-sub="d" type="button">③ 制作 · 串行前段</button>
+      <button class="subtab" data-sub="e" type="button">④ 制作 · 并行区</button>
+      <button class="subtab" data-sub="f" type="button">⑤ 拼接→终审→出片</button>
+    </nav>
+
+    <div class="workbench">
+      <div class="figures">
+
+        <figure class="codefig" id="fig-a">
+          <div class="diagram-wrap">
+          <svg id="svgA" class="flowsvg" viewBox="0 0 1180 332" role="img" aria-label="全链骨架：新建项目→准备三工位→人工门→开始制作→自动重跑闸→串行前段→并行区→拼接终审→出片">
+            <defs>
+              <marker id="arrowA" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
+              </marker>
+            </defs>
+
+            <rect class="band" x="8" y="24" width="1164" height="120"></rect>
+            <text class="bandlabel" x="24" y="44">准备 · 每格下方 = 代码落点（文件:行号）</text>
+
+            <g class="fnode start" data-k="ca_new" tabindex="0" role="button" aria-label="新建项目">
+              <rect class="box" x="24" y="64" width="140" height="76"></rect>
+              <text class="t" x="94" y="90">新建项目</text>
+              <text class="ts" x="94" y="108">前端发命令</text>
+              <text class="tref" x="94" y="128">NewProjectModal.vue:50</text>
+            </g>
+            <path class="edge" d="M164,102 L200,102"></path>
+
+            <g class="fnode" data-k="ca_prep" tabindex="0" role="button" aria-label="准备三工位串行">
+              <rect class="box" x="204" y="64" width="240" height="76"></rect>
+              <text class="t" x="324" y="90">准备：三工位串行</text>
+              <text class="ts" x="324" y="108">文稿→风格→分镜 · ReAct</text>
+              <text class="tref" x="324" y="128">prep/run.go:50（for ①②③）</text>
+            </g>
+            <path class="edge" d="M444,102 L480,102"></path>
+
+            <g class="fnode" data-k="ca_gate" tabindex="0" role="button" aria-label="打包终审门">
+              <rect class="box" x="484" y="64" width="190" height="76"></rect>
+              <text class="t" x="579" y="90">👤 打包终审门</text>
+              <text class="ts" x="579" y="108">三工件一次确认</text>
+              <text class="tref" x="579" y="128">api/server.go:1314</text>
+            </g>
+            <path class="edge" d="M674,102 L710,102"></path>
+
+            <g class="fnode" data-k="ca_start" tabindex="0" role="button" aria-label="开始制作">
+              <rect class="box" x="714" y="64" width="200" height="76"></rect>
+              <text class="t" x="814" y="90">开始制作</text>
+              <text class="ts" x="814" y="108">硬门：三件齐+风格确认</text>
+              <text class="tref" x="814" y="128">api/server.go:1513</text>
+            </g>
+            <path class="edge" d="M914,102 L950,102"></path>
+
+            <g class="fnode" data-k="ca_retry" tabindex="0" role="button" aria-label="自动重跑闸">
+              <rect class="box" x="954" y="64" width="190" height="76"></rect>
+              <text class="t" x="1049" y="90">自动重跑闸</text>
+              <text class="ts" x="1049" y="108">真失败 ≤2 次(10s/30s)</text>
+              <text class="tref" x="1049" y="128">produce/produce.go:269</text>
+            </g>
+
+            <path class="edge" d="M1049,140 L1049,160 L94,160 L94,216"></path>
+
+            <rect class="band" x="8" y="180" width="1164" height="132"></rect>
+            <text class="bandlabel" x="24" y="200">制作 · 串行前段 → 并行区 → 拼接终审（谁写完谁往下流）</text>
+
+            <g class="fnode" data-k="ca_serial" tabindex="0" role="button" aria-label="串行前段">
+              <rect class="box" x="24" y="216" width="190" height="84"></rect>
+              <text class="t" x="119" y="242">串行前段 ③</text>
+              <text class="ts" x="119" y="260">TTS→字幕→选曲→样张</text>
+              <text class="tref" x="119" y="280">produce/segpipe.go:316</text>
+            </g>
+            <path class="edge" d="M214,258 L250,258"></path>
+
+            <g class="fnode" data-k="ca_par" tabindex="0" role="button" aria-label="并行区">
+              <rect class="box" x="254" y="216" width="230" height="84"></rect>
+              <text class="t" x="369" y="242">并行区 coordinator ④</text>
+              <text class="ts" x="369" y="260">写×N ∥ 检 ∥ 渲 ∥ 段审</text>
+              <text class="tref" x="369" y="280">produce/segpipe.go:600</text>
+            </g>
+            <path class="edge" d="M484,258 L520,258"></path>
+
+            <g class="fnode" data-k="ca_fin" tabindex="0" role="button" aria-label="拼接终审">
+              <rect class="box" x="524" y="216" width="230" height="84"></rect>
+              <text class="t" x="639" y="242">拼接→全片终审 ⑤</text>
+              <text class="ts" x="639" y="260">concat+mixBGM→抽帧判卷</text>
+              <text class="tref" x="639" y="280">segpipe.go:649（主循环）</text>
+            </g>
+            <path class="edge" d="M754,258 L790,258"></path>
+
+            <g class="fnode start" data-k="ca_out" tabindex="0" role="button" aria-label="出片">
+              <rect class="box" x="794" y="216" width="160" height="84"></rect>
+              <text class="t" x="874" y="242">出片</text>
+              <text class="ts" x="874" y="260">renders/main.mp4</text>
+              <text class="tref" x="874" y="280">segpipe.go:394 film.ready</text>
+            </g>
+          </svg>
+          </div>
+          <figcaption>全链骨架——先看这张地图，子页签依次放大 ①–⑤</figcaption>
+        </figure>
+
+        <figure class="codefig hidden" id="fig-b">
+          <div class="diagram-wrap">
+          <svg id="svgB" class="flowsvg" viewBox="0 0 1180 340" role="img" aria-label="准备阶段：Runner.Start goroutine → prep.run 三工位 for 循环 → ①文稿 ②风格 ③分镜 → OnDone">
+            <defs>
+              <marker id="arrowB" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
+              </marker>
+            </defs>
+
+            <rect class="band" x="8" y="24" width="1164" height="292"></rect>
+            <text class="bandlabel" x="24" y="44">准备阶段 · HTTP 异步化（goroutine 后台跑，前端看 SSE+轮询）</text>
+
+            <g class="fnode" data-k="cb_async" tabindex="0" role="button" aria-label="Runner.Start">
+              <rect class="box" x="24" y="64" width="180" height="88"></rect>
+              <text class="t" x="114" y="90">Runner.Start</text>
+              <text class="ts" x="114" y="108">goroutine 后台跑</text>
+              <text class="tref" x="114" y="126">prep/runner.go:65 · :120</text>
+            </g>
+            <path class="edge" d="M204,108 L236,108"></path>
+
+            <g class="fnode" data-k="cb_run" tabindex="0" role="button" aria-label="prep.run 编排器">
+              <rect class="box" x="240" y="64" width="176" height="88"></rect>
+              <text class="t" x="328" y="90">prep.run 编排</text>
+              <text class="ts" x="328" y="108">三工位严格串行</text>
+              <text class="tref" x="328" y="126">prep/run.go:74</text>
+            </g>
+            <path class="edge" d="M416,124 L450,124"></path>
+
+            <g class="fnode" data-k="cb_s1" tabindex="0" role="button" aria-label="文稿工位">
+              <rect class="box" x="450" y="64" width="230" height="120"></rect>
+              <text class="t" x="565" y="90">① 文稿工位</text>
+              <text class="tref" x="565" y="108">runScriptStation · script.go:47</text>
+              <text class="ts" x="565" y="130">联网查料 → 口播稿</text>
+              <text class="ts" x="565" y="148">产物：文字稿 + 事实清单</text>
+            </g>
+            <path class="edge" d="M680,124 L718,124"></path>
+            <text class="ts" x="699" y="114" pointer-events="none">文字稿</text>
+
+            <g class="fnode llm" data-k="cb_s2" tabindex="0" role="button" aria-label="风格工位">
+              <rect class="box" x="718" y="64" width="230" height="120"></rect>
+              <text class="t" x="833" y="90">② 风格工位</text>
+              <text class="tref" x="833" y="108">runStyleStation · style.go:40</text>
+              <text class="ts" x="833" y="130">风格库探索 + 动态样张验证</text>
+              <text class="ts" x="833" y="148">产物：风格包（四件套）</text>
+            </g>
+            <path class="edge" d="M948,124 L986,124"></path>
+            <text class="ts" x="967" y="114" pointer-events="none">风格包</text>
+
+            <g class="fnode" data-k="cb_s3" tabindex="0" role="button" aria-label="分镜工位">
+              <rect class="box" x="986" y="64" width="186" height="120"></rect>
+              <text class="t" x="1079" y="90">③ 分镜工位</text>
+              <text class="tref" x="1079" y="108">runStoryboardStation :30</text>
+              <text class="ts" x="1079" y="130">切段+场景 brief（纯内容）</text>
+              <text class="ts" x="1079" y="148">产物：分镜稿 draft.json</text>
+            </g>
+
+            <g class="fnode" data-k="cb_ondone" tabindex="0" role="button" aria-label="链终态 OnDone">
+              <rect class="box" x="986" y="232" width="186" height="64"></rect>
+              <text class="t" x="1079" y="254">链终态 OnDone</text>
+              <text class="ts" x="1079" y="270">状态→style · 聊天框通知</text>
+              <text class="tref" x="1079" y="286">main.go:129 · agent.go:827</text>
+            </g>
+            <path class="edge" d="M1079,184 L1079,232"></path>
+
+            <g class="fnode" data-k="cb_loop" tabindex="0" role="button" aria-label="Loop.Run 引擎">
+              <rect class="chipbox" x="450" y="232" width="530" height="56"></rect>
+              <text class="chiptx" x="715" y="252">三工位同款引擎 Loop.Run：ReAct ≤30 回合 · 唯一出口 submit（loop.go:73）</text>
+              <text class="chiptx" x="715" y="270">工件在即跳过 · 改稿级联作废只重跑作废工位 · 全程 manifest 记账</text>
+            </g>
+          </svg>
+          </div>
+          <figcaption>① 准备阶段——严格串行的三个 ReAct 工位（server/internal/prep/）</figcaption>
+        </figure>
+
+        <figure class="codefig hidden" id="fig-c">
+          <div class="diagram-wrap">
+          <svg id="svgC" class="flowsvg" viewBox="0 0 1180 388" role="img" aria-label="打包终审门：前端轮询 prepView → confirmPrep 校验确认 → 制作解锁；反馈三条路汇入 InvalidateFrom 级联作废">
+            <defs>
+              <marker id="arrowC" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
+              </marker>
+            </defs>
+
+            <rect class="band" x="8" y="24" width="1164" height="352"></rect>
+            <text class="bandlabel" x="24" y="44">打包终审门 · 你点头之前不烧制作的钱 · 意见精准路由回对应工位</text>
+
+            <g class="fnode" data-k="cc_view" tabindex="0" role="button" aria-label="前端轮询三工件">
+              <rect class="box" x="24" y="56" width="250" height="72"></rect>
+              <text class="t" x="149" y="82">前端轮询三工件</text>
+              <text class="ts" x="149" y="100">GET /projects/:id/prep</text>
+              <text class="tref" x="149" y="118">s.prepView · api/server.go:1248</text>
+            </g>
+            <path class="edge" d="M274,92 L310,92"></path>
+
+            <g class="fnode" data-k="cc_confirm" tabindex="0" role="button" aria-label="confirmPrep 确认链">
+              <rect class="box" x="314" y="48" width="330" height="144"></rect>
+              <text class="t" x="479" y="72">确认 s.confirmPrep</text>
+              <text class="tref" x="479" y="90">api/server.go:1314</text>
+              <text class="ts" x="479" y="112">TryLock 互斥 → StyleStale 过期侦测</text>
+              <text class="ts" x="479" y="130">三工件 Validate ×3 → LockDesign 设计冻结</text>
+              <text class="ts" x="479" y="148">→ Confirmed=true → Emit 事件</text>
+            </g>
+            <path class="edge" d="M644,92 L680,92"></path>
+
+            <g class="fnode start" data-k="cc_unlock" tabindex="0" role="button" aria-label="制作硬门解锁">
+              <rect class="box" x="684" y="56" width="250" height="72"></rect>
+              <text class="t" x="809" y="82">制作硬门解锁</text>
+              <text class="ts" x="809" y="100">startProduce 校验三件齐</text>
+              <text class="tref" x="809" y="118">+ StyleConfirmed（server.go:1522）</text>
+            </g>
+
+            <g class="fnode" data-k="cc_r1" tabindex="0" role="button" aria-label="改文字">
+              <rect class="box" x="24" y="220" width="340" height="72"></rect>
+              <text class="t" x="194" y="244">「文字要改」</text>
+              <text class="ts" x="194" y="262">PUT manuscript → ReplaceManuscript</text>
+              <text class="tref" x="194" y="280">server.go:953 → artifacts.go:52</text>
+            </g>
+            <g class="fnode" data-k="cc_r2" tabindex="0" role="button" aria-label="改风格">
+              <rect class="box" x="404" y="220" width="340" height="72"></rect>
+              <text class="t" x="574" y="244">「风格换一个」</text>
+              <text class="ts" x="574" y="262">POST style/apply 清样张+设计</text>
+              <text class="tref" x="574" y="280">server.go:1001（另：对话 rerun_prep）</text>
+            </g>
+            <g class="fnode" data-k="cc_r3" tabindex="0" role="button" aria-label="对话重做">
+              <rect class="box" x="784" y="220" width="340" height="72"></rect>
+              <text class="t" x="954" y="244">对话：「重做分镜」</text>
+              <text class="ts" x="954" y="262">工具 rerun_prep → RunInline</text>
+              <text class="tref" x="954" y="280">agent/tools.go:51 · runner.go:157</text>
+            </g>
+            <path class="edge" d="M194,292 L194,316"></path>
+            <path class="edge" d="M574,292 L574,316"></path>
+            <path class="edge" d="M954,292 L954,316"></path>
+
+            <g class="fnode" data-k="cc_invalidate" tabindex="0" role="button" aria-label="InvalidateFrom 级联作废">
+              <rect class="joinbar" x="24" y="316" width="1100" height="56"></rect>
+              <text class="t" x="574" y="338">InvalidateFrom 级联作废（artifacts.go:130）</text>
+              <text class="ts" x="574" y="356">改文字→①②③ · 改风格→②③ · 改分镜→③ —— 没作废的工件直接复用，只重跑作废的工位</text>
+            </g>
+          </svg>
+          </div>
+          <figcaption>② 打包终审门——唯一人工确认与反馈按工件路由（api/server.go）</figcaption>
+        </figure>
+
+        <figure class="codefig hidden" id="fig-d">
+          <div class="diagram-wrap">
+          <svg id="svgD" class="flowsvg" viewBox="0 0 1180 432" role="img" aria-label="制作串行前段：startProduce→Producer.Start→runWithAutoRetry→run 分流；TTS→字幕→选曲→字体样张→并行区入口">
+            <defs>
+              <marker id="arrowD" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
+              </marker>
+            </defs>
+
+            <rect class="band" x="8" y="24" width="1164" height="160"></rect>
+            <text class="bandlabel" x="24" y="44">制作入口 · 异步化 + 自动重跑闸（produce/produce.go）</text>
+
+            <g class="fnode" data-k="cd_start" tabindex="0" role="button" aria-label="POST produce">
+              <rect class="box" x="24" y="56" width="260" height="84"></rect>
+              <text class="t" x="154" y="82">POST /produce</text>
+              <text class="ts" x="154" y="100">硬门：文字稿+分镜稿+风格确认</text>
+              <text class="ts" x="154" y="116">prep 在跑 / 已在制作 → 拒绝</text>
+              <text class="tref" x="154" y="134">api/server.go:1513</text>
+            </g>
+            <path class="edge" d="M284,98 L320,98"></path>
+
+            <g class="fnode" data-k="cd_claim" tabindex="0" role="button" aria-label="Producer.Start">
+              <rect class="box" x="324" y="56" width="240" height="84"></rect>
+              <text class="t" x="444" y="82">Producer.Start</text>
+              <text class="ts" x="444" y="100">claimRun 占号防双开 · goroutine</text>
+              <text class="ts" x="444" y="116">重启后 Reconcile 对账</text>
+              <text class="tref" x="444" y="134">produce/produce.go:164 · :193</text>
+            </g>
+            <path class="edge" d="M564,98 L600,98"></path>
+
+            <g class="fnode" data-k="cd_retry" tabindex="0" role="button" aria-label="runWithAutoRetry">
+              <rect class="box" x="604" y="56" width="280" height="84"></rect>
+              <text class="t" x="744" y="82">runWithAutoRetry</text>
+              <text class="ts" x="744" y="100">真失败自动重跑 ≤2 次（10s/30s）</text>
+              <text class="ts" x="744" y="116">预算耗尽 / check 不收敛 → 不重跑</text>
+              <text class="tref" x="744" y="134">produce.go:269 · maxAutoRetries :252</text>
+            </g>
+            <path class="edge back" d="M654,56 Q744,18 834,56"></path>
+            <text class="ts" x="744" y="34" pointer-events="none">重跑 ≤2</text>
+            <path class="edge" d="M884,98 L920,98"></path>
+
+            <g class="fnode" data-k="cd_run" tabindex="0" role="button" aria-label="Runner.run 分流">
+              <rect class="box" x="924" y="56" width="228" height="84"></rect>
+              <text class="t" x="1038" y="82">Runner.run</text>
+              <text class="ts" x="1038" y="100">IsPrepProject 分流（produce.go:790）</text>
+              <text class="ts" x="1038" y="116">新项目 → 段级流水线</text>
+              <text class="tref" x="1038" y="134">produce.go:790 · segpipe.go:134</text>
+            </g>
+
+            <path class="edge" d="M1038,140 L1038,166 L139,166 L139,208"></path>
+
+            <rect class="band" x="8" y="180" width="1164" height="240"></rect>
+            <text class="bandlabel" x="24" y="200">串行前段 · 有严格依赖（时间轴/分镜弧线喂下游），一件做完才做下一件</text>
+
+            <g class="fnode ext" data-k="cd_tts" tabindex="0" role="button" aria-label="TTS">
+              <rect class="box" x="24" y="212" width="230" height="100"></rect>
+              <text class="t" x="139" y="238">TTS + 词级对齐 ⚙</text>
+              <text class="ts" x="139" y="258">百炼 websocket + FunASR 字级锚点</text>
+              <text class="ts" x="139" y="278">指纹未变 → 直接复用</text>
+              <text class="tref" x="139" y="302">segpipe.go:336-358</text>
+            </g>
+            <path class="edge" d="M254,262 L290,262"></path>
+
+            <g class="fnode" data-k="cd_sub" tabindex="0" role="button" aria-label="字幕翻译">
+              <rect class="box" x="294" y="212" width="170" height="100"></rect>
+              <text class="t" x="379" y="238">双语字幕翻译</text>
+              <text class="ts" x="379" y="258">失败只记账 · 不挡片</text>
+              <text class="tref" x="379" y="302">produce.go:1429</text>
+            </g>
+            <path class="edge" d="M464,262 L500,262"></path>
+
+            <g class="fnode llm" data-k="cd_bgm" tabindex="0" role="button" aria-label="配乐选曲">
+              <rect class="box" x="504" y="212" width="250" height="100"></rect>
+              <text class="t" x="629" y="238">配乐选曲 pickBGM</text>
+              <text class="ts" x="629" y="258">用户拍板 → LLM → 规则兜底</text>
+              <text class="ts" x="629" y="278">永不覆盖人 · 永不挡片</text>
+              <text class="tref" x="629" y="302">produce/bgmpick.go:243</text>
+            </g>
+            <path class="edge" d="M754,262 L790,262"></path>
+
+            <g class="fnode ext" data-k="cd_font" tabindex="0" role="button" aria-label="字体样张">
+              <rect class="box" x="794" y="212" width="190" height="100"></rect>
+              <text class="t" x="889" y="238">字体 + 样张 ⚙</text>
+              <text class="ts" x="889" y="258">font_tool 子集 · snapSamples</text>
+              <text class="ts" x="889" y="278">样张截图 = 段审金样例</text>
+              <text class="tref" x="889" y="302">segpipe.go:381</text>
+            </g>
+            <path class="edge" d="M984,262 L1020,262"></path>
+
+            <g class="fnode" data-k="cd_coord" tabindex="0" role="button" aria-label="进入并行区">
+              <rect class="box" x="1024" y="212" width="132" height="100"></rect>
+              <text class="t" x="1090" y="240">进入并行区</text>
+              <text class="ts" x="1090" y="260">newCoordinator</text>
+              <text class="ts" x="1090" y="278">三池信号量</text>
+              <text class="tref" x="1090" y="302">segpipe.go:516→600</text>
+            </g>
+          </svg>
+          </div>
+          <figcaption>③ 制作 · 串行前段——配音→字幕→选曲→样张，全部完成才进并行区（produce/segpipe.go:316）</figcaption>
+        </figure>
+
+        <figure class="codefig hidden" id="fig-e">
+          <div class="diagram-wrap">
+          <svg id="svgE" class="flowsvg" viewBox="0 0 1180 716" role="img" aria-label="并行区：journal 恢复后，每段一个 chainWorker 走 写→检→渲→入队，auditDispatcher 单只消费审核，打回沿 feedCh 回边，waitAllPassed 汇合">
+            <defs>
+              <marker id="arrowE" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
+              </marker>
+            </defs>
+
+            <rect class="band" x="8" y="24" width="1164" height="680"></rect>
+            <text class="bandlabel" x="24" y="44">并行区 · 段 = 文件 = 时间轴 = 渲染单位 = 缓存单位 = 调度单位 · 谁写完谁往下流，不等齐</text>
+
+            <g class="fnode" data-k="ce_journal" tabindex="0" role="button" aria-label="断点恢复">
+              <rect class="box" x="24" y="52" width="350" height="52"></rect>
+              <text class="t" x="199" y="72">断点恢复</text>
+              <text class="ts" x="199" y="90">journal 里 audited 的段直接进场不重做（:611）</text>
+            </g>
+            <g class="fnode" data-k="ce_flags" tabindex="0" role="button" aria-label="审核开关">
+              <rect class="box" x="414" y="52" width="380" height="52"></rect>
+              <text class="t" x="604" y="72">两个审核开关</text>
+              <text class="ts" x="604" y="90">段审 SEG_AUDIT 默认 on(:80) · 边界审 BND 默认 off(:93)</text>
+            </g>
+            <g class="fnode" data-k="ce_spawn" tabindex="0" role="button" aria-label="扇出拓扑">
+              <rect class="box" x="834" y="52" width="322" height="52"></rect>
+              <text class="t" x="995" y="72">扇出拓扑</text>
+              <text class="ts" x="995" y="90">每段 1 个 worker(:627) + 1 只审核 dispatcher(:637)</text>
+            </g>
+
+            <rect class="container" x="24" y="120" width="560" height="500"></rect>
+            <text class="t" x="304" y="142">chainWorker × 每段一个 goroutine</text>
+            <text class="ts" x="304" y="158">谁写完谁往下流 · 不等齐（segpipe.go:600）</text>
+
+            <g class="fnode llm" data-k="ce_write" tabindex="0" role="button" aria-label="writeSegment 写画面">
+              <rect class="box" x="56" y="172" width="496" height="108"></rect>
+              <text class="t" x="304" y="194">writeSegment · 写画面</text>
+              <text class="tref" x="304" y="210">segpipe.go:883 · 写信号量 ≤4（PRODUCE_WRITE_CONCURRENCY :71）</text>
+              <text class="ts" x="304" y="232">sceneGen 写画面 LLM：首稿 + lint 回喂修复 ≤2 轮</text>
+              <text class="ts" x="304" y="252">修复＝续写+patch · assemble.py 组装单段工程 ⚙（全局锁串行）</text>
+            </g>
+            <path class="edge" d="M304,280 L304,296"></path>
+
+            <g class="fnode" data-k="ce_check" tabindex="0" role="button" aria-label="checkSegment 程序质检">
+              <rect class="box" x="56" y="300" width="496" height="112"></rect>
+              <text class="t" x="304" y="322">checkSegment · 程序质检（逐段）</text>
+              <text class="tref" x="304" y="338">segpipe.go:985 · segCheck(segcheck.go:148) ≤3 次 attempt(:196)</text>
+              <text class="ts" x="304" y="360">机械修复先行（不烧 LLM）→ npx hyperframes check ⚙ → 回放门禁截帧比对</text>
+              <text class="ts" x="304" y="380">接缝亮度闸 5 帧 luma · 同签名刹车 → 回退 lastgood</text>
+            </g>
+            <path class="edge" d="M304,412 L304,428"></path>
+
+            <g class="fnode ext" data-k="ce_render" tabindex="0" role="button" aria-label="renderSegment 段渲染">
+              <rect class="box" x="56" y="432" width="496" height="100"></rect>
+              <text class="t" x="304" y="454">renderSegment · 段渲染</text>
+              <text class="tref" x="304" y="470">segpipe.go:1003 · 渲信号量 ≤ min(4, CPU−2)（:117）</text>
+              <text class="ts" x="304" y="492">SegStale 指纹判旧：没改的段直接复用旧 mp4</text>
+              <text class="ts" x="304" y="512">hyperframes render ⚙ 软件光栅 + ffprobe 帧数核对</text>
+            </g>
+            <path class="edge" d="M304,532 L304,548"></path>
+
+            <g class="fnode" data-k="ce_queue" tabindex="0" role="button" aria-label="入审核队列">
+              <rect class="box" x="56" y="552" width="496" height="56"></rect>
+              <text class="t" x="304" y="572">入审核队列 / 待命</text>
+              <text class="ts" x="304" y="590">auditCh←段审请求(:866)；worker 停在 feedCh 等打回(:872)</text>
+            </g>
+
+            <rect class="container" x="616" y="120" width="540" height="500"></rect>
+            <text class="t" x="886" y="142">auditDispatcher × 1 只 goroutine</text>
+            <text class="ts" x="886" y="158">写优先闸 · 审信号量 ≤4（segpipe.go:1067）</text>
+
+            <g class="fnode" data-k="ce_gate" tabindex="0" role="button" aria-label="auditGate 写优先">
+              <rect class="box" x="648" y="176" width="220" height="64"></rect>
+              <text class="t" x="758" y="198">auditGate 写优先</text>
+              <text class="ts" x="758" y="216">写在飞：每 200ms 放行 ≤1 审</text>
+              <text class="tref" x="758" y="232">segpipe.go:965</text>
+            </g>
+            <path class="edge" d="M868,208 L904,208"></path>
+
+            <g class="fnode llm" data-k="ce_audit" tabindex="0" role="button" aria-label="auditSegment 段审">
+              <rect class="box" x="908" y="176" width="220" height="88"></rect>
+              <text class="t" x="1018" y="196">auditSegment 段审</text>
+              <text class="ts" x="1018" y="214">→ review 判卷 Loop.Run</text>
+              <text class="ts" x="1018" y="230">预算 6 回合 · 锚点帧首/句末/末</text>
+              <text class="tref" x="1018" y="248">segpipe.go:1099 · agent.go:151</text>
+            </g>
+            <path class="edge" d="M1018,264 L1018,280"></path>
+
+            <g class="fnode" data-k="ce_verdict" tabindex="0" role="button" aria-label="段审结论分支">
+              <polygon class="diamond" points="1018,284 1110,324 1018,364 926,324"></polygon>
+              <text class="t" x="1018" y="320">段审结论</text>
+              <text class="ts" x="1018" y="338">有 high？</text>
+            </g>
+            <path class="edge" d="M926,324 L832,324"></path>
+
+            <g class="fnode start" data-k="ce_pass" tabindex="0" role="button" aria-label="过审">
+              <rect class="box" x="648" y="296" width="180" height="56"></rect>
+              <text class="t" x="738" y="318">过审 stAudited</text>
+              <text class="ts" x="738" y="336">journal 记账（:1154）</text>
+            </g>
+            <path class="edge" d="M1018,364 L1018,384"></path>
+
+            <g class="fnode" data-k="ce_round" tabindex="0" role="button" aria-label="打回轮次判断">
+              <rect class="box" x="908" y="388" width="220" height="76"></rect>
+              <text class="t" x="1018" y="410">round ≤ 2 ？</text>
+              <text class="ts" x="1018" y="428">maxSegRework=2（segpipe.go:57）</text>
+              <text class="ts" x="1018" y="444">超限 → 带伤放行 + wounded 账(:1164)</text>
+              <text class="tref" x="1018" y="458">派发即 round++/gen++(:1108)</text>
+            </g>
+            <path class="edge" d="M908,426 L852,426"></path>
+
+            <g class="fnode" data-k="ce_rew" tabindex="0" role="button" aria-label="dispatchRewrite">
+              <rect class="box" x="648" y="398" width="200" height="56"></rect>
+              <text class="t" x="748" y="418">dispatchRewrite</text>
+              <text class="ts" x="748" y="436">feedCh 投递打回反馈</text>
+              <text class="tref" x="748" y="450">segpipe.go:1218 · 30s 刹车</text>
+            </g>
+            <path class="edge back" d="M648,426 L600,426 L600,226 L560,226"></path>
+            <text class="trefl" x="618" y="374">↩ feedCh 打回回边（≤2 轮）</text>
+
+            <g class="fnode" data-k="ce_brake" tabindex="0" role="button" aria-label="签名刹车">
+              <rect class="box" x="648" y="486" width="480" height="64"></rect>
+              <text class="t" x="888" y="506">brakeTracker 签名刹车（segpipe.go:204）</text>
+              <text class="ts" x="888" y="524">同签名连续两轮 / ≥max(3,段数/4) 轨道同类 → trip 上抛失败</text>
+            </g>
+            <g class="fnode" data-k="ce_gen" tabindex="0" role="button" aria-label="代际机制">
+              <rect class="box" x="648" y="560" width="480" height="48"></rect>
+              <text class="ts" x="888" y="578">打回后代际 gen++：journal 只认当前代际，旧审查结果不复活；</text>
+              <text class="ts" x="888" y="594">waitAllPassed 要求全部段 audited 且代际对齐（:791）</text>
+            </g>
+
+            <path class="edge" d="M304,620 L304,640"></path>
+            <path class="edge" d="M886,620 L886,640"></path>
+            <g class="fnode" data-k="ce_wait" tabindex="0" role="button" aria-label="waitAllPassed 汇合">
+              <rect class="joinbar" x="24" y="644" width="1132" height="52"></rect>
+              <text class="t" x="590" y="666">waitAllPassed 汇合（segpipe.go:769）· 300ms 轮询</text>
+              <text class="ts" x="590" y="684">全部段 audited + 代际对齐才放行 → 进 ⑤ 拼接；任何刹车 → 立即失败上抛</text>
+            </g>
+          </svg>
+          </div>
+          <figcaption>④ 制作 · 并行区——段级流水线，全片最核心的一张（produce/segpipe.go:600 coordinator.run）</figcaption>
+        </figure>
+
+        <figure class="codefig hidden" id="fig-f">
+          <div class="diagram-wrap">
+          <svg id="svgF" class="flowsvg" viewBox="0 0 1180 540" role="img" aria-label="拼接与终审：waitAllPassed→c.stitch→stageRender→concatSegs→stageStitch/mixBGM→成片；finalAudit 抽帧判卷，有 high 按段打回 ≤2 轮">
+            <defs>
+              <marker id="arrowF" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" class="arrowfill"></path>
+              </marker>
+            </defs>
+
+            <rect class="band" x="8" y="24" width="1164" height="190"></rect>
+            <text class="bandlabel" x="24" y="44">拼接 · 每轮终审前都重拼，已渲段零成本复用（pipeline/）</text>
+
+            <g class="fnode" data-k="cf_stitch" tabindex="0" role="button" aria-label="c.stitch">
+              <rect class="box" x="24" y="56" width="200" height="88"></rect>
+              <text class="t" x="124" y="82">c.stitch</text>
+              <text class="ts" x="124" y="100">主循环 for round(:649)</text>
+              <text class="ts" x="124" y="116">stitch_fix 意见 → 重 assemble</text>
+              <text class="tref" x="124" y="134">segpipe.go:751</text>
+            </g>
+            <path class="edge" d="M224,100 L260,100"></path>
+
+            <g class="fnode" data-k="cf_rs" tabindex="0" role="button" aria-label="stageRender">
+              <rect class="box" x="264" y="56" width="230" height="88"></rect>
+              <text class="t" x="379" y="82">RunFrom("render")</text>
+              <text class="ts" x="379" y="100">stageRender：指纹判旧跳过</text>
+              <text class="ts" x="379" y="116">只有重写段真重渲</text>
+              <text class="tref" x="379" y="134">pipeline.go:313 · :896</text>
+            </g>
+            <path class="edge" d="M494,100 L530,100"></path>
+
+            <g class="fnode ext" data-k="cf_concat" tabindex="0" role="button" aria-label="concatSegs">
+              <rect class="box" x="534" y="56" width="230" height="88"></rect>
+              <text class="t" x="649" y="82">concatSegs ⚙ ffmpeg</text>
+              <text class="ts" x="649" y="100">concat -c copy 零转码硬拼</text>
+              <text class="ts" x="649" y="116">→ renders/main_voice.mp4</text>
+              <text class="tref" x="649" y="134">pipeline.go:1045 · 实测时间轴 :1079</text>
+            </g>
+            <path class="edge" d="M764,100 L800,100"></path>
+
+            <g class="fnode ext" data-k="cf_mix" tabindex="0" role="button" aria-label="stageStitch 终装">
+              <rect class="box" x="804" y="56" width="200" height="88"></rect>
+              <text class="t" x="904" y="82">stageStitch 终装 ⚙</text>
+              <text class="ts" x="904" y="100">stitchFinal + mixBGM</text>
+              <text class="ts" x="904" y="116">sidechain 人声优先闪避</text>
+              <text class="tref" x="904" y="134">pipeline.go:1261 · mixBGM :1394</text>
+            </g>
+            <path class="edge" d="M1004,100 L1040,100"></path>
+
+            <g class="fnode start" data-k="cf_film" tabindex="0" role="button" aria-label="成片">
+              <rect class="box" x="1044" y="56" width="112" height="88"></rect>
+              <text class="t" x="1100" y="82">成片</text>
+              <text class="ts" x="1100" y="100">renders/main.mp4</text>
+              <text class="ts" x="1100" y="116">film.ready(:1281)</text>
+            </g>
+
+            <path class="edge" d="M1100,144 L1100,180 L174,180 L174,242"></path>
+
+            <rect class="band" x="8" y="210" width="1164" height="196"></rect>
+            <text class="bandlabel" x="24" y="230">全片终审循环 · 打回只重写问题段（±邻段），重拼复核</text>
+
+            <g class="fnode llm" data-k="cf_final" tabindex="0" role="button" aria-label="finalAudit">
+              <rect class="box" x="24" y="246" width="300" height="96"></rect>
+              <text class="t" x="174" y="268">finalAudit · 全片终审</text>
+              <text class="ts" x="174" y="286">finalFrames 12–16 帧：段界+段落界</text>
+              <text class="ts" x="174" y="302">段起点 +0.4s 锚(:1710) · 实测时间轴</text>
+              <text class="tref" x="174" y="334">segpipe.go:1487</text>
+            </g>
+            <path class="edge" d="M324,294 L360,294"></path>
+
+            <g class="fnode llm" data-k="cf_af" tabindex="0" role="button" aria-label="svc.AuditFinal">
+              <rect class="box" x="364" y="246" width="260" height="96"></rect>
+              <text class="t" x="494" y="268">svc.AuditFinal</text>
+              <text class="ts" x="494" y="288">回合预算 4 · 查节奏/空转/拼接/渐变</text>
+              <text class="ts" x="494" y="306">审查器自身故障 → 降级放行(:1520)</text>
+              <text class="tref" x="494" y="334">review/agent.go:623</text>
+            </g>
+            <path class="edge" d="M624,294 L638,294"></path>
+
+            <g class="fnode" data-k="cf_rew" tabindex="0" role="button" aria-label="有 high 分支">
+              <polygon class="diamond" points="734,254 826,294 734,334 642,294"></polygon>
+              <text class="t" x="734" y="290">有 high？</text>
+              <text class="ts" x="734" y="308">findings → 落段</text>
+            </g>
+            <path class="edge" d="M826,294 L862,294"></path>
+
+            <g class="fnode start" data-k="cf_done" tabindex="0" role="button" aria-label="出片终态">
+              <rect class="box" x="866" y="246" width="290" height="96"></rect>
+              <text class="t" x="1011" y="268">出片 · 任务终态</text>
+              <text class="ts" x="1011" y="288">emit done + Manifest(film.ready)(:394)</text>
+              <text class="ts" x="1011" y="306">finishJob 回写 · OnDone 聊天汇报</text>
+              <text class="tref" x="1011" y="334">segpipe.go:394 · produce.go:488</text>
+            </g>
+            <path class="edge" d="M734,334 L734,352"></path>
+
+            <g class="fnode" data-k="cf_rew" tabindex="0" role="button" aria-label="按段打回">
+              <rect class="box" x="594" y="356" width="280" height="44"></rect>
+              <text class="t" x="734" y="374">按段 dispatchRewrite(:675)</text>
+              <text class="ts" x="734" y="392">drift 连带相邻段 ±1(:1547) → 回 waitAllPassed 重拼复核</text>
+            </g>
+            <path class="edge back" d="M594,378 L120,378 L120,346"></path>
+            <text class="trefl" x="130" y="370">round ≤ maxFinalRd=2(:58) · 超限报「刹车待人工」(:1565)</text>
+
+            <rect class="band" x="8" y="414" width="1164" height="112"></rect>
+            <text class="bandlabel" x="24" y="434">全程安全网 · 贯穿所有阶段</text>
+
+            <g class="fnode" data-k="cf_s1" tabindex="0" role="button" aria-label="自动重跑闸">
+              <rect class="box" x="24" y="446" width="270" height="68"></rect>
+              <text class="t" x="159" y="468">自动重跑闸</text>
+              <text class="ts" x="159" y="486">真失败 10s/30s 后重跑 ≤2 次</text>
+              <text class="tref" x="159" y="504">produce.go:252-254</text>
+            </g>
+            <g class="fnode" data-k="cf_s2" tabindex="0" role="button" aria-label="预算闸">
+              <rect class="box" x="310" y="446" width="270" height="68"></rect>
+              <text class="t" x="445" y="468">预算闸 800 万 token</text>
+              <text class="ts" x="445" y="486">CheckBudget：写/审/终审/选曲前</text>
+              <text class="tref" x="445" y="504">llm/budget.go:30 · :118</text>
+            </g>
+            <g class="fnode" data-k="cf_s3" tabindex="0" role="button" aria-label="磁盘缓存">
+              <rect class="box" x="596" y="446" width="270" height="68"></rect>
+              <text class="t" x="731" y="468">磁盘缓存 + 单飞</text>
+              <text class="ts" x="731" y="486">cachedChat：sha256 命中即复用</text>
+              <text class="tref" x="731" y="504">llm/diskcache.go:187 · :143</text>
+            </g>
+            <g class="fnode" data-k="cf_s4" tabindex="0" role="button" aria-label="取消看门狗账本">
+              <rect class="box" x="882" y="446" width="274" height="68"></rect>
+              <text class="t" x="1019" y="468">取消 · 看门狗 · 账本</text>
+              <text class="ts" x="1019" y="486">Cancel 60s 宽限 · 静默 32min trip</text>
+              <text class="tref" x="1019" y="504">produce.go:311 · segpipe.go:701</text>
+            </g>
+          </svg>
+          </div>
+          <figcaption>⑤ 拼接 → 全片终审 → 出片——以及贯穿全程的安全网（segpipe.go:649 主循环）</figcaption>
+        </figure>
+
+        <div class="legend">
+          <span class="li"><i class="sw"></i>串行：做完才下一步</span>
+          <span class="li"><i class="sw box bandbg"></i>并行容器：多路同时</span>
+          <span class="li"><i class="sw box llm"></i>蓝框 = 调大模型</span>
+          <span class="li"><i class="sw box dashb"></i>虚线框 = ⚙ 外部进程</span>
+          <span class="li"><i class="sw dash"></i>打回/重跑回边（标上限）</span>
+          <span class="li"><i class="sw bar"></i>并行汇合点</span>
+        </div>
+      </div>
+
+      <aside class="side">
+        <div class="side-head">节点详情</div>
+        <div class="detail" id="detailCode" aria-live="polite"></div>
+      </aside>
     </div>
   </section>
+
 </main>
 
-<footer>准备阶段定稿见 <code>docs/prep-agents-design.md</code> · 制作阶段定稿见 <code>docs/production-stage-design.md</code> · 音乐驱动 PV 方案汇总见 <code>docs/pv-music-driven-design.md</code>（2026-10-21 定稿；M1 音乐工位已落地 2026-10-23；先例素材在 <code>demo/agi-mv-repro/</code>）· 方案每改一次须同步更新本图 · 「代码调用链」页签按 2026-10-22 工作区代码绘制，重构后行号会漂移、以函数名为准</footer>
+<footer>准备阶段定稿 <code>docs/prep-agents-design.md</code> · 制作阶段定稿 <code>docs/production-stage-design.md</code> · 音乐驱动 PV <code>docs/pv-music-driven-design.md</code>（M1 音乐工位已落地 2026-10-23）· 方案每改一次须同步更新本图 · 「代码调用链」按 2026-10-22 工作区绘制，行号会漂移、以函数名为准</footer>
 
 <script>
 (function () {
@@ -1358,9 +1388,9 @@
         ["风格包四件", "① 风格描述（附选择理由，供③理解语境）；② 剪辑语法三字段：切分密度 / 段长带 / 同舞台延续；③ 设计系统——含<em>标准入场/收尾动画模板</em>（水墨晕染显影、羊皮纸翻页起手），转场的载体；④ 样张 id 列表（含动态样张 mp4 与海报帧）。"],
         ["设计系统归属", "制作阶段<em>零设计作业</em>：风格库内选择 + 派生治理（条目自带历史记账，选中即继承已验证设计）；样张渲染 / 六件套校验是② <code>render_sample</code> 的底层能力。"],
         ["纪律", "样张场景必须取自口播稿代表性内容，禁止通用示例；口播稿文本一个字不改（文字稿门后冻结）。"],
-        ["样张=动态小样片（2026-10-22）", "<code>render_sample</code> 产出 <em>1.8 秒 mp4</em>（上限 6 张，4–6 甜点区），与成片同一台渲染器同一套工序：场景页 → 机检 → vend 采购内联 → hyperframes 软光栅 → 抽首/中/尾三帧判卷（对照条目真迹判风格贴合 + 尾帧定格检查）；修复轮 ≤2 同类刹车。"],
-        ["返工不占双席（2026-10-23）", "修样张带 <code>replace=序号</code> 原槽位重渲（满 6 张后是唯一修改通道）；忘带也会被自动识别——新样张与已有样张场景简述一字相同、或海报感知哈希（8×8 aHash）距离 ≤14 即判返工，替换原槽位并在回执注明（阈值真机校准：同构图换字体=12 / 不同构图 ≥23）。"],
-        ["自采通道（2026-10-22 开通）", "样张阶段开放 vend 自采：HTML 声明 <code>&lt;!-- vend: lib@x.y.z --&gt;</code> → vendor_tool 代购（许可证白名单/钉版/哈希/台账）→ 渲染副本内联、draft 留声明凭据；submit 时清单进 design_system.vend_libs，正式段<em>货架复用</em>（同款零新增采购，缺的才新采）。字体模型无安装权：<code>font_requests</code> 只登记台账等人工入库，制作阶段零字体自采；首渲前 ensureSampleFonts 按样张字体声明现场备料（MatchSampleFonts → font_tool ensure）。"]
+        ["样张=动态小样片", "<code>render_sample</code> 产出 <em>1.8 秒 mp4</em>（上限 6 张，4–6 甜点区），与成片同一台渲染器同一套工序：场景页 → 机检 → vend 采购内联 → hyperframes 软光栅 → 抽首/中/尾三帧判卷（对照条目真迹判风格贴合 + 尾帧定格检查）；修复轮 ≤2 同类刹车。"],
+        ["返工不占双席", "修样张带 <code>replace=序号</code> 原槽位重渲（满 6 张后是唯一修改通道）；忘带也会被自动识别——新样张与已有样张场景简述一字相同、或海报感知哈希（8×8 aHash）距离 ≤14 即判返工，替换原槽位并在回执注明（阈值真机校准：同构图换字体=12 / 不同构图 ≥23）。"],
+        ["自采通道", "样张阶段开放 vend 自采：HTML 声明 <code>&lt;!-- vend: lib@x.y.z --&gt;</code> → vendor_tool 代购（许可证白名单/钉版/哈希/台账）→ 渲染副本内联、draft 留声明凭据；submit 时清单进 design_system.vend_libs，正式段<em>货架复用</em>（同款零新增采购，缺的才新采）。字体模型无安装权：<code>font_requests</code> 只登记台账等人工入库，制作阶段零字体自采；首渲前 ensureSampleFonts 按样张字体声明现场备料（MatchSampleFonts → font_tool ensure）。"]
       ]
     },
     g3: {
@@ -1467,7 +1497,7 @@
     m_input: {
       type: "起点 · 人工", cls: "", title: "新建项目：选驱动模式（文稿｜音乐）",
       rows: [
-        ["入口已落地（2026-10-21）", "新建弹窗多一档「驱动」单选：文稿驱动（默认）｜音乐驱动 · PV。选定落 project.json 的 mode 字段（script/music，老项目无字段=script）。"],
+        ["入口已落地", "新建弹窗多一档「驱动」单选：文稿驱动（默认）｜音乐驱动 · PV。选定落 project.json 的 mode 字段（script/music，老项目无字段=script）。"],
         ["模式A·AI做曲", "只给一句话主题（情绪与画面想象）：①音乐工位全跑（brief→做曲→地图）。无文稿、无配音——PV 以曲为本，文稿链路整个不进。"],
         ["模式B·带曲入场", "主题＋上传音频文件：跳过 brief 和做曲，直进地图——「给一首曲子做片子」就是这条。上传 UI 落在音乐项目自己的准备页签（M4）。"],
         ["工作区分流", "音乐项目页签裁到「想法（PV 准备页）＋视频」：准备页已长出做曲/地图（2026-10-23，想法页签试听）；分镜随 M2；制作入口前后端都拦（music 项目 produce/confirm 显式 400）。"]
@@ -1615,11 +1645,11 @@
     },
     ca_prep: {
       type: "串行 · 编排器", cls: "", title: "准备三工位（骨架）",
-      rows: [["调用", "prep/run.go:50 <code>run()</code>：stations 表（run.go:68）按 ①文稿→②风格→③分镜 for 循环串行执行（run.go:74）。"], ["详情", "见下方 ① 图。"]]
+      rows: [["调用", "prep/run.go:50 <code>run()</code>：stations 表（run.go:68）按 ①文稿→②风格→③分镜 for 循环串行执行（run.go:74）。"], ["详情", "见子页签 ①。"]]
     },
     ca_gate: {
       type: "👤 唯一人工门", cls: "good", title: "打包终审门（骨架）",
-      rows: [["位置", "三工件齐 → 前端自动切终审页签（App.vue:468）。"], ["确认", "POST /prep/confirm → <code>s.confirmPrep</code>（server.go:1314）：校验三工件 + StyleStale → LockDesign → stylepack.json Confirmed=true（:1373）——制作硬门的事实源。"], ["反馈", "改文字/改风格/对话重做 → 级联作废后只重跑作废工位（见 ② 图）。"]]
+      rows: [["位置", "三工件齐 → 前端自动切终审页签（App.vue:468）。"], ["确认", "POST /prep/confirm → <code>s.confirmPrep</code>（server.go:1314）：校验三工件 + StyleStale → LockDesign → stylepack.json Confirmed=true（:1373）——制作硬门的事实源。"], ["反馈", "改文字/改风格/对话重做 → 级联作废后只重跑作废工位（见子页签 ②）。"]]
     },
     ca_start: {
       type: "HTTP 入口", cls: "", title: "开始制作",
@@ -1652,7 +1682,7 @@
     },
     cb_run: {
       type: "串行 · 编排器", cls: "", title: "prep.run：三工位 for 循环",
-      rows: [["编排", "<code>run()</code>（prep/run.go:50）：项目 token 预算账挂 ctx（:61）；stations 表（:68）。"], ["串行", "for 循环（:74）①→②→③，严格串行——后一位吃前一位的工件，无法并行。"], ["重试", "单工位失败且非预算耗尽 → <code>runWithColdRetry</code>（:105）换全新会话冷重试至多 1 次。"], ["收尾", "prep.Manifest(\"prep.done\")（:85）。"]]
+      rows: [["编排", "<code>run()</code>（prep/run.go:50）：项目 token 预算账挂 ctx（:61）；stations 表（:68）。"], ["串行", "for 循环（:74）①→②→③，严格串行——后一位吃前一位的工件，无法并行。"], ["重试", "单工位失败且非预算耗尽 → <code>runWithColdRetry</code>（:105）换全新会话冷重试至多 1 次。"], ["收尾", "prep.Manifest(\"prep.done\")（:85）。"], ["重放与记账", "HasArtifact（artifacts.go:110）工件在即跳过——断点续跑/反馈路由只补作废部分的根基；每步 manifestStep 记账（:260）；会话留痕 llm/prep-*.jsonl。"]]
     },
     cb_loop: {
       type: "ReAct 循环", cls: "", title: "Loop.Run：三工位同款的干活方式",
@@ -1669,6 +1699,7 @@
     cb_s2: {
       type: "ReAct 工位 · 多模态", cls: "", title: "② 风格工位 runStyleStation",
       rows: [
+        ["模型", "多模态（RoleVisual）——判样张、读真迹都要看图。"],
         ["工具", "<code>search_styles</code> / <code>get_style_detail</code>（真迹附图）/ <code>get_style_usage</code> / <code>register_style</code>（衍生登记）/ <code>submit_style</code>（style.go:1206，增 <code>font_requests</code> 字体申请：台账+回显，模型无安装权，:1259/:1290）。"],
         ["样张验证", "<code>render_sample</code>（:683）= 成片同工序的动态样张（1.8 秒 mp4，sampleDur :481，上限 6 张 :37）：<code>renderSampleVideo</code>（:631）机械整形 PrepareSamplePage → vend 内联（:644）→ hyperframes 软光栅（:649，--no-browser-gpu）→ 抽海报+首/中/尾三帧（:654）→ CheckSampleHTML 机检（:769）→ judgeSample 多模态判卷（:924，对照真迹）→ repairSample 修复 ≤2 轮（:973）；同类签名刹车 issueSignature（:1025）。"],
         ["replace / 返工识别", "<code>replace</code> 参数（:701/709，1-based）原槽位重渲、文件名不变不多占；返工自动识别（:810）：场景简述一字相同或 aHash 距离 ≤14（util.go aHash；阈值真机校准同构图=12 / 异构 ≥23）→ 自动替换原槽位并在回执注明。"],
@@ -1753,7 +1784,7 @@
     },
     cd_coord: {
       type: "并行区入口", cls: "", title: "newCoordinator",
-      rows: [["建池", "segpipe.go:516：建 writeSem/auditSem/renderSem 三池（:522-524）→ <code>c.run</code>（:600）进入并行区（下一张图）。"]]
+      rows: [["建池", "segpipe.go:516：建 writeSem/auditSem/renderSem 三池（:522-524）→ <code>c.run</code>（:600）进入并行区（子页签 ④）。"]]
     },
     ce_flags: {
       type: "开关", cls: "", title: "两个审核开关",
@@ -1790,7 +1821,7 @@
     },
     ce_queue: {
       type: "队列/待命", cls: "", title: "入审核队列 / feedCh 待命",
-      rows: [["入队", "渲完 <code>auditCh ← {kind:\"seg\"}</code>（:866）；段审关则 markSegAuditedNoAudit 直记 audited（:869）。"], ["待命", "worker 停在 feedCh 等打回（:872）——打回反馈从这进，回到本段第一步重写；没有打回就常驻到管线终结。"]]
+      rows: [["入队", "渲完 <code>auditCh ← {kind:\"seg\"}</code>（:866）；段审关则 markSegAuditedNoAudit 直记 audited（:869）。"], ["待命", "worker 停在 feedCh 等打回（:872）——打回反馈从这进，回到本段第一步重写；没有打回就常驻到管线终结。"], ["状态机", "written → checked → rendered → audited / rewriting（segpipe.go:51-58）；每次迁移追加 reviews/journal.jsonl（:561）。"]]
     },
     ce_pass: {
       type: "过审", cls: "good", title: "stAudited",
@@ -1939,13 +1970,13 @@
     music: { detail: document.getElementById("detailMusic"), def: "m_ax" },
     code: { detail: document.getElementById("detailCode"), def: "ca_new" }
   };
-  var cur = "script";
+  var cur = "intro";
 
   function renderDetail(k, el) {
     var d = DETAILS[k];
     if (!d) return;
     var html = '<div class="d-head"><span class="d-type ' + d.cls + '">' + d.type + "</span><h3>" + d.title + "</h3></div>";
-    if (PLAIN[k]) { html += '<div class="plain">💡 <b>大白话：</b>' + PLAIN[k] + "</div>"; }
+    if (PLAIN[k]) { html += '<div class="plain">💡 ' + PLAIN[k] + "</div>"; }
     var rowsHtml = "";
     d.rows.forEach(function (r) {
       rowsHtml += '<div class="d-row"><span class="d-k">' + r[0] + '</span><div class="d-v">' + r[1] + "</div></div>";
@@ -1963,9 +1994,10 @@
   document.querySelectorAll(".flowsvg .fnode").forEach(function (n) {
     n.addEventListener("click", function () {
       select(n.getAttribute("data-k"));
-      var d = PAGES[cur].detail;
-      var r = d.getBoundingClientRect();
-      if (r.top < 0) { d.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+      // 窄屏时详情栏在图下方，滚过去让它可见；宽屏是右侧粘性栏，无需滚动
+      if (window.matchMedia("(max-width: 1120px)").matches) {
+        PAGES[cur].detail.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
     });
     n.addEventListener("keydown", function (e) {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(n.getAttribute("data-k")); }
@@ -1984,6 +2016,18 @@
   document.querySelectorAll(".tab").forEach(function (t) {
     t.addEventListener("click", function () { activate(t.getAttribute("data-page")); });
   });
+
+  // 代码页签：子页签切换（一次只看一张分区图），详情栏同步切到该图起点
+  var SUBDEF = { a: "ca_new", b: "cb_async", c: "cc_view", d: "cd_start", e: "ce_journal", f: "cf_stitch" };
+  function activateSub(id) {
+    document.querySelectorAll(".subtab").forEach(function (b) { b.classList.toggle("active", b.getAttribute("data-sub") === id); });
+    document.querySelectorAll("#page-code .codefig").forEach(function (f) { f.classList.toggle("hidden", f.id !== "fig-" + id); });
+    select(SUBDEF[id] || "ca_new");
+  }
+  document.querySelectorAll(".subtab").forEach(function (b) {
+    b.addEventListener("click", function () { activateSub(b.getAttribute("data-sub")); });
+  });
+  activateSub("a");
 
   var h = location.hash.replace("#", "");
   activate(PAGES[h] ? h : "intro");

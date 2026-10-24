@@ -586,7 +586,7 @@ async function confirmStyle() {
           <HistoryRail :projects="projects" :current="current" @select="selectProject" @delete="onDeleteProject" />
           <main class="center">
             <!-- :key=current：切项目强制重挂载。StagePanel/ChatPanel 内部持有 per-project
-                 的编辑态脏标记（分镜 sbDirty、文稿 dirty、风格 picked/sigOff/direction），
+                 的编辑态脏标记（分镜 sbDirty、文稿 dirty、风格 detail/direction），
                  其 watch 都是"dirty 时不回灌服务器数据"——组件实例跨项目复用的话，A 项目
                  未保存的编辑会原样保存进 B 项目（切项目清的是 App 级 props，清不到这些
                  内部脏标记，详见 StagePanel sbDirty watch / ManuscriptPane dirty watch）。

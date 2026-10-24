@@ -34,6 +34,7 @@ import (
 
 func main() {
 	// 存储维护子命令（离线跑，不占 8080）：-storage-sync 存量回填 / -storage-prune 立即清理
+	// / -backfill-facets 风格条目分面回填（dry-run 默认，--apply 真写）
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "-storage-sync":
@@ -41,6 +42,9 @@ func main() {
 			return
 		case "-storage-prune":
 			runStoragePrune(os.Args[2:])
+			return
+		case "-backfill-facets":
+			runBackfillFacets(os.Args[2:])
 			return
 		}
 	}
@@ -138,6 +142,9 @@ func main() {
 			ag.PostNotice(id, "❌ 准备阶段没能跑完："+pipeline.FirstLine(err.Error(), 160)+"——「想法」页签可重试，或在对话里让我接着修")
 		}
 	}
+	// 开机对账：上次进程死在准备链中途的项目补写终态+聊天通知（与 producer.Reconcile
+	// 同职责——2026-10-23 中-4：进程死亡时 prep goroutine 随葬，无终态无通告）
+	preps.Reconcile(ag.PostNotice)
 	// 会话密钥与初始管理员：SESSION_SECRET > API_TOKEN 派生 > 随机（开放模式）。
 	// 仅鉴权启用时引导建管理员——开放模式没有登录，建了也是死数据。
 	sessionSecret, authActive := auth.DeriveSecret(os.Getenv("SESSION_SECRET"), os.Getenv("API_TOKEN"))

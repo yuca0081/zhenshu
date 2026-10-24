@@ -1545,6 +1545,13 @@ func (s *Server) startProduce(c *gin.Context) {
 		c.JSON(409, gin.H{"error": "准备阶段重跑中，先等完成再开制作"})
 		return
 	}
+	// 成片最新挡整片重做（2026-10-23 中-1）：与主管工具门禁同一判别
+	// （agent.VideoFresh），API 直调不再绕过——改某段画面走段级重做，
+	// 改了文稿/分镜/风格才整片重做。
+	if agent.VideoFresh(st) {
+		c.JSON(400, gin.H{"error": "成片已就绪且为最新，无需重新制作——改某段画面在舞台上点选后说要求（段级重做）；改了文稿/分镜/风格再整片重做"})
+		return
+	}
 	ok, err := s.Producer.Start(id)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -1933,9 +1940,10 @@ func (s *Server) confirmReference(c *gin.Context) {
 }
 
 // ingestRefStyle 一条参考风格入库：帧引用存在性校验（对着解析帧目录）+ 代表帧
-// 封面 + IngestVideoRef（新载荷：标签+特色+题材一句话）+ 原片/抽帧快照。
-// 条目名继承原视频标题（origName=上传文件名），风格名只在标题清洗不出时兜底——
-// 风格标签是家族名，多条目会撞名，不能当条目名用。
+// 封面 + IngestVideoRef（新载荷：标签+特色+题材一句话+分面三轴）+ 原片/抽帧快照。
+// 条目名 = LLM 起的独特陈列名（2026-10-24 翻转：此前拿视频标题当条目名，营销
+// 标题「震惊瘫坐!!」入库既难辨识也不好友好检索；视频标题只在 LLM 缺名时兜底）；
+// 同名撞车由库侧带题材词消歧（uniqueName）。
 // seedID 是 IngestVideoRef 的 refID 种子（重复入库同 seed upsert 幂等）。
 func (s *Server) ingestRefStyle(seedID, origName string, d *styleref.StyleDraft, dir string) (*stylelib.Style, error) {
 	feats := styleref.ReadFeatures(dir)
@@ -1959,9 +1967,14 @@ func (s *Server) ingestRefStyle(seedID, origName string, d *styleref.StyleDraft,
 		}
 	}
 	makeCover(dir, feats, firstEvidenceFrame(d)) // 代表帧拷成 cover.png（卡片封面/回看），失败不挡入库
+	name := strings.TrimSpace(d.Name)
+	if name == "" {
+		name = videoTitle(origName, d.Name) // LLM 缺名：视频标题兜底
+	}
 	st, err := s.Lib.IngestVideoRef(seedID, stylelib.VideoStyleIn{
-		Name:        videoTitle(origName, d.Name),
+		Name:        name,
 		Subject:     d.Subject,
+		Facets:      d.Facets,
 		Tags:        d.Tags,
 		TagEvidence: d.TagEvidence,
 		Signatures:  d.Signatures,

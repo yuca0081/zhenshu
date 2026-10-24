@@ -23,6 +23,7 @@ import (
 	"webpage-video-agent/server/internal/prep"
 	"webpage-video-agent/server/internal/produce"
 	"webpage-video-agent/server/internal/react"
+	"webpage-video-agent/server/internal/review"
 	"webpage-video-agent/server/internal/store"
 	"webpage-video-agent/server/internal/stylelib"
 	"webpage-video-agent/server/internal/styleref"
@@ -340,7 +341,14 @@ func lastFailedOrInterrupted(s State) bool {
 
 // videoFresh 成片就绪且为最新（无过期轴、无失败/中断终态）——此时整片重做挡回
 // rework；旧版/失败/中断后 start_production 放行（与舞台「按最新内容重做」同权）。
+// VideoFresh 导出给 api 层 startProduce 共用（2026-10-23 中-1：两道闸必须同一
+// 判别，API 直调不许绕过「成片最新挡整片重做」）。
 func videoFresh(s State) bool {
+	return VideoFresh(s)
+}
+
+// VideoFresh videoFresh 的导出名：agent 工具门禁与 api startProduce 共用。
+func VideoFresh(s State) bool {
 	return s.HasVideo && len(staleAxes(s)) == 0 && !lastFailedOrInterrupted(s)
 }
 
@@ -798,8 +806,54 @@ func (a *Agent) bumpStyleUsage(projectID string) {
 	if json.Unmarshal(b, &meta) != nil || strings.TrimSpace(meta.StyleID) == "" {
 		return
 	}
-	a.Lib.BumpUsage(strings.TrimSpace(meta.StyleID), 0, true, true)
-	p.Manifest("style.usage", meta.StyleID+"（成片记账）")
+	score := finalAuditScore(p)
+	a.Lib.BumpUsage(strings.TrimSpace(meta.StyleID), score, true, true)
+	note := meta.StyleID + "（成片记账）"
+	if score > 0 {
+		note = fmt.Sprintf("%s（成片记账，终审折算 %.1f 分）", meta.StyleID, score)
+	}
+	p.Manifest("style.usage", note)
+}
+
+// finalAuditScore 终审意见单折算 0–5 分（2026-10-24）：UsageStats.LastScore 此前
+// 恒为 0——调用方把分数硬编码 0，闭环只接了 count 半截，search_styles 的
+// 「最近审核 X 分」从没亮过。口径：最终轮意见单的 findings 密度——high 每条
+// 扣 1、low 每条扣 0.25，下限 0.5（能出片就非 0 分）。意见单缺失（终审故障
+// 降级放行/异常路径）= 0，维持「0=未评」语义，不造假分。findings 记的是片子
+// 的问题不是风格的问题，但作为「这个风格出片干不干净」的选型信号成立：落地
+// 难的风格重写多、意见自然多。
+func finalAuditScore(p *pipeline.Project) float64 {
+	matches, err := filepath.Glob(p.Artifact("reviews/final-all-r*.json"))
+	if err != nil || len(matches) == 0 {
+		return 0
+	}
+	latest, latestRound := "", -1 // 轮号取数比较，字典序有 r10 < r2 陷阱
+	for _, m := range matches {
+		base := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(m), "final-all-r"), ".json")
+		if n, perr := strconv.Atoi(base); perr == nil && n > latestRound {
+			latestRound, latest = n, m
+		}
+	}
+	if latest == "" {
+		return 0
+	}
+	var v review.Verdict
+	if b, rerr := os.ReadFile(latest); rerr != nil || json.Unmarshal(b, &v) != nil {
+		return 0
+	}
+	score := 5.0
+	for _, f := range v.Findings {
+		switch f.Severity {
+		case "high":
+			score -= 1
+		case "low":
+			score -= 0.25
+		}
+	}
+	if score < 0.5 {
+		score = 0.5
+	}
+	return score
 }
 
 func (a *Agent) finish(projectID, content, typ string) {

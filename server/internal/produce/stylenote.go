@@ -91,6 +91,7 @@ func styleNoteFor(p *pipeline.Project) string {
 // 证据来自项目 style/style_brief.json 的 evidence（绝对路径，style_media 快照），
 // 每张先经 ffmpeg 压成 1280 宽 JPEG 缓存进项目 style/（key-<条目id>-<帧名>.jpg，
 // 与段渲染抽帧同规格），压图/读图失败单张跳过——真迹是加分项，缺失不挡出片。
+// Label 带简报里的逐帧指认（打标笔记），过程页留痕与 keyframeNote 字幕同源。
 func styleKeyframeImages(ctx context.Context, p *pipeline.Project) []visImg {
 	brief := pipeline.LoadStyleBrief(p)
 	if brief == nil || len(brief.Evidence) == 0 {
@@ -119,20 +120,36 @@ func styleKeyframeImages(ctx context.Context, p *pipeline.Project) []visImg {
 		if err != nil {
 			continue
 		}
+		label := "风格真迹（原片帧）"
+		if i < len(brief.EvidenceNotes) && strings.TrimSpace(brief.EvidenceNotes[i]) != "" {
+			label = "真迹 · " + brief.EvidenceNotes[i]
+		}
 		vis = append(vis, visImg{
 			URL:   "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(b),
 			Path:  projRel(p, dst),
-			Label: "风格真迹（原片帧）",
+			Label: label,
 		})
 	}
 	return vis
 }
 
 // keyframeNote 场景生成提示里的真迹说明（真迹紧随样张截图；素材真图在真迹之后）。
-// 真迹只准学气质（配色/光影/质感/密度/节奏）——物件是原片题材，照着画就是题材中毒。
-func keyframeNote(n int) string {
-	if n == 0 {
+// 真迹只准学气质（配色/光影/质感/密度/节奏）——物件是原片题材，照着画就是题材中毒；
+// 简报带逐帧指认时按帧列字幕（共享前缀内逐字稳定，不伤缓存），没有就只说总纲。
+func keyframeNote(imgs []visImg) string {
+	if len(imgs) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("\n- 附图样张之后紧随的 %d 张是本风格来源视频的原片真迹（关键帧）：只学气质——配色、光影、质感、画面密度、构图节奏；真迹里画的物件（建筑/人物/器物等）是原视频的题材，与本片无关，禁止模仿着画；本段画什么永远由画面提示说了算\n", n)
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n- 附图样张之后紧随的 %d 张是本风格来源视频的原片真迹（关键帧）：只学气质——配色、光影、质感、画面密度、构图节奏；真迹里画的物件（建筑/人物/器物等）是原视频的题材，与本片无关，禁止模仿着画；本段画什么永远由画面提示说了算\n", len(imgs))
+	var parts []string
+	for i, im := range imgs {
+		if note := strings.TrimPrefix(im.Label, "真迹 · "); note != im.Label && note != "" {
+			parts = append(parts, fmt.Sprintf("第%d张：%s", i+1, note))
+		}
+	}
+	if len(parts) > 0 {
+		fmt.Fprintf(&b, "  附图对应内容：%s\n", strings.Join(parts, "；"))
+	}
+	return b.String()
 }

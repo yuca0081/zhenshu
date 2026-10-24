@@ -42,7 +42,7 @@ var (
 	dimsBoundary = []string{"outro_done", "intro_started", "continuity", "glitch"}
 	catsSegment  = dimsSegment
 	catsBoundary = dimsBoundary
-	catsFinal    = []string{"pacing", "deadair", "stitch", "drift"}
+	catsFinal    = []string{"pacing", "deadair", "stitch", "drift", "content"}
 
 	anchorSegRe   = regexp.MustCompile(`^(N[1-9][0-9]*|t=[0-9]+(\.[0-9]+)?)$`)
 	anchorBndRe   = regexp.MustCompile(`^b[0-9]+\|t=-?[0-9]+(\.[0-9]+)?$`)

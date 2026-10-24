@@ -54,11 +54,21 @@ func DraftFromDesign(ctx context.Context, prov *llm.Provider, lib *stylelib.Libr
 - 从 device/motion/skins/layouts/transition 习惯里挑有记号的机制；公认风格自带的手法不算特色；
 - frames 一律留空。
 
+## 条目名
+- name 是这套系统在库里的陈列名（≤12 字）：概括它独有气质的独特名（如「冷晶仪象」），
+  不要写主标签家族名（同标签多条目会同名撞车）。
+
+## 分面三轴（检索用，各 ≤6 字短语）
+- mood 情绪（如 沉稳/明快/悬疑/热血/治愈）、tone 色调（如 黑金/低饱和暖色/冷蓝/高对比黑白）、
+  density 密度（如 疏朗/中密/高密）——从这套系统的实际观感归纳，措辞贴近示例便于筛选命中。
+
 ## 题材只进 subject
 - subject 一句话记录本片画的是什么（≤30 字）——只供检索，永不进生成提示词。
 
 ## 输出（只输出 JSON，无围栏）
-{"name":"条目名（≤12 字）","subject":"本片题材一句话","tags":[{"id":"..","new":{..},"note":".."}],
+{"name":"条目名（≤12 字，独特名）","subject":"本片题材一句话",
+"facets":{"mood":"..","tone":"..","density":".."},
+"tags":[{"id":"..","new":{..},"note":".."}],
 "signatures":[{"kind":"..","name":"..","mechanism":"..","use_hint":".."}]}%s`,
 				projectName, vocabB.String(), designDigest, contract.SignatureKindNames(), retryNote),
 			&raw)
@@ -153,7 +163,12 @@ func resolveTaggerDraft(ctx context.Context, prov *llm.Provider, lib *stylelib.L
 	d := &StyleDraft{
 		Name:    strings.TrimSpace(raw.Name),
 		Subject: strings.TrimSpace(raw.Subject),
-		Tags:    contract.StyleTags{Main: ids[0], Aux: ids[1:]},
+		Facets: stylelib.StyleFacets{
+			Mood:    strings.TrimSpace(raw.Facets.Mood),
+			Tone:    strings.TrimSpace(raw.Facets.Tone),
+			Density: strings.TrimSpace(raw.Facets.Density),
+		},
+		Tags: contract.StyleTags{Main: ids[0], Aux: ids[1:]},
 	}
 	if d.Name == "" {
 		d.Name = names[0] // 缺省用主标签正式名

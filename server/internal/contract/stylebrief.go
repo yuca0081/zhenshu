@@ -98,6 +98,7 @@ type TagBrief struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Brief string `json:"brief"`
+	Tells string `json:"tells,omitempty"` // 判别特征：帧里认什么——画面锚点，缺省兼容旧词条
 }
 
 // StyleBrief 风格简报（项目 style/style_brief.json，v3 §4.3）：选定条目在项目内的
@@ -107,9 +108,13 @@ type StyleBrief struct {
 	EntryID    string      `json:"entry_id"`
 	EntryName  string      `json:"entry_name"`
 	Tags       StyleTags   `json:"tags"`
-	TagBriefs  []TagBrief  `json:"tag_briefs"` // 从词表取：main+aux 的 {id,name,brief}
+	TagBriefs  []TagBrief  `json:"tag_briefs"` // 从词表取：main+aux 的 {id,name,brief,tells}
 	Signatures []Signature `json:"signatures"` // 开着（未关）的特色，含原文 mechanism
 	Evidence   []string    `json:"evidence"`   // 证据帧绝对路径（style_media 取，≤6 张）
+	// EvidenceNotes 与 Evidence 逐位对应的人话说明：标签证据=打标指认（「第2段：
+	// 紫青撞色+网格地平线」），特色证据=「特色「名」的例证帧」。策展笔记随图走，
+	// 附图时按帧配字幕——裸图只配一句泛泛说明等于让模型自己猜每张看什么。
+	EvidenceNotes []string `json:"evidence_notes,omitempty"`
 }
 
 // CheckAbsorption 落点覆盖校验（stageStyleSamples 在草稿校验通过后追加执行）：

@@ -182,7 +182,9 @@ func sampleBoxes(html string, cv SampleCanvas) []sampleBox {
 			box.y = float64(cv.H) - px(b, bU, cv.H) - box.h
 		}
 		if t := reTranslate.FindStringSubmatch(style); t != nil {
-			dx, dy := cssLen(t[2], t[3], int(box.w)), cssLen(t[4], t[5], int(box.h))
+			// 分组：1=数字1 2=单位1 3=数字2 4=单位2（切片长 5，无 t[5]——
+			// 2026-10-23 实测模型样张写 translate 直接越界打挂整个进程）。
+			dx, dy := cssLen(t[1], t[2], int(box.w)), cssLen(t[3], t[4], int(box.h))
 			box.x += dx
 			box.y += dy
 		}

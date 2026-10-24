@@ -395,11 +395,16 @@ func (r *Runner) runSegmentPipeline(ctx context.Context, p *pipeline.Project) er
 	r.emit(id, "done", "", "renders/main.mp4")
 	r.Manifest(p, EventProduceDone, "renders/main.mp4")
 	r.jobTerminal(id, "done", "renders/main.mp4", "")
-	// 完成通知如实区分「全过」与「带伤」（2026-10-19 中-13：带伤放行/审查器
-	// 故障降级/终审降级的运行原先也说「全部通过」，用户无从知晓成片有账）
+	// 完成通知如实区分「全过」与「带伤」（2026-10-19 中-13），并按本轮实际
+	// 作业量措辞（2026-10-23 低-2）：恢复复用的轮不说「逐段审核」——恢复了
+	// 几段、新做了几段写进账，用户不被「全部通过」误导成这轮逐段审过。
+	work := ""
+	if c.restored > 0 {
+		work = fmt.Sprintf("复用 %d 段/新做 %d 段；", c.restored, len(sb.Segments)-c.restored)
+	}
 	if wounds := c.woundedNotes(); len(wounds) > 0 {
-		r.notifyOnDone(id, "video", fmt.Sprintf("全片制作完成（带伤 %d 处：%s）——明细见过程页与 reviews/ 意见单",
-			len(wounds), strings.Join(wounds, "、")))
+		r.notifyOnDone(id, "video", fmt.Sprintf("全片制作完成（%s带伤 %d 处：%s）——明细见过程页与 reviews/ 意见单",
+			work, len(wounds), strings.Join(wounds, "、")))
 	} else {
 		segNote := "逐段审核"
 		if !segAuditOn() {
@@ -409,7 +414,7 @@ func (r *Runner) runSegmentPipeline(ctx context.Context, p *pipeline.Project) er
 		if !bndAuditOn() {
 			bndNote = "边界审已关（首帧即景/末帧定格+直切契约）"
 		}
-		r.notifyOnDone(id, "video", "全片制作完成（段级流水线："+segNote+"、"+bndNote+"、全片终审全部通过）")
+		r.notifyOnDone(id, "video", "全片制作完成（段级流水线："+work+segNote+"、"+bndNote+"、全片终审全部通过）")
 	}
 	return nil
 }
@@ -482,8 +487,9 @@ type coordinator struct {
 	bounds []*boundaryCtx
 	brakes *brakeTracker
 
-	mu      sync.Mutex
-	journal map[string]journalLine // 内存镜像（log 时同步更新；恢复判定与边界代际比对共用）
+	mu       sync.Mutex
+	journal  map[string]journalLine // 内存镜像（log 时同步更新；恢复判定与边界代际比对共用）
+	restored int                    // 本run按旧账+指纹恢复的段数（完成通告如实措辞用，低-2）
 
 	writeInFlight int // 写在飞计数（写优先于审的闸）
 	auditWhileW   int // 写在飞窗口内已放行的审核数
@@ -595,6 +601,17 @@ func (c *coordinator) segEntry(id string) journalLine {
 	return c.journal["seg/"+id]
 }
 
+// restorable 恢复的内容闸：账面已过审之外，还须段场景输入指纹与当前一致
+// （llm/comp-<id>.scene.src 旁车 == sceneSidecarFingerprint）——与 sceneGen 的
+// 复用闸同一把指纹（段内容+设计系统+导演统筹三轴）。分镜改稿/换风格/改统筹
+// 的段不认旧账，按新输入重走链；指纹对齐的段照常断点续跑。
+// 旁车缺失（老项目首遇新闸）按失配处理：重走一次链即落新旁车，与 sceneGen
+// 的旁车升级口径一致。journal 只记状态不记内容——内容真相以盘上旁车为准。
+func (c *coordinator) restorable(seg contract.Segment) bool {
+	fp, err := os.ReadFile(sceneSidecarPath(c.p, seg.ID))
+	return err == nil && string(fp) == sceneSidecarFingerprint(c.p, c.sb, seg)
+}
+
 // ── 主流程 ────────────────────────────────────────────────────────
 
 func (c *coordinator) run(ctx context.Context) error {
@@ -609,13 +626,16 @@ func (c *coordinator) run(ctx context.Context) error {
 
 	// 恢复（§4.4）：journal 已 audited 的段不重做——代际取自账面，边界对齐后
 	// 只补它参与的边界审；其余段从断点状态重新走链（write/check/render 各自幂等）。
+	// 恢复认内容：分镜/设计/导演统筹改过的段（场景指纹旁车失配）不认旧账，
+	// 按新输入重走链（2026-10-23 高-1：改稿后整片重做不得复用旧画面）。
 	for _, s := range c.segs {
-		if e := c.segEntry(s.seg.ID); e.State == stAudited {
+		if e := c.segEntry(s.seg.ID); e.State == stAudited && c.restorable(s.seg) {
 			s.round = e.Round
 			s.gen = e.Gen
 			if s.gen < 1 {
 				s.gen = 1
 			}
+			c.restored++
 		}
 	}
 	for _, b := range c.bounds {
@@ -625,8 +645,8 @@ func (c *coordinator) run(ctx context.Context) error {
 	}
 
 	for _, s := range c.segs {
-		if c.segEntry(s.seg.ID).State == stAudited {
-			continue // 已过段：不重做（worker 也不起——打回时由 dispatchRewrite 现起并携带反馈）
+		if e := c.segEntry(s.seg.ID); e.State == stAudited && c.restorable(s.seg) {
+			continue // 已过段（且内容未变）：不重做（worker 也不起——打回时由 dispatchRewrite 现起并携带反馈）
 		}
 		c.spawnWorker(s, "")
 	}
@@ -1493,10 +1513,10 @@ func (c *coordinator) finalAudit(ctx context.Context, round int, recheck []strin
 	if len(tl) == 0 {
 		return nil, errors.New("终审缺 timeline（拼接未落 timeline.json）")
 	}
-	frames, paragraphs := finalFrames(c.p, c.sb, tl)
+	frames, paragraphs, segBriefs := finalFrames(c.p, c.sb, tl)
 	total := tl[len(tl)-1].End
 	in := review.FinalInput{
-		Frames: frames, Paragraphs: paragraphs, TotalDur: total, Round: round,
+		Frames: frames, Paragraphs: paragraphs, SegBriefs: segBriefs, TotalDur: total, Round: round,
 		LogPath: c.p.Artifact(fmt.Sprintf("reviews/final-r%d.tools.jsonl", round)),
 	}
 	if round > 1 && len(recheck) > 0 {
@@ -1618,8 +1638,16 @@ func segIndexAt(tl []pipeline.TimelineRow, t float64) int {
 }
 
 // finalFrames 终审帧格（§7）：段落界帧（每段落首段起点）必取，剩余名额用段界帧
-// 均匀补足，总帧 12–16；帧上标注「此刻=第几段/段落界」。
-func finalFrames(p *pipeline.Project, sb *contract.Storyboard, tl []pipeline.TimelineRow) (frames []review.AnchorFrame, paragraphs []string) {
+// 均匀补足，总帧 12–16；帧上标注「此刻=第几段/段落界」。同时产出逐段内容清单
+// （旁白+画面构想截短）——终审 content 查项的对照底稿（2026-10-23 低-1/高-1③）。
+func finalFrames(p *pipeline.Project, sb *contract.Storyboard, tl []pipeline.TimelineRow) (frames []review.AnchorFrame, paragraphs []string, segBriefs []string) {
+	for _, seg := range sb.Segments {
+		b := fmt.Sprintf("第%d段「%s」旁白：%s", seg.Idx, seg.Key, pipeline.FirstLine(seg.Narration, 60))
+		if vb := strings.TrimSpace(seg.VisualBrief); vb != "" {
+			b += fmt.Sprintf("；画面构想：%s", pipeline.FirstLine(vb, 80))
+		}
+		segBriefs = append(segBriefs, b)
+	}
 	paraStarts := map[string]bool{}
 	if p != nil {
 		if d, err := prep.LoadDraft(p); err == nil {
@@ -1700,7 +1728,7 @@ func finalFrames(p *pipeline.Project, sb *contract.Storyboard, tl []pipeline.Tim
 	for _, cd := range cands {
 		frames = append(frames, review.AnchorFrame{T: round2(cd.t), Label: cd.label})
 	}
-	return frames, paragraphs
+	return frames, paragraphs, segBriefs
 }
 
 // segStartAnchorT 段起点锚点的取帧时刻：起点 +0.4s。段片渲染自带 ~0.25s 淡入

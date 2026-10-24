@@ -52,28 +52,30 @@ type frameVerdict struct {
 
 // frameQA 对 only 段（空=全片）做视觉审查 + 自修复。instruction 是 rework 的
 // 用户改画要求：修复轮重出场景文件时必须原样带上，否则用户要求会在修复轮被丢掉。
-func (r *Runner) frameQA(ctx context.Context, p *pipeline.Project, instruction, only string) error {
+// 返回带伤摘要（空串=全过）：修复上限到了仍不过时不阻塞成片（plan §4.5），
+// 摘要交调用方写进完成通知——带伤交付不许只报「完成」（2026-10-23 中-3）。
+func (r *Runner) frameQA(ctx context.Context, p *pipeline.Project, instruction, only string) (string, error) {
 	id := p.ID
 	r.emit(id, "stage", "frameqa", "running")
 	r.Manifest(p, "frameqa.start", map[bool]string{true: only, false: "全片"}[only != ""])
 	for round := 0; ; round++ {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return "", ctx.Err()
 		}
 		failed, err := r.reviewSegments(ctx, p, only)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if len(failed) == 0 {
 			r.emit(id, "stage", "frameqa", "done")
 			r.Manifest(p, "frameqa.pass", only)
-			return nil
+			return "", nil
 		}
 		if round >= 2 { // 修复上限：不阻塞成片，标记问题交给用户决定（plan §4.5）
 			summary := failSummary(failed)
 			r.emit(id, "stage", "frameqa", "error: "+summary)
 			r.Manifest(p, "frameqa.failed", summary)
-			return nil
+			return summary, nil
 		}
 		r.emit(id, "progress", "frameqa",
 			fmt.Sprintf("%d 段审查未过，带问题重出画面（第 %d 轮）", len(failed), round+1))
@@ -87,7 +89,7 @@ func (r *Runner) frameQA(ctx context.Context, p *pipeline.Project, instruction, 
 		}
 		for segID, issues := range failed {
 			if err := r.sceneGen(ctx, p, instruction, issues, segID); err != nil {
-				return err
+				return "", err
 			}
 			r.clearFrames(p, segID)
 			// 删除失败必须留痕（中-L16）：Windows 上文件被渲染进程占用时 Remove
@@ -102,10 +104,10 @@ func (r *Runner) frameQA(ctx context.Context, p *pipeline.Project, instruction, 
 		// 全部段改完统一落盘一次（与 prereview 修复轮同构）：compositions 是
 		// 全量重扫，逐段跑一遍 N 段就白付 N-1 遍
 		if err := pipeline.Run(ctx, p, "compositions"); err != nil {
-			return fmt.Errorf("合成物落盘失败: %w", err)
+			return "", fmt.Errorf("合成物落盘失败: %w", err)
 		}
 		if err := r.assemble(ctx, p); err != nil {
-			return fmt.Errorf("组装失败: %w", err)
+			return "", fmt.Errorf("组装失败: %w", err)
 		}
 		if err := pipeline.Run(ctx, p, "render"); err != nil {
 			// 修复轮的新画面没过 check：整体回滚本轮改动，用旧画面交付——
@@ -115,25 +117,25 @@ func (r *Runner) frameQA(ctx context.Context, p *pipeline.Project, instruction, 
 			for segID := range failed {
 				if orig, ok := prev[segID]; ok {
 					if werr := os.WriteFile(p.LLMOutput("comp-"+segID), orig, 0o644); werr != nil {
-						return werr
+						return "", werr
 					}
 				}
 				r.clearFrames(p, segID)
 			}
 			if cerr := pipeline.Run(ctx, p, "compositions"); cerr != nil {
-				return fmt.Errorf("合成物落盘失败: %w", cerr)
+				return "", fmt.Errorf("合成物落盘失败: %w", cerr)
 			}
 			if cerr := r.assemble(ctx, p); cerr != nil {
-				return fmt.Errorf("组装失败: %w", cerr)
+				return "", fmt.Errorf("组装失败: %w", cerr)
 			}
 			if cerr := pipeline.Run(ctx, p, "render"); cerr != nil {
-				return fmt.Errorf("重渲失败: %w", cerr) // 回滚后仍失败=系统性问题，如实上抛
+				return "", fmt.Errorf("重渲失败: %w", cerr) // 回滚后仍失败=系统性问题，如实上抛
 			}
 		}
 		// 修复轮动了段片 → 必须重缝合成片，否则交付的 main.mp4 还是修复前画面
 		// （run/runRework 的 stitch 在 frameQA 之前，救不了这里）。
 		if err := pipeline.Run(ctx, p, "stitch"); err != nil {
-			return fmt.Errorf("重缝合失败: %w", err)
+			return "", fmt.Errorf("重缝合失败: %w", err)
 		}
 	}
 }

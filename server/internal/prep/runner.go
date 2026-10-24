@@ -8,6 +8,7 @@ package prep
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -242,4 +243,77 @@ func (r *Runner) Cancel(id string) bool {
 	}
 	cancel()
 	return true
+}
+
+// Reconcile 开机对账（2026-10-23 中-4，与 produce.Reconcile 同职责）：上次进程
+// 死在准备链中途的项目补写 interrupted 终态 + 聊天通告。进程死亡时 goroutine
+// 随葬，manifest 只有 prep.start 没有 prep.done/error/cancelled——不补账的话
+// 状态停半途、用户无从知晓，当轮 token 消耗也不可见。会话侧 RunInline 不写
+// prep.start，不会误报；启动时 running 必为空，无需查在跑。
+func (r *Runner) Reconcile(notify func(projectID, msg string)) {
+	entries, err := os.ReadDir(filepath.Join(r.DataDir, "projects"))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), "_") {
+			continue
+		}
+		p := pipeline.NewProject(r.DataDir, e.Name())
+		if !prepDiedMidflight(p) {
+			continue
+		}
+		msg := "⏹ 上次准备阶段因服务重启中断（终态没来得及落账）。「想法」页签或对话里说一声即可重跑——已完成的工位走缓存，不会重烧。"
+		p.Manifest("prep.interrupted", "服务重启，准备链中途死亡（Reconcile 补账）")
+		if notify != nil {
+			notify(e.Name(), msg)
+		}
+	}
+}
+
+// prepDiedMidflight 尾窗扫描：manifest 里最后一个 prep 生命周期事件是
+// prep.start（无终态）= 死在中途。只读尾部 64KB，账是旁路，读坏了当无事。
+func prepDiedMidflight(p *pipeline.Project) bool {
+	f, err := os.Open(p.Artifact("manifest.jsonl"))
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	const tail = 64 << 10
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	off := info.Size() - tail
+	if off < 0 {
+		off = 0
+	}
+	b := make([]byte, info.Size()-off)
+	if _, err := f.ReadAt(b, off); err != nil {
+		return false
+	}
+	lines := strings.Split(string(b), "\n")
+	if off > 0 && len(lines) > 0 {
+		lines = lines[1:] // 首行多半是半截，弃
+	}
+	last := ""
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l == "" {
+			continue
+		}
+		var e struct {
+			Event string `json:"event"`
+		}
+		if json.Unmarshal([]byte(l), &e) != nil {
+			continue
+		}
+		switch e.Event {
+		case "prep.start":
+			last = e.Event
+		case "prep.done", "prep.error", "prep.cancelled", "prep.interrupted":
+			last = e.Event
+		}
+	}
+	return last == "prep.start"
 }

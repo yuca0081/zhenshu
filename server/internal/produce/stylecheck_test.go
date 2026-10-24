@@ -26,17 +26,21 @@ func TestStyleCheckBlockDetoxAndPoison(t *testing.T) {
 }
 
 // 真迹说明反转：只准学气质，禁模仿物件——旧文案「向真迹靠」是题材中毒的推手。
+// 带逐帧指认时按帧列字幕（附图对应内容）。
 func TestKeyframeNoteDetox(t *testing.T) {
-	n := keyframeNote(3)
-	for _, want := range []string{"只学气质", "禁止模仿着画", "画面提示说了算"} {
+	n := keyframeNote([]visImg{{Label: "真迹 · 紫青撞色"}, {Label: "风格真迹（原片帧）"}})
+	for _, want := range []string{"只学气质", "禁止模仿着画", "画面提示说了算", "附图对应内容：第1张：紫青撞色"} {
 		if !strings.Contains(n, want) {
 			t.Fatalf("keyframeNote 缺 %q：%s", want, n)
 		}
 	}
+	if strings.Contains(n, "第2张") { // 泛用标签不是指认，不进字幕清单
+		t.Fatalf("无指认的帧不该进字幕清单：%s", n)
+	}
 	if strings.Contains(n, "向真迹靠") {
 		t.Fatalf("真迹说明不应再推「向真迹靠」：%s", n)
 	}
-	if keyframeNote(0) != "" {
+	if keyframeNote(nil) != "" {
 		t.Fatalf("无真迹应返回空")
 	}
 }

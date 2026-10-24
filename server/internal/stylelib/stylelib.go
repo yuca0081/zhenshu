@@ -143,6 +143,7 @@ func (l *Library) Get(id string) (*Style, bool) {
 type VideoStyleIn struct {
 	Name        string
 	Subject     string // 原片题材一句话（浏览/检索用，不进生成提示词）
+	Facets      StyleFacets
 	Tags        contract.StyleTags
 	TagEvidence []contract.TagEvidence
 	Signatures  []contract.Signature // ID 允许缺省，入库时统一编 sig1..sigN
@@ -152,12 +153,19 @@ type VideoStyleIn struct {
 // 校验 §4.1 全规则（含词表核对）；同 seed 重复入库覆盖式重写（v3 条目都是解析
 // 产物，重解析=用户对同一视频再来一次，旧值不保——确认页已让人工过目）。
 func (l *Library) IngestVideoRef(refID string, in VideoStyleIn) (*Style, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	styles, err := l.cat.ListStyles()
+	if err != nil {
+		return nil, err
+	}
 	s := Style{
 		ID:            videoStyleID(refID),
-		Name:          in.Name,
+		Name:          uniqueName(styles, videoStyleID(refID), strings.TrimSpace(in.Name), in.Subject),
 		Tags:          in.Tags,
 		TagEvidence:   in.TagEvidence,
 		Subject:       in.Subject,
+		Facets:        in.Facets,
 		OriginProject: "video:" + refID,
 		Published:     true,
 		CreatedAt:     time.Now(),
@@ -172,10 +180,36 @@ func (l *Library) IngestVideoRef(refID string, in VideoStyleIn) (*Style, error) 
 	return &s, nil
 }
 
+// uniqueName 陈列名消歧（2026-10-24）：条目名不再绑定主标签家族名/视频标题，
+// LLM 起的独特名同名撞车真实存在——撞名时先带题材词消歧，仍撞追加序号。
+// selfID 是 upsert 覆盖场景的自身条目（重入库同名不该给自己加后缀），新建传空。
+func uniqueName(styles []Style, selfID, name, subject string) string {
+	taken := map[string]bool{}
+	for _, st := range styles {
+		if st.ID != selfID {
+			taken[st.Name] = true
+		}
+	}
+	if name == "" || !taken[name] {
+		return name
+	}
+	base := name + "(" + contract.FirstRunes(subject, 8) + ")"
+	if !taken[base] {
+		return base
+	}
+	for n := 2; ; n++ {
+		cand := fmt.Sprintf("%s %d", base, n)
+		if !taken[cand] {
+			return cand
+		}
+	}
+}
+
 // ProjectDraftIn 成片反哺起草载荷（extract_stylepack，agent 侧 LLM 打标后组装）。
 type ProjectDraftIn struct {
 	Name        string
 	Subject     string
+	Facets      StyleFacets
 	Tags        contract.StyleTags
 	TagEvidence []contract.TagEvidence
 	Signatures  []contract.Signature // frames 允许为空（本片无原片帧，人工在库页补）
@@ -213,10 +247,11 @@ func (l *Library) DraftFromProject(projectDir, projectID string, in ProjectDraft
 
 	s := Style{
 		ID:            newID(styles),
-		Name:          in.Name,
+		Name:          uniqueName(styles, "", strings.TrimSpace(in.Name), in.Subject),
 		Tags:          in.Tags,
 		TagEvidence:   in.TagEvidence,
 		Subject:       in.Subject,
+		Facets:        in.Facets,
 		OriginProject: projectID,
 		Published:     false,
 		CreatedAt:     time.Now(),

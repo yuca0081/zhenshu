@@ -60,7 +60,7 @@ func TestBakeoffFirstRun(t *testing.T) {
 		t.Fatalf("stitch: %v", err)
 	}
 	t.Log("⑤ frameQA（视觉抽检+自修复）…")
-	if err := r.frameQA(ctx, p, "", ""); err != nil {
+	if _, err := r.frameQA(ctx, p, "", ""); err != nil {
 		t.Fatalf("frameQA: %v", err)
 	}
 	t.Logf("✅ bakeoff01 完成，总耗时 %.1f 分钟 → %s", time.Since(t0).Minutes(), p.Artifact("renders/main.mp4"))

@@ -15,11 +15,46 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"webpage-video-agent/server/internal/agentlog"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
 )
+
+// 工位时间预算（2026-10-23 中-2）：总闸 60 分钟整链一刀切会被②的慢 LLM 大调用
+// +样张机检/判卷/修复轮叠加烧穿（三次真机两轮 timeout、92 万 token 零产出）。
+// 按工位分账（①6/②40/③12 分钟，和 ≤58 留缓冲）：单站超线即收口、报清进度，
+// ②临近预算线进入抢收窗口（styleGrabWindow）拒渲新样张、逼 submit 带伤交付。
+var stationBudgets = map[string]time.Duration{
+	StationScript:     6 * time.Minute,
+	StationStyle:      40 * time.Minute,
+	StationStoryboard: 12 * time.Minute,
+}
+
+func stationBudget(name string) time.Duration {
+	if d, ok := stationBudgets[name]; ok {
+		return d
+	}
+	return 15 * time.Minute
+}
+
+// doneStations 已落盘工件的人话清单（预算收口时报进度：烧在谁身上、还缺谁）。
+func doneStations(p *pipeline.Project) string {
+	labels := map[string]string{
+		StationScript: "①文字稿", StationStyle: "②风格包", StationStoryboard: "③分镜稿",
+	}
+	var done []string
+	for _, st := range []string{StationScript, StationStyle, StationStoryboard} {
+		if HasArtifact(p, st) {
+			done = append(done, labels[st])
+		}
+	}
+	if len(done) == 0 {
+		return "无"
+	}
+	return strings.Join(done, "、")
+}
 
 // Available LLM 是否可用（不可用时管线入口降级 legacy，反馈重跑入口报错）。
 func Available() bool {
@@ -86,7 +121,18 @@ func run(ctx context.Context, p *pipeline.Project, d Deps, strict bool) error {
 			p.Manifest("prep.skip_cached", st.name)
 			continue
 		}
-		if err := runWithColdRetry(ctx, p, st.name, st.run); err != nil {
+		// 工位时间预算（2026-10-23 中-2）：总闸 60 分钟一刀切会被②的慢 LLM 大调用
+		// +样张修复轮烧穿（三次真机两轮 timeout、92 万 token 零产出）。按工位分账：
+		// 单站超线即收口，报清「谁烧穿、已完成什么」，冷重试不再救预算耗尽。
+		sctx, scancel := context.WithTimeout(ctx, stationBudget(st.name))
+		err := runWithColdRetry(sctx, p, st.name, st.run)
+		scancel()
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+				err = fmt.Errorf("%s超出 %s 时间预算（抢收窗口内未提交）——已完成：%s。重跑将从缺的工位续起，已完成工位走缓存不重烧",
+					st.name, stationBudget(st.name), doneStations(p))
+				p.Manifest("prep.station_budget", st.name)
+			}
 			p.Manifest("prep.error", st.name+": "+pipeline.FirstLine(err.Error(), 160))
 			d.emit(p.ID, "stage", "prep", "error: "+pipeline.FirstLine(err.Error(), 120))
 			return err
@@ -103,6 +149,9 @@ func run(ctx context.Context, p *pipeline.Project, d Deps, strict bool) error {
 func runTracked(ctx context.Context, p *pipeline.Project, task, label string, loop *Loop) error {
 	at := agentlog.Begin(p, task, label)
 	loop.Rec = at.Rec()
+	// 增量落账（2026-10-23 中-4）：逐调用喂 Task，未落账增量过 2 万 token 自动
+	// Flush——进程死亡时已烧的钱不再整段消失（实测②一轮丢 40 万级）。
+	loop.OnCall = at.Add
 	err := loop.Run(ctx)
 	at.Total(loop.Usage, loop.Calls)
 	at.Done(err)

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { NButton, NInput, NModal, NSelect, NTag } from 'naive-ui'
+import { NButton, NInput, NModal, NSelect, NSwitch, NTag } from 'naive-ui'
 import { api, libraryMediaURL, referenceMediaURL } from '../api'
 import { kindLabel } from '../format'
 import type { RefVideoStyle, Signature, TemplateDetailData } from '../types'
@@ -8,12 +8,15 @@ import type { RefVideoStyle, Signature, TemplateDetailData } from '../types'
 // 风格详情弹窗（v3）：标签（词表名+brief）+ 特色清单（机制+证据帧缩略图）+ 打标证据
 // + 参考片抽帧/原片。解析草稿（未入库）可增删改特色——编辑态存本地副本，
 // 保存走 PUT /references/:id/draft（父组件接线）。
-const props = defineProps<{ show: boolean; detail: TemplateDetailData | null }>()
+// 选风格模式（selectMode，风格页签用）：特色开关搬进查看态（看着截图点菜，默认全开），
+// 底部「就选它」交回 disabled 清单——不再有藏在无图面板里的盲开关。
+const props = defineProps<{ show: boolean; detail: TemplateDetailData | null; applying?: boolean }>()
 const emit = defineEmits<{
   close: []
   publish: [packId: string]
   ingest: [refId: string]
   'save-draft': [refId: string, style: RefVideoStyle]
+  apply: [packId: string, disabled: string[]]
 }>()
 
 // ── 媒体：条目快照（library）优先，引用根目录次之 ──
@@ -24,6 +27,13 @@ const hasVideo = ref(false)
 // 中断回调）——2026-10-19 中-37：老注释只提了 editing，pickerFor 漏了，每次
 // 挂载都向全局 errorHandler 抛一次。
 const editing = ref(false)
+// 选风格模式的特色开关（关掉的不再要求吸收；换条目即重置=默认全开）
+const selOff = ref<Record<string, boolean>>({})
+const selDisabled = computed(() => Object.entries(selOff.value).filter(([, v]) => v).map(([id]) => id))
+function doApply() {
+  if (!props.detail?.packId || props.applying) return
+  emit('apply', props.detail.packId, selDisabled.value)
+}
 // 证据帧挑选：默认只亮已选缩略图，点「挑证据帧」展开全部帧网格（缩略图点选，≤3）。
 // pickerFor 记当前展开的挑选器（签名 id 或 'add'），一次只开一个。
 const pickerFor = ref<string | null>(null)
@@ -46,6 +56,7 @@ watch(
     hasVideo.value = false
     editing.value = false
     pickerFor.value = null
+    selOff.value = {}
     const d = props.detail
     if (!show || !d) return
     if (d.editable) startEdit() // 草稿态默认进编辑视角
@@ -143,7 +154,7 @@ defineExpose({
               <span v-else class="origin">{{ detail.originLabel }}</span>
               <span v-if="detail.createdAt" class="time">{{ detail.createdAt }}</span>
             </div>
-            <div class="act-row">
+            <div class="act-row" v-if="!detail.selectMode">
               <NButton v-if="detail.packId && !detail.published" size="small" type="primary" ghost
                 @click="emit('publish', detail.packId)">入库</NButton>
               <NButton v-if="detail.refId && !detail.confirmed" size="small" type="primary" ghost
@@ -178,11 +189,13 @@ defineExpose({
             </ul>
           </section>
 
-          <!-- 特色清单（查看态） -->
+          <!-- 特色清单（查看态；选风格模式=开关搬进抽屉，看着截图点菜） -->
           <section v-if="!editing && detail.signatures?.length" class="sec">
-            <h3>特色清单 ×{{ detail.signatures.length }}</h3>
-            <div v-for="sg in detail.signatures" :key="sg.id" class="sig">
+            <h3>特色清单 ×{{ detail.signatures.length }}<span v-if="detail.selectMode" class="sel-hint">（默认全开，不想要的关掉——关掉的不再要求吸收）</span></h3>
+            <div v-for="sg in detail.signatures" :key="sg.id" class="sig" :class="{ off: detail.selectMode && selOff[sg.id] }">
               <div class="sig-head">
+                <NSwitch v-if="detail.selectMode" size="small" :value="!selOff[sg.id]"
+                  @update:value="(v: boolean) => (selOff[sg.id] = !v)" />
                 <NTag size="tiny" :bordered="false" type="info">{{ kindLabel[sg.kind] ?? sg.kind }}</NTag>
                 <b>{{ sg.name }}</b>
               </div>
@@ -267,6 +280,11 @@ defineExpose({
 
         </template>
       </div>
+      <!-- 选风格模式底栏：看着截图点完菜，这里拍板 -->
+      <footer v-if="detail?.selectMode" class="tdialog-foot">
+        <span class="foot-hint">特色 {{ detail.signatures?.length ?? 0 }} 条{{ selDisabled.length ? `，关掉 ${selDisabled.length} 条` : '全开' }}；确认后按它「强参考」现发明设计系统并自动出样张</span>
+        <NButton type="primary" size="large" :loading="applying" @click="doApply">就选它，出样张</NButton>
+      </footer>
     </div>
   </NModal>
 </template>
@@ -278,6 +296,12 @@ defineExpose({
 .tdialog-x { background: none; border: none; color: #7c7c88; font-size: 14px; cursor: pointer; padding: 2px 8px; border-radius: 6px; }
 .tdialog-x:hover { color: #e8e8ee; background: #1a1a22; }
 .tdialog-body { overflow-y: auto; padding: 14px 18px 20px; color: #c9c9d1; }
+
+/* 选风格模式底栏：特色开关的拍板位 */
+.tdialog-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 18px; border-top: 1px solid #232329; background: #0d0d12; }
+.foot-hint { font-size: 12px; color: #8a8a96; }
+.sel-hint { font-size: 11px; color: #6f6f7c; font-weight: 400; margin-left: 6px; }
+.sig.off { opacity: .45; }
 
 .head { display: flex; flex-direction: column; gap: 8px; }
 .title-row { display: flex; align-items: center; gap: 10px; }
