@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>画风矩阵</title>
+<style>
+  html,body{margin:0;padding:0;width:960px;height:1080px;overflow:hidden;background:#fff}
+  canvas{display:block}
+  #err{position:fixed;left:10px;top:10px;z-index:9;font:bold 26px monospace;color:#c0392b;
+       background:rgba(255,255,255,.9);padding:6px 10px;max-width:900px;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<div id="err" style="display:none"></div>
+<script src="vendor/p5.min.js"></script>
+<script src="vendor/p5.brush.js"></script>
+<script src="styles.js"></script>
+<script>
+  // 仅在出错时显示红字条
+  const errEl = document.getElementById('err');
+  new MutationObserver(() => { errEl.style.display = errEl.textContent ? 'block' : 'none'; })
+    .observe(errEl, { childList: true, characterData: true, subtree: true });
+</script>
+</body>
+</html>

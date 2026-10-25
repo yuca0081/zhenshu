@@ -72,6 +72,9 @@ demo/agi-mv-repro/*.wav
 demo/ink-prototype/*.mp4
 demo/ink-prototype/*.png
 
+# p5.brush 画风矩阵：源码+瘦 vend 入库；渲染 PNG 种子确定性可再生（README 有命令）
+demo/p5brush-sample/*.png
+
 # 风格打样工作区:成片/原料图/参考片(可再生成或版权内容,不入库)
 demo/style-samples/renders/
 demo/style-samples/rawimg/
