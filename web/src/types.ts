@@ -179,10 +179,33 @@ export interface StyleSample {
   clip_note?: string
 }
 
+// 字体角色（design_system.fonts）：stack 拆开就是终审「自采依赖」里的字体清单
+export interface FontRole {
+  stack: string
+  weight?: string
+  tracking?: string
+}
+export interface FontRoles {
+  display: FontRole
+  body: FontRole
+  data?: FontRole
+}
+
+// 样张阶段自装字体（<!-- font: Family | 协议 | 直链URL --> 声明，平台下载）：
+// 终审页披露「装了哪些字体」——协议是模型自报的披露字段，来源可点开核对
+export interface CustomFont {
+  family: string
+  license?: string
+  url: string
+}
+
 export interface StyleSamples {
   direction: string
   samples: StyleSample[]
   skin?: Skin // 风格文件（§12.2）：样张阶段与样张同产，确认时锁定
+  fonts?: FontRoles
+  vend_libs?: string[] // 样张自采的外部库（lib@精确版本，正式段货架复用）
+  custom_fonts?: CustomFont[]
   confirmed: boolean
 }
 

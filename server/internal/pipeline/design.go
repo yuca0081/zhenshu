@@ -712,7 +712,7 @@ func LockDesign(p *Project, ss *contract.StyleSamples) error {
 	if len(matched) > 0 {
 		p.Manifest("design.fontcatalog", "设计点名目录字体："+strings.Join(mapKeys(matched), "、"))
 	}
-	if err := writeFontAssetRequest(p, matched); err != nil {
+	if err := writeFontAssetRequest(p, matched, ss.CustomFonts); err != nil {
 		return fmt.Errorf("字体准备申请书落盘失败: %w", err)
 	}
 	skins := ss.EffectiveSkins()
@@ -802,6 +802,8 @@ var reFontFamilyDecl = regexp.MustCompile(`(?i)(font-family\s*:\s*)([^;{}"]+)`)
 // 字体问题在落盘侧一次收口——目录字体的中文别名/大小写写法归一成规范 Family
 // （'站酷快乐体' → 'ZCOOL KuaiLe'，与 LockDesign 同一 clampFontStack）；渲染端
 // 没有且目录没有的字体（思源黑体/PingFang SC 等）直接剥除退到栈内后备。
+// 样张阶段自装并随设计系统记账的家族（custom_fonts）放行——否则自装字体
+// 在制作段帧被剥掉，样张与成片两张皮。
 // 只动 font-family 声明值，选择器与内容不碰。幂等。
 func ClampSegmentFonts(p *Project, segID string) {
 	path := filepath.Join(p.Artifact("compositions/frames"), segID+".html")
@@ -810,9 +812,11 @@ func ClampSegmentFonts(p *Project, segID string) {
 		return
 	}
 	html := string(b)
+	var ss contract.StyleSamples
+	_ = readJSON(p.Artifact("style/style_samples.json"), &ss)
 	fixed := reFontFamilyDecl.ReplaceAllStringFunc(html, func(m string) string {
 		loc := reFontFamilyDecl.FindStringSubmatch(m)
-		return loc[1] + clampFontStack(loc[2], nil)
+		return loc[1] + clampFontStack(loc[2], nil, customFontSet(ss.CustomFonts))
 	})
 	if fixed != html {
 		_ = writeFile(path, fixed)
@@ -892,9 +896,12 @@ var cjkFontSet = map[string]bool{
 // skin slots.font）是机械装配没有这道关——未声明字体直接全灭字幕（2026-10-11
 // 夜跑实录：21 个字幕文件一票全否）。处理顺序：系统白名单与通用族保留 →
 // 目录字体（fontCatalog，平台下载+子集化+真声明）改写为规范名并登记 →
+// 自装字体（custom：样张阶段模型声明、平台已下载过的家族）按声明写法保留 →
 // 其余花名剥除；剥完中文失去字源（只剩通用族/西文）时整体回退雅黑。
+// 自装字体对 cjkSource 中立：中文源保障来自校验强制的栈尾 CJK 回退
+// （HasCJKFont），自装体本身不据此宣称覆盖中文。
 // 幂等：已干净的栈原样返回（designVersion 不漂移）。
-func clampFontStack(stack string, matched map[string]*CatalogFont) string {
+func clampFontStack(stack string, matched map[string]*CatalogFont, custom map[string]bool) string {
 	var keep []string
 	seen := map[string]bool{}
 	cjkSource := false
@@ -906,10 +913,14 @@ func clampFontStack(stack string, matched map[string]*CatalogFont) string {
 		}
 		generic := cssGenericFonts[lower]
 		catalog := (*CatalogFont)(nil)
+		isCustom := false
 		if !generic && !osFontWhitelist[lower] {
 			catalog = matchCatalogFont(name)
 			if catalog == nil {
-				continue
+				isCustom = custom != nil && custom[normalizeFontName(name)]
+				if !isCustom {
+					continue
+				}
 			}
 		}
 		seen[lower] = true
@@ -922,6 +933,8 @@ func clampFontStack(stack string, matched map[string]*CatalogFont) string {
 			if matched != nil {
 				matched[catalog.Family] = catalog
 			}
+		case isCustom:
+			keep = append(keep, "'"+name+"'")
 		default:
 			keep = append(keep, "'"+titleCaseFont(lower)+"'")
 			if cjkFontSet[lower] {
@@ -938,14 +951,17 @@ func clampFontStack(stack string, matched map[string]*CatalogFont) string {
 // clampDesignFonts 就地解析设计系统里的全部字体栈（三角色 + 各皮肤槽位），
 // 返回是否有改动与点名的目录字体（LockDesign 据此写准备申请书）。
 // 样张 HTML 是预览件不解析（所见即所得只在确认前承诺）。
+// 自装字体集合从 ss.CustomFonts 构造——样张阶段装过的家族在这里放行，
+// 否则 LockDesign 一钳，自装字体进不了 design.md/skin.json（制作端丢失）。
 func clampDesignFonts(ss *contract.StyleSamples) (bool, map[string]*CatalogFont) {
 	changed := false
 	matched := map[string]*CatalogFont{}
+	custom := customFontSet(ss.CustomFonts)
 	clamp := func(stack *string) {
 		if *stack == "" {
 			return
 		}
-		if c := clampFontStack(*stack, matched); c != *stack {
+		if c := clampFontStack(*stack, matched, custom); c != *stack {
 			*stack = c
 			changed = true
 		}
@@ -962,6 +978,18 @@ func clampDesignFonts(ss *contract.StyleSamples) (bool, map[string]*CatalogFont)
 		clamp(&ss.Skin.Slots.Font)
 	}
 	return changed, matched
+}
+
+// customFontSet 自装字体家族集合（normalizeFontName 键，clampFontStack 匹配用）。
+func customFontSet(fonts []contract.CustomFont) map[string]bool {
+	if len(fonts) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(fonts))
+	for _, c := range fonts {
+		set[normalizeFontName(c.Family)] = true
+	}
+	return set
 }
 
 // mapKeys 目录字体的 manifest 摘要用（键即规范家族名）。

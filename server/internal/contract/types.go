@@ -351,7 +351,22 @@ type StyleSamples struct {
 	// 老文件无此字段，读侧一律按可选处理。
 	VendLibs []string `json:"vend_libs,omitempty"`
 
+	// CustomFonts 样张阶段自装字体清单（终审页披露「装了哪些字体」的唯一依据）：
+	// 样张 HTML 里 <!-- font: Family | 协议 | 直链URL --> 声明，平台下载/子集化后
+	// 真字体渲样张，随设计系统携带进制作（申请书保留 + 段级钳制放行）。协议是
+	// 模型自报的披露字段，人工验收在终审页看——不在装的时候拦。老文件无此字段。
+	CustomFonts []CustomFont `json:"custom_fonts,omitempty"`
+
 	Confirmed bool `json:"confirmed"` // 硬门：用户点头后才允许开工
+}
+
+// CustomFont 样张自装字体的一条记账：Family 必须与样张/设计栈里 font-family 的
+// 写法逐字一致（渲染端 @font-face 按它配对）；License 是模型自报的披露字段；
+// URL 是直链（ttf/otf 或 zip release 资产），font_tool 按内容分流下载。
+type CustomFont struct {
+	Family  string `json:"family"`
+	License string `json:"license,omitempty"`
+	URL     string `json:"url"`
 }
 
 // EntryExitSpec 标准入场/收尾动画模板：风格资产，写一次用一世。
@@ -607,6 +622,22 @@ func ValidateStyleSamplesDraft(ss *StyleSamples) error {
 	}
 	if d := ss.Fonts.Data; strings.TrimSpace(d.Stack) != "" && !HasCJKFont(d.Stack) {
 		return fmt.Errorf("fonts.data 字体栈 %q 未包含中文字体（数据标签也有中文，栈尾必须带 CJK 回退）", d.Stack)
+	}
+	// 自装字体记账校验：三字段齐 + 家族去重 + 上限封顶（样张才几张，字体超编
+	// 说明模型在拿字体堆花样，不是在服务画面）。
+	if len(ss.CustomFonts) > 6 {
+		return fmt.Errorf("custom_fonts 最多 6 款（得到 %d）——目录与系统字体不够用才自装", len(ss.CustomFonts))
+	}
+	seenF := map[string]bool{}
+	for i, cf := range ss.CustomFonts {
+		if strings.TrimSpace(cf.Family) == "" || strings.TrimSpace(cf.URL) == "" {
+			return fmt.Errorf("custom_fonts[%d] family/url 不能为空", i)
+		}
+		k := strings.ToLower(strings.TrimSpace(cf.Family))
+		if seenF[k] {
+			return fmt.Errorf("custom_fonts[%d] 家族 %q 重复", i, cf.Family)
+		}
+		seenF[k] = true
 	}
 	if ss.Motion == nil {
 		return fmt.Errorf("缺 motion（动效语言：缓动族/时长档/错峰/性格）")

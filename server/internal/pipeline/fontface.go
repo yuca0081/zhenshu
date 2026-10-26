@@ -162,6 +162,30 @@ func loadFontAssets(p *Project) map[string]string {
 	return out
 }
 
+// LoadFontAssetsDetail resolved（family 小写 → data URL）+ stripped（本次 ensure
+// 被 font_tool 剥掉降级的家族）——样张字体成败判定用：退出码不区分哪档失败，
+// 以产物为准。
+func LoadFontAssetsDetail(p *Project) (map[string]string, []string) {
+	b, err := os.ReadFile(p.Artifact("style/font_assets.json"))
+	if err != nil {
+		return nil, nil
+	}
+	var parsed struct {
+		Resolved map[string]string `json:"resolved"`
+		Stripped []string          `json:"stripped"`
+	}
+	if json.Unmarshal(b, &parsed) != nil {
+		return nil, nil
+	}
+	out := map[string]string{}
+	for family, url := range parsed.Resolved {
+		if family != "" && url != "" {
+			out[strings.ToLower(family)] = url
+		}
+	}
+	return out, parsed.Stripped
+}
+
 // titleCaseFont 白名单小写键 → 规范展示名（local('Microsoft YaHei') 的大小写要跟系统一致）。
 func titleCaseFont(lower string) string {
 	for _, canonical := range []string{"Microsoft YaHei", "SimHei", "SimSun", "KaiTi", "STKaiti",

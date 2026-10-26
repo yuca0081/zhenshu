@@ -1390,7 +1390,7 @@
         ["纪律", "样张场景必须取自口播稿代表性内容，禁止通用示例；口播稿文本一个字不改（文字稿门后冻结）。"],
         ["样张=动态小样片", "<code>render_sample</code> 产出 <em>1.8 秒 mp4</em>（上限 6 张，4–6 甜点区），与成片同一台渲染器同一套工序：场景页 → 机检 → vend 采购内联 → hyperframes 软光栅 → 抽首/中/尾三帧判卷（对照条目真迹判风格贴合 + 尾帧定格检查）；修复轮 ≤2 同类刹车。"],
         ["返工不占双席", "修样张带 <code>replace=序号</code> 原槽位重渲（满 6 张后是唯一修改通道）；忘带也会被自动识别——新样张与已有样张场景简述一字相同、或海报感知哈希（8×8 aHash）距离 ≤14 即判返工，替换原槽位并在回执注明（阈值真机校准：同构图换字体=12 / 不同构图 ≥23）。"],
-        ["自采通道", "样张阶段开放 vend 自采：HTML 声明 <code>&lt;!-- vend: lib@x.y.z --&gt;</code> → vendor_tool 代购（许可证白名单/钉版/哈希/台账）→ 渲染副本内联、draft 留声明凭据；submit 时清单进 design_system.vend_libs，正式段<em>货架复用</em>（同款零新增采购，缺的才新采）。字体模型无安装权：<code>font_requests</code> 只登记台账等人工入库，制作阶段零字体自采；首渲前 ensureSampleFonts 按样张字体声明现场备料（MatchSampleFonts → font_tool ensure）。"]
+        ["自采通道", "样张阶段开放 vend 自采：HTML 声明 <code>&lt;!-- vend: lib@x.y.z --&gt;</code> → vendor_tool 代购（许可证白名单/钉版/哈希/台账）→ 渲染副本内联、draft 留声明凭据；submit 时清单进 design_system.vend_libs，正式段<em>货架复用</em>（同款零新增采购，缺的才新采）。字体同款开放自装（2026-10-26 定稿，取代旧 font_requests 申请-人工入库）：HTML 声明 <code>&lt;!-- font: Family | 协议 | 直链URL --&gt;</code> → 首渲前 ensureSampleFonts 现场备料（MatchSampleFonts 目录匹配 ∪ 自装声明 → font_tool ensure，来源不限、体积/魔数机械闸兜底）→ 下载失败响亮回喂模型当场换，目录字体失败静默降级；submit 提取进 design_system.custom_fonts，终审页「自采依赖」区披露库与字体清单（协议+来源可点开核对）——人工从守门挪到验收；制作阶段申请书保留自装条目（LockDesign 合并写入，不再整写覆盖）+ 段级钳制放行记账家族。"]
       ]
     },
     g3: {
@@ -1700,7 +1700,7 @@
       type: "ReAct 工位 · 多模态", cls: "", title: "② 风格工位 runStyleStation",
       rows: [
         ["模型", "多模态（RoleVisual）——判样张、读真迹都要看图。"],
-        ["工具", "<code>search_styles</code> / <code>get_style_detail</code>（真迹附图）/ <code>get_style_usage</code> / <code>register_style</code>（衍生登记）/ <code>submit_style</code>（style.go:1206，增 <code>font_requests</code> 字体申请：台账+回显，模型无安装权，:1259/:1290）。"],
+        ["工具", "<code>search_styles</code> / <code>get_style_detail</code>（真迹附图）/ <code>get_style_usage</code> / <code>register_style</code>（衍生登记）/ <code>submit_style</code>（style.go:1206，提取样张自装字体进 design_system.custom_fonts——终审页披露；旧 <code>font_requests</code> 申请参数已随自装通道上线退役）。"],
         ["样张验证", "<code>render_sample</code>（:683）= 成片同工序的动态样张（1.8 秒 mp4，sampleDur :481，上限 6 张 :37）：<code>renderSampleVideo</code>（:631）机械整形 PrepareSamplePage → vend 内联（:644）→ hyperframes 软光栅（:649，--no-browser-gpu）→ 抽海报+首/中/尾三帧（:654）→ CheckSampleHTML 机检（:769）→ judgeSample 多模态判卷（:924，对照真迹）→ repairSample 修复 ≤2 轮（:973）；同类签名刹车 issueSignature（:1025）。"],
         ["replace / 返工识别", "<code>replace</code> 参数（:701/709，1-based）原槽位重渲、文件名不变不多占；返工自动识别（:810）：场景简述一字相同或 aHash 距离 ≤14（util.go aHash；阈值真机校准同构图=12 / 异构 ≥23）→ 自动替换原槽位并在回执注明。"],
         ["出口", "submit：ValidateStylePack（:1298）→ 字体闸（:1301）+ font_tool ensure（:1340）→ <code>LockDesign</code>（:1311，样张 vend_libs 货架清单随之入册）→ stylepack.json（:1314）；submit 后 snap_samples.py 批量重截海报（:1342）供确认页网格与段审金样例。首渲前 ensureSampleFonts（:583）扫样张字体声明现场备料（fontcatalog.go:136）。"]

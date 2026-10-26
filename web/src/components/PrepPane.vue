@@ -82,6 +82,27 @@ const clipSrc = (video: string) => `/api/projects/${props.projectId}/style/clips
 const segs = computed(() => props.prep?.draft?.segments ?? [])
 const paragraphs = computed(() => props.prep?.draft?.paragraphs ?? [])
 const sentences = computed(() => props.prep?.script?.sentences ?? [])
+
+// ── 自采依赖（终审披露）：样张阶段模型装了哪些库、哪些字体，一次列清 ──
+const vendLibs = computed(() => props.prep?.design?.vend_libs ?? [])
+const customFonts = computed(() => props.prep?.design?.custom_fonts ?? [])
+// 设计字体栈拆 token（去重）：目录/系统/自装混在一起的「本片用了什么字体」全览
+const designFonts = computed(() => {
+  const f = props.prep?.design?.fonts
+  if (!f) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const role of [f.display, f.body, f.data]) {
+    if (!role?.stack) continue
+    for (let tok of role.stack.split(',')) {
+      tok = tok.trim().replace(/^['"]|['"]$/g, '')
+      const k = tok.toLowerCase()
+      if (tok && !seen.has(k)) { seen.add(k); out.push(tok) }
+    }
+  }
+  return out
+})
+const hasDeps = computed(() => vendLibs.value.length > 0 || customFonts.value.length > 0 || designFonts.value.length > 0)
 </script>
 
 <template>
@@ -127,6 +148,26 @@ const sentences = computed(() => props.prep?.script?.sentences ?? [])
             <span>切分密度：{{ prep.stylepack.grammar.density }}</span>
             <span>段长带：{{ prep.stylepack.grammar.band_min }}–{{ prep.stylepack.grammar.band_max }} 秒</span>
             <span>同舞台延续：{{ prep.stylepack.grammar.continuity }}</span>
+          </div>
+          <!-- 自采依赖：样张阶段装了什么在此披露——确认门的人工验收面 -->
+          <div v-if="hasDeps" class="deps">
+            <span class="dep-label">自采依赖</span>
+            <div class="dep-rows">
+              <p v-if="vendLibs.length">
+                <b>库（{{ vendLibs.length }}，正式段货架复用）</b>
+                <code v-for="v in vendLibs" :key="v">{{ v }}</code>
+              </p>
+              <p v-if="customFonts.length">
+                <b>自装字体（{{ customFonts.length }}，来源可核对）</b>
+                <span v-for="c in customFonts" :key="c.family" class="dep-font">
+                  {{ c.family }}<i v-if="c.license">{{ c.license }}</i><a v-if="c.url" :href="c.url" target="_blank" rel="noopener">源 ↗</a>
+                </span>
+              </p>
+              <p v-if="designFonts.length">
+                <b>本片字体</b>
+                <code v-for="f in designFonts" :key="f">{{ f }}</code>
+              </p>
+            </div>
           </div>
           <div v-if="samples.length" class="samples">
             <figure v-for="(s, i) in samples" :key="i" class="sample">
@@ -209,6 +250,22 @@ const sentences = computed(() => props.prep?.script?.sentences ?? [])
 .facts a { color: #8fc7ff; margin-left: 6px; }
 .desc { font-size: 13px; line-height: 1.8; color: #c9c9d3; margin-bottom: 10px; }
 .grammar { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12.5px; color: #9a9aa6; margin-bottom: 12px; }
+/* 自采依赖：库/字体 chips 披露区（终审的人工验收面） */
+.deps { display: flex; gap: 12px; font-size: 12.5px; margin-bottom: 12px; }
+.dep-label { flex: none; color: #f0c674; font-weight: 600; letter-spacing: .5px; padding-top: 2px; }
+.dep-rows { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.dep-rows p { margin: 0; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.dep-rows b { color: #7c7c88; font-weight: 600; font-size: 11.5px; white-space: nowrap; }
+.dep-rows code {
+  background: #191920; border: 1px solid #2b2b33; border-radius: 5px;
+  padding: 2px 8px; color: #c9c9d3; font-size: 11.5px;
+}
+.dep-font { display: inline-flex; align-items: baseline; gap: 5px; }
+.dep-font i {
+  font-style: normal; color: #7ee2a8; font-size: 10.5px;
+  border: 1px solid rgba(126, 226, 168, .35); border-radius: 4px; padding: 1px 5px;
+}
+.dep-font a { color: #8fc7ff; font-size: 11px; }
 .samples { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
 .sample figcaption { font-size: 11.5px; color: #7c7c88; margin-top: 6px; line-height: 1.5; }
 .sb { width: 100%; border-collapse: collapse; font-size: 12.5px; }

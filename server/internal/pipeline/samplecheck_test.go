@@ -193,13 +193,23 @@ func TestUnresolvedDesignFonts(t *testing.T) {
 			Body:    contract.FontRole{Stack: "Noto Sans SC, sans-serif"},
 		},
 	}
-	bad := UnresolvedDesignFonts(ss)
+	bad := UnresolvedDesignFonts(ss, nil)
 	if len(bad) != 1 || bad[0] != "Zpix" {
 		t.Fatalf("字体闸清单不对: %v", bad)
 	}
 	// 点名目录字体不算没有
 	ss.Fonts.Display.Stack = "'Fusion Pixel 12px Prop zh-Hans', monospace"
-	if bad = UnresolvedDesignFonts(ss); len(bad) != 0 {
+	if bad = UnresolvedDesignFonts(ss, nil); len(bad) != 0 {
 		t.Fatalf("目录字体被误判: %v", bad)
+	}
+	// 样张自装字体：ensure 进 font_assets.json（assets）后放行——否则字体闸
+	// assets=nil 误杀，自装字体进不了设计系统
+	ss.Fonts.Display.Stack = "'Fusion Pixel Test zh', monospace"
+	assets := map[string]string{"fusion pixel test zh": "data:font/woff2;base64,xxx"}
+	if bad = UnresolvedDesignFonts(ss, assets); len(bad) != 0 {
+		t.Fatalf("已 ensure 的自装字体被误杀: %v", bad)
+	}
+	if bad = UnresolvedDesignFonts(ss, nil); len(bad) != 1 || bad[0] != "Fusion Pixel Test zh" {
+		t.Fatalf("未 ensure 的自装字体应打回: %v", bad)
 	}
 }

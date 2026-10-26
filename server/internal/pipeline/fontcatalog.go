@@ -8,10 +8,15 @@ package pipeline
 // （所有片子一个雅黑脸），要么给一份合法可下载的菜单让它点名——这是后者。
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
+
+	"webpage-video-agent/server/internal/contract"
 )
 
 type CatalogFont struct {
@@ -101,14 +106,15 @@ func FontCatalogList() string {
 	return strings.Join(parts, "、")
 }
 
-// writeFontAssetRequest 目录字体准备申请书（ai/font_tool.py ensure 的输入）。
-// 字体栈改写后在 LockDesign 调用；无目录字体时清掉旧申请书。
-func writeFontAssetRequest(p *Project, matched map[string]*CatalogFont) error {
-	if len(matched) == 0 {
+// writeFontAssetRequest 字体准备申请书（ai/font_tool.py ensure 的输入）：
+// 目录匹配与样张自装声明合并落盘——LockDesign 重写时不能把自装条目擦掉。
+// 两者皆空才清掉旧申请书。
+func writeFontAssetRequest(p *Project, matched map[string]*CatalogFont, customs []contract.CustomFont) error {
+	if len(matched) == 0 && len(customs) == 0 {
 		_ = os.Remove(p.Artifact("style/font_assets.request.json"))
 		return nil
 	}
-	fonts := make([]map[string]string, 0, len(matched))
+	fonts := make([]map[string]string, 0, len(matched)+len(customs))
 	seen := map[string]bool{}
 	for _, f := range matched {
 		if seen[f.ID] {
@@ -124,11 +130,39 @@ func writeFontAssetRequest(p *Project, matched map[string]*CatalogFont) error {
 			"url": url, "license": f.License,
 		})
 	}
+	seenC := map[string]bool{}
+	for _, c := range customs {
+		k := normalizeFontName(c.Family)
+		if seenC[k] {
+			continue
+		}
+		seenC[k] = true
+		fonts = append(fonts, map[string]string{
+			"id": customFontID(c.Family), "version": customFontVersion(c.URL),
+			"family": strings.TrimSpace(c.Family), "url": strings.TrimSpace(c.URL),
+			"license": strings.TrimSpace(c.License),
+		})
+	}
 	b, err := json.MarshalIndent(map[string]any{"fonts": fonts}, "", "  ")
 	if err != nil {
 		return err
 	}
 	return writeFile(p.Artifact("style/font_assets.request.json"), string(b))
+}
+
+// customFontID 自装字体的缓存键（font_tool 按 id@version 判缓存）：家族名哈希
+// 而不是 slug——家族可以是任意 Unicode（中文名），slug 会撞空；同家族跨项目
+// 稳定命中机器级缓存。
+func customFontID(family string) string {
+	sum := sha256.Sum256([]byte("font:" + strings.ToLower(strings.TrimSpace(family))))
+	return "custom-" + hex.EncodeToString(sum[:6])
+}
+
+// customFontVersion 自装字体的版本钉：URL 哈希。模型换来源（升版本/换镜像）
+// = 换 URL = 新缓存键重新下载；同 URL 一律吃缓存，天然可复现。
+func customFontVersion(url string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(url)))
+	return hex.EncodeToString(sum[:6])
 }
 
 // MatchSampleFonts 扫样张 HTML 的 font-family 声明 → 目录字体匹配（prep② 首渲前
@@ -151,10 +185,122 @@ func MatchSampleFonts(htmls []string) map[string]*CatalogFont {
 	return matched
 }
 
+// fontDeclRe 样张自装字体声明（与 vend 声明同构）：
+// <!-- font: Family | 协议 | 直链URL -->（协议是模型自报的披露字段，终审页给人看）。
+var fontDeclRe = regexp.MustCompile(`(?is)<!--\s*font:\s*(.*?)\s*-->`)
+
+// fontDeclFields 单条声明按 | 切三段（家族/协议/URL）。第二刀起多余的分段并进
+// URL 尾部——URL 里理论可含竖线，家族与协议不该有。
+func fontDeclFields(inner string) (family, license, url string, ok bool) {
+	parts := strings.SplitN(inner, "|", 3)
+	if len(parts) != 3 {
+		return "", "", "", false
+	}
+	family = strings.TrimSpace(parts[0])
+	license = strings.TrimSpace(parts[1])
+	url = strings.TrimSpace(parts[2])
+	if family == "" || url == "" || !(strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://")) {
+		return "", "", "", false
+	}
+	return family, license, url, true
+}
+
+// CustomFontDecls 扫 HTML 里的自装字体声明（去重；命中目录/系统字体的声明丢弃
+// ——目录钉版优先，装一份野源同名字体没有意义）。bad 返回格式不合的声明原文
+// （回喂模型改写），调用方拿它组 Observation。
+func CustomFontDecls(html string) (customs []contract.CustomFont, bad []string) {
+	seen := map[string]bool{}
+	for _, m := range fontDeclRe.FindAllStringSubmatch(html, -1) {
+		family, license, url, ok := fontDeclFields(m[1])
+		if !ok {
+			bad = append(bad, strings.TrimSpace(m[0]))
+			continue
+		}
+		k := normalizeFontName(family)
+		if seen[k] {
+			continue
+		}
+		if matchCatalogFont(family) != nil || osFontWhitelist[k] {
+			continue // 目录/系统字体优先，声明静默降级为目录钉版
+		}
+		seen[k] = true
+		customs = append(customs, contract.CustomFont{Family: family, License: license, URL: url})
+	}
+	return customs, bad
+}
+
+// CustomFontsFromHTMLs 多张样张 HTML 的自装声明聚合（去重排序，submit_style 提取
+// 进 design_system 用——终审页披露与制作段钳制都吃这份清单）。
+func CustomFontsFromHTMLs(htmls []string) []contract.CustomFont {
+	var out []contract.CustomFont
+	seen := map[string]bool{}
+	for _, html := range htmls {
+		cs, _ := CustomFontDecls(html)
+		for _, c := range cs {
+			k := normalizeFontName(c.Family)
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			out = append(out, c)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Family < out[j].Family })
+	return out
+}
+
+// CustomFontsFromRequest 申请书里的自装条目（id 前缀 custom-）：ensureSampleFonts
+// 每次都写全集，申请书因此是「本项目装过什么」的持久账——修复轮重写 HTML 弄丢
+// 声明也不丢账（submit 提取取两者并集的另一半）。
+func CustomFontsFromRequest(p *Project) []contract.CustomFont {
+	b, err := os.ReadFile(p.Artifact("style/font_assets.request.json"))
+	if err != nil {
+		return nil
+	}
+	var parsed struct {
+		Fonts []struct {
+			ID      string `json:"id"`
+			Family  string `json:"family"`
+			License string `json:"license"`
+			URL     string `json:"url"`
+		} `json:"fonts"`
+	}
+	if json.Unmarshal(b, &parsed) != nil {
+		return nil
+	}
+	var out []contract.CustomFont
+	for _, f := range parsed.Fonts {
+		if strings.HasPrefix(f.ID, "custom-") && f.Family != "" && f.URL != "" {
+			out = append(out, contract.CustomFont{Family: f.Family, License: f.License, URL: f.URL})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Family < out[j].Family })
+	return out
+}
+
+// MergeCustomFonts 声明提取 ∪ 申请书账（按家族去重，声明侧优先——URL/协议以
+// 样张里的原始声明为准），排序稳定供幂等比对。
+func MergeCustomFonts(a, b []contract.CustomFont) []contract.CustomFont {
+	out := append([]contract.CustomFont{}, a...)
+	seen := map[string]bool{}
+	for _, c := range a {
+		seen[normalizeFontName(c.Family)] = true
+	}
+	for _, c := range b {
+		if seen[normalizeFontName(c.Family)] {
+			continue
+		}
+		seen[normalizeFontName(c.Family)] = true
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Family < out[j].Family })
+	return out
+}
+
 // WriteFontAssetRequest 导出给 prep②：样张阶段按扫描结果写申请书（与 LockDesign
-// 同一文件同一格式，font_tool ensure 消费）。
-func WriteFontAssetRequest(p *Project, matched map[string]*CatalogFont) error {
-	return writeFontAssetRequest(p, matched)
+// 同一文件同一格式，font_tool ensure 消费；目录匹配与自装声明合并）。
+func WriteFontAssetRequest(p *Project, matched map[string]*CatalogFont, customs []contract.CustomFont) error {
+	return writeFontAssetRequest(p, matched, customs)
 }
 
 // MapCatalogFonts manifest 回显用：匹配结果的家族名列表（排序）。

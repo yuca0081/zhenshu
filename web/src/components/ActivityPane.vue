@@ -248,6 +248,19 @@ const items = computed<Item[]>(() => {
       case 'film.ready':
         add({ state: 'ok', title: '成片终装完成（后期/配乐）', timeText: t, minor: true })
         break
+      // 样张阶段自采披露：装了什么库/字体，过程页同步可见（终审页有汇总）
+      case 'prep.vend':
+        add({ state: 'ok', title: '样张自采库入库', timeText: t, detail: ev.detail, minor: true })
+        break
+      case 'prep.style_fonts':
+        add({ state: 'ok', title: '样张字体已备（目录）', timeText: t, detail: ev.detail, minor: true })
+        break
+      case 'prep.style_font_custom':
+        add({ state: 'ok', title: '样张自装字体', timeText: t, detail: ev.detail, minor: true })
+        break
+      case 'prep.style_font_degrade':
+        add({ state: 'info', title: '字体降级（回退渲染，不挡样张）', timeText: t, detail: firstLine(ev.detail), minor: true })
+        break
       default:
         break // llm.usage / seg.* / stage.done 等技术性事件不上屏
     }

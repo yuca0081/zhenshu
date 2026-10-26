@@ -41,7 +41,7 @@ const styleSampleMax = 6
 // 一张样张带修复 ~7 分钟（真机实测），窗口必须盖过一次收尾提交的回合开销。
 const styleGrabWindow = 4 * time.Minute
 
-const styleSystem = `你是美术指导。任务：为口播稿选定视觉风格，产出可直接指导制作的风格包。材料：get_script 拿口播稿；search_styles 按情绪与题材定分面、有筛选地浏览（不必遍历全库）；get_style_detail 看中的条目——描述、特色、样张图库、历史使用记录，**该条目的原片真迹帧会作为附图随观察给你**：配色、质感、画面密度、字体气质一律从真迹里来，禁止只凭文字想象风格。render_sample 渲染 1.8 秒动态样张验证落地效果（与成片同一台渲染器，动效/字体/质感即所得）；判卷官抽首/中/尾三帧对照真迹判风格贴合，打回时对着附图修。样张 4–5 张为宜（上限 6），每张版式明显不同；需要外部库就用 vend 声明让平台采购，别硬手搓。
+const styleSystem = `你是美术指导。任务：为口播稿选定视觉风格，产出可直接指导制作的风格包。材料：get_script 拿口播稿；search_styles 按情绪与题材定分面、有筛选地浏览（不必遍历全库）；get_style_detail 看中的条目——描述、特色、样张图库、历史使用记录，**该条目的原片真迹帧会作为附图随观察给你**：配色、质感、画面密度、字体气质一律从真迹里来，禁止只凭文字想象风格。render_sample 渲染 1.8 秒动态样张验证落地效果（与成片同一台渲染器，动效/字体/质感即所得）；判卷官抽首/中/尾三帧对照真迹判风格贴合，打回时对着附图修。样张 4–5 张为宜（上限 6），每张版式明显不同；需要外部库就用 vend 声明让平台采购，别硬手搓；目录里没有的字体（特殊像素体/手写体/展示体等）在样张 HTML 写 <!-- font: Family | 协议 | 直链URL --> 声明由平台下载安装——首渲即真字体，装了什么会在终审页列出。
 库中没有合适的，从最接近的条目衍生一个并说明差异（register_style，单次限登记 1 个；衍生条目带「未验证」标签，出片后才转正）。
 产出四件（submit_style 一次交齐）：风格描述（视觉语言、色彩、质感、构图倾向，附选择理由——分镜工位靠它理解语境）；剪辑语法（切分密度 / 段长带秒数 / 同舞台延续强弱）；设计系统（皮肤、字体角色、动效语言、贯穿装置、版式、负面清单，以及本风格的**标准入场/收尾动画模板**——它是转场的载体，一套模板一段内生效，禁止逐段即兴发明）；样张 id 列表。
 规则：只在库内风格（含本次衍生登记）中选择；样张场景必须取自口播稿代表性内容，禁止通用示例；口播稿文本一个字不改。完成即调用 submit_style。`
@@ -594,27 +594,72 @@ func (r *styleRun) ensureSampleShell() {
 }
 
 // ensureSampleFonts 首渲前备字体：样张阶段还没有设计系统（LockDesign 的申请书
-// 不存在），按样张 HTML 里声明的目录字体现场写申请书 + font_tool ensure（下载/
-// 子集化走机器级缓存，首项目冷启动慢、后续项目快）。不备的代价 = 目录字体静默
-// 回退雅黑渲染进 mp4，判卷的字体气质意见全部失真（2026-10-22 真机实测复犯）。
-// 备不齐不挡样张：回退渲染照常出，降级如实记账。
-func (r *styleRun) ensureSampleFonts(ctx context.Context, htmls []string) {
-	if _, err := os.Stat(r.p.Artifact("style/font_assets.json")); err == nil {
-		return // 已备
-	}
+// 不存在），按样张 HTML 的目录匹配 + 自装声明（<!-- font: Family | 协议 | URL -->）
+// 现场写申请书 + font_tool ensure（下载/子集化走机器级缓存，首项目冷启动慢、
+// 后续项目快）。不备的代价 = 字体静默回退雅黑渲染进 mp4，判卷的字体气质意见
+// 全部失真（2026-10-22 真机实测复犯）。
+// 早退条件是「需求全部已 resolved」而非「产物文件存在」——后渲样张新增字体
+// 照样补装（旧实现的文件存在即跳过会让后加的字体永远装不上）。
+// 失败语义两档：目录字体失败=静默降级记账、不挡样张（既有语义）；自装字体
+// 失败/声明格式错=返回清单，由 render_sample 回喂模型当场换（vend 采购同款）。
+func (r *styleRun) ensureSampleFonts(ctx context.Context, htmls []string) (failedCustoms, badDecls []string) {
 	matched := pipeline.MatchSampleFonts(htmls)
-	if len(matched) == 0 {
-		return // 样张只用系统字体，无需备料
+	var customs []contract.CustomFont
+	for _, h := range htmls {
+		cs, bad := pipeline.CustomFontDecls(h)
+		customs = append(customs, cs...)
+		badDecls = append(badDecls, bad...)
 	}
-	if err := pipeline.WriteFontAssetRequest(r.p, matched); err != nil {
+	// 申请书写全集（本项目的字体 BOM，锁提交/确认时 LockDesign 重写也不丢自装
+	// 条目）；font_tool 只在有缺口时才跑（已 resolved 的家族重跑只是白子集化）
+	resolved, _ := pipeline.LoadFontAssetsDetail(r.p)
+	needCatalog := map[string]*pipeline.CatalogFont{}
+	for fam, f := range matched {
+		if resolved[strings.ToLower(fam)] == "" {
+			needCatalog[fam] = f
+		}
+	}
+	var needCustoms []contract.CustomFont
+	for _, c := range customs {
+		if resolved[strings.ToLower(c.Family)] == "" {
+			needCustoms = append(needCustoms, c)
+		}
+	}
+	if err := pipeline.WriteFontAssetRequest(r.p, matched, customs); err != nil {
 		r.p.Manifest("prep.style_font_degrade", "申请书落盘失败: "+pipeline.FirstLine(err.Error(), 160))
-		return
+		return nil, badDecls
 	}
-	if err := r.runAIScript(ctx, 6*time.Minute, "font_tool.py", "ensure", r.p.Dir); err != nil {
+	if len(needCatalog) == 0 && len(needCustoms) == 0 {
+		return nil, badDecls
+	}
+	// 冷启动连下多款大字库时 6 分钟偏紧（重试×3 在内），放宽到 8 分钟
+	if err := r.runAIScript(ctx, 8*time.Minute, "font_tool.py", "ensure", r.p.Dir); err != nil {
 		r.p.Manifest("prep.style_font_degrade", pipeline.FirstLine(err.Error(), 160))
-		return
 	}
-	r.p.Manifest("prep.style_fonts", "样张字体已备("+strings.Join(pipeline.MapCatalogFonts(matched), "、")+")")
+	// 成败以 font_assets.json 实际 resolved 为准（font_tool 剥族降级不算整脚本失败）
+	after, _ := pipeline.LoadFontAssetsDetail(r.p)
+	var okCatalog []string
+	for fam := range matched {
+		if after[strings.ToLower(fam)] != "" {
+			okCatalog = append(okCatalog, fam)
+		}
+	}
+	sort.Strings(okCatalog)
+	if len(okCatalog) > 0 {
+		r.p.Manifest("prep.style_fonts", "样张字体已备("+strings.Join(okCatalog, "、")+")")
+	}
+	for _, c := range needCustoms {
+		if after[strings.ToLower(c.Family)] == "" {
+			failedCustoms = append(failedCustoms, c.Family)
+			continue
+		}
+		lic := c.License
+		if lic == "" {
+			lic = "协议未注明"
+		}
+		r.p.Manifest("prep.style_font_custom", fmt.Sprintf("样张自装字体 %s（%s）← %s", c.Family, lic, c.URL))
+	}
+	return failedCustoms, badDecls
 }
 
 // grabFrame ffmpeg 抽帧：mp4 指定时刻 → 一帧 jpg（判卷三帧/海报共用）。
@@ -702,7 +747,7 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 - 动效全写进一条 gsap 时间轴：var tl=gsap.timeline({paused:true}); …; window.__timelines=window.__timelines||{}; window.__timelines["main"]=tl; 可补间只有 opacity/x/y/scale/rotation；禁 CSS animation/transition/@keyframes；禁 rAF/setTimeout/setInterval/Date.now；Math.random 必须种子化
 - <canvas> 绘制 = window.__draw_xxx=function(t,ctx,W,H,rng) 纯函数，由时间轴 onUpdate 驱动逐帧重画
 - 需要外部库（three.js/物理/图表等）：在 html 里写 <!-- vend: 包名@精确版本 --> 声明，平台自动采购注入（许可证白名单：MIT/Apache/BSD/CC0 等，白名单外拒收）；静态画面能解决的别引大库
-- 字体只能用：目录字体（%s——像素风标题用它）＋微软雅黑/黑体/宋体/楷体＋monospace；颜色/字体与本片设计系统皮肤槽位逐字一致；自包含无图片无外链
+- 字体：目录字体（%s）＋微软雅黑/黑体/宋体/楷体＋monospace；目录真没有的（像素体/手写体等）在 html 写 <!-- font: Family | 协议 | 直链URL --> 声明自装（ttf/otf 直链或 zip release 资产；Family 与 font-family 用法逐字一致；下载失败会回喂你换）——字体必须在渲前装好，判卷的字体意见才作数；颜色/字体与本片设计系统皮肤槽位逐字一致；自包含无图片无外链
 - 提交后自动过机械检查并渲染判卷（抽首/中/尾三帧对照真迹判风格贴合），不合格带诊断回喂你修复（≤%d 轮）；构图版式必须与本组其他样张明显不同。目标 ≤%d 字符，上限 %d`,
 		sampleDur, w, h, w, h, sampleDur, sampleDur, pipeline.FontCatalogList(), sampleRepairMax, sampleHTMLTarget, sampleHTMLMax)
 	return Tool{
@@ -773,12 +818,23 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 				}
 			}
 
-			// 首渲前备字体（含本组已有样张的声明，一次备齐）
+			// 首渲前备字体（含本组已有样张的声明，一次备齐）：自装失败/声明格式错
+			// 回喂模型当场换（vend 采购同款语义），目录字体失败静默降级不挡样张
 			fontHTMLs := []string{in.HTML}
 			for _, s0 := range draft.Samples {
 				fontHTMLs = append(fontHTMLs, s0.HTML)
 			}
-			r.ensureSampleFonts(ctx, fontHTMLs)
+			if failed, bad := r.ensureSampleFonts(ctx, fontHTMLs); len(failed) > 0 || len(bad) > 0 {
+				var parts []string
+				if len(failed) > 0 {
+					parts = append(parts, "自装字体下载失败："+strings.Join(failed, "、")+"（来源不可达、超时或不是字体文件——体积上限 20MB/zip 64MB）")
+				}
+				for _, b := range bad {
+					parts = append(parts, "声明格式错（应为 <!-- font: Family | 协议 | 直链URL -->）："+pipeline.FirstLine(b, 100))
+				}
+				return Observation{Text: "字体自装失败：" + strings.Join(parts, "；") +
+					"。换可用直链重试、改用目录字体，或去掉该字体重新 render_sample（其余样张不受影响）。"}
+			}
 
 			// 渲染验证内循环：机检 → 渲 mp4 → 抽三帧判卷 → 修复（≤sampleRepairMax 轮，同类刹车）
 			html, carried, skipNote := in.HTML, []string(nil), ""
@@ -1006,7 +1062,7 @@ func (r *styleRun) repairSample(ctx context.Context, loop *Loop, brief, html str
 当前 HTML：
 %s
 
-只输出 JSON：{"html":"<完整新HTML>"}（无围栏）。画布 %d×%d；字体只能用目录字体（%s）与系统字体（微软雅黑/黑体/宋体/楷体）与 monospace。`,
+只输出 JSON：{"html":"<完整新HTML>"}（无围栏）。画布 %d×%d；字体用目录字体（%s）、系统字体（微软雅黑/黑体/宋体/楷体）、monospace，或保留原样张里 <!-- font: Family | 协议 | 直链URL --> 自装声明（平台已装好的家族，Family 写法逐字保留别改）。`,
 		brief, len(frames), strings.Join(issues, "\n- "), html, int(cv.W), int(cv.H), pipeline.FontCatalogList())
 	images := append(append([]string{}, frames...), refs...)
 	usage, err := prov.GenerateJSONVisionNoThink(ctx, sampleRepairSystem, user, images, 0.5, &out)
@@ -1252,10 +1308,6 @@ func (r *styleRun) submitStyleTool() Tool {
 					"type": "array", "items": map[string]any{"type": "string"},
 					"description": "样张 id 列表（本次 render_sample 渲过的张，如 [\"样张 A · …\"]；≥1）",
 				},
-				"font_requests": map[string]any{
-					"type": "array", "items": map[string]any{"type": "string"},
-					"description": "缺字体申请单（可空）：样张效果确实需要目录里没有的字体时才申请，每条格式「字体名 | 开源协议 | 来源URL」，只申请 OFL/IPA 等开源协议。申请≠可用——人工入库前，样张与成片都用最接近的目录字体兜底",
-				},
 			},
 			"required": []string{"style_id", "description", "grammar", "design_system"},
 		}),
@@ -1274,7 +1326,6 @@ func (r *styleRun) submitStyleTool() Tool {
 				Grammar      contract.EditGrammar  `json:"grammar"`
 				DesignSystem contract.StyleSamples `json:"design_system"`
 				SampleIDs    []string              `json:"sample_ids"`
-				FontRequests []string              `json:"font_requests"`
 			}
 			if err := decodeArgs(normArgs, &in); err != nil {
 				return reply(err.Error())
@@ -1303,24 +1354,26 @@ func (r *styleRun) submitStyleTool() Tool {
 			ds.StyleID = sid
 			ds.Samples = draft.Samples
 			ds.VendLibs = sampleVendLibs(draft.Samples) // 样张自采货架：正式段优先复现
-			ds.Confirmed = false                        // 打包终审硬门：确认前禁止开工
-			// 字体申请台账（申请-人工入库）：模型没有字体安装权，登记后等用户点头
-			if len(in.FontRequests) > 0 {
-				req := map[string]any{"style_id": sid, "requests": in.FontRequests,
-					"at": time.Now().Format("2006-01-02 15:04")}
-				if err := writeJSONFile(r.p.Artifact("style/font_requests.json"), req); err == nil {
-					r.p.Manifest("prep.font_request", fmt.Sprintf("%d 条待人工入库：%s", len(in.FontRequests), strings.Join(in.FontRequests, "；")))
-				}
+			// 样张自装字体记账（终审页披露 + 制作段钳制放行的依据）：HTML 声明 ∪
+			// 申请书账——修复轮重写 HTML 可能弄丢声明，申请书是持久 BOM，并集才不丢
+			var cfHTMLs []string
+			for _, s := range draft.Samples {
+				cfHTMLs = append(cfHTMLs, s.HTML)
 			}
+			ds.CustomFonts = pipeline.MergeCustomFonts(
+				pipeline.CustomFontsFromHTMLs(cfHTMLs),
+				pipeline.CustomFontsFromRequest(r.p))
+			ds.Confirmed = false // 打包终审硬门：确认前禁止开工
 			sp := contract.NewStylePack(sid, in.Description, in.Grammar, &ds, ids)
 			if err := contract.ValidateStylePack(sp); err != nil {
 				return reply("被拒：" + err.Error())
 			}
 			// 字体闸：设计声明里出现渲染端没有的字体族 = 样张与正片双双静默回退
-			//（齐马蓝教训，2026-10-21 呼啸骑士战实测复犯）。打回并列出可用品类，
-			// 模型当场换——比事后剥族保得住设计意图。
-			if bad := pipeline.UnresolvedDesignFonts(&ds); len(bad) > 0 {
-				return reply(fmt.Sprintf("被拒：设计系统字体栈含渲染端没有的字体族「%s」。目录字体可选：%s；系统字体：微软雅黑/黑体/宋体/楷体/仿宋/Noto Sans SC；通用族 monospace/serif/sans-serif。换好后重交。",
+			//（齐马蓝教训，2026-10-21 呼啸骑士战实测复犯）。可用=目录/系统白名单/
+			// 通用族/已 ensure 的样张字体（assets——目录与自装都进 font_assets.json）。
+			// 打回并列出可用品类，模型当场换——比事后剥族保得住设计意图。
+			if bad := pipeline.UnresolvedDesignFonts(&ds, pipeline.LoadSampleFontAssets(r.p)); len(bad) > 0 {
+				return reply(fmt.Sprintf("被拒：设计系统字体栈含渲染端没有的字体族「%s」。目录字体可选：%s；系统字体：微软雅黑/黑体/宋体/楷体/仿宋/Noto Sans SC；样张自装的字体以样张里 <!-- font: … --> 声明过的家族名为准（设计栈与声明写法逐字一致）。换好后重交。",
 					strings.Join(bad, "、"), pipeline.FontCatalogList()))
 			}
 			// 设计锁定（legacy 路径同源）：字体钳制/接缝契约机械执法/目录字体申请书/
@@ -1362,9 +1415,16 @@ func (r *styleRun) submitStyleTool() Tool {
 			}
 			r.d.emit(r.p.ID, "stage", "prep/style", fmt.Sprintf("done：%s「%s」语法[%s %.0f-%.0fs] 样张×%d",
 				sid, ds.Direction, in.Grammar.Density, in.Grammar.BandMin, in.Grammar.BandMax, len(draft.Samples)))
-			done := reply(fmt.Sprintf("风格包已提交：%s（%s）；剪辑语法 %s / %.0f–%.0f 秒 / %s；样张 %d 张（自采库：%s）；设计系统含入场/收尾模板。%s 样张未经用户终审确认前禁止开工。",
-				sid, ds.Direction, in.Grammar.Density, in.Grammar.BandMin, in.Grammar.BandMax, in.Grammar.Continuity, len(draft.Samples), orNone(ds.VendLibs),
-				map[bool]string{true: "字体申请已登记，等人工入库（入库前用目录字体兜底）。", false: ""}[len(in.FontRequests) > 0]))
+			customNote := "无"
+			if len(ds.CustomFonts) > 0 {
+				names := make([]string, 0, len(ds.CustomFonts))
+				for _, c := range ds.CustomFonts {
+					names = append(names, c.Family)
+				}
+				customNote = strings.Join(names, "、")
+			}
+			done := reply(fmt.Sprintf("风格包已提交：%s（%s）；剪辑语法 %s / %.0f–%.0f 秒 / %s；样张 %d 张；自采库：%s；自装字体：%s。自装清单会随终审页列出（含协议与来源）。样张未经用户终审确认前禁止开工。",
+				sid, ds.Direction, in.Grammar.Density, in.Grammar.BandMin, in.Grammar.BandMax, in.Grammar.Continuity, len(draft.Samples), orNone(ds.VendLibs), customNote))
 			done.Done = true
 			return done
 		},

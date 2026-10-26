@@ -311,15 +311,16 @@ func LoadSampleFontAssets(p *Project) map[string]string {
 }
 
 // UnresolvedDesignFonts 设计系统字体栈里渲染端解析不了的字体族（prep② submit_style
-// 字体闸的回喂清单）。目录字体/系统白名单/通用族之外的一律算没有——渲染端会
-// 静默回退雅黑，设计字体进不了画面（齐马蓝教训）。
-func UnresolvedDesignFonts(ss *contract.StyleSamples) []string {
+// 字体闸的回喂清单）。目录字体/系统白名单/通用族/已 ensure 的样张字体（目录或
+// 自装——assets 是 font_assets.json 的 resolved 表）之外的一律算没有——渲染端
+// 会静默回退雅黑，设计字体进不了画面（齐马蓝教训）。
+func UnresolvedDesignFonts(ss *contract.StyleSamples, assets map[string]string) []string {
 	bad := map[string]bool{}
 	collect := func(stack string) {
 		for _, name := range strings.Split(stack, ",") {
 			name = strings.TrimSpace(name)
 			name = strings.Trim(name, "'\"")
-			if name == "" || fontFamiliesUsable(name, nil) {
+			if name == "" || fontFamiliesUsable(name, assets) {
 				continue
 			}
 			bad[name] = true
