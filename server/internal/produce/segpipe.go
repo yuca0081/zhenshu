@@ -195,6 +195,19 @@ func saveVerdict(p *pipeline.Project, kind, id string, round int, v *review.Verd
 	return pipeline.WriteFileAtomic(verdictPath(p, kind, id, round), b, 0o644)
 }
 
+// recordVerdict 落意见单并记账失败：意见单既是用户可见的带伤交付明细，又是终审
+// 复核轮的判卷基准（loadVerdictFile 读的就是它，缺失会退化为全量帧格）。写失败
+// 不挡成片（同 frameQA 的非阻塞哲学），但必须账面可见——此前三处 `_ =` 静默，
+// 复核退化与伤情明细丢失都无人知晓（2026-10-26 审查）。
+func (c *coordinator) recordVerdict(kind, id string, round int, v *review.Verdict) {
+	if err := saveVerdict(c.p, kind, id, round, v); err != nil {
+		c.r.Manifest(c.p, "review.verdict_write_error",
+			fmt.Sprintf("%s/%s r%d: %s", kind, id, round, pipeline.FirstLine(err.Error(), 120)))
+		c.emit("progress", "review", fmt.Sprintf("意见单 %s/%s 落盘失败（终审复核将退化、伤情明细缺失）: %s",
+			kind, id, pipeline.FirstLine(err.Error(), 120)))
+	}
+}
+
 // ── 签名刹车（§4.5）──────────────────────────────────────────────
 
 // brakeTracker 签名 = 类别@锚点。同签名连续两轮 high → 刹车；≥N 个不同段出现
@@ -375,7 +388,7 @@ func (r *Runner) runSegmentPipeline(ctx context.Context, p *pipeline.Project) er
 	// 拼接混音（mixBGM）按 project.json 自动消费，本步零混音逻辑。
 	r.pickBGM(ctx, p, sb, voices)
 
-	// 目录字体先行（一次，全局；失败降级不挡制作）+ 样张截图
+	// 字体先行（目录 + 样张自装，一次全局吃申请书缓存；失败降级不挡制作）+ 样张截图
 	r.emit(id, "stage", "compositions", "running")
 	r.Manifest(p, "stage.start", "compositions")
 	if err := r.python(ctx, "ai/font_tool.py", p.Dir, 4*time.Minute); err != nil {
@@ -491,6 +504,8 @@ type coordinator struct {
 	journal  map[string]journalLine // 内存镜像（log 时同步更新；恢复判定与边界代际比对共用）
 	restored int                    // 本run按旧账+指纹恢复的段数（完成通告如实措辞用，低-2）
 
+	journalFileMu sync.Mutex // journal 文件追加互斥（内存镜像走 c.mu，磁盘 IO 不进主锁）
+
 	writeInFlight int // 写在飞计数（写优先于审的闸）
 	auditWhileW   int // 写在飞窗口内已放行的审核数
 
@@ -562,17 +577,21 @@ func (c *coordinator) seg(id string) *segCtx {
 }
 
 // log 状态迁移落账：journal 追加 + 内存镜像 + manifest 一行（§4.4）。
-// audited 迁移顺带唤醒边界跟踪（提示性；轮询兜底）。journal 文件写与 manifest
-// 落盘都在锁外（2026-10-19 中-L6：临界区只碰内存镜像——磁盘 IO 进临界区会把
-// 并发段的记账串行排队，与 journal 文件写「刻意放锁外」同一顾虑）。
+// audited 迁移顺带唤醒边界跟踪（提示性；轮询兜底）。journal 文件写在专用
+// journalFileMu 下（2026-10-26：此前只靠 O_APPEND 单行写——那是文件系统副作用
+// 不是设计保证，撕裂行会被 loadJournal 静默跳过 → 恢复时重做已完成段；与
+// pipeline 的 ManifestMu 同口径）。磁盘 IO 仍不进 c.mu（2026-10-19 中-L6：
+// 临界区只碰内存镜像——磁盘 IO 进临界区会把并发段的记账串行排队）。
 func (c *coordinator) log(e journalLine) {
 	e.TS = time.Now().Format(time.RFC3339)
 	b, _ := json.Marshal(e)
+	c.journalFileMu.Lock()
 	_ = os.MkdirAll(filepath.Dir(journalPath(c.p)), 0o755)
 	if f, err := os.OpenFile(journalPath(c.p), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
 		f.Write(append(b, '\n'))
 		f.Close()
 	}
+	c.journalFileMu.Unlock()
 	c.touch()
 	c.mu.Lock()
 	if c.journal == nil {
@@ -1167,7 +1186,7 @@ func (c *coordinator) auditSegment(ctx context.Context, req auditReq) {
 		c.segState(s.seg.ID, stAudited, round, gen, "审查器故障降级")
 		return
 	}
-	_ = saveVerdict(c.p, "seg", s.seg.ID, round, &v)
+	c.recordVerdict("seg", s.seg.ID, round, &v)
 	high := v.HighFindings()
 	detail := fmt.Sprintf("%d 条意见（%d high）", len(v.Findings), len(high))
 	if len(high) == 0 {
@@ -1384,7 +1403,7 @@ func (c *coordinator) auditBoundary(ctx context.Context, req auditReq) {
 		return
 	}
 	// 真实轮次落盘（2026-10-19 中-7：旧版恒写 round 1，多次重审互相覆盖不可考）
-	_ = saveVerdict(c.p, "bnd", b.id, rnd+1, &v)
+	c.recordVerdict("bnd", b.id, rnd+1, &v)
 	// stitch 分流（2026-10-19 中-8）：stitch_fix 是拼接侧可机械修正的意见，不该
 	// 触发段重画——旧版全部 high 一律打回，含 stitch_fix 的边界永远活不到 stitch
 	// 阶段（takeStitchFixes 恒空，「能拼接修的别判 redraw」的提示词承诺落空）。
@@ -1546,7 +1565,7 @@ func (c *coordinator) finalAudit(ctx context.Context, round int, recheck []strin
 		c.emit("stage", "review", "done: 全片终审审查器故障，降级放行（账在 manifest）")
 		return nil, nil
 	}
-	_ = saveVerdict(c.p, "final", "all", round, &v)
+	c.recordVerdict("final", "all", round, &v)
 	high := v.HighFindings()
 	if len(high) == 0 {
 		c.log(journalLine{Kind: "final", ID: "all", State: stAudited, Round: round, Detail: "全片终审通过"})

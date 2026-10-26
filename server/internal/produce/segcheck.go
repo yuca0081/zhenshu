@@ -156,8 +156,12 @@ func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string
 		r.emit(id, "stage", "check", fmt.Sprintf("%s 第 %d 次（单段）", segID, attempt))
 		r.Manifest(p, "stage.start", "check/"+segID)
 		var err, blocking error
+		// out=check 原始全量输出。cheap-fix 修复器必须吃它：contrastSuggRe/gsapOpacityNoopRe
+		// 依赖 Contrast 段与「Try rgb/source」续行，而那些行会被 blockingCheckErrors 过滤掉，
+		// 喂 blocking（过滤版）两个修复器永远匹配不上（2026-10-26 审查发现：段级路径因此
+		// 白烧 LLM 修复轮）。LLM 回喂仍走 blocking 过滤版（斩 Contrast warning 回喂循环）。
+		var out string
 		if err = ensureSegCheckDir(p, segID); err == nil {
-			var out string
 			out, err = pipeline.RunCLI(p, "npx", pipeline.HyperframesPkg, "check", ".hf-check/"+segID, "--no-browser-gpu")
 			if err == nil {
 				// check 过了还差回放门禁（canvas 段）与段间接缝亮度闸（D5，全段）
@@ -207,8 +211,9 @@ func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string
 			return fmt.Errorf("%s check 环境类失败: %w", segID, err)
 		}
 		// 廉价修复先行：checker 给了对比度建议色 / opacity 冲突就机械回填再检，
-		// 不烧 LLM 修复轮（与全局 checkWithRepair 同一经验：LLM 修这两类从不收敛）
-		fixN := applyContrastFixes(p, blocking.Error()) + applyGsapOpacityFixes(p, blocking.Error())
+		// 不烧 LLM 修复轮（与全局 checkWithRepair 同一经验：LLM 修这两类从不收敛）。
+		// 输入用全量 out（同全局路径喂 err.Error()），blocking 过滤版只服务下方 LLM 回喂。
+		fixN := applyContrastFixes(p, out) + applyGsapOpacityFixes(p, out)
 		if fixN > 0 {
 			r.emit(id, "stage", "check", fmt.Sprintf("%s cheap-fix：机械回填 %d 处", segID, fixN))
 			r.Manifest(p, "check.contrast_fix", fmt.Sprintf("%s %d 处", segID, fixN))

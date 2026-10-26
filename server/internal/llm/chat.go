@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math/rand"
+	"net/http"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -63,11 +64,13 @@ func (p *Provider) chatTemp(ctx context.Context, msgs []openai.ChatCompletionMes
 		req.Tools = tools
 	}
 	applyEffort(&req, effort)
-	// 429 限速退避重试（循环对话轮没有外层重试——审核/工位一轮 429 就整轮报废，
-	// 代价远大于等一个限速窗口）。退避 15s/30s，叠随机抖动——多路调用方同步退避
-	// 会一起醒来再撞一次（2026-10-17 惊群教训，与 generate 同款）；ctx 取消立即让路。
+	// 瞬时错误退避重试（循环对话轮没有外层重试——审核/工位一轮失败就整轮报废，
+	// 代价远大于等一个限速窗口）。可重试=429 限流/5xx/网络错，与 generate 同一口径
+	// （2026-10-26 审查发现原先只重试 429：一次网络抖动或上游 5xx 即整轮报废）。
+	// 退避 15s/30s，叠随机抖动——多路调用方同步退避会一起醒来再撞一次
+	// （2026-10-17 惊群教训，与 generate 同款）；ctx 取消立即让路。
 	// 预算闸/记账在 cachedChat 里（postChat 一跳）：缓存命中免费放行，只有真正
-	// 出网才过闸记账；预算错误非 StatusError，走下面的非 429 分支立刻失败。
+	// 出网才过闸记账；预算错误不可重试，下方显式放行立即失败。
 	for attempt := 0; ; attempt++ {
 		// 账户级并发闸（2026-10-19 高-8）：Chat/ChatTemp 原先绕闸直发，而准备三
 		// 工位与全部审片循环都走这条路——多项目并行时正是 429 惊群最后一个口子。
@@ -88,7 +91,12 @@ func (p *Provider) chatTemp(ctx context.Context, msgs []openai.ChatCompletionMes
 			return resp.Choices[0].Message, resp.Usage, nil
 		}
 		var se *StatusError
-		if attempt >= 2 || ctx.Err() != nil || !errors.As(err, &se) || se.Code != 429 {
+		if attempt >= 2 || ctx.Err() != nil || errors.Is(err, ErrBudgetExceeded) {
+			return openai.ChatCompletionMessage{}, openai.Usage{}, err
+		}
+		// 4xx 客户端错（除 429）重试不会好：立即失败透传状态码；
+		// 429 限流/5xx/网络错（非 StatusError）照旧退避重试——generate 同款分类
+		if errors.As(err, &se) && se.Code >= 400 && se.Code < 500 && se.Code != http.StatusTooManyRequests {
 			return openai.ChatCompletionMessage{}, openai.Usage{}, err
 		}
 		select {
