@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>minimanual-arm</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #000; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<script>
+/* ============================================================
+   核心源码段（整段照抄自 kit-minimanual.md，唯一真源，语义未改）
+   ============================================================ */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const PS = {
+  black: '#101010', white: '#ffffff', orange: '#F08030', yellow: '#FFFF00',
+  cyan: '#00d8e0', magenta: '#ff20c8', cyanText: '#00e5e5',
+  brick: '#8b2020', navy: '#1a2a4a', teal: '#2a7a8a',
+  confetti: ['#ff2020', '#2020ff', '#00d8e0', '#e8e000', '#ff00ff', '#ffffff', '#ffffff', '#111111', '#20ff20'],
+};
+class PixelStage {
+  constructor(seed = 1) {           // 输出 640x360；像素层逻辑 320x180（2x 最近邻）
+    this.seed = seed; this.rnd = mulberry32(seed);
+    this.LW = 320; this.LH = 180; this.W = 640; this.H = 360;
+    this.px = document.createElement('canvas'); this.px.width = this.LW; this.px.height = this.LH;
+    this.P = this.px.getContext('2d');                        // 像素层（硬边）
+    this.sm = document.createElement('canvas'); this.sm.width = this.W; this.sm.height = this.H;
+    this.S = this.sm.getContext('2d');                        // 平滑层（软边特效）
+    this.main = document.createElement('canvas'); this.main.width = this.W; this.main.height = this.H;
+    this.M = this.main.getContext('2d');                      // 合成输出
+    this.letterbox = 0;             // 上下黑边（屏幕px）
+  }
+  bgFlat(c) { this.P.fillStyle = c; this.P.fillRect(0, 0, this.LW, this.LH); }
+  bgRadial(cx, cy, r0, r1, c0, c1) { // 底色画像素层（八律2）
+    const g = this.P.createRadialGradient(cx, cy, r0, cx, cy, r1);
+    g.addColorStop(0, c0); g.addColorStop(1, c1);
+    this.P.fillStyle = g; this.P.fillRect(0, 0, this.LW, this.LH);
+  }
+  rect(x, y, w, h, c) { this.P.fillStyle = c; this.P.fillRect(x | 0, y | 0, w | 0, h | 0); }
+  text(str, x, y, size, c, bold = true) { // 点阵字：小字号进逻辑层
+    this.P.font = `${bold ? 'bold ' : ''}${size}px monospace`;
+    this.P.fillStyle = c; this.P.textBaseline = 'top'; this.P.fillText(str, x, y);
+  }
+  box(x, y, w, h, c, t = 1) { // UI 描边框：直角无圆角
+    this.rect(x, y, w, t, c); this.rect(x, y + h - t, w, t, c);
+    this.rect(x, y, t, h, c); this.rect(x + w - t, y, t, h, c);
+  }
+  part(w, h, rotDeg, draw) {        // 部件=独立小画布+微旋转（八律5）
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    draw(c.getContext('2d'), w, h);
+    return { c, rot: rotDeg * Math.PI / 180 };
+  }
+  stamp(part, rx, ry) {             // 贴到像素层：rx,ry=部件中心落点
+    this.P.save();
+    this.P.translate(rx, ry); this.P.rotate(part.rot);
+    this.P.imageSmoothingEnabled = false;
+    this.P.drawImage(part.c, -part.c.width / 2, -part.c.height / 2);
+    this.P.restore();
+  }
+  rgbSplit(target, dR, dG, dB) {    // 块级通道撕裂：multiply 通道掩膜+lighter（八律4）
+    const w = target.width, h = target.height;
+    const out = document.createElement('canvas'); out.width = w; out.height = h;
+    const o = out.getContext('2d');
+    const chan = (color) => {
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const x = c.getContext('2d');
+      x.drawImage(target, 0, 0);
+      x.globalCompositeOperation = 'multiply';
+      x.fillStyle = color; x.fillRect(0, 0, w, h);
+      x.globalCompositeOperation = 'destination-in';
+      x.drawImage(target, 0, 0);
+      return c;
+    };
+    o.globalCompositeOperation = 'lighter';
+    o.drawImage(chan('#ff0000'), dR[0], dR[1]);
+    o.drawImage(chan('#00ff00'), dG[0], dG[1]);
+    o.drawImage(chan('#0000ff'), dB[0], dB[1]);
+    return out;
+  }
+  rgbSplit2Wrap(part, dR, dG, dB) { return { c: this.rgbSplit(part.c, dR, dG, dB), rot: part.rot }; }
+  glowSpot(x, y, r, c, a = 0.8) {   // 辉光斑（平滑层，屏幕坐标）
+    const g = this.S.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, c); g.addColorStop(1, 'rgba(0,0,0,0)');
+    this.S.save(); this.S.globalAlpha = a; this.S.globalCompositeOperation = 'lighter';
+    this.S.fillStyle = g; this.S.beginPath(); this.S.arc(x, y, r, 0, 7); this.S.fill(); this.S.restore();
+  }
+  pixSmoke(x, y, r, n, seedOff = 0) { // 块状像素烟（真迹高光形态，八律6）
+    const rr = mulberry32(this.seed + seedOff);
+    this.S.save();
+    for (let i = 0; i < n; i++) {
+      const ang = rr() * 6.283, d = rr() * r;
+      const w = 2 * (rr() < 0.6 ? 1 : rr() < 0.9 ? 2 : 3);
+      this.S.fillStyle = `rgba(255,255,255,${0.25 + rr() * 0.5})`;
+      this.S.fillRect((x + Math.cos(ang) * d) | 0, (y + Math.sin(ang) * d * 0.7) | 0, w, w);
+    }
+    this.S.restore();
+  }
+  smoke(x, y, r, a = 0.5, seedOff = 0) { // 软烟雾团（与硬像素成对，八律6）
+    const s = this.S; s.save();
+    s.globalAlpha = a; s.globalCompositeOperation = 'screen';
+    const rr = mulberry32(this.seed + seedOff);
+    for (let i = 0; i < 5; i++) {
+      const dx = (rr() - 0.5) * r, dy = (rr() - 0.5) * r * 0.7, rad = r * (0.4 + rr() * 0.5);
+      const g = s.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, rad);
+      g.addColorStop(0, 'rgba(255,255,255,0.85)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+      s.fillStyle = g; s.beginPath(); s.arc(x + dx, y + dy, rad, 0, 7); s.fill();
+    }
+    s.restore();
+  }
+  spotlight(x0, y0, x1, y1, halfW0, halfW1, c = 'rgba(255,255,255,0.10)') { // 梯形光锥
+    const s = this.S; s.save(); s.globalCompositeOperation = 'screen';
+    s.fillStyle = c; s.beginPath();
+    s.moveTo(x0 - halfW0, y0); s.lineTo(x0 + halfW0, y0);
+    s.lineTo(x1 + halfW1, y1); s.lineTo(x1 - halfW1, y1);
+    s.closePath(); s.fill(); s.restore();
+  }
+  scanRows(ys) {                    // 断续故障扫描行（八律7，屏幕坐标）
+    const s = this.S;
+    for (const { y, color } of ys) {
+      let x = 4 + this.rnd() * 30;
+      while (x < this.W - 4) {
+        const seg = 6 + this.rnd() * 40, gap = (this.rnd() < 0.35 ? 10 + this.rnd() * 30 : 2);
+        s.globalAlpha = 0.5 + this.rnd() * 0.5;
+        s.fillStyle = color; s.fillRect(x, y, seg, 1.5 + (this.rnd() < 0.2 ? 1.5 : 0));
+        x += seg + gap;
+      }
+    }
+    s.globalAlpha = 1;
+  }
+  confettiBurst(cx, cy, dirDeg, spreadDeg, distMax, n, seedOff = 0) { // 爆点簇（八律6）
+    const rr = mulberry32(this.seed + seedOff);
+    for (let i = 0; i < n; i++) {
+      const t = rr() * rr();        // 密度梯度：贴爆点密、远处疏
+      const ang = (dirDeg + (rr() - 0.5) * spreadDeg) * Math.PI / 180;
+      const d = 8 + t * distMax;
+      const drop = t * t * (rr() * 30 + 10); // 抛物线下坠
+      const c = PS.confetti[(rr() * PS.confetti.length) | 0];
+      const w = 2 * (rr() < 0.7 ? 1 : 2);
+      this.S.fillStyle = c;
+      this.S.fillRect((cx + Math.cos(ang) * d) | 0, (cy + Math.sin(ang) * d + drop) | 0, w, w);
+    }
+  }
+  whiteFlash(a = 1) {               // 径向白闪转场
+    const g = this.M.createRadialGradient(this.W / 2, this.H / 2, 40, this.W / 2, this.H / 2, 420);
+    g.addColorStop(0, `rgba(255,255,255,${a})`); g.addColorStop(1, `rgba(153,153,153,${a * 0.85})`);
+    this.M.fillStyle = g; this.M.fillRect(0, 0, this.W, this.H);
+  }
+  compose(o = {}) {                 // 后处理一次收口（八律：场景不得自行叠加后处理）
+    const op = Object.assign({ bloom: 0.55, noise: 0.04, rgbShift: null }, o);
+    const M = this.M;
+    M.fillStyle = PS.black; M.fillRect(0, 0, this.W, this.H);
+    M.imageSmoothingEnabled = false;
+    M.drawImage(this.px, 0, 0, this.LW, this.LH, 0, 0, this.W, this.H); // 2x 硬放大
+    M.drawImage(this.sm, 0, 0);
+    if (this.letterbox > 0) { M.fillStyle = '#0f0f0f';
+      M.fillRect(0, 0, this.W, this.letterbox); M.fillRect(0, this.H - this.letterbox, this.W, this.letterbox); }
+    if (op.rgbShift) this._frameRGBShift(op.rgbShift);
+    if (op.bloom > 0) this._bloom(op.bloom);
+    if (op.noise > 0) this._noise(op.noise);
+  }
+  _frameRGBShift([dx]) {            // 全帧 1-2px 水平色差
+    const t = document.createElement('canvas'); t.width = this.W; t.height = this.H;
+    t.getContext('2d').drawImage(this.main, 0, 0);
+    this.M.drawImage(this.rgbSplit(t, [dx, 0], [0, 0], [-dx, 0]), 0, 0);
+  }
+  _bloom(a) {                       // 亮部提取→blur→lighter 叠回
+    const w = this.W >> 1, h = this.H >> 1;
+    const t = document.createElement('canvas'); t.width = w; t.height = h;
+    const x = t.getContext('2d');
+    x.drawImage(this.main, 0, 0, w, h);
+    x.globalCompositeOperation = 'multiply';
+    x.fillStyle = 'rgb(90,90,90)'; x.fillRect(0, 0, w, h);
+    x.globalCompositeOperation = 'destination-in';
+    x.drawImage(this.main, 0, 0, w, h);
+    this.M.save();
+    this.M.globalAlpha = a; this.M.globalCompositeOperation = 'lighter';
+    this.M.filter = 'blur(3px)';
+    this.M.drawImage(t, 0, 0, this.W, this.H);
+    this.M.restore();
+  }
+  _noise(a) {                       // 灰阶抖动噪
+    const w = this.W >> 1, h = this.H >> 1;
+    const t = document.createElement('canvas'); t.width = w; t.height = h;
+    const x = t.getContext('2d'), img = x.createImageData(w, h), rr = mulberry32(this.seed + 77);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const v = rr() < 0.5 ? 0 : rr() * 255;
+      img.data[i] = v; img.data[i + 1] = v; img.data[i + 2] = v;
+      img.data[i + 3] = 255 * a * rr();
+    }
+    x.putImageData(img, 0, 0);
+    this.M.save(); this.M.globalCompositeOperation = 'lighter';
+    this.M.drawImage(t, 0, 0, this.W, this.H); this.M.restore();
+  }
+}
+/* ============================================================
+   场景代码（在源码段之上仿写，全部随机由种子派生，禁 Math.random）
+   ============================================================ */
+
+/* ---------- 命题一 scene=c：暗场爆炸舞台 ---------- */
+function sceneC(st) {
+  st.letterbox = 29;                                      // 上下各 29px 黑边（compose 收口盖住，边内无内容）
+
+  // —— 暗场底（八律2：底色画像素层）——
+  st.bgFlat(PS.black);                                    // #101010 深黑（非纯 #000）
+
+  // —— 舞台（逻辑 320x180，台缘 ≈ 82% 高：逻辑 y147 = 屏幕 294）——
+  st.rect(0, 145, 320, 2, '#26262c');                     // 台面
+  st.rect(0, 147, 320, 2, '#ff2020');                     // 台缘连续红色光带（横贯）
+  st.rect(0, 149, 320, 17, '#141419');                    // 台缘前立面
+  // 台缘左右两端斜向红/橙厚边（舞台侧沿，part+微旋转）
+  const sideEdge = (rot) => st.part(16, 8, rot, (g) => {
+    g.fillStyle = PS.orange; g.fillRect(0, 0, 16, 8);
+    g.fillStyle = '#ff2020'; g.fillRect(0, 0, 16, 3);
+  });
+  st.stamp(sideEdge(18), 10, 152);
+  st.stamp(sideEdge(-18), 310, 152);
+
+  // —— 聚光下背对镜头的白色小像素人（part+微旋转，≈35x55 屏幕px）——
+  const hero = st.part(26, 36, 1.5, (g) => {
+    g.fillStyle = PS.white;
+    g.fillRect(3, 31, 20, 2);                             // 脚下白色横杠
+    g.fillRect(8, 24, 3, 7); g.fillRect(15, 24, 3, 7);    // 两条腿
+    g.fillRect(7, 14, 12, 10);                            // 躯干
+    g.fillStyle = '#a9a9b6';
+    g.fillRect(7, 14, 3, 10); g.fillRect(7, 22, 12, 2);   // 躯干暗部
+    g.fillStyle = PS.white;
+    g.fillRect(8, 5, 10, 9); g.fillRect(10, 3, 6, 2);     // 兜帽头（背对）
+    g.fillStyle = '#c3c3cf';
+    g.fillRect(12, 6, 2, 7); g.fillRect(8, 12, 10, 2);    // 兜帽褶缝
+  });
+  st.stamp(hero, 140, 129);
+
+  // —— 白色发光小屏（黄描边+白块；RGB 块级错位重影=爆点专属撕裂）——
+  const scr = st.part(40, 30, -2, (g) => {
+    g.fillStyle = PS.yellow; g.fillRect(3, 3, 34, 24);    // 黄色描边框
+    g.fillStyle = PS.white; g.fillRect(5, 5, 30, 20);     // 白色屏块
+  });
+  st.stamp(st.rgbSplit2Wrap(scr, [-2, 0], [0, 0], [2, 1]), 140, 96);
+
+  // —— 屏下缘电光黄爆发核（黄/橙/白小像素块团，非光滑光球）——
+  const rc = mulberry32(st.seed + 5);
+  const coreCols = [PS.yellow, PS.orange, PS.white, '#FFE84A'];
+  for (let i = 0; i < 30; i++) {
+    const ang = rc() * 6.283, d = rc() * rc() * 8;
+    const w = 1 + ((rc() * 2.4) | 0);
+    st.P.fillStyle = coreCols[(rc() * coreCols.length) | 0];
+    st.P.fillRect((140 + Math.cos(ang) * d - w / 2) | 0, (108 + Math.sin(ang) * d * 0.8 - w / 2) | 0, w, w);
+  }
+
+  // —— 右上：断裂机械臂残骸（白描边+深灰填充，RGB 错位重影=爆炸飞散物）——
+  const arm = st.part(48, 30, -8, (g) => {
+    const B = (x, y, w, h) => {
+      g.fillStyle = '#3a3a44'; g.fillRect(x, y, w, h);
+      g.fillStyle = PS.white;
+      g.fillRect(x, y, w, 1); g.fillRect(x, y + h - 1, w, 1);
+      g.fillRect(x, y, 1, h); g.fillRect(x + w - 1, y, 1, h);
+    };
+    B(2, 11, 20, 8); B(22, 8, 10, 12); B(32, 12, 10, 7);  // 上臂段/肘关节/断口段
+    g.fillStyle = PS.white;
+    g.fillRect(42, 13, 1, 2); g.fillRect(43, 16, 1, 2);   // 断口锯齿
+    g.fillStyle = '#8a8a96'; g.fillRect(39, 15, 4, 1);    // 断口露出线缆
+    g.fillStyle = PS.white;
+    g.fillRect(6, 14, 1, 1); g.fillRect(26, 11, 1, 1); g.fillRect(26, 16, 1, 1); // 铆钉
+  });
+  st.stamp(st.rgbSplit2Wrap(arm, [-2, 1], [0, 0], [2, -1]), 272, 40);
+  // 中部散落 2-3 块半解体浅灰下箭头碎块（各带独立微旋转）
+  const arrowChunk = (rot) => st.part(13, 10, rot, (g) => {
+    g.fillStyle = '#b9b9c2';
+    g.fillRect(1, 1, 3, 2); g.fillRect(8, 1, 3, 2);       // 下箭头 ⌄ 阶梯
+    g.fillRect(3, 3, 3, 2); g.fillRect(6, 3, 3, 2);
+    g.fillRect(5, 5, 2, 2);
+    g.fillRect(10, 5, 2, 2);                              // 解体脱落小块
+  });
+  st.stamp(arrowChunk(-14), 252, 28);
+  st.stamp(arrowChunk(18), 290, 52);
+  st.stamp(arrowChunk(4), 264, 58);
+
+  // ===== 平滑层软特效（屏幕坐标 640x360）=====
+  st.spotlight(280, 29, 280, 294, 14, 66, 'rgba(205,205,220,0.16)'); // 聚光灯锥（灰梯形，顶部窄底宽）
+  st.spotlight(280, 29, 280, 294, 6, 30, 'rgba(228,228,238,0.10)');  // 锥内芯更亮
+  st.glowSpot(280, 293, 66, 'rgba(210,210,230,0.28)', 0.5);          // 锥底落在台面上的光池
+  st.glowSpot(320, 296, 190, 'rgba(255,32,32,0.20)', 0.45);          // 台缘红光带泛光
+  st.glowSpot(280, 192, 52, 'rgba(255,255,255,0.30)', 0.5);          // 小屏发光
+  st.glowSpot(280, 216, 44, 'rgba(255,232,0,0.50)', 0.5);            // 爆发核弱辉光
+  // 左右各一小团灰色软烟（软硬成对：smoke 打底 + pixSmoke 块状像素团）
+  st.smoke(60, 272, 30, 0.16, 31); st.pixSmoke(60, 272, 26, 24, 32);
+  st.smoke(582, 278, 30, 0.16, 33); st.pixSmoke(582, 278, 26, 24, 34);
+  // 爆发点双方向纸屑（confettiBurst 自带密度梯度，禁均匀撒点）
+  st.confettiBurst(280, 214, 135, 65, 85, 55, 11);        // 一路向左下方炸开
+  st.confettiBurst(280, 214, -90, 75, 95, 65, 12);        // 一路向上抛洒回落（drop 项）
+  // 爆点近旁 4-10px 大块碎片（贴爆点密、远处疏）
+  const rf = mulberry32(st.seed + 13);
+  for (let i = 0; i < 14; i++) {
+    const t = rf() * rf();
+    const ang = (135 + (rf() - 0.5) * 200) * Math.PI / 180;
+    const d = 6 + t * 70, w = 4 + ((rf() * 6) | 0);
+    st.S.fillStyle = PS.confetti[(rf() * PS.confetti.length) | 0];
+    st.S.fillRect((280 + Math.cos(ang) * d) | 0, (214 + Math.sin(ang) * d + t * t * 34) | 0, w, w);
+  }
+  // 红色台缘光带下方：3 条断续故障扫描行（深蓝/青绿/砖红，各单色）
+  st.scanRows([{ y: 305, color: PS.navy }, { y: 312, color: PS.teal }, { y: 319, color: PS.brick }]);
+
+  // 收尾后处理：暗场参数带（辉光偏强、轻噪点）
+  st.compose({ bloom: 0.6, rgbShift: null, noise: 0.008 });
+}
+
+/* ---------- 命题二 scene=n：换题考试（中性几何测试图）---------- */
+function sceneN(st) {
+  st.bgFlat('#000000');                                   // 纯黑底，无 letterbox
+
+  // ===== 三主体：白线稿一等主体 + 各自独立微旋转 =====
+  // 圆（左上）：白描边像素阶梯圆 + 橙色内环（橙=可交互语义），轻度 RGB 错位重影
+  const circ = st.part(48, 48, 4, (g) => {
+    const ring = (r, c) => {
+      g.fillStyle = c;
+      for (let a = 0; a < 360; a += 3) {
+        const rad = a * Math.PI / 180;
+        g.fillRect(24 + Math.round(Math.cos(rad) * r) - 1, 24 + Math.round(Math.sin(rad) * r) - 1, 2, 2);
+      }
+    };
+    ring(20, PS.white); ring(13, PS.orange);
+  });
+  st.stamp(st.rgbSplit2Wrap(circ, [-1, 0], [0, 0], [1, 0]), 75, 58);
+
+  // 方块（中上）：白描边 + 深灰填充 + 顶部黄色小面板（电光黄全场焦点）
+  const sq = st.part(36, 36, -3, (g) => {
+    g.fillStyle = '#2e2e36'; g.fillRect(1, 1, 34, 34);
+    g.fillStyle = PS.white;
+    g.fillRect(1, 1, 34, 1); g.fillRect(1, 34, 34, 1);
+    g.fillRect(1, 1, 1, 34); g.fillRect(34, 1, 1, 34);
+    g.fillStyle = PS.yellow; g.fillRect(8, 5, 20, 5);     // 顶部黄色小面板
+    g.fillStyle = PS.white; g.fillRect(5, 28, 2, 2); g.fillRect(29, 28, 2, 2); // 底部铆钉
+  });
+  st.stamp(sq, 165, 63);
+  // 方块右下角受击小爆点：纸屑炸开 + 辉光只绑这个爆点（主动加强，补换题图存在感）
+  st.confettiBurst(362, 158, 30, 150, 44, 42, 21);
+  st.confettiBurst(362, 158, 200, 80, 30, 18, 22);
+  st.glowSpot(362, 158, 30, 'rgba(255,240,200,0.60)', 0.55);
+
+  // 波浪（右侧）：白点阵波浪线 + 红/青低透明度错位 2px 级重影
+  const wave = st.part(72, 28, 6, (g) => {
+    const plot = (ox, c) => {
+      g.fillStyle = c;
+      for (let x = 2; x < 70; x += 2) {
+        g.fillRect(x + ox, 14 + Math.round(Math.sin(x * 0.30) * 7), 2, 2);
+      }
+    };
+    plot(-2, 'rgba(255,32,32,0.40)');                     // 红重影
+    plot(2, 'rgba(0,216,224,0.40)');                      // 青重影
+    plot(0, PS.white);                                    // 白色单色主体
+  });
+  st.stamp(wave, 247, 60);
+
+  // ===== UI 墨水层（真迹 UI 语言，part+微旋转）=====
+  // 中下偏右 HP 状态行：白字 + 黄色血格 + 白字 18/20
+  const hp = st.part(146, 14, 2, (g) => {
+    g.font = 'bold 8px monospace'; g.textBaseline = 'top';
+    g.fillStyle = PS.white; g.fillText('KITT  LV 1  HP', 0, 3);
+    g.fillRect(74, 2, 32, 1); g.fillRect(74, 9, 32, 1);   // 血格外框
+    g.fillRect(74, 2, 1, 8); g.fillRect(105, 2, 1, 8);
+    g.fillStyle = PS.yellow; g.fillRect(75, 3, 27, 5);    // 18/20 → 90% 黄
+    g.fillStyle = '#3a3a44'; g.fillRect(102, 3, 3, 5);    // 空血尾
+    g.fillStyle = PS.white; g.fillText('18 / 20', 110, 3);
+  });
+  st.stamp(hp, 205, 136);
+  // 左上角：红方块 + 白字 LIVE + 青字 CAM 02
+  const live = st.part(66, 12, -2.5, (g) => {
+    g.fillStyle = '#ff2020'; g.fillRect(0, 3, 6, 6);
+    g.font = 'bold 8px monospace'; g.textBaseline = 'top';
+    g.fillStyle = PS.white; g.fillText('LIVE', 10, 2);
+    g.fillStyle = PS.cyanText; g.fillText('CAM 02', 34, 2);
+  });
+  st.stamp(live, 36, 13);
+  // 右上角：青字 RATING 12000
+  const rating = st.part(64, 12, 2, (g) => {
+    g.font = 'bold 8px monospace'; g.textBaseline = 'top';
+    g.fillStyle = PS.cyanText; g.fillText('RATING 12000', 0, 2);
+  });
+  st.stamp(rating, 281, 13);
+
+  // ===== 平滑层 =====
+  st.spotlight(320, 0, 320, 185, 8, 42, 'rgba(255,255,255,0.10)'); // 顶部中央细锥光（照向中部）
+  st.spotlight(320, 0, 320, 185, 4, 18, 'rgba(255,255,255,0.10)');
+  st.glowSpot(320, 349, 130, 'rgba(255,32,32,0.15)', 0.4);         // 台缘灯带泛光
+
+  // ===== 底部：细红色台缘灯带（贴台缘、不到全宽）+ 灯带下 2 条断续扫描行 =====
+  st.rect(36, 173, 248, 2, '#ff2020');
+  st.scanRows([{ y: 353, color: PS.teal }, { y: 357, color: PS.brick }]);
+
+  // 收尾后处理：换题图轻参数（轻辉光、微色差、轻噪点）
+  st.compose({ bloom: 0.35, rgbShift: [0.5], noise: 0.005 });
+}
+
+/* ---------- 入口：URL 参数 ?scene=c|n&seed=1 ---------- */
+const qs = new URLSearchParams(location.search);
+const scene = qs.get('scene') || 'c';
+const seed = (parseInt(qs.get('seed'), 10) || 1) | 0;
+const st = new PixelStage(seed);
+if (scene === 'n') sceneN(st); else sceneC(st);
+document.body.appendChild(st.main);
+window.__done = true;
+</script>
+</body>
+</html>

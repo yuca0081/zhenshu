@@ -1,0 +1,16 @@
+{
+ "framework": "零依赖纯 Canvas2D —— 像素风的笔触单位是格子不是笔刷，笔刷库用不上；双画布分层（像素层 320x180 逻辑 2x 最近邻 + 平滑层 640x360），与 p5.brush 系（demo/p5brush-sample）分庭抗礼的另一条技术路线",
+ "deps": [],
+ "files": [
+  "kit.js",
+  "scenes.js",
+  "style.html"
+ ],
+ "cheat_sheet": "见 demo/stylekit-pixelstage/kit-cheatsheet.md（~1.5k token，注入时整体替换本字段）",
+ "score": {
+  "reproduce": "A 34/40 · B 31.5/40 · C 31/40（终审，四维=像素感/色阶/质感/构图各10）；综合约 82/100",
+  "neutral": 82,
+  "rounds": 4
+ },
+ "notes": "人工首单产物（2026-10-26）。迭代 r1→终审：A 24.5→34、B 3→31.5、C 18→31。三方对比：换题图 v2 82 分 vs 纯形容词版 56 分（反超 26，验收立住；v1 曾 30:70 落后——换题场景没同步考题修复的教训）。配方 16 条见 demo/stylekit-pixelstage/README.md。最大教训两条：平滑层不透明底会盖掉整个像素层（r1 烧两格）；RGB 色散只许出现在爆点，主体一律白线稿（复审补律）。"
+}

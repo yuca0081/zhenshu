@@ -151,6 +151,7 @@ type stylePayload struct {
 	DerivedFrom string                 `json:"derived_from,omitempty"`
 	Unverified  bool                   `json:"unverified,omitempty"`
 	Usage       *UsageStats            `json:"usage,omitempty"`
+	Kit         *StyleKit              `json:"kit,omitempty"`
 }
 
 func (r *styleRow) toStyle() (Style, error) {
@@ -170,6 +171,9 @@ func (r *styleRow) toStyle() (Style, error) {
 		CreatedAt:     r.CreatedAt,
 		DerivedFrom:   p.DerivedFrom,
 		Unverified:    p.Unverified,
+	}
+	if p.Kit != nil {
+		s.Kit = p.Kit
 	}
 	if p.Facets != nil {
 		s.Facets = *p.Facets
@@ -279,7 +283,7 @@ func (c *pgCatalog) PutStyle(s *Style) error {
 	payload, err := json.Marshal(stylePayload{
 		TagEvidence: s.TagEvidence, Signatures: s.Signatures,
 		Facets: facetPtr(s.Facets), DerivedFrom: s.DerivedFrom, Unverified: s.Unverified,
-		Usage: usagePtr(s.Usage),
+		Usage: usagePtr(s.Usage), Kit: s.Kit,
 	})
 	if err != nil {
 		return err

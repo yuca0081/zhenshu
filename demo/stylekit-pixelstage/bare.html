@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>PIXELSTAGE - LIVE RPG</title>
+<style>
+  html,body{margin:0;padding:0;background:#000;overflow:hidden}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="stage" width="640" height="360"></canvas>
+<script>
+(function(){
+"use strict";
+var W=320,H=180;
+var out=document.getElementById('stage');
+var ctx=out.getContext('2d');
+var off=document.createElement('canvas');
+off.width=W;off.height=H;
+var g=off.getContext('2d');
+
+/* ================= 3x5 像素字体 ================= */
+var FONT={
+'0':'111101101101111','1':'010110010010111','2':'111001111100111','3':'111001111001111',
+'4':'101101111001001','5':'111100111001111','6':'111100111101111','7':'111001001010010',
+'8':'111101111101111','9':'111101111001111',
+'A':'010101111101101','B':'110101110101110','C':'011100100100011','D':'110101101101110',
+'E':'111100110100111','F':'111100110100100','G':'011100101101011','H':'101101111101101',
+'I':'111010010010111','J':'011001001101010','K':'101101110101101','L':'100100100100111',
+'M':'101111111101101','N':'110101101101101','O':'111101101101111','P':'110101110100100',
+'Q':'111101101110001','R':'110101110101101','S':'011100010001110','T':'111010010010010',
+'U':'101101101101111','V':'101101101101010','W':'101101111111101','X':'101101010101101',
+'Y':'101101010010010','Z':'111001010100111',
+' ':'000000000000000','+':'000010111010000','-':'000000111000000','!':'010010010000010',
+'.':'000000000000010',',':'000000000010100',':':'000010000010000','/':'001001010100100',
+'*':'000101010101000','^':'010111010010000'
+};
+
+/* ============ 基础绘制原语（整数像素，无抗锯齿） ============ */
+function R(x,y,w,h,c,a){g.globalAlpha=(a===undefined?1:a);g.fillStyle=c;g.fillRect(x,y,w,h);g.globalAlpha=1;}
+function P(x,y,c,a){R(x,y,1,1,c,a);}
+function border(x,y,w,h,c,a){R(x,y,w,1,c,a);R(x,y+h-1,w,1,c,a);R(x,y,1,h,c,a);R(x+w-1,y,1,h,c,a);}
+function thick(x,y,w,h,t,c,a){R(x,y,w,t,c,a);R(x,y+h-t,w,t,c,a);R(x,y,t,h,c,a);R(x+w-t,y,t,h,c,a);}
+function pCircle(cx,cy,r,c,a){g.globalAlpha=(a===undefined?1:a);g.fillStyle=c;
+  for(var dy=-r;dy<=r;dy++){var s=Math.floor(Math.sqrt(r*r-dy*dy));g.fillRect(cx-s,cy+dy,2*s+1,1);}
+  g.globalAlpha=1;}
+function pRing(cx,cy,r,w,c,a){g.globalAlpha=(a===undefined?1:a);g.fillStyle=c;var ri=r-w;
+  for(var dy=-r;dy<=r;dy++){var s=Math.floor(Math.sqrt(r*r-dy*dy));
+    if(ri>0&&Math.abs(dy)<=ri){var s2=Math.floor(Math.sqrt(ri*ri-dy*dy));
+      if(s2<s){g.fillRect(cx-s,cy+dy,s-s2,1);g.fillRect(cx+s2+1,cy+dy,s-s2,1);}}
+    else{g.fillRect(cx-s,cy+dy,2*s+1,1);}}
+  g.globalAlpha=1;}
+function pLine(x0,y0,x1,y1,c,a){g.globalAlpha=(a===undefined?1:a);g.fillStyle=c;
+  var dx=Math.abs(x1-x0),sx=x0<x1?1:-1,dy=-Math.abs(y1-y0),sy=y0<y1?1:-1,err=dx+dy,x=x0,y=y0;
+  for(;;){g.fillRect(x,y,1,1);if(x===x1&&y===y1)break;var e2=2*err;
+    if(e2>=dy){err+=dy;x+=sx;}if(e2<=dx){err+=dx;y+=sy;}}
+  g.globalAlpha=1;}
+function ptext(s,x,y,sc,c,a){g.globalAlpha=(a===undefined?1:a);g.fillStyle=c;s=String(s).toUpperCase();
+  var cx=x;for(var k=0;k<s.length;k++){var gl=FONT[s.charAt(k)]||FONT[' '];
+    for(var i=0;i<15;i++){if(gl.charAt(i)==='1'){g.fillRect(cx+(i%3)*sc,y+((i/3)|0)*sc,sc,sc);}}
+    cx+=4*sc;}g.globalAlpha=1;}
+function ptextS(s,x,y,sc,c,sh){ptext(s,x+(sc>1?2:1),y+(sc>1?2:1),sc,sh||'#000');ptext(s,x,y,sc,c);}
+function ztext(s,x,y,px,c,st){g.font='bold '+px+'px "Microsoft YaHei","PingFang SC","SimHei",sans-serif';
+  g.textBaseline='top';
+  if(st){g.strokeStyle=st;g.lineWidth=Math.max(2,px*0.26);g.lineJoin='round';g.strokeText(s,x,y);}
+  g.fillStyle=c;g.fillText(s,x,y);}
+function lighter(on){g.globalCompositeOperation=on?'lighter':'source-over';}
+function lerpC(c1,c2,t){var a=parseInt(c1.slice(1),16),b=parseInt(c2.slice(1),16);
+  var r=Math.round(((a>>16)&255)+(((b>>16)&255)-((a>>16)&255))*t);
+  var gr=Math.round(((a>>8)&255)+(((b>>8)&255)-((a>>8)&255))*t);
+  var bl=Math.round((a&255)+((b&255)-(a&255))*t);
+  return 'rgb('+r+','+gr+','+bl+')';}
+function miniPlus(x,y,c,a){P(x,y,c,a);P(x-1,y,c,a*0.8);P(x+1,y,c,a*0.8);P(x,y-1,c,a*0.8);P(x,y+1,c,a*0.8);}
+function plusSpark(x,y,c){lighter(true);R(x,y-3,1,7,c,0.85);R(x-3,y,7,1,c,0.85);P(x,y,'#ffffff',0.95);lighter(false);}
+
+var C_CYAN='#29f2ff',C_PINK='#ff2ea6',C_PINK2='#ff3ec8',C_RED='#ff2038',
+    C_YEL='#ffd426',C_GRN='#3dff6e',C_WHT='#f2fbff',C_TXT='#d8ecff',
+    C_GRY='#8fa3c8',C_BD='#33415f';
+
+/* ================= 黑底 ================= */
+R(0,0,W,H,'#04050a');
+
+/* 远景像素星 */
+var stars=[[28,52,C_CYAN,.5],[48,66,C_PINK,.45],[74,46,'#e8fbff',.4],[206,44,C_CYAN,.45],
+[232,68,C_YEL,.4],[292,74,C_PINK,.45],[40,104,C_CYAN,.35],[256,42,'#e8fbff',.4],
+[86,60,C_YEL,.4],[216,58,C_CYAN,.4],[30,132,C_PINK,.3],[304,118,C_CYAN,.35],[66,90,'#e8fbff',.3]];
+for(var si=0;si<stars.length;si++)P(stars[si][0],stars[si][1],stars[si][2],stars[si][3]);
+miniPlus(50,120,C_CYAN,.25);miniPlus(270,68,C_PINK,.25);miniPlus(160,50,C_YEL,.22);
+
+/* ================= 热血冲击放射线 ================= */
+var FCX=158,FCY=96;
+var rayC=['#ffffff','#ff5ad1','#29f2ff','#ffd426'],rayA=[0.3,0.22,0.22,0.16];
+for(var rr=0;rr<20;rr++){
+  var ang=rr*0.31415+0.12;
+  var r1=54+(rr%3)*5,ln=10+((rr*7)%14);
+  var rx0=Math.round(FCX+Math.cos(ang)*r1),ry0=Math.round(FCY+Math.sin(ang)*r1);
+  var rx1=Math.round(FCX+Math.cos(ang)*(r1+ln)),ry1=Math.round(FCY+Math.sin(ang)*(r1+ln));
+  if(ry1<15||rx1<2||rx1>317||ry1>176)continue;
+  pLine(rx0,ry0,rx1,ry1,rayC[rr%4],rayA[rr%4]);
+}
+
+/* ================= 中心径向白闪（转场帧瞬间） ================= */
+lighter(true);
+pCircle(FCX,FCY,84,'#ffffff',0.028);
+pCircle(FCX,FCY,66,'#ffffff',0.05);
+pCircle(FCX,FCY,50,'#ffffff',0.09);
+pCircle(FCX,FCY,36,'#ffffff',0.16);
+pCircle(FCX,FCY,24,'#ffffff',0.26);
+pCircle(FCX,FCY,14,'#ffffff',0.4);
+pCircle(FCX,FCY,6,'#ffffff',0.75);
+pRing(FCX,FCY,56,2,'#ffffff',0.3);
+pRing(FCX,FCY,88,2,'#ffffff',0.12);
+lighter(false);
+
+/* ================= 波浪线（地面能量波，绿色霓虹） ================= */
+var WX0=64,WX1=296,WY=124,WAMP=8,WL=34;
+var wys=[];
+for(var wa=WX0;wa<=WX1;wa++)wys[wa]=WY+Math.round(WAMP*Math.sin((wa-WX0)*2*Math.PI/WL));
+for(var wb=WX0;wb<=WX1;wb++)R(wb,wys[wb]+3,1,1,'#1d8a3c',0.3);
+lighter(true);
+for(var wc=WX0;wc<=WX1;wc++){R(wc-2,wys[wc],1,3,'#ff0040',0.5);R(wc+2,wys[wc]-2,1,3,'#00ffd0',0.5);}
+lighter(false);
+for(var wd=WX0;wd<=WX1;wd++)R(wd,wys[wd]-1,1,3,C_GRN);
+for(var we=WX0;we<=WX1;we++)P(we,wys[we],'#eafff0');
+plusSpark(61,wys[WX0],C_GRN);
+plusSpark(299,wys[WX1],'#eafff0');
+
+/* ================= 圆（霓虹宝珠，青色，RGB 错位重影） ================= */
+var CX=128,CY=84,CR=18;
+lighter(true);
+pRing(CX,CY,CR+2,2,C_CYAN,0.15);
+pRing(CX,CY,CR+4,2,C_CYAN,0.06);
+pRing(CX-2,CY-1,CR,2,'#ff0040',0.55);
+pRing(CX+2,CY+1,CR,2,'#00ffd0',0.55);
+lighter(false);
+pCircle(CX,CY,CR,'#0a1620');
+pCircle(CX+2,CY+2,CR-5,'#061019');
+pRing(CX,CY,12,1,C_CYAN,0.22);
+var hiDots=[[114,80],[116,77],[118,74],[121,72],[124,70]];
+for(var d1=0;d1<hiDots.length;d1++)P(hiDots[d1][0],hiDots[d1][1],'#9ff6ff',0.85);
+var shDots=[[142,88],[140,91],[138,94]];
+for(var d2=0;d2<shDots.length;d2++)P(shDots[d2][0],shDots[d2][1],'#0d3a4a',0.9);
+pRing(CX,CY,CR,2,C_CYAN);
+R(106,70,2,2,C_CYAN,0.8);R(148,71,2,2,'#ff5ad1',0.7);R(133,107,2,2,C_CYAN,0.6);
+
+/* ================= 方块（霓虹装甲块，品红，RGB 错位重影） ================= */
+var SX=173,SY=81,SW=30,SH=30;
+lighter(true);
+border(SX-2,SY-2,SW+4,SH+4,C_PINK,0.13);
+border(SX-3,SY-3,SW+6,SH+6,C_PINK,0.05);
+thick(SX-2,SY-1,SW,SH,2,'#ff0040',0.55);
+thick(SX+2,SY+1,SW,SH,2,'#00ffd0',0.55);
+lighter(false);
+R(SX,SY,SW,SH,'#150b1c');
+R(SX+2,SY+2,SW-4,1,'#ff9adf',0.28);
+R(SX+2,SY+2,1,SH-4,'#ff9adf',0.18);
+R(SX+2,SY+SH-3,SW-4,1,'#000000',0.5);
+R(SX+SW-3,SY+2,1,SH-4,'#000000',0.35);
+border(SX+5,SY+5,SW-10,SH-10,C_PINK2,0.3);
+pLine(181,101,195,87,'#ffffff',0.06);
+pLine(184,104,196,92,'#ffffff',0.05);
+R(SX+3,SY+3,2,2,C_YEL);R(SX+SW-5,SY+3,2,2,C_YEL);
+R(SX+3,SY+SH-5,2,2,C_YEL);R(SX+SW-5,SY+SH-5,2,2,C_YEL);
+P(188,94,'#ff9adf');P(187,95,'#ff9adf');P(189,95,'#ff9adf');P(186,96,'#ff9adf');P(190,96,'#ff9adf');
+P(187,97,'#ff9adf');P(189,97,'#ff9adf');P(188,98,'#ff9adf');
+thick(SX,SY,SW,SH,2,C_PINK2);
+
+/* ================= 敌方名牌 ================= */
+function tag(x,y,s,c){var w=s.length*4-1+8;R(x,y,w,8,'#070c15',0.9);border(x,y,w,8,C_BD);R(x+1,y+1,1,6,c,0.95);ptext(s,x+4,y+1,1,C_TXT);}
+tag(103,55,'CIRCLE LV8',C_CYAN);
+tag(166,69,'SQUARE LV9',C_PINK2);
+tag(64,104,'WAVE LV7',C_GRN);
+
+/* 冲击火花 */
+plusSpark(150,68,C_YEL);
+plusSpark(186,62,C_CYAN);
+plusSpark(140,112,'#ff5ad1');
+plusSpark(222,104,'#e8fbff');
+P(98,90,'#ff5ad1',0.8);P(216,80,C_CYAN,0.7);
+
+/* ================= 弹幕 ================= */
+ztext('前方高能!!',12,44,9,'#ffe14d','#000');
+ptextS('666666',242,50,2,C_WHT,'#001318');
+ztext('这波能打!!',22,144,9,C_GRN,'#000');
+ztext('破防了',246,138,9,'#ff5ad1','#000');
+
+/* ============ 顶部直播条 + 收视率翻牌计数器（收视率即血条） ============ */
+R(0,0,W,14,'#05080f',0.9);
+R(0,13,W,1,'#1b2742');
+
+/* LIVE 红点 + 机位号（左上角） */
+R(3,2,7,7,C_RED,0.22);
+border(3,2,7,7,C_RED,0.5);
+R(4,3,5,5,C_RED);
+P(5,4,'#ff97a4');
+ptextS('LIVE',12,3,2,'#ffffff','#5c0716');
+ptext('CAM 02',47,5,1,C_GRY);
+
+/* 大号翻牌计数器 */
+R(97,2,126,30,'#0a0e16',0.94);
+border(97,2,126,30,'#3a4a6e');
+R(98,3,124,1,C_CYAN,0.45);
+R(98,30,124,1,C_PINK,0.4);
+ztext('收视率',102,3,8,'#ff85d8');
+ptextS('^+1024',196,4,1,C_GRN,'#05230f');
+var cells=[111,127,143,162,178,194];
+var num='882417';
+for(var ci=0;ci<6;ci++){
+  var cl=cells[ci];
+  R(cl,12,15,17,'#0d1119');
+  ptext(num.charAt(ci),cl+3,13,3,ci===5?'#eaffef':C_TXT);
+  R(cl+1,20,13,1,'#000000',0.6);
+  R(cl+1,21,13,1,'#ffffff',0.05);
+  border(cl,12,15,17,ci===5?C_GRN:C_BD);
+}
+R(159,24,2,2,C_TXT);
+
+/* 血条段（收视率=HP） */
+R(99,32,112,6,'#04060b',0.7);
+ptext('HP',102,33,1,C_GRN);
+for(var hpi=0;hpi<24;hpi++){
+  var hx=113+hpi*4;
+  if(hpi<18){R(hx,33,3,3,lerpC('#3dff6e','#ffd426',hpi/17));}
+  else{R(hx,33,3,3,'#33121d');}
+}
+R(113+17*4,33,3,1,'#ffffff',0.7);
+
+/* 连击计数（右上角） */
+ptext('COMBO',236,4,1,C_YEL);
+ptextS('*127',258,3,2,'#ff8a2a','#4a0e00');
+ptext('HITS',292,7,1,C_GRY);
+P(255,3,C_YEL,0.9);P(290,12,'#ff5ad1',0.8);
+
+/* ============ 底部：战斗播报 + 弹幕输入条 + 信号 ============ */
+R(106,151,108,12,'#080d16',0.92);
+border(106,151,108,12,'#2a3752');
+R(107,152,1,10,C_YEL,0.7);
+ztext('方块格挡! 收视率+1024',113,153,8,'#cfe2ff');
+
+R(4,167,166,11,'#080c14',0.92);
+border(4,167,166,11,'#26324d');
+R(9,170,3,1,C_CYAN,0.9);P(8,171,C_CYAN,0.9);P(12,171,C_CYAN,0.9);
+P(8,172,C_CYAN,0.9);P(12,172,C_CYAN,0.9);R(9,173,3,1,C_CYAN,0.9);P(10,174,C_CYAN,0.9);
+ztext('发个弹幕见证当下',17,169,8,'#6f7fa3');
+R(85,170,2,6,C_CYAN,0.95);
+
+R(284,175,3,2,C_GRN,0.9);R(288,173,3,4,C_GRN,0.9);R(292,171,3,6,C_GRN,0.9);R(296,169,3,8,'#26324d');
+ptext('AUTO',303,171,1,C_GRY);
+
+/* ============ 输出：2x 最近邻放大 + CRT 后期 ============ */
+ctx.imageSmoothingEnabled=false;
+ctx.drawImage(off,0,0,640,360);
+ctx.fillStyle='rgba(255,255,255,0.05)';
+ctx.fillRect(0,0,640,360);
+ctx.fillStyle='rgba(255,255,255,0.03)';
+ctx.fillRect(0,196,640,54);
+ctx.fillStyle='rgba(0,0,0,0.2)';
+for(var sy2=1;sy2<360;sy2+=2)ctx.fillRect(0,sy2,640,1);
+var vg=ctx.createRadialGradient(320,180,120,320,180,410);
+vg.addColorStop(0,'rgba(0,0,0,0)');
+vg.addColorStop(0.55,'rgba(0,0,0,0.1)');
+vg.addColorStop(1,'rgba(1,1,10,0.55)');
+ctx.fillStyle=vg;
+ctx.fillRect(0,0,640,360);
+})();
+</script>
+</body>
+</html>

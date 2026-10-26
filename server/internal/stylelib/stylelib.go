@@ -50,6 +50,37 @@ type Style struct {
 	DerivedFrom string      `json:"derived_from,omitempty"` // 衍生出处（register_style 自动带）
 	Unverified  bool        `json:"unverified,omitempty"`   // 未验证：用过它的片出片后才转正
 	Usage       UsageStats  `json:"usage,omitempty"`        // 使用统计（出片记账；分数来自审核）
+
+	// Kit 可执行画材包（docs/style-kit-distillation-plan §6）：蒸馏工位产物。
+	// nil = 未蒸馏（现状全部条目），新老互不干扰；payload JSONB 加字段零迁移。
+	// 制作期画面工位注入 CheatSheet（小抄）替代整篇画法描述；Files 只存文件名，
+	// 正本住 MediaStore style_media/<id>/kit/，URL 永不入库。
+	Kit *StyleKit `json:"kit,omitempty"`
+}
+
+// StyleKit 画材包：还原过关才进库的可执行代码资产，不是提取文本（防 v2 覆辙）。
+type StyleKit struct {
+	Framework  string         `json:"framework"`             // 用了什么框架 + 一句话为什么（选型本身是风格知识）
+	Deps       []StyleKitDep  `json:"deps,omitempty"`        // 依赖（精确版本；零依赖为空）
+	Files      []string       `json:"files,omitempty"`       // 画材包代码文件名（kit.js/scenes.js/...，正本在媒体后端）
+	CheatSheet string         `json:"cheat_sheet,omitempty"` // API 小抄（≤~2k token）——画面工位提示词真正注入的东西
+	Score      StyleKitScore  `json:"score,omitempty"`       // 判卷记录：入库门槛依据，带伤必标分
+	Notes      string         `json:"notes,omitempty"`       // 配方笔记（路线 + 已知弱点，≤14 行）
+}
+
+// StyleKitDep 依赖清单条目：版本钉死（@latest 不许进，毕业检查第①条）。
+type StyleKitDep struct {
+	Name    string `json:"name"`              // 包名（零依赖纯 Canvas 时为空表）
+	Version string `json:"version,omitempty"` // 精确版本
+	License string `json:"license,omitempty"` // 许可证（GPL 类商用小心，毕业检查第③条）
+}
+
+// StyleKitScore 蒸馏判卷分：reproduce=还原分（真迹对照四维）、neutral=换题分
+// （防描红）、rounds=迭代轮数（预算证据）。分制由判卷官口径带出（如 40 分制）。
+type StyleKitScore struct {
+	Reproduce string  `json:"reproduce,omitempty"` // 如 "A 34/40 · B 31.5/40 · C 31/40（终审）"
+	Neutral   float64 `json:"neutral,omitempty"`   // 换题样图风格保持度 0-100
+	Rounds    int     `json:"rounds,omitempty"`    // 判卷迭代轮数
 }
 
 // StyleFacets 分面标签：风格工位 search_styles 的检索轴（prep-agents-design §3.2）。

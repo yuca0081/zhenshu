@@ -112,3 +112,11 @@ ai/vendor/soundfonts/*
 
 # BGM v2 试听串烧（可再生副产物，ai/make_bgm_v2.py --reel）
 data/library/media/audio/preview_*_reel.mp3
+
+# 风格画材包人工首单：kit 源码入库；渲染/判卷 PNG 种子确定性可再生成，不入库（同 p5brush-sample 惯例）
+demo/stylekit-pixelstage/**/*.png
+
+# 本地临时目录与杂项二进制（运行日志/接口调试草稿/未收编工具）
+tmp/
+server/tmp/
+server/pgq.exe

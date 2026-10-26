@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>pixelstage kit</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #101010; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<script src="kit.js"></script>
+<script src="scenes.js"></script>
+<script>
+  const qs = new URLSearchParams(location.search);
+  const which = qs.get('scene') || 'a';
+  const seed = parseInt(qs.get('seed') || '1', 10) || 1;
+  const st = new PixelStage(seed);
+  ({ a: sceneA, b: sceneB, c: sceneC, n: sceneN })[which]();
+  document.body.appendChild(st.main);
+  window.__done = true;
+</script>
+</body>
+</html>

@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>manual-arm pixelstage</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #000; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<script>
+// ============================================================
+// manual-arm —— 手册仿写：命题一（scene=c 暗场爆炸舞台）+
+// 命题二（scene=n 换题中性测试图）。单文件自包含：
+// 原语整段摘抄改编自 kit.js（PixelStage / mulberry32 / PS 调色板）。
+// 用法：manual.html?scene=c|n&seed=1
+// 纪律：禁 Math.random，一切随机从种子派生（mulberry32）。
+// ============================================================
+
+// ---- 种子随机（mulberry32，照抄手册）----
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+// ---- 画材包调色板（照抄手册 PS 对象）----
+const PS = {
+  black: '#101010',      // 广播黑（暗场底色，非纯 #000）
+  stageGray: '#2b2b2b',  // 舞台锥灰
+  white: '#ffffff',
+  orange: '#F08030',     // 交互层橙
+  yellow: '#FFFF00',     // 焦点黄——全场至多两处
+  cyan: '#00d8e0',
+  magenta: '#ff20c8',
+  cyanText: '#00e5e5',
+  brick: '#8b2020',
+  navy: '#1a2a4a',
+  teal: '#2a7a8a',
+  confetti: ['#ff2020', '#2020ff', '#00d8e0', '#e8e000', '#ff00ff', '#ffffff', '#ffffff', '#111111', '#20ff20'],
+};
+
+// ============================================================
+// PixelStage —— 摘抄改编自 kit.js
+// 改动 3 处（均为命题要求，注明）：
+//  1. compose 的 letterbox 填纯黑 #000000（命题一：边是纯黑，暗场才是深黑）。
+//  2. confettiBurst 加 big 选项：纸屑块 4-10px（命题一要求 4-10px 团）。
+//  3. pixSmoke 加 tint 灰度参数（命题一要求灰色软烟，非纯白）。
+// ============================================================
+class PixelStage {
+  constructor(seed = 1) {
+    this.seed = seed;
+    this.rnd = mulberry32(seed);
+    this.LW = 320; this.LH = 180;              // 逻辑（像素层）分辨率
+    this.W = 640; this.H = 360;                // 输出分辨率
+    this.px = document.createElement('canvas');
+    this.px.width = this.LW; this.px.height = this.LH;
+    this.P = this.px.getContext('2d');
+    this.main = document.createElement('canvas');
+    this.main.width = this.W; this.main.height = this.H;
+    this.M = this.main.getContext('2d');
+    this.sm = document.createElement('canvas');
+    this.sm.width = this.W; this.sm.height = this.H;
+    this.S = this.sm.getContext('2d');
+    this.jitters = [];
+    this.letterbox = 0;
+  }
+
+  // ---- 像素层原语（逻辑坐标，1 单位 = 屏幕 2px）----
+  bgFlat(c) { this.P.fillStyle = c; this.P.fillRect(0, 0, this.LW, this.LH); }
+  bgRadial(cx, cy, r0, r1, c0, c1) {
+    const g = this.P.createRadialGradient(cx, cy, r0, cx, cy, r1);
+    g.addColorStop(0, c0); g.addColorStop(1, c1);
+    this.P.fillStyle = g; this.P.fillRect(0, 0, this.LW, this.LH);
+  }
+  rect(x, y, w, h, c) { this.P.fillStyle = c; this.P.fillRect(x | 0, y | 0, w | 0, h | 0); }
+  text(str, x, y, size, c, bold = true) {
+    this.P.font = `${bold ? 'bold ' : ''}${size}px monospace`;
+    this.P.fillStyle = c; this.P.textBaseline = 'top';
+    this.P.fillText(str, x, y);
+  }
+  box(x, y, w, h, c, t = 1) {
+    this.rect(x, y, w, t, c); this.rect(x, y + h - t, w, t, c);
+    this.rect(x, y, t, h, c); this.rect(x + w - t, y, t, h, c);
+  }
+
+  // ---- 部件：独立小画布 + 微旋转（八律 #4 手持机位）----
+  part(w, h, rotDeg, draw) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    draw(c.getContext('2d'), w, h);
+    return { c, rot: rotDeg * Math.PI / 180, rnd: this.rnd() };
+  }
+  stamp(part, rx, ry) {
+    this.P.save();
+    this.P.translate(rx, ry); this.P.rotate(part.rot);
+    this.P.imageSmoothingEnabled = false;
+    this.P.drawImage(part.c, -part.c.width / 2, -part.c.height / 2);
+    this.P.restore();
+  }
+
+  // ---- 块级 RGB 通道撕裂（错位量按部件传入）----
+  rgbSplit(target, dR, dG, dB) {
+    const w = target.width, h = target.height;
+    const out = document.createElement('canvas'); out.width = w; out.height = h;
+    const o = out.getContext('2d');
+    const chan = (color) => {
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const x = c.getContext('2d');
+      x.drawImage(target, 0, 0);
+      x.globalCompositeOperation = 'multiply';
+      x.fillStyle = color; x.fillRect(0, 0, w, h);
+      x.globalCompositeOperation = 'destination-in';
+      x.drawImage(target, 0, 0);
+      return c;
+    };
+    o.globalCompositeOperation = 'lighter';
+    o.drawImage(chan('#ff0000'), dR[0], dR[1]);
+    o.drawImage(chan('#00ff00'), dG[0], dG[1]);
+    o.drawImage(chan('#0000ff'), dB[0], dB[1]);
+    return out;
+  }
+  rgbSplit2Wrap(part, dR, dG, dB) {
+    return { c: this.rgbSplit(part.c, dR, dG, dB), rot: part.rot };
+  }
+
+  // ---- 平滑层原语（全分辨率，软边）----
+  glowSpot(x, y, r, c, a = 0.8) {
+    const g = this.S.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, c); g.addColorStop(1, 'rgba(0,0,0,0)');
+    this.S.save(); this.S.globalAlpha = a; this.S.globalCompositeOperation = 'lighter';
+    this.S.fillStyle = g; this.S.beginPath(); this.S.arc(x, y, r, 0, 7); this.S.fill(); this.S.restore();
+  }
+  pixSmoke(x, y, r, n, seedOff = 0, tint = 255) { // 【改】tint：灰色烟
+    const rr = mulberry32(this.seed + seedOff);
+    this.S.save();
+    for (let i = 0; i < n; i++) {
+      const ang = rr() * 6.283, d = rr() * r;
+      const px = x + Math.cos(ang) * d, py = y + Math.sin(ang) * d * 0.7;
+      const w = 2 * (rr() < 0.6 ? 1 : rr() < 0.9 ? 2 : 3);
+      this.S.fillStyle = `rgba(${tint},${tint},${tint},${0.25 + rr() * 0.5})`;
+      this.S.fillRect(px | 0, py | 0, w, w);
+    }
+    this.S.restore();
+  }
+  smoke(x, y, r, a = 0.5, seedOff = 0) {
+    const s = this.S; s.save();
+    s.globalAlpha = a; s.globalCompositeOperation = 'screen';
+    const rr = mulberry32(this.seed + seedOff);
+    for (let i = 0; i < 5; i++) {
+      const dx = (rr() - 0.5) * r, dy = (rr() - 0.5) * r * 0.7, rad = r * (0.4 + rr() * 0.5);
+      const g = s.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, rad);
+      g.addColorStop(0, 'rgba(255,255,255,0.85)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      s.fillStyle = g; s.beginPath(); s.arc(x + dx, y + dy, rad, 0, 7); s.fill();
+    }
+    s.restore();
+  }
+  spotlight(x0, y0, x1, y1, halfW0, halfW1, c = 'rgba(255,255,255,0.10)') {
+    const s = this.S; s.save(); s.globalCompositeOperation = 'screen';
+    s.fillStyle = c; s.beginPath();
+    s.moveTo(x0 - halfW0, y0); s.lineTo(x0 + halfW0, y0);
+    s.lineTo(x1 + halfW1, y1); s.lineTo(x1 - halfW1, y1);
+    s.closePath(); s.fill(); s.restore();
+  }
+  scanRows(ys) { // 每行单色、细横线、断续带缺口（1.2-2px，压低亮度防彩块感）
+    const s = this.S;
+    for (const { y, color } of ys) {
+      let x = 4 + this.rnd() * 30;
+      while (x < this.W - 4) {
+        const seg = 10 + this.rnd() * 50, gap = (this.rnd() < 0.35 ? 10 + this.rnd() * 28 : 2);
+        s.globalAlpha = 0.35 + this.rnd() * 0.3;
+        s.fillStyle = color; s.fillRect(x, y, seg, 1.2 + (this.rnd() < 0.25 ? 0.8 : 0));
+        x += seg + gap;
+      }
+    }
+    s.globalAlpha = 1;
+  }
+  confetti(cx, cy, spreadX, spreadY, n, seedOff = 0) {
+    const rr = mulberry32(this.seed + seedOff);
+    for (let i = 0; i < n; i++) {
+      const x = cx + (rr() - 0.5) * spreadX, y = cy + (rr() - 0.5) * spreadY;
+      const c = PS.confetti[(rr() * PS.confetti.length) | 0];
+      const w = 2 * (rr() < 0.7 ? 1 : 2);
+      this.S.fillStyle = c;
+      this.S.fillRect(x | 0, y | 0, w, w);
+    }
+  }
+  // 爆点簇 + 抛物线下落弧（贴爆点密、远处疏）【改】big=true 时纸屑 4-10px
+  confettiBurst(cx, cy, dirDeg, spreadDeg, distMax, n, seedOff = 0, big = false) {
+    const rr = mulberry32(this.seed + seedOff);
+    for (let i = 0; i < n; i++) {
+      const t = rr() * rr(); // 密度梯度
+      const ang = (dirDeg + (rr() - 0.5) * spreadDeg) * Math.PI / 180;
+      const d = 8 + t * distMax;
+      const drop = t * t * (rr() * 30 + 10); // 抛物线下坠
+      const x = cx + Math.cos(ang) * d, y = cy + Math.sin(ang) * d + drop;
+      const c = PS.confetti[(rr() * PS.confetti.length) | 0];
+      const w = big ? 2 * (rr() < 0.5 ? 2 : rr() < 0.85 ? 3 : 5)   // 4/6/10px
+                    : 2 * (rr() < 0.7 ? 1 : 2);
+      this.S.fillStyle = c;
+      this.S.fillRect(x | 0, y | 0, w, w);
+    }
+  }
+  whiteFlash(a = 1) {
+    const g = this.M.createRadialGradient(this.W / 2, this.H / 2, 40, this.W / 2, this.H / 2, 420);
+    g.addColorStop(0, `rgba(255,255,255,${a})`);
+    g.addColorStop(1, `rgba(153,153,153,${a * 0.85})`);
+    this.M.fillStyle = g; this.M.fillRect(0, 0, this.W, this.H);
+  }
+
+  // ---- 合成与后处理 ----
+  compose(o = {}) {
+    const op = Object.assign({ bloom: 0.55, noise: 0.04, rgbShift: null, glitchSource: null }, o);
+    const M = this.M;
+    M.fillStyle = PS.black; M.fillRect(0, 0, this.W, this.H);
+    M.imageSmoothingEnabled = false;
+    M.drawImage(this.px, 0, 0, this.LW, this.LH, 0, 0, this.W, this.H);
+    M.drawImage(this.sm, 0, 0);
+    if (this.letterbox > 0) {
+      M.fillStyle = '#000000'; // 【改】命题一：letterbox 边为纯黑（边内不放内容）
+      M.fillRect(0, 0, this.W, this.letterbox);
+      M.fillRect(0, this.H - this.letterbox, this.W, this.letterbox);
+    }
+    if (op.rgbShift) this._frameRGBShift(op.rgbShift);
+    if (op.bloom > 0) this._bloom(op.bloom);
+    if (op.noise > 0) this._noise(op.noise);
+  }
+  _frameRGBShift([dx]) {
+    const t = document.createElement('canvas'); t.width = this.W; t.height = this.H;
+    t.getContext('2d').drawImage(this.main, 0, 0);
+    const shifted = this.rgbSplit(t, [dx, 0], [0, 0], [-dx, 0]);
+    this.M.drawImage(shifted, 0, 0);
+  }
+  _bloom(a) {
+    const w = this.W >> 1, h = this.H >> 1;
+    const t = document.createElement('canvas'); t.width = w; t.height = h;
+    const x = t.getContext('2d');
+    x.drawImage(this.main, 0, 0, w, h);
+    x.globalCompositeOperation = 'multiply';
+    x.fillStyle = 'rgb(90,90,90)'; x.fillRect(0, 0, w, h);
+    x.globalCompositeOperation = 'destination-in';
+    x.drawImage(this.main, 0, 0, w, h);
+    this.M.save();
+    this.M.globalAlpha = a; this.M.globalCompositeOperation = 'lighter';
+    this.M.filter = 'blur(3px)';
+    this.M.drawImage(t, 0, 0, this.W, this.H);
+    this.M.restore();
+  }
+  _noise(a) {
+    const w = this.W >> 1, h = this.H >> 1;
+    const t = document.createElement('canvas'); t.width = w; t.height = h;
+    const x = t.getContext('2d'), img = x.createImageData(w, h), rr = mulberry32(this.seed + 77);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const v = rr() < 0.5 ? 0 : rr() * 255;
+      img.data[i] = v; img.data[i + 1] = v; img.data[i + 2] = v;
+      img.data[i + 3] = 255 * a * rr();
+    }
+    x.putImageData(img, 0, 0);
+    this.M.save(); this.M.globalCompositeOperation = 'lighter';
+    this.M.drawImage(t, 0, 0, this.W, this.H); this.M.restore();
+  }
+}
+
+// ============================================================
+// 命题一（scene=c）：暗场爆炸舞台
+// 原语：bgFlat 广播黑 / P 层锥光梯形 / 台缘细红光带+斜向侧沿 /
+// part+stamp 小人/小屏/机械臂（红蓝错位重影描边，不做整块通道撕裂）/
+// 像素块爆发核 / glowSpot 弱辉光 / confettiBurst 双向爆簇 /
+// pixSmoke 灰烟 / scanRows / compose 暗场参数带
+// ============================================================
+
+// 背对镜头的白色小像素人（兜帽头/躯干带暗部/两腿/脚下白横杠）
+function personPart() {
+  return st.part(18, 28, -2.5, (g) => {
+    g.fillStyle = '#ffffff';
+    g.fillRect(5, 0, 8, 8); g.fillRect(4, 2, 10, 5);      // 兜帽头
+    g.fillStyle = '#b8b8b8'; g.fillRect(6, 2, 6, 2);      // 帽内暗（背对镜头）
+    g.fillStyle = '#ffffff'; g.fillRect(4, 8, 10, 10);    // 躯干
+    g.fillStyle = '#8a8a8a'; g.fillRect(6, 10, 4, 6);     // 躯干暗部
+    g.fillStyle = '#ffffff';
+    g.fillRect(5, 18, 3, 8); g.fillRect(10, 18, 3, 8);    // 两条腿
+    g.fillRect(2, 26, 14, 2);                             // 脚下白色横杠
+  });
+}
+
+// 悬浮小屏（白色块+黄描边框+红/蓝块级错位重影描边——重影只做描边，不让白块变彩块）
+function screenPart() {
+  return st.part(52, 38, 2.0, (g) => {
+    g.lineWidth = 2;
+    g.strokeStyle = 'rgba(255,32,32,0.9)';
+    g.strokeRect(11, 7, 34, 24);                           // 红重影描边（右下错位）
+    g.strokeStyle = 'rgba(32,32,255,0.9)';
+    g.strokeRect(3, 3, 34, 24);                            // 蓝重影描边（左上错位）
+    g.fillStyle = '#ffffff'; g.fillRect(7, 5, 34, 24);     // 白色块
+    g.strokeStyle = '#FFFF00';
+    g.strokeRect(6.5, 4.5, 35, 25);                        // 黄色描边框
+    g.fillStyle = '#c8c8c8'; g.fillRect(11, 9, 10, 3);     // 屏面碎细节
+  });
+}
+
+// 断裂机械臂残骸（深灰填充块+白描边轮廓；RGB 重影=红/蓝错位描边，不做整块通道撕裂）
+function drawArmShapes(g, ghost) {
+  g.lineWidth = 2;
+  if (!ghost) g.strokeStyle = '#ffffff';
+  if (!ghost) { g.fillStyle = '#2b2b2b'; g.fillRect(14, 6, 26, 13); }   // 上臂
+  g.strokeRect(14, 6, 26, 13);
+  g.beginPath(); g.arc(43, 12, 7, 0, 7);                                 // 肘关节
+  if (!ghost) g.fill();
+  g.stroke();
+  g.save(); g.translate(43, 12); g.rotate(0.55);                         // 前臂（断离）
+  if (!ghost) g.fillRect(5, -5, 18, 10);
+  g.strokeRect(5, -5, 18, 10);
+  g.restore();
+  if (!ghost) {                                                          // 断口锯齿
+    g.fillStyle = '#ffffff';
+    g.fillRect(11, 7, 3, 3); g.fillRect(13, 13, 3, 3); g.fillRect(10, 10, 2, 3);
+  }
+}
+function armPart() {
+  return st.part(74, 44, 14, (g) => {
+    g.strokeStyle = 'rgba(255,32,32,0.85)';
+    g.save(); g.translate(5, 2); drawArmShapes(g, true); g.restore();    // 红重影（右下错位）
+    g.strokeStyle = 'rgba(32,64,255,0.85)';
+    g.save(); g.translate(-4, -2); drawArmShapes(g, true); g.restore();  // 蓝重影（左上错位）
+    drawArmShapes(g, false);                                             // 主体：深灰填充+白描边
+    g.strokeStyle = '#ff2020'; g.lineWidth = 1.5;                        // 红色线缆
+    g.beginPath(); g.moveTo(19, 21); g.lineTo(26, 27); g.lineTo(36, 22); g.stroke();
+  });
+}
+
+// 半解体的浅灰色下箭头碎块（断成两截的 V 形残骸，不是指针图标）
+function chevPart() {
+  return st.part(16, 12, 0, (g) => {
+    g.strokeStyle = '#b8b8b8'; g.lineWidth = 2.5; g.lineCap = 'square';
+    g.beginPath(); g.moveTo(2, 2); g.lineTo(7, 7); g.stroke();           // V 左半
+    g.beginPath(); g.moveTo(9, 9); g.lineTo(14, 4); g.stroke();          // V 右半（错位）
+  });
+}
+
+function sceneC() {
+  st.letterbox = 29;                    // 上下 29px 纯黑边（compose 内填 #000）
+  st.bgFlat('#101010');                 // 暗场：广播黑，非纯 #000
+  // —— 聚光灯锥（像素层灰梯形，锥内比周围略亮；锥底落在 82% 高度台面上）——
+  st.P.save();
+  st.P.globalAlpha = 0.20; st.P.fillStyle = '#9a9a9a';
+  st.P.beginPath(); st.P.moveTo(137, 15); st.P.lineTo(153, 15);
+  st.P.lineTo(179, 146); st.P.lineTo(111, 146); st.P.closePath(); st.P.fill();
+  st.P.globalAlpha = 0.10; st.P.fillStyle = '#ffffff';  // 内芯更亮一档
+  st.P.beginPath(); st.P.moveTo(141, 15); st.P.lineTo(149, 15);
+  st.P.lineTo(165, 146); st.P.lineTo(125, 146); st.P.closePath(); st.P.fill();
+  st.P.globalAlpha = 0.12; st.P.fillRect(109, 143, 72, 3); // 锥底台面光带
+  st.P.restore();
+  // —— 台面 + 台缘细红光带（细窄、贴台面前沿、不到全宽）——
+  st.rect(36, 140, 248, 5, '#161616');            // 台面微亮条
+  st.rect(58, 146, 204, 2, '#d41414');            // 台面前沿细红带
+  st.rect(58, 146, 204, 1, '#ff2020');            // 亮芯
+  // 台缘左右两端一小段斜向红/橙厚边（舞台侧沿，向下斜收，不与光带相连）
+  st.P.save(); st.P.lineCap = 'round';
+  st.P.strokeStyle = '#c01818'; st.P.lineWidth = 3;
+  st.P.beginPath(); st.P.moveTo(54, 147); st.P.lineTo(46, 153); st.P.stroke();
+  st.P.beginPath(); st.P.moveTo(266, 147); st.P.lineTo(274, 153); st.P.stroke();
+  st.P.strokeStyle = '#F08030'; st.P.lineWidth = 2;
+  st.P.beginPath(); st.P.moveTo(52, 147); st.P.lineTo(45, 152); st.P.stroke();
+  st.P.beginPath(); st.P.moveTo(268, 147); st.P.lineTo(275, 152); st.P.stroke();
+  st.P.restore();
+  // —— 聚光下背对镜头的小人（舞台中央偏左）——
+  st.stamp(personPart(), 138, 127);
+  // —— 白色发光小屏（白色块+黄框+红蓝错位重影描边）——
+  const scr = screenPart();
+  st.stamp(scr, 140, 92);
+  // —— 屏下缘电光黄爆发核（黄/橙/白小像素块团，非光滑光球）——
+  burstCore(140, 105);
+  st.glowSpot(280, 208, 46, 'rgba(255,220,80,0.9)', 0.42);  // 爆发核处单个弱辉光
+  // —— 双向纸屑：左下炸开一路 + 上抛回落一路（4-10px 团，密度梯度）——
+  st.confettiBurst(280, 208, 145, 60, 150, 46, 11, true);
+  st.confettiBurst(280, 208, 268, 55, 130, 40, 22, true);
+  // —— 右上断裂机械臂残骸（白描边+深灰填充+RGB 重影描边）+ 散落下箭头碎块 ——
+  st.stamp(armPart(), 256, 52);
+  const a1 = chevPart(); a1.rot = 18 * Math.PI / 180;
+  const a2 = chevPart(); a2.rot = -10 * Math.PI / 180;
+  const a3 = chevPart(); a3.rot = 5 * Math.PI / 180;
+  st.stamp(a1, 240, 72); st.stamp(a2, 280, 66); st.stamp(a3, 252, 34);
+  // —— 左右灰色软烟（块状像素团）——
+  st.pixSmoke(72, 268, 26, 26, 31, 190);
+  st.pixSmoke(572, 282, 24, 22, 32, 190);
+  // —— 红带下方断续故障扫描行 ——
+  st.scanRows([
+    { y: 306, color: PS.navy },
+    { y: 314, color: PS.teal },
+    { y: 322, color: PS.brick },
+  ]);
+  // 收尾：暗场参数带（辉光偏强、轻噪点）
+  st.compose({ bloom: 0.6, noise: 0.008 });
+}
+
+// 爆发核：黄/橙/白小像素块簇（长在屏下缘）
+function burstCore(bx, by) {
+  const blocks = [
+    [-6, -2, 4, 3, '#FFA020'], [-2, -4, 5, 4, '#FFFF00'], [2, -1, 4, 4, '#FFFF00'],
+    [-4, 1, 3, 3, '#FFFFFF'], [1, 2, 4, 3, '#FFC040'], [4, -3, 3, 3, '#FFA020'],
+    [-9, 1, 2, 2, '#FFFF00'], [6, 2, 2, 2, '#FFFFFF'], [-1, -8, 3, 2, '#FFFFFF'],
+    [4, -7, 2, 2, '#FFA020'], [-7, -5, 2, 2, '#FFC040'],
+  ];
+  for (const [dx, dy, w, h, c] of blocks) st.rect(bx + dx, by + dy, w, h, c);
+}
+
+// ============================================================
+// 命题二（scene=n）：换题考试（中性测试图，抽象几何）
+// 原语：bgFlat 纯黑 / P 层细锥光 / part+stamp 圆方波（白线稿+微旋转）/
+// box 思路描边 / rgbSplit2Wrap 轻撕裂（圆+受击方块）/ 橙=交互 内环 /
+// 电光黄单焦点面板 / confettiBurst+glowSpot 只绑受击爆点 / UI 墨水层
+// （HP 行/LIVE/RATING 微旋转）/ 台缘红灯带 / scanRows / 轻参数 compose
+// ============================================================
+
+// 圆：白描边像素阶梯圆 + 橙色内环（橙=可交互），轻度 RGB 错位重影
+function circlePart() {
+  return st.part(52, 52, 3.0, (g) => {
+    g.strokeStyle = '#ffffff'; g.lineWidth = 3;
+    g.beginPath(); g.arc(26, 26, 20, 0, 7); g.stroke();
+    g.strokeStyle = '#F08030'; g.lineWidth = 2;
+    g.beginPath(); g.arc(26, 26, 12, 0, 7); g.stroke();
+  });
+}
+
+// 方块：白描边 + 深灰填充 + 顶部黄色小面板（电光黄全场唯一焦点）
+function squarePart() {
+  return st.part(48, 44, -2.5, (g) => {
+    g.fillStyle = '#2b2b2b'; g.fillRect(2, 2, 44, 40);
+    g.strokeStyle = '#ffffff'; g.lineWidth = 3; g.strokeRect(2, 2, 44, 40);
+    g.fillStyle = '#FFFF00'; g.fillRect(6, 6, 16, 7);   // 黄色小面板
+    g.fillStyle = '#8a8a8a'; g.fillRect(28, 30, 12, 6); // 灰阶细节
+  });
+}
+
+// 波浪：白色点阵主体（主体一律白线稿），红/青只做低透明度 2px 级错位重影
+function wavePart() {
+  return st.part(92, 36, 2.0, (g) => {
+    for (let x = 0; x <= 88; x += 4) {
+      const y = 18 + Math.sin(x * 0.22) * 10;
+      g.fillStyle = 'rgba(255,32,32,0.4)'; g.fillRect(x - 2, y - 1, 3, 3);  // 红重影
+      g.fillStyle = 'rgba(0,216,224,0.4)'; g.fillRect(x + 2, y + 1, 3, 3);  // 青重影
+      g.fillStyle = '#ffffff'; g.fillRect(x, y - 1, 3, 3);                  // 白主体
+    }
+  });
+}
+
+// UI 墨水层部件（独立微旋转）
+function hpPart() {
+  return st.part(184, 18, 2.2, (g) => {
+    g.font = 'bold 11px monospace'; g.textBaseline = 'top';
+    g.fillStyle = '#ffffff';
+    g.fillText('KITT', 2, 3); g.fillText('LV 1', 42, 3); g.fillText('HP', 82, 3);
+    g.fillStyle = '#FFFF00'; g.fillRect(102, 3, 13, 11);   // 黄血格
+    g.fillStyle = '#ffffff'; g.fillText('18 / 20', 124, 3);
+  });
+}
+function livePart() {
+  return st.part(96, 16, -2.0, (g) => {
+    g.fillStyle = '#ff2020'; g.fillRect(0, 4, 8, 8);       // 红色小方块
+    g.font = 'bold 11px monospace'; g.textBaseline = 'top';
+    g.fillStyle = '#ffffff'; g.fillText('LIVE', 13, 2);
+    g.fillStyle = PS.cyanText; g.fillText('CAM 02', 52, 2);
+  });
+}
+function ratingPart() {
+  return st.part(88, 14, 2.4, (g) => {
+    g.font = 'bold 11px monospace'; g.textBaseline = 'top';
+    g.fillStyle = PS.cyanText; g.fillText('RATING 12000', 0, 2);
+  });
+}
+
+function sceneN() {
+  st.letterbox = 0;
+  st.bgFlat('#000000');                 // 纯黑底
+  // —— 顶部中央细锥光，照向画面中部（像素层）——
+  st.P.save();
+  st.P.globalAlpha = 0.13; st.P.fillStyle = '#ffffff';
+  st.P.beginPath(); st.P.moveTo(155, 0); st.P.lineTo(165, 0);
+  st.P.lineTo(178, 90); st.P.lineTo(142, 90); st.P.closePath(); st.P.fill();
+  st.P.globalAlpha = 0.10; st.P.fillRect(138, 88, 44, 3); // 锥底光带
+  st.P.restore();
+  // —— 圆（左上）：白线稿 + 橙内环，轻度 RGB 重影 ——
+  const circ = st.rgbSplit2Wrap(circlePart(), [2, 1], [-1, 0], [2, -1]);
+  st.stamp(circ, 72, 52);
+  // —— 方块（中上）：受击小爆点在右下角（纸屑+辉光只绑爆点）——
+  const sq = squarePart();
+  st.stamp(sq, 163, 58);
+  const hitX = 370, hitY = 156;         // 方块右下角（屏幕坐标）
+  st.confettiBurst(hitX, hitY, 115, 130, 120, 56, 5, true);   // 主爆簇：右下半圆炸开、4-10px 团
+  st.confettiBurst(hitX, hitY, 250, 60, 80, 24, 9);           // 上抛回落小簇
+  st.glowSpot(hitX, hitY, 40, 'rgba(255,255,255,0.95)', 0.6); // 辉光只绑这个爆点
+  st.rect(182, 76, 3, 3, '#ffffff');    // 打击点白闪像素
+  st.rect(185, 79, 2, 2, '#F08030');
+  // —— 波浪（右侧）：青点阵 + 红/青重影 ——
+  st.stamp(wavePart(), 258, 72);
+  // —— UI 墨水层 ——
+  st.stamp(hpPart(), 225, 140);         // 中下偏右 HP 状态行
+  st.stamp(livePart(), 52, 20);         // 左上 LIVE / CAM 02
+  st.stamp(ratingPart(), 268, 20);      // 右上 RATING
+  // —— 底部：细红台缘灯带 + 下方 2 条断续故障扫描行 ——
+  st.rect(20, 165, 280, 2, '#e01818');
+  st.rect(20, 166, 280, 1, '#ff2020');
+  st.scanRows([
+    { y: 342, color: PS.teal },
+    { y: 350, color: PS.brick },
+  ]);
+  // 收尾：轻参数（轻辉光、微色差、轻噪点；换题图按笔记主动加强 rgbShift）
+  st.compose({ bloom: 0.35, rgbShift: [0.5], noise: 0.008 });
+}
+
+// ============================================================
+// 装载：URL 参数 ?scene=c|n&seed=1
+// ============================================================
+const q = new URLSearchParams(location.search);
+const which = q.get('scene') || 'c';
+const seed = (parseInt(q.get('seed'), 10) || 1) >>> 0;
+const st = new PixelStage(seed);
+if (which === 'n') sceneN(); else sceneC();
+document.body.appendChild(st.main);
+window.__done = true;
+</script>
+</body>
+</html>

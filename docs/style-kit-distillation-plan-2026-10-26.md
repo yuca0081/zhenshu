@@ -1,6 +1,6 @@
 # 风格画材包·蒸馏工位方案（style kit distillation）
 
-> 2026-10-26 定稿讨论收敛。状态：**方案待拍板，未实施**。
+> 2026-10-26 定稿讨论收敛。状态：**第 0/1 步已完成（见 §8 落地表），第 2/3 步未实施**。
 > 起因：meme67-art-history 仓库（github.com/Tunai-0511/meme67-art-history）的启发 + demo/p5brush-sample 四画风矩阵实测。
 > 实施拍板后须同步更新 docs/production-architecture-v3-interactive.html。
 
@@ -165,8 +165,8 @@ type StyleKit struct {
 
 | 步 | 内容 | 说明 |
 |---|---|---|
-| **0** | 人工出第一份画材包 | 挑「像素感缺」老条目（候选：呼啸骑士），3 帧手动走还原循环（参照 demo/p5brush-sample 的做法），产出按 §6 Kit schema 入库——**同时把 schema 试了**；三方对比：真迹 vs 画材包 vs 现形容词生成，分数差距立住=功能价值立住 |
-| **1** | 拍板 zhenshu-kit 规范+毕业检查单 | 纯架构：统一 API（笔/色/纹理/明度）、五坑封装、去题材化纪律 |
+| **0** | 人工出第一份画材包 | ✅ 2026-10-26 完成：条目 vid-ref20261026-103650，demo/stylekit-pixelstage，考题终审 A34/B31.5/C31，三方对比 82 vs 56 验收立住 |
+| **1** | 拍板 zhenshu-kit 规范+毕业检查单 | ✅ 2026-10-26 定稿：docs/zhenshu-kit-spec-2026-10-26.md（四类语义 API/五坑封装/去题材化/判卷口径/毕业七查；D1-D3 已拍板，cheat_sheet 正文已入库为证） |
 | **2** | 蒸馏工位自动化 | Dockerfile+监工+容器+提示词；懒触发接线解析打标 |
 | **3** | 画面工位接入 | 提示词改造+scene_lint 适配+裸 canvas 兜底；与 P2 组件编译器合并设计 |
 
