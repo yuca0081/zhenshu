@@ -230,13 +230,28 @@ def main() -> int:
             print(f"{tr['name']}: {mp3.stat().st_size // 1024}KB ✓")
         manifest.append({'name': tr['name'], 'file': mp3.name,
                          'duration': tr['slot'] * len(tr['chords']), 'mood': tr['mood']})
-    # 原子写：tracks.json 是 Go 选曲的唯一事实源（v1/v2 共用），write_text 先截断
-    # 再写，中途挂掉整份清单半截残废（与 make_bgm_v2.update_manifest 同款修法）
+    # 清单合并式写：tracks.json 是 v1/v2 共用的 Go 选曲唯一事实源，此前 v1 从自身
+    # TRACKS 整份重建覆盖——跑一次 v1 会把 v2 的条目静默清出选曲池（mp3 还在盘上
+    # 但清单不认，2026-10-26 审查发现）。非 v1 条目原样保留，v1 条目以本轮为准。
+    # 原子写（tmp+os.replace）+ 损坏容错，与 make_bgm_v2.update_manifest 同款。
+    names = {tr['name'] for tr in TRACKS}
+    mpath = OUT_DIR / 'tracks.json'
+    kept = []
+    if mpath.exists():
+        try:
+            for it in json.loads(mpath.read_text(encoding='utf-8')):
+                if it.get('name') not in names:
+                    kept.append(it)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            bak = mpath.with_suffix('.json.corrupt')
+            mpath.replace(bak)
+            print(f"tracks.json 损坏（{e}），已备份为 {bak.name} 从空重建")
+    manifest = kept + manifest
     tmp = OUT_DIR / 'tracks.json.tmp'
     tmp.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=1), encoding='utf-8')
-    os.replace(tmp, OUT_DIR / 'tracks.json')
-    print(f"曲库清单 tracks.json ✓（{len(manifest)} 首）")
+    os.replace(tmp, mpath)
+    print(f"曲库清单 tracks.json ✓（{len(manifest)} 首，其中保留非 v1 条目 {len(kept)} 首）")
     return 0
 
 
