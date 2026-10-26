@@ -56,6 +56,11 @@ type Server struct {
 	SessionSecret []byte
 	AuthActive    bool
 
+	// CookieSecure 强制会话 cookie 带 Secure 标记（COOKIE_SECURE=1/true）。默认自动：
+	// 直连 TLS 或反代 X-Forwarded-Proto=https 时置位——Docker 部署 TLS 在反代终止
+	// 时 Go 侧看不到 TLS，30 天长效 cookie 会走反代→后端明文链路（2026-10-26 审查）。
+	CookieSecure bool
+
 	// loginFails 登录失败窗口："ip|username" → *failWindow（见 login）。
 	loginFails sync.Map
 
@@ -130,18 +135,21 @@ func (s *Server) Router() *gin.Engine {
 	api.GET("/bgm/audio/:name", s.bgmAudio)
 	api.GET("/projects/:id/music/audio", s.musicAudio)
 	api.GET("/library", s.listLibrary)
-	api.DELETE("/library/:id", s.deleteLibraryEntry)
 	api.GET("/library/:id/frames", s.libraryFrames)
 	api.GET("/library/:id/media/:file", s.libraryMedia)
-	api.POST("/library/:id/publish", s.publishPack)
 	api.GET("/vocab", s.listVocab)
-	api.POST("/references", s.uploadReference)
 	api.GET("/references", s.listReferences)
 	api.GET("/references/:id/frames", s.referenceFrames)
 	api.GET("/references/:id/media/:file", s.referenceMedia)
-	api.POST("/references/:id/analyze", s.analyzeReference)
-	api.POST("/references/:id/confirm", s.confirmReference)
-	api.PUT("/references/:id/draft", s.updateReferenceDraft)
+	// 全局资产（风格库/参考库）的写操作影响所有用户，普通账号不该能删库/发布/入库
+	// （读路径照旧登录即可——项目归属守卫只覆盖 projects/:id，全局资产此前是全员可写）。
+	libAdm := api.Group("", s.requireAdmin())
+	libAdm.DELETE("/library/:id", s.deleteLibraryEntry)
+	libAdm.POST("/library/:id/publish", s.publishPack)
+	libAdm.POST("/references", s.uploadReference)
+	libAdm.POST("/references/:id/analyze", s.analyzeReference)
+	libAdm.POST("/references/:id/confirm", s.confirmReference)
+	libAdm.PUT("/references/:id/draft", s.updateReferenceDraft)
 	// 留痕图片取件走通配路径（style/xxx、reports/prereview/round1/xxx 多级目录），
 	// 进不了 secureParams（它禁参数里的斜杠）——单开一组，鉴权/项目归属照旧，
 	// 穿越防线由 handler 侧路径清洗 + 目录/扩展名白名单承担。
@@ -368,8 +376,19 @@ func (s *Server) setSession(c *gin.Context, cl auth.Claims) {
 		MaxAge:   int(time.Until(exp).Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   c.Request.TLS != nil,
+		Secure:   s.cookieSecure(c),
 	})
+}
+
+// cookieSecure 会话 cookie 的 Secure 判定：COOKIE_SECURE 显式强制，或直连 TLS，
+// 或反代告知 https（X-Forwarded-Proto）。转发头只在「反代如实设置」的前提下可信；
+// 直连部署下客户端伪造该头只会让自己的 cookie 带 Secure（无害），反代部署下缺了
+// 它 30 天长效 cookie 就恒走明文链路——两害相权取其听。
+func (s *Server) cookieSecure(c *gin.Context) bool {
+	if s.CookieSecure {
+		return true
+	}
+	return c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
 }
 
 // createAccount 管理员建账号（固定账号模型，无自助注册）。

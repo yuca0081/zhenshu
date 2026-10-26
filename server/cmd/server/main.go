@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -163,6 +164,7 @@ func main() {
 		Artifacts:     art,
 		APIToken:      os.Getenv("API_TOKEN"),
 		SessionSecret: sessionSecret, AuthActive: authActive,
+		CookieSecure:  os.Getenv("COOKIE_SECURE") == "1" || strings.EqualFold(os.Getenv("COOKIE_SECURE"), "true"),
 	}
 
 	// 开发诊断：DEBUG_PPROF=1 时挂 net/http/pprof（goroutine 转储定位段级流水线卡点用）。
