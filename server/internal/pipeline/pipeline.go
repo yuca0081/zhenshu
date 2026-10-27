@@ -733,7 +733,7 @@ func stageStyleSamples(p *Project) error {
 }
 
 // stageTTS 配音：每段音频 + 逐词时间戳。
-// 批量生成器在 ai/ 侧（ai/tts_align.py）：引擎百炼（DASHSCOPE_API_KEY，qwen-audio-3.0-tts-plus）
+// 批量生成器在 ai/ 侧（ai/tts_align.py）：引擎百炼（DASHSCOPE_API_KEY，qwen-audio-3.1-tts-plus）
 // → Edge 兜底（微软免费）；FunASR paraformer 字级时间戳 → audio_meta.json。
 //
 // ⚠️ --text-file 文件必须存在，否则路径字符串会被当文本朗读（已踩坑）。

@@ -7,7 +7,7 @@
 链路（幂等，缺什么补什么）：
   1. storyboard.json 每段旁白 → audio/segNN.txt
   2. TTS 引擎按优先级（逐段级联，前者失败落后者；2026-10-10 精简为两档）：
-       a. 百炼 Qwen-Audio-TTS（DASHSCOPE_API_KEY，qwen-audio-3.0-tts-plus；
+       a. 百炼 Qwen-Audio-TTS（DASHSCOPE_API_KEY，qwen-audio-3.1-tts-plus；
           ¥1.4/万字符，free-style 指令控情绪/语速；BAILIAN_TTS_MODEL/VOICE 可换）
        b. Edge TTS（微软免费兜底，zh-CN-XiaoxiaoNeural 晓晓；EDGE_TTS_VOICE 可换音色，
           如 zh-CN-YunxiNeural 云希男声；EDGE_TTS_RATE 可调速，如 +5%）
@@ -39,17 +39,26 @@ import subprocess
 import sys
 
 PUNCT = set('，。！？；、：,.!?;:…—·')
-# 百炼档（2026-10-10 用户定档 qwen-audio-3.0-tts-plus：free-style 指令控情绪/语速，
+# 百炼档（2026-10-27 用户升级 qwen-audio-3.1-tts-plus，此前 3.0 自 2026-10-10 起用：
+# free-style 指令控情绪/语速，
 # 内置音色见 help.aliyun.com/zh/model-studio/qwen-audio-tts-voice-list；
 # 音色必须属于当前模型，跨模型混用报 cosyvoice Engine error 411）
-BL_MODEL = os.environ.get('BAILIAN_TTS_MODEL', 'qwen-audio-3.0-tts-plus')
+BL_MODEL = os.environ.get('BAILIAN_TTS_MODEL', 'qwen-audio-3.1-tts-plus')
 BL_VOICE = os.environ.get('BAILIAN_TTS_VOICE', 'longanlingxin')
 
 
 def bailian_voice_id(v):
     """百炼 Qwen-Audio-TTS 音色判别：longan*（中文龙安系）/loong*（英文系）/
-    xunanchuan（许南川），含 _v3.x 后缀；非百炼音色返回 ''。"""
-    return v if v.startswith(('longan', 'loong', 'xunanchuan')) else ''
+    xunanchuan（许南川）；非百炼音色返回 ''。
+    3.1 起模型只认带 _v3.x 后缀的音色（裸 id 报 Engine error 411 → 逐段静默落
+    Edge），这里按 BL_MODEL 版本自动补后缀——存量 project.json 里的裸 id
+    （longanlingxin 等）靠这步续命；3.0 模型仍用裸 id，不补。已带后缀原样返回。"""
+    if not v.startswith(('longan', 'loong', 'xunanchuan')):
+        return ''
+    m = re.search(r'-(\d+)\.(\d+)-tts', BL_MODEL)
+    if m and (int(m.group(1)), int(m.group(2))) >= (3, 1) and '_v' not in v:
+        v += f'_v{m.group(1)}.{m.group(2)}'
+    return v
 
 # 项目级音色（project.json "voice" 字段）：百炼音色（longanlingxin 等，需 DASHSCOPE_API_KEY，
 # 未配自动回落 Edge）或 Edge 音色中文名/完整 id。设置后锁定对应引擎并以此
@@ -330,7 +339,7 @@ def main(proj_dir: str) -> int:
     # 项目指定 Edge 音色（pv 有值且非百炼系）→ 锁 Edge：之前只看 key，配了 key
     # 就走百炼默认龙安灵心，audio_meta 却记着 Edge 音色——静默错配
     engine = 'bailian' if (DASHSCOPE_KEY and not (pv and not bl)) else 'edge'
-    bl_use = bl or (BL_VOICE if DASHSCOPE_KEY else '')
+    bl_use = bl or (bailian_voice_id(BL_VOICE) if DASHSCOPE_KEY else '')
     # edge_voice 只认 Edge 风格音色（含 '-' 且含 'Neural'，与上面判别同口径）：
     # 百炼失败级联回落 Edge 时，百炼音色 id（longanlingxin 等）传给 edge-tts 必报
     # Voice does not exist → 该段直接 return 1——此时落环境变量/默认晓晓，兜底才兜得住
