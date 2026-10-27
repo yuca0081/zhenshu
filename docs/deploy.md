@@ -1,5 +1,8 @@
 # 部署（服务器 IP 见本地 deploy/ 脚本，不入库）
 
+> 两个视角：本页 = **开发机**一键发版（deploy.sh 推流上去）；
+> **服务器侧**自部署（拉码→编译→构建镜像→迁移→起容器）见 [server-self-deploy.md](server-self-deploy.md)。
+
 一键部署（开发机 Git Bash）：
 
 ```bash
