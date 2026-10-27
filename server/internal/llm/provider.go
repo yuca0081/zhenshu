@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -48,6 +49,11 @@ type Provider struct {
 	BaseURL string
 	APIKey  string
 	Model   string
+	// EffortOverride LLM_EFFORT 覆盖档：把平台默认深思考档（EffortHigh）整体换成
+	// low/max/disabled。2026-10-27 实测 GLM 编码端点 high 档思考失控（肥提示词
+	// 240s 零字节、prep ② 15 分钟客户端超时两连），qwen 时代等于无深思考所以
+	// 一直没暴露；判卷类显式降档调用不受此覆盖影响。
+	EffortOverride Effort
 }
 
 // FromEnv 按环境变量构造供应商：LLM_API_KEY / LLM_BASE_URL / LLM_MODEL（旧名 DEEPSEEK_* 仍兼容）。
@@ -73,7 +79,13 @@ func FromEnv(role Role) (*Provider, error) {
 		if model == "" {
 			model = "glm-5.3-flash"
 		}
-		return &Provider{Name: "llm", BaseURL: base, APIKey: key, Model: model}, nil
+		eff := Effort(os.Getenv("LLM_EFFORT"))
+		switch eff { // 非法值当没配（端点对非法档位也是静默按默认跑，同口径）
+		case EffortDefault, EffortLow, EffortHigh, EffortDisabled:
+		default:
+			eff = EffortDefault
+		}
+		return &Provider{Name: "llm", BaseURL: base, APIKey: key, Model: model, EffortOverride: eff}, nil
 	}
 	return nil, fmt.Errorf("未知角色 %s", role)
 }
@@ -164,6 +176,33 @@ func mediaParts(user string, imageURLs []string, videoURL string) []glmMediaPart
 // 写大 HTML 的单调用两连死在 600s（chatTemp 的 ctx 超时还没到线，这层先掐了——
 // 双层超时必须同步放宽，只改一层是无效修复）。
 var httpClient = &http.Client{Timeout: 15 * time.Minute}
+
+// callLeash 单次尝试超时秒数（LLM_CALL_TIMEOUT，默认 300；≤0 关闭走外层闸）。
+// 进程内只读一次：env 每跳都查太贵。
+func callLeash() time.Duration {
+	callLeashOnce.Do(func() {
+		v := os.Getenv("LLM_CALL_TIMEOUT")
+		if v == "" {
+			callLeashSec = 300
+			return
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			callLeashSec = -1
+			return
+		}
+		callLeashSec = n
+	})
+	if callLeashSec <= 0 {
+		return 0
+	}
+	return time.Duration(callLeashSec) * time.Second
+}
+
+var (
+	callLeashOnce sync.Once
+	callLeashSec  int
+)
 
 // StatusError 上游非 2xx 的结构化错误：状态码 + 响应体。重试策略按它分流——
 // 401/403/400 这类客户端错（key 错/欠费封禁/参数非法）重试也不会好，烧满 3 次
@@ -382,6 +421,16 @@ func (p *Provider) postChat(ctx context.Context, req glmChatRequest) (openai.Cha
 
 // postChatNet 真正的 HTTP 一跳（缓存未命中时由 cachedChat 调）。
 func (p *Provider) postChatNet(ctx context.Context, body []byte) ([]byte, error) {
+	// 单次尝试超时（LLM_CALL_TIMEOUT 秒，默认 300）：2026-10-27 切 GLM 实测编码端点
+	// 会按概率「黑洞」请求——连接建立、请求发完、header 永不回（同体重放 4 连发
+	// 命中 3 黑洞 1 成功），generate 的 3 次重试每次都死等 httpClient 15 分钟线，
+	// 一次坏运气放大成 45 分钟站级烧穿。给每次尝试独立短闸，黑洞快速失败进下一
+	// 次重试；正常长输出（实测 58 tok/s，万 token 级 HTML ≈ 3 分钟）不受影响。
+	if leash := callLeash(); leash > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, leash)
+		defer cancel()
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, "POST",
 		strings.TrimSuffix(p.BaseURL, "/")+"/chat/completions", bytes.NewReader(body))
 	if err != nil {

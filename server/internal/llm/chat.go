@@ -35,6 +35,13 @@ func (p *Provider) ChatTempEffort(ctx context.Context, msgs []openai.ChatComplet
 }
 
 func (p *Provider) chatTemp(ctx context.Context, msgs []openai.ChatCompletionMessage, tools []openai.Tool, temp *float64, effort Effort) (openai.ChatCompletionMessage, openai.Usage, error) {
+	// LLM_EFFORT 覆盖默认深思考档（只动 EffortHigh 这一档）：2026-10-27 切回 GLM
+	// 实测编码端点 high 档思考失控——肥提示词探针 240s 零字节、prep ② 每回合
+	// 拖满 900s 客户端超时后整链烧穿；low 档同题 38s 正常交付。显式降档的调用
+	// （判卷 ChatTempEffort）不受影响。
+	if p.EffortOverride != EffortDefault && effort == EffortHigh {
+		effort = p.EffortOverride
+	}
 	// 900s：②风格工位真迹附图上线后（2026-10-22 实测），带图工位对话 + 深思考写
 	// 大 HTML 的单调用两连死在 600s 线（prep.style cold_retry×2，context deadline
 	// exceeded）。此前 300s 不够判卷载荷（段审实测死在 5 分钟线上）升到 600；
