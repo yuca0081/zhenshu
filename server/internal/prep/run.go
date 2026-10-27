@@ -22,15 +22,22 @@ import (
 	"webpage-video-agent/server/internal/pipeline"
 )
 
-// 工位时间预算（2026-10-23 中-2）：总闸 60 分钟整链一刀切会被②的慢 LLM 大调用
+// 工位时间预算（2026-10-23 中-2）：总闸整链一刀切会被②的慢 LLM 大调用
 // +样张机检/判卷/修复轮叠加烧穿（三次真机两轮 timeout、92 万 token 零产出）。
-// 按工位分账（①6/②40/③12 分钟，和 ≤58 留缓冲）：单站超线即收口、报清进度，
+// 按工位分账：单站超线即收口、报清进度，
 // ②临近预算线进入抢收窗口（styleGrabWindow）拒渲新样张、逼 submit 带伤交付。
 var stationBudgets = map[string]time.Duration{
-	StationScript:     6 * time.Minute,
-	StationStyle:      40 * time.Minute,
-	StationStoryboard: 12 * time.Minute,
+	StationScript: 6 * time.Minute,
+	StationStyle:  40 * time.Minute,
+	// 2026-10-24 12→25：回合预算放宽到 60 后（qwen 逐段估时长节奏慢），
+	// 时间闸也得跟上——30 回合就吃了 12 分钟，60 回合时间闸先到照样掐。
+	StationStoryboard: 25 * time.Minute,
 }
+
+// prepChainBudget 三工位链级总闸（runner.go 兜底闸，budget_test 同源断言）：
+// 2026-10-27 60→80——③站闸放宽到 25 后工位预算和 71 分钟已越过旧总闸 60，
+// ③实际只剩 14 分钟、25 分钟站闸成假账，长文稿复现「烧穿被掐」。
+const prepChainBudget = 80 * time.Minute
 
 func stationBudget(name string) time.Duration {
 	if d, ok := stationBudgets[name]; ok {

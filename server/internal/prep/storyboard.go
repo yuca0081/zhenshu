@@ -17,8 +17,10 @@ import (
 	"webpage-video-agent/server/internal/react"
 )
 
-// storyboardBudget ③的回合预算（§5.2 基线 ③≤10；用户拍板放宽到 30）。
-const storyboardBudget = 30
+// storyboardBudget ③的回合预算（§5.2 基线 ③≤10；用户拍板放宽到 30；
+// 2026-10-24 再放宽到 60——qwen3-vl-plus 逐段 estimate_speech_duration 每回合
+// 只吃 1-2 段，31 段文稿 30 回合估不完就被掐，submit 永远排在队尾）。
+const storyboardBudget = 60
 
 const storyboardSystem = `你是分镜师。任务：基于口播稿与风格包产出分镜稿。材料：get_script（按句编号）、get_style_package；拟段时用 estimate_speech_duration 自检每段落段长带。
 切段按优先级：话题没讲完不在中间切；句与句之间是天然候选切点（目前没有真实停顿证据，用时长估算顶替）；疏密与段长跟随剪辑语法。想做出「画面连续过渡」，正确做法是并成一段，而不是设缝。

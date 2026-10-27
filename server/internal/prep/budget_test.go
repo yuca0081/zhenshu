@@ -10,7 +10,7 @@ import (
 	"webpage-video-agent/server/internal/pipeline"
 )
 
-// TestStationBudgets 工位分时预算（中-2）：三站都有账、和不超过总闸 60 分钟。
+// TestStationBudgets 工位分时预算（中-2）：三站都有账、和不超过链级总闸。
 func TestStationBudgets(t *testing.T) {
 	total := time.Duration(0)
 	for _, name := range []string{StationScript, StationStyle, StationStoryboard} {
@@ -20,8 +20,8 @@ func TestStationBudgets(t *testing.T) {
 		}
 		total += b
 	}
-	if total > 60*time.Minute {
-		t.Fatalf("工位预算和 %s 超过总闸 60 分钟", total)
+	if total > prepChainBudget {
+		t.Fatalf("工位预算和 %s 超过链级总闸 %s", total, prepChainBudget)
 	}
 	if stationBudget("unknown") <= 0 {
 		t.Fatal("未知工位应有兜底预算")

@@ -17,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"webpage-video-agent/server/internal/artifacts"
 	"webpage-video-agent/server/internal/pipeline"
@@ -126,9 +125,9 @@ func (r *Runner) Start(id, idea string, force bool) (bool, error) {
 	p.Manifest("prep.start", startMsg)
 	r.Deps.emit(id, "stage", "prep", "running")
 	// 总闸：回合预算放宽后（①30/②12/③10），单站烧穿预算的最坏墙钟很可观，
-	// 再叠一次冷重试必须有个链级上限兜底——60 分钟覆盖正常长链绰绰有余，
-	// 卡死（端点挂住/无限重试）到点收口，不无限拖。
-	runCtx, cancelRun := context.WithTimeout(ctx, 60*time.Minute)
+	// 再叠一次冷重试必须有个链级上限兜底——prepChainBudget（80 分钟，2026-10-27
+	// 随③站闸 25 放宽）覆盖正常长链，卡死（端点挂住/无限重试）到点收口，不无限拖。
+	runCtx, cancelRun := context.WithTimeout(ctx, prepChainBudget)
 	go func() {
 		defer release()
 		defer cancelRun()
