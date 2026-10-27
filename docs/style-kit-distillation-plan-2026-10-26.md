@@ -1,6 +1,6 @@
 # 风格画材包·蒸馏工位方案（style kit distillation）
 
-> 2026-10-26 定稿讨论收敛。状态：**第 0/1 步已完成（见 §8 落地表），第 2/3 步未实施**。
+> 2026-10-26 定稿讨论收敛。状态：**第 0/1/2 步已完成（第 2 步见 §8 落地表），第 3 步未实施**。
 > 起因：meme67-art-history 仓库（github.com/Tunai-0511/meme67-art-history）的启发 + demo/p5brush-sample 四画风矩阵实测。
 > 实施拍板后须同步更新 docs/production-architecture-v3-interactive.html。
 
@@ -167,8 +167,10 @@ type StyleKit struct {
 |---|---|---|
 | **0** | 人工出第一份画材包 | ✅ 2026-10-26 完成：条目 vid-ref20261026-103650，demo/stylekit-pixelstage，考题终审 A34/B31.5/C31，三方对比 82 vs 56 验收立住 |
 | **1** | 拍板 zhenshu-kit 规范+毕业检查单 | ✅ 2026-10-26 定稿：docs/zhenshu-kit-spec-2026-10-26.md（四类语义 API/五坑封装/去题材化/判卷口径/毕业七查；D1-D3 已拍板，cheat_sheet 正文已入库为证） |
-| **2** | 蒸馏工位自动化 | Dockerfile+监工+容器+提示词；懒触发接线解析打标 |
+| **2** | 蒸馏工位自动化 | ✅ 2026-10-27 落地：`distill/`（Dockerfile+render/sheet/measure/licenses+SPEC 房内规则书）+ `server/internal/prep/distill*.go`（监工：容器生命周期/四能力工具/submit_kit 契约/毕业机械检查/判卷官/kit 组装入库）+ 懒触发接线（解析打 `distill_pending` 标记；admin API `POST/GET /library/:id/distill`，并发=1）；单测覆盖沙箱启动参数/路径守门/manifest lint/判卷门槛。**云服务器真机首单待跑**（build 镜像 → 挑一条目开单） |
 | **3** | 画面工位接入 | 提示词改造+scene_lint 适配+裸 canvas 兜底；与 P2 组件编译器合并设计 |
+
+第 2 步与 §5.3 原稿的一处偏差：房间以 `sleep infinity` 常驻、监工逐条 `docker exec` 转发命令（§2 监工循环的直译），不再是「一单一条 `docker run … explore.sh`」的一次性形态——一次性语义由 `--rm + 用完 rm -f` 保留。网络分段（装包期联网/干活期断网）与 npm 缓存卷仍按原稿缓议。
 
 二期可选：同题多画师并行、择优毕业（best-of-N）。
 

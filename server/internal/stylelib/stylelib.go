@@ -51,6 +51,11 @@ type Style struct {
 	Unverified  bool        `json:"unverified,omitempty"`   // 未验证：用过它的片出片后才转正
 	Usage       UsageStats  `json:"usage,omitempty"`        // 使用统计（出片记账；分数来自审核）
 
+	// DistillPending 待蒸馏标记（蒸馏方案 §3.1 懒触发）：解析入库时置位，提示
+	// 该条目有真迹可开蒸馏单；不自动触发——风格快常用了才值得花这笔探索成本。
+	// kit 落库（AttachKit）时清除；重解析覆盖式重写会重新置位。
+	DistillPending bool `json:"distill_pending,omitempty"`
+
 	// Kit 可执行画材包（docs/style-kit-distillation-plan §6）：蒸馏工位产物。
 	// nil = 未蒸馏（现状全部条目），新老互不干扰；payload JSONB 加字段零迁移。
 	// 制作期画面工位注入 CheatSheet（小抄）替代整篇画法描述；Files 只存文件名，
@@ -60,12 +65,12 @@ type Style struct {
 
 // StyleKit 画材包：还原过关才进库的可执行代码资产，不是提取文本（防 v2 覆辙）。
 type StyleKit struct {
-	Framework  string         `json:"framework"`             // 用了什么框架 + 一句话为什么（选型本身是风格知识）
-	Deps       []StyleKitDep  `json:"deps,omitempty"`        // 依赖（精确版本；零依赖为空）
-	Files      []string       `json:"files,omitempty"`       // 画材包代码文件名（kit.js/scenes.js/...，正本在媒体后端）
-	CheatSheet string         `json:"cheat_sheet,omitempty"` // API 小抄（≤~2k token）——画面工位提示词真正注入的东西
-	Score      StyleKitScore  `json:"score,omitempty"`       // 判卷记录：入库门槛依据，带伤必标分
-	Notes      string         `json:"notes,omitempty"`       // 配方笔记（路线 + 已知弱点，≤14 行）
+	Framework  string        `json:"framework"`             // 用了什么框架 + 一句话为什么（选型本身是风格知识）
+	Deps       []StyleKitDep `json:"deps,omitempty"`        // 依赖（精确版本；零依赖为空）
+	Files      []string      `json:"files,omitempty"`       // 画材包代码文件名（kit.js/scenes.js/...，正本在媒体后端）
+	CheatSheet string        `json:"cheat_sheet,omitempty"` // API 小抄（≤~2k token）——画面工位提示词真正注入的东西
+	Score      StyleKitScore `json:"score,omitempty"`       // 判卷记录：入库门槛依据，带伤必标分
+	Notes      string        `json:"notes,omitempty"`       // 配方笔记（路线 + 已知弱点，≤14 行）
 }
 
 // StyleKitDep 依赖清单条目：版本钉死（@latest 不许进，毕业检查第①条）。
@@ -191,15 +196,22 @@ func (l *Library) IngestVideoRef(refID string, in VideoStyleIn) (*Style, error) 
 		return nil, err
 	}
 	s := Style{
-		ID:            videoStyleID(refID),
-		Name:          uniqueName(styles, videoStyleID(refID), strings.TrimSpace(in.Name), in.Subject),
-		Tags:          in.Tags,
-		TagEvidence:   in.TagEvidence,
-		Subject:       in.Subject,
-		Facets:        in.Facets,
-		OriginProject: "video:" + refID,
-		Published:     true,
-		CreatedAt:     time.Now(),
+		ID:             videoStyleID(refID),
+		Name:           uniqueName(styles, videoStyleID(refID), strings.TrimSpace(in.Name), in.Subject),
+		Tags:           in.Tags,
+		TagEvidence:    in.TagEvidence,
+		Subject:        in.Subject,
+		Facets:         in.Facets,
+		OriginProject:  "video:" + refID,
+		Published:      true,
+		CreatedAt:      time.Now(),
+		DistillPending: true,
+	}
+	// 覆盖式重写不烧画材包：重解析换的是标签/特色（人的新过目），Kit 是蒸馏工位
+	// 另一条生产线攒下的可执行资产，跟重解析无关——留着，且不再挂待蒸馏标记。
+	if old, err := l.cat.GetStyle(s.ID); err == nil && old != nil && old.Kit != nil {
+		s.Kit = old.Kit
+		s.DistillPending = false
 	}
 	s.Signatures = renumberSigs(in.Signatures)
 	if err := l.validateWrite(&s); err != nil {
@@ -324,6 +336,34 @@ func renumberSigs(sigs []contract.Signature) []contract.Signature {
 func (l *Library) Publish(id string) (*Style, error) {
 	return l.cat.MarkPublished(id)
 }
+
+// AttachKit 蒸馏工位回写画材包（docs/style-kit-distillation-plan §6）：账本只记
+// 清单（Files 是文件名，正本已先经 MediaStore 落位），同时摘掉待蒸馏标记。
+// kit 文件本体由调用方（prep 蒸馏监工）走 PutMedia 存进 style_media/<id>/kit/。
+func (l *Library) AttachKit(id string, kit *StyleKit) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	st, err := l.cat.GetStyle(id)
+	if err != nil {
+		return fmt.Errorf("%w: %s", ErrNoEntry, id)
+	}
+	st.Kit = kit
+	st.DistillPending = false
+	return l.cat.PutStyle(st)
+}
+
+// PutMedia 媒体写入的通用口子（蒸馏工位专用扩展名走这里；参考快照仍走
+// SnapshotMedia）。name 必须过 ValidMediaName（含 kit/ 子树与 repro/neutral 样图）。
+func (l *Library) PutMedia(styleID, name, srcPath string) error {
+	if !ValidMediaName(name) {
+		return fmt.Errorf("媒体名 %q 不在白名单", name)
+	}
+	return l.media.Put(styleID, name, srcPath)
+}
+
+// DistillDir 蒸馏任务目录根（data/library/distill/<entryID>-<ts>/）：
+// 考卷袋 in/、交付 out/、判卷与留痕都住这里，与媒体后端无关（宿主本地盘）。
+func (l *Library) DistillDir() string { return filepath.Join(l.dir, "distill") }
 
 // Delete 删除条目并清掉它的媒体。已出片项目不受影响——简报在选用时早已拷进
 // 项目各自的 style/，删的只是「以后新建项目还能不能选它」。先账后货：删账是

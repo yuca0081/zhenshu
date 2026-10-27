@@ -37,25 +37,47 @@ type MediaStore interface {
 	Localize(styleID, name string) (string, error)
 }
 
-// ValidMediaName 媒体文件名白名单：原片 video.mp4 / 封面 cover.png / 抽帧 frame-*.png。
+// ValidMediaName 媒体文件名白名单：原片 video.mp4 / 封面 cover.png / 抽帧 frame-*.png
+// / 蒸馏样图 repro-*.png·neutral-*.png / 画材包 kit/<name>（docs/style-kit-distillation-plan §6）。
 // 抽帧名带小数点时间戳（extract_video_features.py 产物，如 frame-0.8.png），
-// 字符集放宽到 [a-z0-9._-]，但斜杠与「..」段坚决拒收（防路径穿越——本地拼路径、
-// MinIO 拼 key 都吃这个名单）。既是写入过滤也是读取防穿越，api 复用。
+// 字符集放宽到 [a-z0-9._-]，但斜杠只许出现在 kit/ 前缀里，「..」段坚决拒收
+// （防路径穿越——本地拼路径、MinIO 拼 key 都吃这个名单）。既是写入过滤也是读取
+// 防穿越，api 复用。
 func ValidMediaName(name string) bool {
-	if name == "video.mp4" || name == "cover.png" {
+	if name == "video.mp4" || name == "cover.png" || name == "neutral.png" {
 		return true
 	}
-	if !strings.HasPrefix(name, "frame-") || !strings.HasSuffix(name, ".png") {
+	if !strings.Contains(name, "/") {
+		// 顶层平名：抽帧 + 蒸馏还原样图（换题样图固定名 neutral.png，走上面精确匹配）
+		for _, prefix := range []string{"frame-", "repro-", "neutral-"} {
+			if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ".png") &&
+				len(name) > len(prefix)+4 && !strings.Contains(name, "..") &&
+				isMediaCharset(name) {
+				return true
+			}
+		}
 		return false
 	}
-	if name == "frame-.png" {
-		return false // 帧名主体为空
-	}
-	body := name[len("frame-"):]
-	if strings.ContainsAny(name, `/\`) || strings.Contains(body, "..") {
+	// kit/<file> 子树：画材包代码与配方（js/json/md/lock/png/css/html/txt）
+	sub, ok := strings.CutPrefix(name, "kit/")
+	if !ok || sub == "" || strings.Contains(sub, "/") || strings.Contains(sub, "..") ||
+		strings.HasPrefix(sub, ".") {
 		return false
 	}
-	for _, r := range name {
+	switch {
+	case strings.HasSuffix(sub, ".js"), strings.HasSuffix(sub, ".mjs"),
+		strings.HasSuffix(sub, ".json"), strings.HasSuffix(sub, ".json.lock"),
+		strings.HasSuffix(sub, ".lock"), strings.HasSuffix(sub, ".md"),
+		strings.HasSuffix(sub, ".png"), strings.HasSuffix(sub, ".css"),
+		strings.HasSuffix(sub, ".html"), strings.HasSuffix(sub, ".txt"):
+		return isMediaCharset(sub)
+	}
+	return false
+}
+
+// isMediaCharset 白名字符集 [a-z0-9._-]（大写拒收——key 规整由写入方保证）。
+func isMediaCharset(s string) bool {
+	for _, r := range s {
 		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.') {
 			return false
 		}
@@ -88,7 +110,7 @@ func (m *dirMedia) dir(id string) string { return filepath.Join(m.root, "style_m
 // 硬链接占位会挡 os.Link。
 func (m *dirMedia) Put(styleID, name, srcPath string) error {
 	dstDir := m.dir(styleID)
-	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(dstDir, name)), 0o755); err != nil {
 		return err
 	}
 	dst := filepath.Join(dstDir, name)
@@ -211,13 +233,23 @@ func (m *minioMedia) prefix(styleID string) string {
 	return mediaKeyPrefix + styleID + "/"
 }
 
-// contentType 按扩展名给对象类型（白名单内只有 png/mp4，兜底 octet-stream）。
+// contentType 按扩展名给对象类型（白名单内的 png/mp4/kit 代码文件，兜底 octet-stream）。
 func contentType(name string) string {
-	if strings.HasSuffix(name, ".png") {
+	switch {
+	case strings.HasSuffix(name, ".png"):
 		return "image/png"
-	}
-	if strings.HasSuffix(name, ".mp4") {
+	case strings.HasSuffix(name, ".mp4"):
 		return "video/mp4"
+	case strings.HasSuffix(name, ".js"), strings.HasSuffix(name, ".mjs"):
+		return "text/javascript; charset=utf-8"
+	case strings.HasSuffix(name, ".json"):
+		return "application/json"
+	case strings.HasSuffix(name, ".html"):
+		return "text/html; charset=utf-8"
+	case strings.HasSuffix(name, ".css"):
+		return "text/css; charset=utf-8"
+	case strings.HasSuffix(name, ".md"), strings.HasSuffix(name, ".txt"):
+		return "text/plain; charset=utf-8"
 	}
 	return "application/octet-stream"
 }

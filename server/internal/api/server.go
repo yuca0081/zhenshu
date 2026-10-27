@@ -146,6 +146,10 @@ func (s *Server) Router() *gin.Engine {
 	libAdm := api.Group("", s.requireAdmin())
 	libAdm.DELETE("/library/:id", s.deleteLibraryEntry)
 	libAdm.POST("/library/:id/publish", s.publishPack)
+	// 蒸馏工位（docs/style-kit-distillation-plan §3/§4）：懒触发——admin 单发开单，
+	// 状态轮询同一资源位。全局资产写操作收管理员（2026-10-26 安全口径）。
+	libAdm.POST("/library/:id/distill", s.startDistill)
+	libAdm.GET("/library/:id/distill", s.distillStatus)
 	libAdm.POST("/references", s.uploadReference)
 	libAdm.POST("/references/:id/analyze", s.analyzeReference)
 	libAdm.POST("/references/:id/confirm", s.confirmReference)
@@ -1762,6 +1766,31 @@ func (s *Server) deleteLibraryEntry(c *gin.Context) {
 		return
 	}
 	c.JSON(200, gin.H{"ok": true})
+}
+
+// startDistill 开蒸馏单（懒触发的人工拍板口）：起容器-画师-判卷-入库全链异步跑，
+// 并发=1（蒸馏房占用中回 409）。判卷与进度走 GET 同资源位轮询。
+func (s *Server) startDistill(c *gin.Context) {
+	d := prep.Deps{RootDir: s.RootDir, Lib: s.Lib}
+	if err := prep.StartDistill(d, c.Param("id")); err != nil {
+		if errors.Is(err, stylelib.ErrNoEntry) {
+			c.JSON(404, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(409, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(202, gin.H{"started": true})
+}
+
+// distillStatus 蒸馏状态：全局在跑单 + 本条目最近一单。
+func (s *Server) distillStatus(c *gin.Context) {
+	snap := prep.DistillSnapshot()
+	last := map[string]any(nil)
+	if m, ok := snap["last"].(map[string]map[string]any); ok {
+		last = m[c.Param("id")]
+	}
+	c.JSON(200, gin.H{"running": snap["running"], "last": last})
 }
 
 func isSlug(s string) bool {
