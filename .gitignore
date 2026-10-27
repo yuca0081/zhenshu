@@ -24,8 +24,9 @@ data/library/media/*
 Thumbs.db
 *.log
 
-# 环境变量（真实值不入库）
+# 环境变量（真实值不入库；bak 副本同罪，2026-10-28 挡）
 .env
+.env.bak*
 
 # 本地构建产物
 bin/
@@ -120,3 +121,6 @@ demo/stylekit-pixelstage/**/*.png
 tmp/
 server/tmp/
 server/pgq.exe
+
+# 本地数据库备份/清库脚本（PG dump 含真实数据，只住本地）
+backups/
