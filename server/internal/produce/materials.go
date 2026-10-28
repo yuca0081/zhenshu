@@ -249,12 +249,13 @@ func materialsNote(mats []Material) string {
 	return b.String()
 }
 
-// materialNote 素材真图的视觉注入说明（图附在样张之后）。
+// materialNote 素材真图的注入说明（2026-10-28 换脑后为细读缺省兜底行：视觉副驾
+// 不可用时至少告知素材在盘上，按清单检索词从严想象）。
 func materialNote(n int) string {
 	if n == 0 {
 		return ""
 	}
-	return fmt.Sprintf("\n- 附图最后 %d 张是本段素材真图（公版，清单见素材块）：看清内容再决定用不用、怎么用\n", n)
+	return fmt.Sprintf("\n- 本段素材真图 %d 张在盘（视觉副驾细读缺省——按素材清单的检索词从严想象，宁少用勿错用）\n", n)
 }
 
 // materialVisImgs 素材图 → 多模态注入图（URL 给模型看着真图定摆位；路径+标签给

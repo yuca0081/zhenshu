@@ -80,6 +80,12 @@ func sceneConcurrency() int {
 	return 3
 }
 
+// qStyleBook / qSegMaterials 视觉副驾细读的固定问法（2026-10-28 换脑）。同图同问 =
+// 同请求体字节：风格画像全片一次、跨段跨修复轮靠磁盘缓存零成本重放——改措辞就是
+// 废缓存，动前先想清楚。
+const qStyleBook = "以下是本片已确认的风格样张截图与来源视频真迹帧——逐图细读四维画像：配色（底色/强调色/文字色，给近似色值）、质感（颗粒/描边/纹理）、画面密度与层次、字体气质。这是全片视觉的权威参照。"
+const qSegMaterials = "以下是本段素材真图（公版检索所得）——逐图细读内容主体与构图，供决定用不用、怎么摆位。"
+
 // sceneGen 每段一个场景文件。instruction = 用户改画要求（最高优先级位，修复轮必须
 // 带上否则会丢）；feedback = lint/check/审查回喂（必须修正位）；only 非空只处理该段。
 func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction, feedback, only string) error {
@@ -91,22 +97,39 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	if err != nil {
 		return err
 	}
-	prov, perr := llm.FromEnv(llm.RoleVisual)
+	// 主脑走文本主力档（2026-10-28 换脑 glm-5.3，无多模态）：写画面会话纯文本，
+	// 看图活全走视觉副驾（llm.VisionDigest，flash 档）——样张/真迹细读成全片
+	// 共享的「风格画像」，素材图段级细读。判卷链（frameQA/段审/终审）仍整段
+	// flash 直判，不经这里。
+	prov, perr := llm.FromEnv(llm.RolePlan)
 	if perr != nil {
 		return fmt.Errorf("场景生成需要 API 模式（LLM_API_KEY）: %w", perr)
 	}
 	cv := ProjectCanvas(p)
 	golden := goldenExample(r.RootDir)
-	// 样张截图（ai/snap_samples.py）→ 多模态注入：模型看着真图写画面（失败退纯文本）。
+	// 样张截图（ai/snap_samples.py）→ 视觉副驾的细读原料（不再逐段内嵌进会话）。
 	// 带指纹缓存：frameQA/preReview 修复轮对每个失败段各调一次 sceneGen，样张不变
 	// 却重复截图（5 段×2 轮=10 次浏览器作业）纯属白付。
 	r.snapSamples(ctx, p)
 	sampleImgs := styleSampleImages(p)
-	// 真迹关键帧（风格来源视频原片帧）全段注入：每段都看着真迹画——课堂通道，
-	// 与考卷（frameqa 对照真迹）配套；无媒体/压图失败静默缺省，退回纯样张。
+	// 真迹关键帧（风格来源视频原片帧）：与样张截图一起进风格画像——课堂通道，
+	// 与考卷（frameqa 对照真迹）配套；无媒体/压图失败静默缺省，退回纯样张画像。
 	keyImgs := styleKeyframeImages(ctx, p)
 	if len(keyImgs) > 0 {
 		sampleImgs = append(sampleImgs, keyImgs...)
+	}
+	// 风格画像 styleBook（视觉副驾，每片一次）：样张截图+真迹细读成文字块，全段
+	// 逐字共享进稳定前缀。同图同问字节一致——磁盘缓存跨段/跨修复轮零成本复用；
+	// 会话变纯文本后，修复轮续写不再因丢图换形态断前缀（此前 seg.write 命中率
+	// 22% 的主病灶，docs 见架构图 2026-10-28 版）。副驾失败降级空串：写的一端
+	// 退回样张源码+设计系统文字口径，判卷链仍对照真图，闭环没断。
+	styleBook := ""
+	if shared := visURLs(sampleImgs); len(shared) > 0 {
+		at := agentlog.Begin(p, "seg.stylebook", "风格画像细读（视觉副驾）")
+		var u openai.Usage
+		styleBook, u = llm.VisionDigest(ctx, shared, qStyleBook)
+		at.Add(u)
+		at.Done(nil)
 	}
 	// NoThink：画面是结构化 HTML 作业，开思考单段 5-13 分钟；关思考配合段间并发
 	// 把全片压进分钟级（v1 spec 路径同款取舍）。
@@ -124,21 +147,31 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		}
 		return 0
 	}
-	gen := func(acc *segUsage, imgs []visImg, user string, out any) (openai.Usage, error) {
+	// digest 视觉副驾细读 + 用量并入段账（prompt/compl/cached/calls 全记——副驾
+	// 花的钱是写画面成本的一部分，账面不能漏）。
+	digest := func(acc *segUsage, images []visImg, question string) string {
+		if len(images) == 0 {
+			return ""
+		}
+		d, u := llm.VisionDigest(ctx, visURLs(images), question)
+		acc.prompt += u.PromptTokens
+		acc.compl += u.CompletionTokens
+		if u.PromptTokensDetails != nil {
+			acc.cached += u.PromptTokensDetails.CachedTokens
+		}
+		acc.calls++
+		return d
+	}
+	gen := func(acc *segUsage, user string, out any) (openai.Usage, error) {
 		if acc.rec != nil {
 			if acc.calls == 0 { // 系统提示（设计系统/皮肤笼子）每任务记一次：留痕里看得见注入了什么约束
 				acc.rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: sceneSystemFor(p)})
 			}
-			// 图片载荷不落盘（data URL 太肥），记项目内路径清单——「过程」页渲染缩略图可点开
-			acc.rec.MessageImgs(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: user}, visRefs(imgs))
+			acc.rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: user})
 		}
-		var u openai.Usage
-		var err error
-		if len(imgs) > 0 {
-			u, err = prov.GenerateJSONVisionNoThink(ctx, sceneSystemFor(p), user, visURLs(imgs), 0.7, out)
-		} else {
-			u, err = prov.GenerateJSONNoThink(ctx, sceneSystemFor(p), user, out)
-		}
+		// 纯文本主脑（2026-10-28 换脑）：图不入会话——样张/真迹走全片共享的风格
+		// 画像（styleBook），素材走段级细读；NoThink 取舍不变（结构化 HTML 作业）。
+		u, err := prov.GenerateJSONNoThink(ctx, sceneSystemFor(p), user, out)
 		acc.prompt += u.PromptTokens
 		acc.compl += u.CompletionTokens
 		acc.cached += genCached(u)
@@ -285,19 +318,23 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		}()
 		v := voices[seg.ID]
 		sceneM, compM := methodsFor(r.RootDir, seg)
-		// 附图顺序 = 样张 → 真迹关键帧 → 本段素材真图（按需申请制，无素材不带图）
-		// ——共享图在前、段变量图在后，与文本的稳定前缀布局同构。
-		vis := append([]visImg{}, sampleImgs...)
-		// 稳定前缀布局（七刀#4）：跨段不变的（样张源码/真迹说明/设计系统主体）连成
-		// 整块进共享前缀；段变量（导演统筹/本段版式指派/素材注记）全部垫尾——
-		// 导演统筹块先前置是可读性取舍，缓存计价下让位（语义由提示词行文自明）。
+		// 稳定前缀布局（七刀#4）：跨段不变的（样张源码/真迹说明/设计系统主体/风格
+		// 画像）连成整块进共享前缀；段变量（导演统筹/本段版式指派/素材细读）全部
+		// 垫尾——导演统筹块先前置是可读性取舍，缓存计价下让位（语义由提示词行文自明）。
 		styleShared := sampleSrc + keyframeNote(keyImgs) + designShared
+		if styleBook != "" {
+			styleShared += "\n## 风格画像（视觉副驾对样张截图与真迹帧的细读——全片共享，视觉权威参照）\n" + styleBook + "\n"
+		}
 		_, styleSeg := designNotesFor(p, seg.Idx)
 		styleSeg = directorNoteFor(sb, seg) + styleSeg
 		segMats := materialsForSeg(p, seg.ID)
 		if len(segMats) > 0 {
-			vis = append(vis, materialVisImgs(p, segMats)...)
-			styleSeg += materialNote(len(segMats)) + materialsNote(segMats)
+			if d := digest(acc, materialVisImgs(p, segMats), qSegMaterials); d != "" {
+				styleSeg += "\n- 素材真图细读（视觉副驾，公版检索所得——看清内容再决定用不用、怎么摆位）：\n" + d + "\n"
+			} else {
+				styleSeg += materialNote(len(segMats))
+			}
+			styleSeg += materialsNote(segMats)
 		}
 		fp := sceneSidecarFingerprint(p, sb, seg)
 		var payload struct {
@@ -327,7 +364,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		}
 		if hist == nil { // 全新会话（首写或续写不可用的修复兜底，行为同旧版）
 			user := sceneUserPrompt(seg, v, instruction, feedback, cv, styleShared, styleSeg, golden, sceneM, compM, len(segMats) == 0, prevSceneHTML(p, seg.ID))
-			_, gerr := gen(acc, vis, user, &payload)
+			_, gerr := gen(acc, user, &payload)
 			if gerr != nil {
 				werr = fmt.Errorf("%s 场景生成失败: %w", seg.ID, gerr)
 				fail(werr)
@@ -338,9 +375,13 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			if len(segMats) == 0 && len(payload.ImageRequests) > 0 {
 				if mats := r.fulfillRequests(ctx, p, seg.ID, cleanRequests(payload.ImageRequests)); len(mats) > 0 {
 					segMats = mats
-					vis = append(vis, materialVisImgs(p, segMats)...)
-					styleSeg += materialNote(len(segMats)) + materialsNote(segMats)
-					_, err2 := gen(acc, vis, sceneUserPrompt(seg, v, instruction, feedback, cv, styleShared, styleSeg, golden, sceneM, compM, false, ""), &payload)
+					if d := digest(acc, materialVisImgs(p, segMats), qSegMaterials); d != "" {
+						styleSeg += "\n- 素材真图细读（视觉副驾，公版检索所得——看清内容再决定用不用、怎么摆位）：\n" + d + "\n"
+					} else {
+						styleSeg += materialNote(len(segMats))
+					}
+					styleSeg += materialsNote(segMats)
+					_, err2 := gen(acc, sceneUserPrompt(seg, v, instruction, feedback, cv, styleShared, styleSeg, golden, sceneM, compM, false, ""), &payload)
 					if err2 != nil {
 						werr = fmt.Errorf("%s 带素材终稿生成失败: %w", seg.ID, err2)
 						fail(werr)
@@ -366,7 +407,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 					HTML     string                  `json:"html"`
 					Elements []contract.NamedElement `json:"elements"`
 				}
-				_, err2 = gen(acc, vis, sceneUserPrompt(seg, v, "", fb, cv, styleShared, styleSeg, golden, sceneM, compM, false, payload.HTML), &fixed)
+				_, err2 = gen(acc, sceneUserPrompt(seg, v, "", fb, cv, styleShared, styleSeg, golden, sceneM, compM, false, payload.HTML), &fixed)
 				if err2 == nil {
 					payload.HTML, payload.Elements = fixed.HTML, fixed.Elements
 				}
@@ -498,7 +539,7 @@ func (r *Runner) fallbackOldScene(p *pipeline.Project, segID, why string) bool {
 func sceneSystemFor(p *pipeline.Project) string {
 	var ss contract.StyleSamples
 	if b, err := os.ReadFile(p.Artifact("style/style_samples.json")); err == nil && json.Unmarshal(b, &ss) == nil && ss.Direction != "" {
-		s := "你是视频的画面工程师，直接写可渲染的场景 HTML。只输出 JSON。风格：" + ss.Direction + "。"
+		s := "你是视频的画面工程师，直接写可渲染的场景 HTML。只输出 JSON。风格：" + ss.Direction + "。视觉参照以注入的「风格画像」与设计系统文字为准（你看不到图，画像就是你的眼睛）。"
 		if ss.Device != nil && ss.Device.Name != "" {
 			s += "贯穿装置「" + ss.Device.Name + "」是全片签名，本段按注入的设计系统细则呼应它。"
 		}

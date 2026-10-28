@@ -44,7 +44,7 @@ LLM 作业契约（请求 md → 产物 json）：
 | 风格样张 | `llm/style_samples.request.md` | `llm/style_samples.json` | `ValidateStyleSamples`（含 confirmed 硬门） |
 | 段合成物×N | `llm/comp-segNN.request.md` | `llm/comp-segNN.json` | html 非空 + elements 非空（元素命名规范） |
 
-切 API 模式：`LLM_MODE=api` + `LLM_API_KEY`（默认 GLM 编码套餐端点，任何 OpenAI 兼容平台改 `LLM_BASE_URL`/`LLM_MODEL` 即换）。
+切 API 模式：`LLM_MODE=api` + `LLM_API_KEY`（默认 GLM 编码套餐端点，任何 OpenAI 兼容平台改 `LLM_BASE_URL`/`LLM_MODEL` 即换）。按档分模型：`LLM_VISUAL_MODEL`/`LLM_PLAN_MODEL`/`LLM_DIALOGUE_MODEL` 覆盖单档（不设回落 `LLM_MODEL`；2026-10-28 起视觉档配 `glm-5.3` 全量版，写画面/审帧/判卷走它）。
 
 ## M1 前置事项（服务器侧）
 

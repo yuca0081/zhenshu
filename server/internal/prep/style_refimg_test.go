@@ -65,26 +65,26 @@ func testLib(t *testing.T) *stylelib.Library {
 	return stylelib.New(dir)
 }
 
-// get_style_detail：文字档案之外必须随观察附真迹（chosen 跟踪 + 附图）。
+// get_style_detail：文字档案之外必须给真迹细读（2026-10-28 换脑后走视觉副驾文字
+// 画像；无 LLM_API_KEY 时降级为计数提示——chosen 跟踪 + refImages 判卷对照物不变）。
 func TestGetStyleDetailAttachesEvidenceFrames(t *testing.T) {
 	p := testProject(t)
 	r := &styleRun{p: p, d: Deps{Lib: testLib(t)}}
-	obs := r.getStyleDetailTool().Run(context.Background(), `{"id":"st1"}`)
+	obs := r.getStyleDetailTool(&Loop{}).Run(context.Background(), `{"id":"st1"}`)
 	if r.chosen != "st1" {
 		t.Fatalf("chosen 应跟踪到查看的条目，got %q", r.chosen)
 	}
-	if len(obs.Images) != 2 {
-		t.Fatalf("应随观察附 2 张真迹，got %d 张\n%s", len(obs.Images), obs.Text)
+	// 换脑后会话纯文本：不再附图，文本必须声明真迹去向（测试环境无 key → 降级文案）
+	if len(obs.Images) != 0 {
+		t.Fatalf("换脑后不该再附图，got %d 张", len(obs.Images))
 	}
-	for _, u := range obs.Images {
-		if !strings.HasPrefix(u, "data:image/jpeg;base64,") {
-			t.Fatalf("附图应为 JPEG dataURL，got 前缀 %.40s", u)
-		}
+	if !strings.Contains(obs.Text, "原片真迹 2 张") {
+		t.Fatalf("文案应声明真迹计数\n%s", obs.Text)
 	}
-	if !strings.Contains(obs.Text, "随本观察附 2 张原片真迹") {
-		t.Fatalf("文案应声明附图\n%s", obs.Text)
+	if !strings.Contains(obs.Text, "视觉副驾") {
+		t.Fatalf("文案应说明画像通道/降级\n%s", obs.Text)
 	}
-	// 判卷对照物同一批货（缓存复用）
+	// 判卷对照物同一批货（缓存复用）——判卷链仍对照真图，闭环没断
 	if refs := r.refImages(refJudgeMax); len(refs) != 2 {
 		t.Fatalf("refImages 应返回 2 张对照真迹，got %d", len(refs))
 	}
@@ -99,7 +99,7 @@ func TestGetStyleDetailWithoutMedia(t *testing.T) {
 	os.WriteFile(filepath.Join(libDir, "styles.json"), b, 0o644)
 	p := testProject(t)
 	r := &styleRun{p: p, d: Deps{Lib: stylelib.New(dir)}}
-	obs := r.getStyleDetailTool().Run(context.Background(), `{"id":"st2"}`)
+	obs := r.getStyleDetailTool(&Loop{}).Run(context.Background(), `{"id":"st2"}`)
 	if len(obs.Images) != 0 {
 		t.Fatalf("无媒体不该有附图，got %d", len(obs.Images))
 	}

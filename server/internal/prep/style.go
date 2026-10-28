@@ -41,7 +41,7 @@ const styleSampleMax = 6
 // 一张样张带修复 ~7 分钟（真机实测），窗口必须盖过一次收尾提交的回合开销。
 const styleGrabWindow = 4 * time.Minute
 
-const styleSystem = `你是美术指导。任务：为口播稿选定视觉风格，产出可直接指导制作的风格包。材料：get_script 拿口播稿；search_styles 按情绪与题材定分面、有筛选地浏览（不必遍历全库）；get_style_detail 看中的条目——描述、特色、样张图库、历史使用记录，**该条目的原片真迹帧会作为附图随观察给你**：配色、质感、画面密度、字体气质一律从真迹里来，禁止只凭文字想象风格。render_sample 渲染 1.8 秒动态样张验证落地效果（与成片同一台渲染器，动效/字体/质感即所得）；判卷官抽首/中/尾三帧对照真迹判风格贴合，打回时对着附图修。样张 4–5 张为宜（上限 6），每张版式明显不同；需要外部库就用 vend 声明让平台采购，别硬手搓；目录里没有的字体（特殊像素体/手写体/展示体等）在样张 HTML 写 <!-- font: Family | 协议 | 直链URL --> 声明由平台下载安装——首渲即真字体，装了什么会在终审页列出。
+const styleSystem = `你是美术指导。任务：为口播稿选定视觉风格，产出可直接指导制作的风格包。材料：get_script 拿口播稿；search_styles 按情绪与题材定分面、有筛选地浏览（不必遍历全库）；get_style_detail 看中的条目——描述、特色、样张图库、历史使用记录，**该条目的原片真迹会由视觉副驾细读成文字画像随观察给你**：配色、质感、画面密度、字体气质一律以画像为准，禁止只凭条目文字想象风格。render_sample 渲染 1.8 秒动态样张验证落地效果（与成片同一台渲染器，动效/字体/质感即所得）；判卷官抽首/中/尾三帧对照真迹判风格贴合，打回时对照三帧细读与诊断清单修。样张 4–5 张为宜（上限 6），每张版式明显不同；需要外部库就用 vend 声明让平台采购，别硬手搓；目录里没有的字体（特殊像素体/手写体/展示体等）在样张 HTML 写 <!-- font: Family | 协议 | 直链URL --> 声明由平台下载安装——首渲即真字体，装了什么会在终审页列出。
 库中没有合适的，从最接近的条目衍生一个并说明差异（register_style，单次限登记 1 个；衍生条目带「未验证」标签，出片后才转正）。
 产出四件（submit_style 一次交齐）：风格描述（视觉语言、色彩、质感、构图倾向，附选择理由——分镜工位靠它理解语境）；剪辑语法（切分密度 / 段长带秒数 / 同舞台延续强弱）；设计系统（皮肤、字体角色、动效语言、贯穿装置、版式、负面清单，以及本风格的**标准入场/收尾动画模板**——它是转场的载体，一套模板一段内生效，禁止逐段即兴发明）；样张 id 列表。
 规则：只在库内风格（含本次衍生登记）中选择；样张场景必须取自口播稿代表性内容，禁止通用示例；口播稿文本一个字不改。完成即调用 submit_style。`
@@ -103,7 +103,7 @@ func styleKickoff(p *pipeline.Project) string {
 		if name == "" {
 			name = brief.EntryID
 		}
-		k += fmt.Sprintf("\n用户已在风格库为本片选定条目「%s」（%s）——这是硬要求：get_style_detail 先看它（真迹帧随观察附图，配色/质感/密度/字体从真迹里来），风格包与样张以它为准；确有更强理由换选别的条目时必须先说明理由再看新条目。", name, brief.EntryID)
+		k += fmt.Sprintf("\n用户已在风格库为本片选定条目「%s」（%s）——这是硬要求：get_style_detail 先看它（真迹细读画像随观察给出，配色/质感/密度/字体从画像里来），风格包与样张以它为准；确有更强理由换选别的条目时必须先说明理由再看新条目。", name, brief.EntryID)
 	}
 	if idea := noteFile(p, IdeaFile); idea != "" {
 		k += "\n用户的想法（导演意图参考——风格气质可以从中取材，与口播稿冲突时以稿为准）：" + idea
@@ -148,6 +148,12 @@ const refDetailMax = 3
 // refJudgeMax 判卷/修复随附的真迹帧数：单发调用（不进多轮历史），对照物给足。
 const refJudgeMax = 4
 
+// qEntryFrames / qSampleFrames 视觉副驾细读的固定问法（2026-10-28 换脑）。同图同问
+// = 同请求体字节：get_style_detail、render_sample、修复轮共用同一份，磁盘缓存跨
+// 调用点零成本复用——改措辞就是废缓存，动前先想清楚。
+const qEntryFrames = "以下是被选风格条目的原片真迹帧——逐图细读四维画像：配色（底色/强调色/文字色，给近似色值）、质感（颗粒/描边/纹理）、画面密度与层次、字体气质。"
+const qSampleFrames = "以下是同一条 1.8 秒动态样张的首/中/尾三帧——逐帧细读：构图与主体位置、全部可见文字清单、动效阶段（入场/揭示/定格）。"
+
 // refImages chosen 条目的真迹附图（懒加载缓存）。条目无媒体/库未接线返回 nil，
 // 判卷降级为不对照真迹（与旧行为一致）。
 func (r *styleRun) refImages(maxN int) []string {
@@ -176,8 +182,10 @@ func (r *styleRun) refImages(maxN int) []string {
 }
 
 func (r *styleRun) prov() react.ChatClient {
-	// ②必须多模态——RoleVisual 档。Chat 的多模态观察走 user 附图通道。
-	prov, _ := llm.FromEnv(llm.RoleVisual)
+	// ②主脑走文本主力档（2026-10-28 换脑 glm-5.3，无多模态）：看图活全走视觉
+	// 副驾（llm.VisionDigest，flash 档细读成文字画像），判卷/修复对照物另起
+	// RoleVisual 单发调用——脑与眼分档，各吃各的模型。
+	prov, _ := llm.FromEnv(llm.RolePlan)
 	return prov
 }
 
@@ -201,7 +209,7 @@ func (r *styleRun) tools(loop *Loop) []Tool {
 	return []Tool{
 		r.getScriptTool(),
 		r.searchStylesTool(),
-		r.getStyleDetailTool(),
+		r.getStyleDetailTool(loop),
 		r.getStyleUsageTool(),
 		r.renderSampleTool(&snapLeft, loop),
 		r.registerStyleTool(),
@@ -365,7 +373,7 @@ func (r *styleRun) facetMissHint(query, mood, tone, density string) string {
 }
 
 // getStyleDetailTool get_style_detail：完整描述 + 特色 + 样张图库（帧清单）。
-func (r *styleRun) getStyleDetailTool() Tool {
+func (r *styleRun) getStyleDetailTool(loop *Loop) Tool {
 	return Tool{
 		Def: toolSchema("get_style_detail", "看一条风格的完整档案：标签与特色机制、分面、题材、样张图库清单、衍生出处与验证状态。", map[string]any{
 			"type": "object",
@@ -374,7 +382,7 @@ func (r *styleRun) getStyleDetailTool() Tool {
 			},
 			"required": []string{"id"},
 		}),
-		Run: func(_ context.Context, args string) Observation {
+		Run: func(ctx context.Context, args string) Observation {
 			var in struct {
 				ID string `json:"id"`
 			}
@@ -419,13 +427,20 @@ func (r *styleRun) getStyleDetailTool() Tool {
 					b.WriteString(line + "\n")
 				}
 			}
-			// 真迹随观察附图（≤3 张，标签证据优先——同简报取法）：风格的本体在帧里
-			// 不在文字里，纯文本档案喂不出贴合的配色/质感/字体（2026-10-22 实测根因）。
+			// 真迹细读（视觉副驾，2026-10-28 大杯换脑）：主脑纯文本，真迹帧由 flash
+			// 细读成文字画像回喂——风格的本体在帧里不在文字里，纯文本档案喂不出贴合的
+			// 配色/质感/字体（2026-10-22 实测根因），画像保住这条命脉。副驾不可用
+			// 降级为计数提示：判卷链仍对照真图，闭环没断。
 			var obs Observation
 			obs.Text = b.String()
 			if imgs := r.refImages(refDetailMax); len(imgs) > 0 {
-				obs.Text += fmt.Sprintf("样张图库：随本观察附 %d 张原片真迹（配色/质感/密度/字体气质以它为准；画里的物件是原片题材，不进本片）。\n", len(imgs))
-				obs.Images = imgs
+				if d, u := llm.VisionDigest(ctx, imgs, qEntryFrames); d != "" {
+					obs.Text += fmt.Sprintf("样张图库：原片真迹 %d 张已由视觉副驾细读（配色/质感/密度/字体气质以画像为准；画里的物件是原片题材，不进本片）：\n%s\n", len(imgs), d)
+					llm.AccumulateUsage(&loop.Usage, u)
+					loop.Calls++
+				} else {
+					obs.Text += fmt.Sprintf("样张图库：原片真迹 %d 张（视觉副驾暂不可用，画像缺省——凭文字档案从严执行；判卷仍会对照真图）\n", len(imgs))
+				}
 			} else {
 				frames, hasVideo := r.d.Lib.MediaNames(st.ID)
 				switch {
@@ -930,8 +945,15 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 				note += "机检与判卷全过。"
 			}
 			note += replaced
-			note += fmt.Sprintf("附图为该样张首/中/尾三帧。要改这张就带 replace=%d 重新渲染（额度剩 %d 张）。已采库：%s。", idx+1, *snapLeft, orNone(specs))
-			return Observation{Text: note, Images: judgeFrames}
+			note += fmt.Sprintf("要改这张就带 replace=%d 重新渲染（额度剩 %d 张）。已采库：%s。", idx+1, *snapLeft, orNone(specs))
+			// 三帧细读（视觉副驾）：主脑看不见图，三帧画像替它自查构图与文字——
+			// 问法与修复轮同源（qSampleFrames），同图同问磁盘缓存免费重放。
+			if d, u := llm.VisionDigest(ctx, judgeFrames, qSampleFrames); d != "" {
+				note += "\n三帧细读（视觉副驾）：\n" + d
+				llm.AccumulateUsage(&loop.Usage, u)
+				loop.Calls++
+			}
+			return Observation{Text: note}
 		},
 	}
 }
@@ -1042,30 +1064,47 @@ func (r *styleRun) judgeSample(ctx context.Context, loop *Loop, brief string, fr
 // sampleRepairSystem 修复轮（与判卷同一固定前缀形态，利前缀缓存）。
 const sampleRepairSystem = `你是样张修复师。重写完整样张 HTML，修复全部质检问题，其余保持不变。只输出 JSON。`
 
-// repairSample 按诊断重写样张 HTML。refs 非空时随附真迹——修复师对着对照物修，
-// 不是凭一句「风格不贴合」瞎猜。
+// repairSample 按诊断重写样张 HTML（大杯主脑 + 文字对照物）：真迹画像与三帧细读
+// 都是视觉副驾产物（问法与 get_style_detail/render_sample 同源，同图同问磁盘缓存
+// 免费重放）——修复师对着画像修，不是凭一句「风格不贴合」瞎猜。
 func (r *styleRun) repairSample(ctx context.Context, loop *Loop, brief, html string, frames []string, issues []string) (string, bool) {
-	prov, err := llm.FromEnv(llm.RoleVisual)
+	prov, err := llm.FromEnv(llm.RolePlan)
 	if err != nil {
 		return "", false
 	}
 	cv := pipeline.ProjectCanvas(r.p)
 	refs := r.refImages(refJudgeMax)
+	refDigest, u1 := llm.VisionDigest(ctx, refs, qEntryFrames)
+	frameDigest, u2 := llm.VisionDigest(ctx, frames, qSampleFrames)
+	llm.AccumulateUsage(&loop.Usage, u1)
+	llm.AccumulateUsage(&loop.Usage, u2)
+	if len(refs) > 0 {
+		loop.Calls++
+	}
+	if len(frames) > 0 {
+		loop.Calls++
+	}
 	var out struct {
 		HTML string `json:"html"`
 	}
-	user := fmt.Sprintf(`你写的样张（场景：%s；附图其后 %d 帧为它的首/中/尾三帧，再往后是真迹对照物）判卷未过，重写完整 HTML 修复全部问题（没被点名的部分保持不变）。
+	contrast := ""
+	if refDigest != "" {
+		contrast += "真迹画像（风格贴合的对照物）：\n" + refDigest + "\n\n"
+	}
+	if frameDigest != "" {
+		contrast += "三帧细读（把问题清单对应到具体帧）：\n" + frameDigest + "\n\n"
+	}
+	user := fmt.Sprintf(`你写的样张（场景：%s）判卷未过，重写完整 HTML 修复全部问题（没被点名的部分保持不变）。
 
 问题清单：
 - %s
 
-当前 HTML：
+%s当前 HTML：
 %s
 
 只输出 JSON：{"html":"<完整新HTML>"}（无围栏）。画布 %d×%d；字体用目录字体（%s）、系统字体（微软雅黑/黑体/宋体/楷体）、monospace，或保留原样张里 <!-- font: Family | 协议 | 直链URL --> 自装声明（平台已装好的家族，Family 写法逐字保留别改）。`,
-		brief, len(frames), strings.Join(issues, "\n- "), html, int(cv.W), int(cv.H), pipeline.FontCatalogList())
-	images := append(append([]string{}, frames...), refs...)
-	usage, err := prov.GenerateJSONVisionNoThink(ctx, sampleRepairSystem, user, images, 0.5, &out)
+		brief, strings.Join(issues, "\n- "), contrast, html, int(cv.W), int(cv.H), pipeline.FontCatalogList())
+	usage, err := prov.GenerateJSONNoThinkTemp(ctx, sampleRepairSystem, user, 0.5, &out)
 	llm.AccumulateUsage(&loop.Usage, usage)
 	if err == nil {
 		loop.Calls++

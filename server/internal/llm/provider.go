@@ -56,7 +56,8 @@ type Provider struct {
 	EffortOverride Effort
 }
 
-// FromEnv 按环境变量构造供应商：LLM_API_KEY / LLM_BASE_URL / LLM_MODEL（旧名 DEEPSEEK_* 仍兼容）。
+// FromEnv 按环境变量构造供应商：LLM_API_KEY / LLM_BASE_URL / LLM_MODEL（旧名 DEEPSEEK_* 仍兼容），
+// 单档模型可用 LLM_VISUAL_MODEL / LLM_PLAN_MODEL / LLM_DIALOGUE_MODEL 覆盖。
 // 默认 GLM 编码套餐端点 + glm-5.3-flash。缺 key 返回错误（调用方转 ErrAwaitLLM 降级会话模式）。
 func FromEnv(role Role) (*Provider, error) {
 	get := func(newName, oldName string) string {
@@ -66,7 +67,7 @@ func FromEnv(role Role) (*Provider, error) {
 		return os.Getenv(oldName)
 	}
 	switch role {
-	case RolePlan, RoleDialogue, RoleVisual: // M0 单模型起步：bake-off 后按档分模型
+	case RolePlan, RoleDialogue, RoleVisual:
 		key := get("LLM_API_KEY", "DEEPSEEK_API_KEY")
 		if key == "" {
 			return nil, errors.New("LLM_API_KEY 未配置（旧名 DEEPSEEK_API_KEY 亦未配置）")
@@ -78,6 +79,12 @@ func FromEnv(role Role) (*Provider, error) {
 		model := get("LLM_MODEL", "DEEPSEEK_MODEL")
 		if model == "" {
 			model = "glm-5.3-flash"
+		}
+		// 按档分模型（bake-off 口子，2026-10-28 起用）：LLM_<ROLE>_MODEL 覆盖单档
+		// （LLM_VISUAL_MODEL / LLM_PLAN_MODEL / LLM_DIALOGUE_MODEL），不设回落
+		// LLM_MODEL。BaseURL/Key 三档共享——只分模型不分平台。
+		if m := get("LLM_"+strings.ToUpper(string(role))+"_MODEL", ""); m != "" {
+			model = m
 		}
 		eff := Effort(os.Getenv("LLM_EFFORT"))
 		switch eff { // 非法值当没配（端点对非法档位也是静默按默认跑，同口径）
@@ -111,6 +118,12 @@ func (p *Provider) GenerateJSON(ctx context.Context, system, user string, out an
 // 结构化作业（样张/画面 HTML）思考会烧上万 reasoning token、拖到分钟级，纯亏时长。
 func (p *Provider) GenerateJSONNoThink(ctx context.Context, system, user string, out any) (openai.Usage, error) {
 	return p.generate(ctx, system, user, nil, "", out, 0.7, EffortDisabled)
+}
+
+// GenerateJSONNoThinkTemp 同 GenerateJSONNoThink，显式温度（样张修复轮 0.5 这类
+// 与缺省 0.7 不同的档）。
+func (p *Provider) GenerateJSONNoThinkTemp(ctx context.Context, system, user string, temperature float32, out any) (openai.Usage, error) {
+	return p.generate(ctx, system, user, nil, "", out, temperature, EffortDisabled)
 }
 
 // GenerateJSONEffort 同 GenerateJSON，思考档位由调用方定。

@@ -607,14 +607,17 @@ func (a *Agent) resolveSegment(p *pipeline.Project, ref string) (id, label strin
 // 很容易把 8 步吃满被硬剪——上限只防失控循环，不卡正常长链。
 const maxSteps = 16
 
-func (a *Agent) systemPrompt(id string, s State) string {
+// systemPrompt 主管系统提示词。只含项目内稳定的部分（身份/准则/工具指引）——
+// 实时状态不进 system：它每轮都变，拼进来会把整条 system 前缀的跨轮缓存打穿，
+// 且状态本来就随每轮末尾的「实时项目状态」注入消息给到（最新位置，权重最高）。
+// 2026-10-28 缓存优化：状态出 system 后，system+工具块跨轮字节稳定。
+func (a *Agent) systemPrompt(id, name string) string {
 	return fmt.Sprintf(`你是「帧述」的主管 Agent——靠谱的剪辑搭档：懂行、话少、主动汇报、给专业建议但尊重用户决定。
 
-当前项目「%s」（ID: %s）状态（唯一事实源，说话前先对照它）：
-%s
+当前项目「%s」（ID: %s）。每轮对话末尾注入的「［系统·实时项目状态］」是唯一事实源，说话前先对照它。
 
 工作准则：
-- 上面这份状态是唯一事实，说话前先对照它：「成片已就绪」才给下载地址 /api/projects/%s/video/main.mp4；状态说「旧版/失败/中断/未出过」就按它说，制作没在跑（无 ⏳ 行）就绝不说「在跑/渲染中」；不确定先 read_project 核对，禁止按聊天历史想象状态。
+- 实时状态是唯一事实：「成片已就绪」才给下载地址 /api/projects/%s/video/main.mp4；状态说「旧版/失败/中断/未出过」就按它说，制作没在跑（无 ⏳ 行）就绝不说「在跑/渲染中」；不确定先 read_project 核对，禁止按聊天历史想象状态。
 - 涉及文稿/分镜文本内容的问题（讲了什么、措辞、文稿与分镜是否一致）：先 read_manuscript 读全文、list_segments 看各段，核对后再答——你没有任何「凭记忆」的资格，文本比对必须基于刚读到的内容。
 - 改旁白：改一两段的用词/段名用 edit_segment（精准、不动其他段）；要重构段落划分/整体节奏才用 update_storyboard 整表重生成。
 - 三前置硬门：文稿、分镜、风格样张（用户确认）——齐了才能 start_production，代码强制，别硬闯；缺哪项就引导用户补齐——文稿可由你 draft_manuscript 起草（或用户粘贴后你 save_manuscript 存下），分镜 draft_storyboard，风格 search_styles 检索后 apply_style 选用（或用户描述方向直接出样张）。
@@ -629,7 +632,7 @@ func (a *Agent) systemPrompt(id string, s State) string {
 - 制作画面检查没过/用户问「哪几段有问题」：read_check 看逐段检查报告，别拿 140 字摘要猜。
 - 用户新建项目/看有哪些项目：create_project / list_projects。新建后项目列表里打开它，对话仍留在当前项目。
 - 工具被拒就换路或向用户解释，不重复硬试；每轮最多 %d 步。
-- 回复短：一段话讲清做了什么、下一步是什么，不堆术语、不复述参数。`, s.Name, id, s.summary(), id, maxSteps)
+- 回复短：一段话讲清做了什么、下一步是什么，不堆术语、不复述参数。`, name, id, id, maxSteps)
 }
 
 // Run 一轮对话：userText 与 refs 已入库。Agent 循环产出最终回复入库并广播。
@@ -649,7 +652,7 @@ func (a *Agent) Run(ctx context.Context, projectID, userText string, refs []stor
 		return
 	}
 	st := a.State(projectID) // 一轮只全量扫一次盘；system 提示与状态注入吃同一份
-	msgs := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: a.systemPrompt(projectID, st)}}
+	msgs := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: a.systemPrompt(projectID, st.Name)}}
 	hist := a.history(projectID, 10)
 	// 刚落库的这条用户消息在历史里已有一份，下面的状态注入还会带一遍——
 	// 去掉历史里那份，同一句话不在上下文里出现两次
