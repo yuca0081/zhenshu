@@ -24,9 +24,20 @@
 （④换脑+styleBook+素材细读）、`produce/materials.go`、`agent/agent.go`（主管状态出
 system）、`prep/style_refimg_test.go`、`.env`（三行）、架构 HTML（分档表/速查表/节点详情）。
 
+待办 1 边界化重构已落盘（2026-10-28 下午，`go build`+全量 `go test` 零失败）：
+`prep/script.go`（①检索纪律行出 system→web_search 描述补「1–2 轮」）、`prep/style.go`
+（②system 收敛为流程+政策；真迹画像进 get_style_detail 描述、场景约束/整组张数进
+render_sample 描述、转场禁即兴进 submit_style 的 entry_exit 字段契约）、
+`prep/storyboard.go`（③去「按句编号」冗余）、`agent/agent.go`（主管：URL 形态/搜索
+额度/set_voice·extract_stylepack 连锁/rework 机制括注出 system，📎≈rework 与起草
+默认不落盘等政策保留）+ `agent/tools.go`（export/web_search/fetch_url/rework/
+extract_stylepack 五处描述承接）——架构 HTML 三工位提示词全文+主管摘要+速查表边界
+注记已同步。另：补完 0007 迁移（drop render_jobs）遗留的编译断点——`store/store.go`
+DeleteProject 残留 s.jobs 清理块、`produce/produce.go` 残留未用 store import。
+
 ## 待办
 
-- [ ] **1. 系统提示词边界化重构**（用户提案，2026-10-28）
+- [x] **1. 系统提示词边界化重构**（用户提案，2026-10-28；同日落盘，见上方改动清单）
       边界：**单工具机制**（如「read_source 是材料唯一入口」「estimate≈4.5字/秒」）
       搬进工具 description；**跨工具流程**（先读后写、submit 前自检）与**政策**
       （起草默认不落盘、📎引用≈rework 意图）留 system——它们没有别的地方可住。

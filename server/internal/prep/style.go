@@ -41,10 +41,12 @@ const styleSampleMax = 6
 // 一张样张带修复 ~7 分钟（真机实测），窗口必须盖过一次收尾提交的回合开销。
 const styleGrabWindow = 4 * time.Minute
 
-const styleSystem = `你是美术指导。任务：为口播稿选定视觉风格，产出可直接指导制作的风格包。材料：get_script 拿口播稿；search_styles 按情绪与题材定分面、有筛选地浏览（不必遍历全库）；get_style_detail 看中的条目——描述、特色、样张图库、历史使用记录，**该条目的原片真迹会由视觉副驾细读成文字画像随观察给你**：配色、质感、画面密度、字体气质一律以画像为准，禁止只凭条目文字想象风格。render_sample 渲染 1.8 秒动态样张验证落地效果（与成片同一台渲染器，动效/字体/质感即所得）；判卷官抽首/中/尾三帧对照真迹判风格贴合，打回时对照三帧细读与诊断清单修。样张 4–5 张为宜（上限 6），每张版式明显不同；需要外部库就用 vend 声明让平台采购，别硬手搓；目录里没有的字体（特殊像素体/手写体/展示体等）在样张 HTML 写 <!-- font: Family | 协议 | 直链URL --> 声明由平台下载安装——首渲即真字体，装了什么会在终审页列出。
-库中没有合适的，从最接近的条目衍生一个并说明差异（register_style，单次限登记 1 个；衍生条目带「未验证」标签，出片后才转正）。
-产出四件（submit_style 一次交齐）：风格描述（视觉语言、色彩、质感、构图倾向，附选择理由——分镜工位靠它理解语境）；剪辑语法（切分密度 / 段长带秒数 / 同舞台延续强弱）；设计系统（皮肤、字体角色、动效语言、贯穿装置、版式、负面清单，以及本风格的**标准入场/收尾动画模板**——它是转场的载体，一套模板一段内生效，禁止逐段即兴发明）；样张 id 列表。
-规则：只在库内风格（含本次衍生登记）中选择；样张场景必须取自口播稿代表性内容，禁止通用示例；口播稿文本一个字不改。完成即调用 submit_style。`
+// styleSystem 系统提示词（委托书原则 + 2026-10-28 边界化）：只装身份/任务、
+// 跨工具流程与政策；单工具机制住各自工具 description——真迹细读画像在
+// get_style_detail、判卷修复内循环与 vend/字体声明在 render_sample、登记治理在
+// register_style、四件字段契约在 submit_style 的 schema。
+const styleSystem = `你是美术指导。任务：为口播稿选定视觉风格，产出可直接指导制作的风格包。流程：get_script 拿口播稿；search_styles 按情绪与题材定分面、有筛选地浏览，get_style_detail 细看候选条目；render_sample 渲染动态样张逐张验证落地效果；完成即调用 submit_style 一次交齐四件——风格描述（视觉语言、色彩、质感、构图倾向，附选择理由，分镜工位靠它理解语境）、剪辑语法（切分密度 / 段长带 / 同舞台延续）、设计系统（皮肤、字体角色、动效语言、贯穿装置、版式、负面清单、标准入场/收尾动画模板）、样张 id 列表。
+规则：只在库内风格（含本次衍生登记）中选择，库中没有合适的就从最接近的条目衍生登记（register_style）；口播稿文本一个字不改。`
 
 // runStyleStation 跑②：成功后工件 B 落盘（stylepack.json + legacy style_samples.json 未确认态）。
 func runStyleStation(ctx context.Context, p *pipeline.Project, d Deps) error {
@@ -244,7 +246,7 @@ func formatScriptForPeers(s *contract.Script) string {
 // searchStylesTool search_styles：库的主入口；空 query = 全量分页。
 func (r *styleRun) searchStylesTool() Tool {
 	return Tool{
-		Def: toolSchema("search_styles", "检索风格库（主入口）。空 query = 全量分页；分面给情绪/题材（关键词）/色调/密度。看中的条目用 get_style_detail 细看。", map[string]any{
+		Def: toolSchema("search_styles", "检索风格库（主入口）。空 query = 全量分页；分面给情绪/题材（关键词）/色调/密度；按分面有筛选地浏览，不必遍历全库。看中的条目用 get_style_detail 细看。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"query":   map[string]any{"type": "string", "description": "关键词（风格名/题材/气质词；可空=全量）"},
@@ -375,7 +377,7 @@ func (r *styleRun) facetMissHint(query, mood, tone, density string) string {
 // getStyleDetailTool get_style_detail：完整描述 + 特色 + 样张图库（帧清单）。
 func (r *styleRun) getStyleDetailTool(loop *Loop) Tool {
 	return Tool{
-		Def: toolSchema("get_style_detail", "看一条风格的完整档案：标签与特色机制、分面、题材、样张图库清单、衍生出处与验证状态。", map[string]any{
+		Def: toolSchema("get_style_detail", "看一条风格的完整档案：标签与特色机制、分面、题材、样张图库清单、衍生出处与验证状态。该条目的原片真迹会由视觉副驾细读成文字画像随观察给你——配色、质感、画面密度、字体气质一律以画像为准，禁止只凭条目文字想象风格。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"id": map[string]any{"type": "string", "description": "风格条目 id（search_styles 结果里拿）"},
@@ -756,15 +758,15 @@ const sampleJudgeSystem = `你是样张质检员。给一条短视频动态样�
 func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 	cv := pipeline.ProjectCanvas(r.p) // 画幅跟项目走：横版样张上验竖版版式=无效验证（2026-10-15 实测 P1）
 	w, h := int(cv.W), int(cv.H)
-	desc := fmt.Sprintf(`渲染一张动态样张（%.1f 秒 mp4，与成片同一台渲染器同一套工序）。scene_brief=场景简述（必须取自口播稿代表性内容）；html=%d×%d 自包含动态页面：
+	desc := fmt.Sprintf(`渲染一张动态样张（%.1f 秒 mp4，与成片同一台渲染器同一套工序，动效/字体/质感即所得）。scene_brief=场景简述（必须取自口播稿代表性内容，禁止通用示例）；html=%d×%d 自包含动态页面：
 - 根元素 <div data-composition-id="main" data-width="%d" data-height="%d" data-start="0" data-duration="%.1f">，%.1f 秒走完一次完整揭示节拍（开场视觉锚点即亮，收尾定格在内容帧不拖尾）
 - <head> 里保留 <script src="assets/gsap.min.js"></script> 与 <script src="assets/hf.js"></script>（漏写平台会机械补）
 - 动效全写进一条 gsap 时间轴：var tl=gsap.timeline({paused:true}); …; window.__timelines=window.__timelines||{}; window.__timelines["main"]=tl; 可补间只有 opacity/x/y/scale/rotation；禁 CSS animation/transition/@keyframes；禁 rAF/setTimeout/setInterval/Date.now；Math.random 必须种子化
 - <canvas> 绘制 = window.__draw_xxx=function(t,ctx,W,H,rng) 纯函数，由时间轴 onUpdate 驱动逐帧重画
 - 需要外部库（three.js/物理/图表等）：在 html 里写 <!-- vend: 包名@精确版本 --> 声明，平台自动采购注入（许可证白名单：MIT/Apache/BSD/CC0 等，白名单外拒收）；静态画面能解决的别引大库
 - 字体：目录字体（%s）＋微软雅黑/黑体/宋体/楷体＋monospace；目录真没有的（像素体/手写体等）在 html 写 <!-- font: Family | 协议 | 直链URL --> 声明自装（ttf/otf 直链或 zip release 资产；Family 与 font-family 用法逐字一致；下载失败会回喂你换）——字体必须在渲前装好，判卷的字体意见才作数；颜色/字体与本片设计系统皮肤槽位逐字一致；自包含无图片无外链
-- 提交后自动过机械检查并渲染判卷（抽首/中/尾三帧对照真迹判风格贴合），不合格带诊断回喂你修复（≤%d 轮）；构图版式必须与本组其他样张明显不同。目标 ≤%d 字符，上限 %d`,
-		sampleDur, w, h, w, h, sampleDur, sampleDur, pipeline.FontCatalogList(), sampleRepairMax, sampleHTMLTarget, sampleHTMLMax)
+- 提交后自动过机械检查并渲染判卷（抽首/中/尾三帧对照真迹判风格贴合），不合格带诊断回喂你修复（≤%d 轮）；构图版式必须与本组其他样张明显不同，整组 4–5 张为宜（上限 %d 张）。目标 ≤%d 字符，上限 %d`,
+		sampleDur, w, h, w, h, sampleDur, sampleDur, pipeline.FontCatalogList(), sampleRepairMax, styleSampleMax, sampleHTMLTarget, sampleHTMLMax)
 	return Tool{
 		Def: toolSchema("render_sample", desc, map[string]any{
 			"type": "object",
@@ -1318,7 +1320,7 @@ func normalizeStyleArgs(args string) (string, []string) {
 // submitStyleTool submit_style：唯一出口。校验通过 = 风格包 + legacy style_samples.json 落盘。
 func (r *styleRun) submitStyleTool() Tool {
 	return Tool{
-		Def: toolSchema("submit_style", "提交风格包（唯一出口）。校验：剪辑语法三字段齐全且段长带数值合法；样张 ≥1；style_id 已存在（库内或本次登记）；设计系统缺件会被打回。", map[string]any{
+		Def: toolSchema("submit_style", "提交风格包（唯一出口），一次交齐四件：风格描述、剪辑语法、设计系统、样张 id 列表（字段契约见 schema；entry_exit 模板是转场的载体）。校验：剪辑语法三字段齐全且段长带数值合法；样张 ≥1；style_id 已存在（库内或本次登记）；设计系统缺件会被打回。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"style_id":    map[string]any{"type": "string", "description": "风格条目 id（库内或本次 register_style 登记）"},
@@ -1339,7 +1341,7 @@ func (r *styleRun) submitStyleTool() Tool {
 						"skins:[{name,slots:{bg,txt,accent,font,mute?,surface?,panel_txt?,radius?,border_w?},css≤4000字符}] 1–2 套，色值 #RRGGBB、txt 对 bg 对比度 ≥4.5:1、font 含中文字体、radius/border_w 是数字 px（如 12、2，不是 \"12px\" 字符串），双皮肤必须另给 skin_rule；" +
 						"fonts:{display:{stack,weight?,tracking?},body:{...},data?{...}} 三角色分工、每栈含中文字体、weight 是字符串（如 \"700\"，不是数字 700）；" +
 						"motion:{ease,dur_in(0.1-1.5),dur_settle(0.05-1.0),stagger(0-0.5),entrances:[{name,how,use_for}] 3-5条互异,rhythm,exits,camera,transition,notes}；" +
-						"device:{name,desc,per_seg} 贯穿装置；entry_exit:{entry,exit,entry_dur(0.2-1.0)} 标准入场/收尾动画模板（转场载体，一套模板一段内生效）；" +
+						"device:{name,desc,per_seg} 贯穿装置；entry_exit:{entry,exit,entry_dur(0.2-1.0)} 标准入场/收尾动画模板（转场载体，一套模板一段内生效，禁止逐段即兴发明）；" +
 						"layouts:[{id,name,desc,layered?}] 0 个或 ≥2 个、layered 是字符串（有叠层写「哪层压哪层、为何可读」，无叠层不传——不是布尔）；" +
 						"anti_patterns ≤8 条；post:{vignette,grain,chroma} 各 0-1",
 				},

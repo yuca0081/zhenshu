@@ -517,7 +517,7 @@ var tools = []tool{
 			"properties": map[string]any{
 				"segment":     map[string]any{"type": "string", "description": "目标段（单个时用）：段号（如 3）或段 id（如 seg03）——从用户的 📎 引用或话里解析"},
 				"segments":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "目标段列表（多个时用）；与 segment 二选一，都给则合并"},
-				"instruction": map[string]any{"type": "string", "description": "画面修改要求（改什么元素、怎么改）"},
+				"instruction": map[string]any{"type": "string", "description": "画面修改要求（改什么元素、怎么改；用户元素引用指名了元素就在这里点名它——人话名，必要时带元素 id 与时刻）"},
 			},
 			"required": []string{"instruction"},
 		}),
@@ -579,7 +579,7 @@ var tools = []tool{
 		},
 	},
 	{
-		def: toolDef("extract_stylepack", "把本片风格沉淀成风格库草稿（标签+特色清单，LLM 打标；成片出片后自动做，用户在风格库确认入库后可复用；草稿的证据帧留空，由用户在库页回看补录）", nil),
+		def: toolDef("extract_stylepack", "把本片风格沉淀成风格库草稿（标签+特色清单，LLM 打标；成片出片后自动做，用户在风格库确认入库后可复用；草稿的证据帧留空，由用户在库页回看补录）。一次就够，已提炼过不必重复调用", nil),
 		gate: func(s State) string {
 			if !s.HasVideo {
 				return "成片未就绪，出片后再提炼"
@@ -727,7 +727,7 @@ var tools = []tool{
 		},
 	},
 	{
-		def: toolDef("web_search", "联网搜索实时资料（新闻/版本号/价格/数据等模型知识截止后的信息，或核实文稿事实）。写实元素（人物/产品/地标/新闻实物）的画面调研先搜再定。额度有限（套餐月约 200 次），必要才调，一次到位；要细读某条结果用 fetch_url（免费）", map[string]any{
+		def: toolDef("web_search", "联网搜索实时资料（新闻/版本号/价格/数据等模型知识截止后的信息，或核实文稿事实）。写实元素（人物/产品/地标/新闻实物）的画面调研先搜再定。额度有限（套餐月约 200 次，与其他工具共享）——非必要不搜，一轮对话合并成尽量少的精准查询；空结果最多换个词再试一次，仍空就如实说明并标明信息可能过时，不连环重试；要细读某条结果用 fetch_url（免费）", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"query":    map[string]any{"type": "string", "description": "搜索词，≤70 字，关键词组效果最好"},
@@ -742,7 +742,7 @@ var tools = []tool{
 		},
 	},
 	{
-		def: toolDef("fetch_url", "读取一个网页的正文（纯文本，免费不占搜索额度）。用户贴了链接想让你看内容、或 web_search 结果里有要细看的条目时用它。只抓静态页面（文章/文档/博客/wiki），不执行 JS，重前端页面会读不到正文", map[string]any{
+		def: toolDef("fetch_url", "读取一个网页的正文（纯文本，免费不占搜索额度）。用户贴了链接想让你看内容、或 web_search 结果里有要细看的条目时用它——能用它看内容就别再搜一次。只抓静态页面（文章/文档/博客/wiki），不执行 JS，重前端页面会读不到正文", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"url": map[string]any{"type": "string", "description": "要读取的网页地址（http/https）"},
@@ -1001,7 +1001,7 @@ var tools = []tool{
 		},
 	},
 	{
-		def: toolDef("export", "导出成片（返回下载地址）", nil),
+		def: toolDef("export", "导出成片（返回下载地址 /api/projects/<项目id>/video/main.mp4，1080p 含旁白与逐词字幕）", nil),
 		gate: func(s State) string {
 			if !s.HasVideo {
 				return "成片未就绪"
