@@ -5,6 +5,7 @@
 package store
 
 import (
+	"context"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
@@ -83,20 +84,28 @@ type ProjectRow struct {
 	// 里 style_id 为空），时长用户拍板不要——两者仍留磁盘事实源。
 	Topic         string    `gorm:"column:topic" json:"topic,omitempty"`
 	Aspect        string    `gorm:"column:aspect" json:"aspect,omitempty"`
-	StoragePrefix string    `gorm:"column:storage_prefix" json:"-"` // MinIO 桶内相对路径前缀
+	StoragePrefix string    `gorm:"column:storage_prefix" json:"-"` // MinIO 桶内相对路径前缀（<user_id>/<项目ID>/，账本为准）
 	UpdatedAt     time.Time `gorm:"column:updated_at" json:"-"`
+	// 0008 列表事实源字段（docs/storage-rework-2026-10-28.md Q4/Q1）：mode 建项落账；
+	// last_event/last_event_ts 制作/重做终态处落账（NotifyResult 读 manifest 终态写入），
+	// 列表的「上次制作结果」由此直出，不再回放磁盘 manifest。
+	Mode        string    `gorm:"column:mode" json:"-"`
+	LastEvent   string    `gorm:"column:last_event" json:"-"`
+	LastEventTs time.Time `gorm:"column:last_event_ts" json:"-"`
 }
 
 func (ProjectRow) TableName() string { return "projects" }
 
-// ProjectMeta 项目账行的可同步字段（磁盘 project.json 是事实源，这里是检索镜像）。
-// StoragePrefix 是 MinIO 桶内相对路径（如 projects/p20261016-115229/）——「URL 永不
-// 入库」原则不受影响：入账的是 key，不是带域名/桶名的 URL，换端点零迁移。
+// ProjectMeta 项目账行的可同步字段。PG 行是项目元数据账本（方案甲，2026-10-28 拍板）：
+// 可检索字段以 PG 为准（写点在建项/状态转移处），磁盘 project.json 降级为随货快照。
+// StoragePrefix 是 MinIO 桶内相对路径——「URL 永不入库」原则不受影响：入账的是 key，
+// 不是带域名/桶名的 URL，换端点零迁移。
 type ProjectMeta struct {
 	Topic         string
 	Aspect        string
 	Status        string
 	StoragePrefix string
+	Mode          string // script（文稿驱动，缺省）| music（音乐驱动 PV）
 }
 
 // User 用户账号（固定账号模型：管理员预建，无自助注册）。PasswordHash 不出 JSON。
@@ -115,40 +124,30 @@ var (
 	ErrDuplicateUser = errors.New("用户名已存在")
 )
 
-// RenderJobRow render_jobs 行：一次制作/重做一行（kind: produce|rework），
-// status: running|done|failed|cancelled。quality 恒 draft（管线暂只此一档），
-// kind 存 payload JSONB。磁盘 manifest 仍是事实源，这里是可查询镜像。
-type RenderJobRow struct {
-	ID         int64      `gorm:"column:id"          json:"id"`
-	ProjectID  string     `gorm:"column:project_id"  json:"-"` // 内存实现用；PG 查询不取
-	Kind       string     `gorm:"column:kind"        json:"kind"`
-	Status     string     `gorm:"column:status"      json:"status"`
-	OutputPath string     `gorm:"column:output_path" json:"output_path,omitempty"`
-	Error      string     `gorm:"column:error"       json:"error,omitempty"`
-	StartedAt  time.Time  `gorm:"column:started_at"  json:"started_at"`
-	FinishedAt *time.Time `gorm:"column:finished_at" json:"finished_at,omitempty"`
-}
-
 // Store 聊天案卷 + 项目元数据。chat_messages.project_id 在 DDL 里是 UUID 外键，
 // PG 实现按 disk_id 换写；内存实现直接存。
 type Store interface {
 	CreateProject(diskID, name, userID string) error
 	EnsureProject(diskID, name string) error // 已存在则跳过
 	UpdateStatus(diskID, status string) error
-	// UpdateProjectMeta 加厚账行（topic/画幅/风格/目标时长/状态/对象路径）。
-	// 幂等覆盖写：磁盘 project.json 是事实源，调用方在读到盘上最新值后同步。
+	// UpdateProjectMeta 加厚账行（topic/画幅/模式/状态/对象路径）。幂等覆盖写。
 	UpdateProjectMeta(diskID string, meta ProjectMeta) error
-	DeleteProject(diskID string) error // 行+聊天+任务镜像全删（磁盘目录由调用方删）
+	// ListProjects / GetProject 项目账本读取（listProjects 列表事实源、云端项目
+	// 首触归属判定）。GetProject 无行回 ErrNoProjectRow。
+	ListProjects() ([]ProjectRow, error)
+	GetProject(diskID string) (ProjectRow, error)
+	// SetLastEvent 制作/重做终态落账（last_event/last_event_ts + updated_at）。
+	SetLastEvent(diskID, event string, ts time.Time) error
+	DeleteProject(diskID string) error // 行+聊天全删（磁盘目录由调用方删）
 	SaveMsg(m *Msg) error
 	ListMsgs(projectID string, afterID int64, limit int) ([]Msg, error)
 	// ListMsgsTail 取该项目最近 limit 条消息，按时间正序返回。对话历史窗口用：
 	// ListMsgs 恒从最旧往后取，消息一超量最新对话永远进不了 LLM 上下文。
 	ListMsgsTail(projectID string, limit int) ([]Msg, error)
-	// render_jobs 记账：起跑插 running 行，终态回写该项目最近一行 running
-	//（同项目同时最多一个任务，见 produce.running 幂等锁）。只写不读——
-	// PG 表是给运维 SQL 手查的镜像，manifest 才是事实源。
-	StartRenderJob(projectID, kind string) error
-	FinishRenderJob(projectID, status, outputPath, errMsg string) error
+	// TryProductionLease 制作租约（串行换机，Q5 拍板）：PG advisory lock 按项目占坑，
+	// 同一项目同时只允许一台机器开工。返回幂等 release；ok=false = 租约被占
+	// （另一台机器在开）。内存实现退化为进程内互斥（跨机无从谈起）。
+	TryProductionLease(diskID string) (release func(), ok bool, err error)
 	// 用户账号。UserByID 不需要：会话载荷自带角色（签名 cookie 无状态校验，零 DB 查询）。
 	CreateUser(u *User) error                  // ID 为空自动生成；用户名冲突回 ErrDuplicateUser
 	UserByName(username string) (*User, error) // 无此用户回 ErrNoUser
@@ -194,12 +193,15 @@ func Open(dsn string) (Store, error) {
 	)`).Error; err != nil {
 		return nil, fmt.Errorf("建 users 表失败: %w", err)
 	}
-	// projects 账行加厚列（migrations/0006_project_meta.sql 留档；这里幂等补齐，
+	// projects 账行加厚列（migrations/0006、0008 留档；这里幂等补齐，
 	// 老库不经 deploy 也能起）
 	for _, stmt := range []string{
 		`ALTER TABLE projects ADD COLUMN IF NOT EXISTS topic TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE projects ADD COLUMN IF NOT EXISTS storage_prefix TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE projects ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`,
+		`ALTER TABLE projects ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE projects ADD COLUMN IF NOT EXISTS last_event TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE projects ADD COLUMN IF NOT EXISTS last_event_ts TIMESTAMPTZ`,
 	} {
 		if err := db.Exec(stmt).Error; err != nil {
 			return nil, fmt.Errorf("加厚 projects 表失败（%s）: %w", stmt, err)
@@ -250,16 +252,75 @@ func (s *pgStore) EnsureProject(diskID, name string) error {
 }
 
 func (s *pgStore) UpdateStatus(diskID, status string) error {
-	return s.db.Exec(`UPDATE projects SET status = ? WHERE disk_id = ?`, status, diskID).Error
+	return s.db.Exec(`UPDATE projects SET status = ?, updated_at = now() WHERE disk_id = ?`, status, diskID).Error
 }
 
-// UpdateProjectMeta 幂等覆盖账行。磁盘是事实源，这里照抄盘上值——包括 status
-// （自愈 UpdateStatus 可能漏掉的转移）。
+// UpdateProjectMeta 幂等覆盖账行（含状态——状态转移点可能整批同步盘上快照）。
 func (s *pgStore) UpdateProjectMeta(diskID string, meta ProjectMeta) error {
 	return s.db.Exec(`UPDATE projects SET
-		topic = ?, aspect = ?, status = ?, storage_prefix = ?, updated_at = now()
+		topic = ?, aspect = ?, status = ?, storage_prefix = ?, mode = ?, updated_at = now()
 		WHERE disk_id = ?`,
-		meta.Topic, meta.Aspect, meta.Status, meta.StoragePrefix, diskID).Error
+		meta.Topic, meta.Aspect, meta.Status, meta.StoragePrefix, meta.Mode, diskID).Error
+}
+
+func (s *pgStore) ListProjects() ([]ProjectRow, error) {
+	var rows []ProjectRow
+	err := s.db.Order("created_at DESC").Find(&rows).Error
+	return rows, err
+}
+
+func (s *pgStore) GetProject(diskID string) (ProjectRow, error) {
+	var row ProjectRow
+	err := s.db.Where("disk_id = ?", diskID).Take(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ProjectRow{}, fmt.Errorf("项目 %s: %w", diskID, ErrNoProjectRow)
+	}
+	if err != nil {
+		return ProjectRow{}, fmt.Errorf("项目 %s 查 DB 失败: %w", diskID, err)
+	}
+	return row, nil
+}
+
+func (s *pgStore) SetLastEvent(diskID, event string, ts time.Time) error {
+	return s.db.Exec(`UPDATE projects SET last_event = ?, last_event_ts = ?, updated_at = now() WHERE disk_id = ?`,
+		event, ts, diskID).Error
+}
+
+// TryProductionLease pg_try_advisory_lock 会话级占坑：锁绑定在专用连接上，
+// 制作跑多久占多久（连接池 MaxOpenConns=4，同机并发制作通常 ≤2，可承受）。
+// release 解锁并还连接，幂等（Once 包裹由调用方负责——这里自身幂等安全：
+// 重复 unlock 只返回 false）。进程崩溃连接断开锁自动释放，无死租约。
+func (s *pgStore) TryProductionLease(diskID string) (func(), bool, error) {
+	sqlDB, err := s.db.DB()
+	if err != nil {
+		return nil, false, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := sqlDB.Conn(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	var got bool
+	if err := conn.QueryRowContext(ctx,
+		`SELECT pg_try_advisory_lock(hashtextextended('zhenshu-produce:' || $1, 0))`,
+		diskID).Scan(&got); err != nil {
+		conn.Close()
+		return nil, false, err
+	}
+	if !got {
+		conn.Close()
+		return nil, false, nil
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = conn.ExecContext(ctx, `SELECT pg_advisory_unlock(hashtextextended('zhenshu-produce:' || $1, 0))`, diskID)
+			conn.Close() // 还池（锁随会话释放，双保险）
+		})
+	}, true, nil
 }
 
 // DeleteProject 删项目镜像：聊天、任务、行。无行不报错（磁盘才是事实源）；
@@ -276,30 +337,7 @@ func (s *pgStore) DeleteProject(diskID string) error {
 	if err := s.db.Exec(`DELETE FROM chat_messages WHERE project_id = ?`, uuid).Error; err != nil {
 		return err
 	}
-	if err := s.db.Exec(`DELETE FROM render_jobs WHERE project_id = ?`, uuid).Error; err != nil {
-		return err
-	}
 	return s.db.Exec(`DELETE FROM projects WHERE id = ?`, uuid).Error
-}
-
-func (s *pgStore) StartRenderJob(projectID, kind string) error {
-	uuid, err := s.findUUID(projectID)
-	if err != nil {
-		return err
-	}
-	payload, _ := json.Marshal(map[string]string{"kind": kind})
-	return s.db.Exec(`INSERT INTO render_jobs (project_id, quality, status, payload, started_at)
-		VALUES (?, 'draft', 'running', ?::jsonb, now())`, uuid, string(payload)).Error
-}
-
-func (s *pgStore) FinishRenderJob(projectID, status, outputPath, errMsg string) error {
-	uuid, err := s.findUUID(projectID)
-	if err != nil {
-		return err
-	}
-	return s.db.Exec(`UPDATE render_jobs SET status = ?, output_path = NULLIF(?, ''), error = NULLIF(?, ''), finished_at = now()
-		WHERE id = (SELECT max(id) FROM render_jobs WHERE project_id = ? AND status = 'running')`,
-		status, outputPath, errMsg, uuid).Error
 }
 
 func (s *pgStore) SaveMsg(m *Msg) error {
@@ -393,10 +431,9 @@ type memStore struct {
 	mu       sync.Mutex
 	projects []ProjectRow
 	msgs     []Msg
-	jobs     []RenderJobRow
 	users    []User
-	jobSeq   int64
 	seq      int64
+	leases   map[string]bool // 制作租约占坑（进程内语义）
 }
 
 func newMem() *memStore { return &memStore{} }
@@ -429,6 +466,7 @@ func (s *memStore) UpdateStatus(diskID, status string) error {
 	for i := range s.projects {
 		if s.projects[i].ID == diskID {
 			s.projects[i].Status = status
+			s.projects[i].UpdatedAt = time.Now()
 		}
 	}
 	return nil
@@ -442,10 +480,65 @@ func (s *memStore) UpdateProjectMeta(diskID string, meta ProjectMeta) error {
 			p := &s.projects[i]
 			p.Topic, p.Aspect = meta.Topic, meta.Aspect
 			p.Status, p.StoragePrefix = meta.Status, meta.StoragePrefix
+			p.Mode = meta.Mode
 			p.UpdatedAt = time.Now()
 		}
 	}
 	return nil
+}
+
+func (s *memStore) ListProjects() ([]ProjectRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]ProjectRow, len(s.projects))
+	copy(out, s.projects)
+	return out, nil
+}
+
+func (s *memStore) GetProject(diskID string) (ProjectRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.projects {
+		if s.projects[i].ID == diskID {
+			return s.projects[i], nil
+		}
+	}
+	return ProjectRow{}, fmt.Errorf("项目 %s: %w", diskID, ErrNoProjectRow)
+}
+
+func (s *memStore) SetLastEvent(diskID, event string, ts time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.projects {
+		if s.projects[i].ID == diskID {
+			s.projects[i].LastEvent, s.projects[i].LastEventTs = event, ts
+			s.projects[i].UpdatedAt = time.Now()
+		}
+	}
+	return nil
+}
+
+// TryProductionLease 内存实现退化为进程内互斥：跨机串行本就以 PG 为前提。
+func (s *memStore) TryProductionLease(diskID string) (func(), bool, error) {
+	s.mu.Lock()
+	if s.leases == nil {
+		s.leases = map[string]bool{}
+	}
+	if s.leases[diskID] {
+		s.mu.Unlock()
+		return nil, false, nil
+	}
+	s.leases[diskID] = true
+	s.mu.Unlock()
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			s.mu.Lock()
+			delete(s.leases, diskID)
+			s.mu.Unlock()
+		})
+	}
+	return release, true, nil
 }
 
 func (s *memStore) DeleteProject(diskID string) error {
@@ -465,13 +558,6 @@ func (s *memStore) DeleteProject(diskID string) error {
 		}
 	}
 	s.msgs = msgs
-	jobs := s.jobs[:0]
-	for _, j := range s.jobs {
-		if j.ProjectID != diskID {
-			jobs = append(jobs, j)
-		}
-	}
-	s.jobs = jobs
 	return nil
 }
 
@@ -485,30 +571,6 @@ func (s *memStore) SaveMsg(m *Msg) error {
 	}
 	s.msgs = append(s.msgs, *m)
 	return nil
-}
-
-func (s *memStore) StartRenderJob(projectID, kind string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.jobSeq++
-	s.jobs = append(s.jobs, RenderJobRow{ID: s.jobSeq, ProjectID: projectID, Kind: kind, Status: "running", StartedAt: time.Now()})
-	return nil
-}
-
-func (s *memStore) FinishRenderJob(projectID, status, outputPath, errMsg string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := len(s.jobs) - 1; i >= 0; i-- {
-		if s.jobs[i].ProjectID == projectID && s.jobs[i].Status == "running" {
-			s.jobs[i].Status = status
-			s.jobs[i].OutputPath = outputPath
-			s.jobs[i].Error = errMsg
-			now := time.Now()
-			s.jobs[i].FinishedAt = &now
-			return nil
-		}
-	}
-	return nil // 无 running 行（起跑未记账）：manifest 是事实源，不虚报
 }
 
 func (s *memStore) ListMsgs(projectID string, afterID int64, limit int) ([]Msg, error) {

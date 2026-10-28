@@ -933,7 +933,7 @@ func stageRender(p *Project) error {
 		return err
 	}
 	p.Manifest("render.done", "renders/main_voice.mp4")
-	syncArtifacts(artifacts.ProjectKey(p.ID, "renders")) // 母版/timeline/list.txt/段片兜底补传
+	syncArtifacts(artifacts.LocalPrefix(p.ID) + "/renders") // 母版/timeline/list.txt/段片兜底补传
 	return nil
 }
 
@@ -2060,7 +2060,8 @@ func putArtifact(key, srcPath string) {
 	}
 }
 
-// syncArtifacts 检查点补传某前缀（幂等：远端已 Stat 到的跳过）。
+// syncArtifacts 检查点补传某前缀（幂等：远端已 Stat 到的跳过）。prefix 是本地
+// 相对前缀（artifacts 层内换算远端 key，见 SyncUp 注释）。
 func syncArtifacts(prefix string) {
 	if artifactsStore == nil || !artifactsStore.Available() {
 		return
@@ -2079,8 +2080,7 @@ func EnsureWorkspace(p *Project) {
 	if artifactsStore == nil || !artifactsStore.Available() {
 		return
 	}
-	prefix := artifacts.ProjectKey(p.ID, "")
-	n, err := artifacts.Restore(artifactsStore, dataDir, prefix)
+	n, err := artifacts.Restore(artifactsStore, dataDir, artifacts.LocalPrefix(p.ID))
 	if err != nil {
 		fmt.Printf("[artifacts] %s 工作区回源中断（继续用本地现有文件）: %v\n", p.ID, err)
 		return

@@ -82,11 +82,6 @@ type Server struct {
 	// 构造无构造函数，channel 字段的零值 nil 会让 select 永远走 default。
 	chatSlotsOnce sync.Once
 	chatSlots     chan struct{}
-
-	// ensured projectID → 元数据指纹：listProjects 的账行自愈记账——首见或指纹变化
-	// 才 EnsureProject+UpdateProjectMeta，写库频率与盘上元数据变化率一致，列表高频
-	// 轮询不产生 N+1。内存 store 重启清行由本进程下一次列表自愈补回，语义不变。
-	ensured sync.Map
 }
 
 func (s *Server) Router() *gin.Engine {
@@ -234,9 +229,11 @@ func (s *Server) requireAdmin() gin.HandlerFunc {
 }
 
 // projectGuard 项目归属守卫：统一拦 /api/projects/:id… 全部读写（含 messages/video/
-// produce 等绕过 s.project() 的 handler，一处收口）。归属记在 project.json 的
-// user_id（磁盘事实源），DB 行同步落列；旧项目无 user_id = 系统项目，仅管理员可见。
+// produce 等绕过 s.project() 的 handler，一处收口）。归属记在 project.json（磁盘
+// 快照），DB 行同步落列；旧项目无 user_id = 系统项目，仅管理员可见。
 // 归属不符与不存在同回 404——不向探测者暴露项目存在性。
+// 本地缺货的云端项目（换机场景）：账本行在、归属对得上 → 先恢复小件再放行
+// （打开项目即恢复，docs/storage-rework-2026-10-28.md §3.2）。
 func (s *Server) projectGuard() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !s.AuthActive {
@@ -252,15 +249,62 @@ func (s *Server) projectGuard() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		owner, err := projectOwner(filepath.Join(s.DataDir, "projects", id, "project.json"))
+		pj := filepath.Join(s.DataDir, "projects", id, "project.json")
+		owner, err := projectOwner(pj)
 		if err == nil && s.canAccess(c, owner) {
 			c.Next()
 			return
+		}
+		// 磁盘没有 project.json：可能是云端项目首触。账本行可查且归属对得上就
+		// 恢复小件后重验；账本也无行 = 真不存在，照旧 404。
+		if err != nil && s.restoreOpenProject(c, id) {
+			if owner, err := projectOwner(pj); err == nil && s.canAccess(c, owner) {
+				c.Next()
+				return
+			}
 		}
 		c.JSON(404, gin.H{"error": "项目不存在"})
 		c.Abort()
 	}
 }
+
+// openRestored 已做过「打开即恢复」的项目（进程内一次；失败也标记，防每次请求
+// 都同步等一轮远端 List）。
+var openRestored sync.Map
+
+// restoreOpenProject 云端项目首触的小件恢复：账本行归属校验通过才动手（不向
+// 无权者泄露云端有无此项目——404 口径不变）。只回源 ≤openRestoreMaxFile 的
+// Keeper（契约/transcripts/manifest/样张图），视频等大件留给流式回源与开跑前
+// 的 EnsureWorkspace 全量恢复。
+func (s *Server) restoreOpenProject(c *gin.Context, id string) bool {
+	if s.Artifacts == nil || !s.Artifacts.Available() {
+		return false
+	}
+	if _, loaded := openRestored.LoadOrStore(id, struct{}{}); loaded {
+		return false // 本进程已试过（成功与否），不再阻塞请求
+	}
+	row, err := s.Store.GetProject(id)
+	if err != nil || !s.canAccess(c, row.UserID) {
+		return false
+	}
+	n, err := artifacts.RestoreSmall(s.Artifacts, s.DataDir, artifacts.LocalPrefix(id),
+		openRestoreMaxFile, openRestoreMaxTotal)
+	if err != nil {
+		log.Printf("[artifacts] %s 打开恢复中断: %v", id, err)
+		return false
+	}
+	if n > 0 {
+		log.Printf("[artifacts] %s 打开恢复 %d 个小件", id, n)
+	}
+	return true
+}
+
+// 打开恢复的尺寸闸：单件 ≤16MB（契约/transcripts/样张图都远小于此，视频/字体
+// 天然出局）；整次 ≤128MB（判卷截图类大户封顶，首开体验有界）。
+const (
+	openRestoreMaxFile  = 16 << 20
+	openRestoreMaxTotal = 128 << 20
+)
 
 // projectOwner 读 project.json 的 user_id；文件缺失/损坏 = 项目不存在（err）。
 func projectOwner(path string) (string, error) {
@@ -612,6 +656,14 @@ func (s *Server) createProject(c *gin.Context) {
 	} {
 		_ = os.MkdirAll(filepath.Join(p.Dir, d), 0o755)
 	}
+	// 用户域前缀（<user_id>/<项目ID>/，系统项目回镜像布局）：先灌 artifacts 前缀表
+	// 再落账——此后本项目的全部 key 组装与上传都走这条映射（账本为准，代码不拼装归属）。
+	uid, _ := s.currentUser(c)
+	storagePrefix := uid + "/" + id
+	if uid == "" {
+		storagePrefix = "projects/" + id // 机器 token 建的系统项目：无用户域，回镜像布局
+	}
+	artifacts.SeedPrefix(id, storagePrefix)
 	if in.Manuscript != "" {
 		if err := os.WriteFile(p.Artifact("input/article.txt"), []byte(in.Manuscript), 0o644); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
@@ -622,31 +674,31 @@ func (s *Server) createProject(c *gin.Context) {
 	meta, _ := json.MarshalIndent(map[string]any{
 		"id": id, "name": in.Name, "status": "created", "aspect": in.Aspect,
 		"topic": in.Topic, "style_id": styleID, "mode": in.Mode,
-		"user_id":    func() string { uid, _ := s.currentUser(c); return uid }(), // 归属（磁盘事实源；projectGuard/listProjects 都读它）
+		"user_id":    uid, // 归属（磁盘快照；projectGuard 读它，账本行同列）
 		"created_at": time.Now().Format(time.RFC3339),
 	}, "", "  ")
 	_ = os.WriteFile(p.Artifact("project.json"), meta, 0o644)
+	// 项目账本行：可检索元数据 + 桶内相对路径 + 驱动模式（列表事实源，方案甲）。
+	// 建行先行于内容上传，保证 PG 行/前缀表与首批 key 同时就位。
+	_ = s.Store.CreateProject(id, in.Name, uid)
+	_ = s.Store.UpdateProjectMeta(id, store.ProjectMeta{
+		Topic: in.Topic, Aspect: in.Aspect, Mode: in.Mode,
+		Status: "created", StoragePrefix: storagePrefix,
+	})
 	s.putArtifact(artifacts.ProjectKey(id, "project.json"), p.Artifact("project.json"))
 	createdLabel := in.Aspect
 	if in.Mode == "music" {
 		createdLabel = "音乐驱动 PV · " + in.Aspect
 	}
 	p.Manifest("project.created", fmt.Sprintf("%s（%s）", in.Name, createdLabel))
-	uid, _ := s.currentUser(c)
-	_ = s.Store.CreateProject(id, in.Name, uid)
-	// 项目账行加厚：一行账 = 可检索元数据 + MinIO 桶内相对路径（内容不入库）
-	_ = s.Store.UpdateProjectMeta(id, store.ProjectMeta{
-		Topic: in.Topic, Aspect: in.Aspect,
-		Status: "created", StoragePrefix: artifacts.ProjectKey(id, ""),
-	})
 	s.Hub.Emit(id, "msg", "", "项目已创建："+in.Name)
 	c.JSON(200, gin.H{"id": id, "name": in.Name, "aspect": in.Aspect})
 }
 
 func (s *Server) listProjects(c *gin.Context) {
-	// 扫磁盘（事实源），确保 DB 有行；合并状态。归属过滤读 project.json 的 user_id
-	//（createProject 落盘），不在本接口引入 DB 查询。
-	entries, _ := os.ReadDir(filepath.Join(s.DataDir, "projects"))
+	// 列表事实源 = PG projects 账本（方案甲，docs/storage-rework-2026-10-28.md §4）：
+	// 跨机器换机也能看到全部项目；本地盘只作展示态补充（producing 灯/成片在否），
+	// 不再是数据来源——磁盘扫描与账行自愈指纹机制就此退役。
 	uid, role := s.currentUser(c)
 	filterByOwner := s.AuthActive && role != "admin"
 	type row struct {
@@ -658,61 +710,77 @@ func (s *Server) listProjects(c *gin.Context) {
 		LastProduce any    `json:"last_produce"`
 		Topic       string `json:"topic,omitempty"`
 		Mode        string `json:"mode,omitempty"` // music=音乐驱动 PV（其余/空=文稿，省字段）
+		Local       bool   `json:"local"`          // 工作区在本机（false=只在云端，打开时会先恢复小件）
 	}
 	// 预分配非 nil：空列表必须序列化成 [] 而不是 null（前端读 .length 会崩）
-	out := make([]row, 0, len(entries))
-	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), "_") {
-			continue
-		}
-		pj := filepath.Join(s.DataDir, "projects", e.Name(), "project.json")
-		b, err := os.ReadFile(pj)
-		if err != nil {
-			continue
-		}
-		var meta struct {
-			ID        string `json:"id"`
-			Name      string `json:"name"`
-			Status    string `json:"status"`
-			CreatedAt string `json:"created_at"`
-			UserID    string `json:"user_id"`
-			Topic     string `json:"topic"`
-			Aspect    string `json:"aspect"`
-			Mode      string `json:"mode"`
-		}
-		if json.Unmarshal(b, &meta) != nil || meta.Name == "" {
-			continue
-		}
-		if filterByOwner && meta.UserID != uid {
-			continue // 无主（旧）项目 user_id 为空 ≠ 任何普通用户的 uid，天然被滤掉
-		}
-		// 账行自愈：首见或指纹变化（盘上元数据被改/状态转移）才写库——磁盘仍是事实源，
-		// 这里只做可查询镜像；ensured 的值从占位升级为元数据指纹，写库频率与盘上
-		// 变化率一致，不引入 N+1。
-		diskStatus := meta.Status
-		fp := meta.Topic + "|" + meta.Aspect + "|" + diskStatus
-		if prev, seen := s.ensured.Load(e.Name()); !seen || prev != fp {
+	out := make([]row, 0, 16)
+	if s.Store.Kind() != "pg" {
+		// 内存存储（demo 容器/临时无库开发）：没有账本可读，磁盘扫描保命——
+		// 只补 EnsureProject 行（demo 聊天案卷要行），元数据同步不再回写。
+		entries, _ := os.ReadDir(filepath.Join(s.DataDir, "projects"))
+		for _, e := range entries {
+			if !e.IsDir() || strings.HasPrefix(e.Name(), "_") {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(s.DataDir, "projects", e.Name(), "project.json"))
+			if err != nil {
+				continue
+			}
+			var meta struct {
+				Name      string `json:"name"`
+				Status    string `json:"status"`
+				CreatedAt string `json:"created_at"`
+				UserID    string `json:"user_id"`
+				Topic     string `json:"topic"`
+				Mode      string `json:"mode"`
+			}
+			if json.Unmarshal(b, &meta) != nil || meta.Name == "" {
+				continue
+			}
+			if filterByOwner && meta.UserID != uid {
+				continue
+			}
 			_ = s.Store.EnsureProject(e.Name(), meta.Name)
-			_ = s.Store.UpdateProjectMeta(e.Name(), store.ProjectMeta{
-				Topic: meta.Topic, Aspect: meta.Aspect, Status: diskStatus,
-				StoragePrefix: artifacts.ProjectKey(e.Name(), ""),
-			})
-			s.ensured.Store(e.Name(), fp)
+			status := meta.Status
+			if s.Producer.IsRunning(e.Name()) {
+				status = "producing"
+			}
+			var lastProduce any
+			if ev, _, ts := produce.LastTerminal(pipeline.NewProject(s.DataDir, e.Name())); ev != "" {
+				lastProduce = gin.H{"event": ev, "ts": ts}
+			}
+			out = append(out, row{e.Name(), meta.Name, status, meta.CreatedAt,
+				s.hasFinalVideo(e.Name()), lastProduce, meta.Topic, meta.Mode, true})
 		}
-		hasVideo := s.hasFinalVideo(e.Name())
-		if s.Producer.IsRunning(e.Name()) {
-			meta.Status = "producing"
-		} else if hasVideo {
-			meta.Status = "video"
+	} else {
+		rows, err := s.Store.ListProjects()
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
 		}
-		// last_produce：最近一轮制作终态（与 agent 状态摘要同一读法 produce.LastTerminal）。
-		// status 故意不动（video/style 语义下游都吃），失败由前端按 last_produce 标红，
-		// 否则「失败后被抹平成 video」的老问题换个视图继续活。
-		var lastProduce any
-		if ev, _, ts := produce.LastTerminal(pipeline.NewProject(s.DataDir, e.Name())); ev != "" {
-			lastProduce = gin.H{"event": ev, "ts": ts}
+		for _, r := range rows {
+			if r.Name == "" {
+				continue
+			}
+			if filterByOwner && r.UserID != uid {
+				continue // 系统项目 user_id 空 ≠ 任何普通用户的 uid，天然被滤掉
+			}
+			status := r.Status
+			if s.Producer.IsRunning(r.ID) {
+				status = "producing" // 本机在跑：展示态优先于账面（账面由 startProduce 落）
+			}
+			var lastProduce any
+			if r.LastEvent != "" {
+				ts := r.LastEventTs
+				if ts.IsZero() {
+					ts = r.UpdatedAt
+				}
+				lastProduce = gin.H{"event": r.LastEvent, "ts": ts.Format(time.RFC3339)}
+			}
+			_, diskErr := os.Stat(filepath.Join(s.DataDir, "projects", r.ID))
+			out = append(out, row{r.ID, r.Name, status, r.CreatedAt.Format(time.RFC3339),
+				s.hasFinalVideo(r.ID), lastProduce, r.Topic, r.Mode, diskErr == nil})
 		}
-		out = append(out, row{e.Name(), meta.Name, meta.Status, meta.CreatedAt, hasVideo, lastProduce, meta.Topic, meta.Mode})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
 	c.JSON(200, out)
@@ -928,8 +996,8 @@ func (s *Server) deleteProject(c *gin.Context) {
 	if v, loaded := s.turnCancels.LoadAndDelete(id); loaded {
 		v.(context.CancelFunc)()
 	}
-	s.turnMu.Delete(id)  // 对话轮互斥锁同理（sync.Map 只增不减的慢泄漏）
-	s.ensured.Delete(id) // 列表自愈记账同步清掉，同名重建能再补行
+	s.turnMu.Delete(id)     // 对话轮互斥锁同理（sync.Map 只增不减的慢泄漏）
+	openRestored.Delete(id) // 打开恢复记账同步清掉，同名重建能再触发
 	if dbErr != nil {
 		// 磁盘已删、DB 行清不掉=镜像残留：如实 500 不装成功；后续清理与 DB 无关已照做
 		log.Printf("[delete] 项目 %s 磁盘已删但 DB 行清理失败: %v", id, dbErr)

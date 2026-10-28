@@ -1,10 +1,15 @@
 package artifacts
 
 // 产物对象存储层：项目产物与参考库的「货」（正本）进 MinIO，本地目录降级为工作区+缓存。
-// 设计文档 docs/storage-cloud-migration.md；双后端模式照抄 stylelib/media.go（风格库迁移已验证）。
+// 设计文档 docs/storage-cloud-migration.md、docs/storage-rework-2026-10-28.md；
+// 双后端模式照抄 stylelib/media.go（风格库迁移已验证）。
 //
-// key 镜像磁盘布局：projects/<项目ID>/<项目内相对路径>、references/<refID>/<参考内相对路径>。
-// 与风格库同一纪律：URL 永不入库、key 拼装不出后端——前端永远走 /api 路由由 Go 回源。
+// 远端 key 与本地路径自 2026-10-28 起不再是逐字镜像：项目对象进用户域
+// `<user_id>/<项目ID>/<项目内相对路径>`（用户域隔离，桶里一眼可归属；前缀记于
+// projects.storage_prefix 账本），本地磁盘布局不变（仍 projects/<项目ID>/<相对路径>）。
+// 层内映射（keyToRel/toLocalRel + 前缀表）承担两向换算，管线零改动；参考库
+// references/<refID>/ 不进用户域，key 仍镜像磁盘。与风格库同一纪律：URL 永不
+// 入库、key 拼装不出后端——前端永远走 /api 路由由 Go 回源。
 //
 // 文件三分类（Classify）决定去留：Keeper 上传且平时留本地（契约与成品）；Discard 可再生成
 // 不上传、完结清理时删本地；Garbage 纯垃圾随时删。安全不变量：清理任何 Keeper 大文件前必须
@@ -18,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,6 +40,8 @@ type Store interface {
 	Delete(key string) error
 	// List 前缀下全部完整 key。
 	List(prefix string) ([]string, error)
+	// ListSized 前缀下 key 与字节数（RestoreSmall 按尺寸过滤用；语义与 List 同）。
+	ListSized(prefix string) ([]Object, error)
 	// DeletePrefix 整前缀删除（删项目/参考时清对象；部分失败只报 error，孤儿货无害）。
 	DeletePrefix(prefix string) error
 	// Localize 确保 key 对应的本地文件可得并返回本地绝对路径——渲染子进程与多模态
@@ -45,9 +53,93 @@ type Store interface {
 	Available() bool
 }
 
+// Object 远端对象清单条目（key + 字节数）。
+type Object struct {
+	Key  string
+	Size int64
+}
+
+// ── 远端 key ↔ 本地路径映射（用户域前缀表）──────────────────────
+//
+// 前缀表由宿主进程灌入：启动时从 PG projects.storage_prefix 全量播种、建项时
+// 随建行写入（SeedPrefix）。查不到的项目回缺省前缀 "projects/"——本地后端
+// （demo/无 MinIO）与重构前的老项目 keys 都落在这套镜像布局上，行为不变。
+
+var (
+	prefixMu       sync.RWMutex
+	projectPrefixs = map[string]string{} // 项目ID → 远端前缀（含尾斜杠，如 "uuid/"）
+)
+
+// SeedPrefix 登记单项目远端前缀（建项/账行同步时调用；空值忽略）。
+func SeedPrefix(projectID, prefix string) {
+	if projectID == "" || prefix == "" {
+		return
+	}
+	prefixMu.Lock()
+	projectPrefixs[projectID] = strings.TrimSuffix(filepath.ToSlash(prefix), "/") + "/"
+	prefixMu.Unlock()
+}
+
+// SeedPrefixes 启动时全量播种（PG projects.storage_prefix → 表）。
+func SeedPrefixes(m map[string]string) {
+	prefixMu.Lock()
+	for id, p := range m {
+		if id != "" && p != "" {
+			projectPrefixs[id] = strings.TrimSuffix(filepath.ToSlash(p), "/") + "/"
+		}
+	}
+	prefixMu.Unlock()
+}
+
+// ProjectPrefix 项目远端前缀：账本播种值优先，缺省回镜像布局 "projects/"。
+func ProjectPrefix(projectID string) string {
+	prefixMu.RLock()
+	defer prefixMu.RUnlock()
+	if p, ok := projectPrefixs[projectID]; ok {
+		return p
+	}
+	return "projects/"
+}
+
 // ProjectKey / ReferenceKey 拼 key。rel 一律以 / 分隔（内部统一 ToSlash）。
-func ProjectKey(projectID, rel string) string { return "projects/" + projectID + "/" + rel }
-func ReferenceKey(refID, rel string) string   { return "references/" + refID + "/" + rel }
+// ProjectKey 出的是远端 key（用户域前缀 + 项目ID），与本地路径的换算在层内
+// （LocalPrefix/toLocalRel）；ReferenceKey 保持镜像布局。
+func ProjectKey(projectID, rel string) string {
+	return ProjectPrefix(projectID) + projectID + "/" + rel
+}
+func ReferenceKey(refID, rel string) string { return "references/" + refID + "/" + rel }
+
+// LocalPrefix 项目的本地相对前缀（data/ 下；磁盘布局恒 projects/<项目ID>）。
+// SyncUp/Restore/Prune 这类「本地目录 ↔ 远端前缀」批量操作的入口参数一律用它，
+// 内部换算远端 key 前缀。
+func LocalPrefix(projectID string) string { return "projects/" + projectID }
+
+// toLocalRel 远端 key → 本地相对路径：命中已登记项目（且首段非 "projects"）时
+// 换回镜像布局，其余（references/、老 projects/ 布局）原样返回。
+func toLocalRel(key string) string {
+	segs := strings.SplitN(filepath.ToSlash(key), "/", 3)
+	if len(segs) == 3 && segs[0] != "projects" {
+		if ProjectPrefix(segs[1]) == segs[0]+"/" {
+			return "projects/" + segs[1] + "/" + segs[2]
+		}
+	}
+	return filepath.ToSlash(key)
+}
+
+// toKeyRel 本地相对路径 → 远端 key（镜像布局前缀按需换算用户域）。
+func toKeyRel(rel string) string {
+	rel = filepath.ToSlash(rel)
+	rest := strings.TrimPrefix(rel, "projects/")
+	if rest == rel {
+		return rel // references/ 等：镜像布局
+	}
+	id, sub, _ := strings.Cut(rest, "/")
+	return ProjectKey(id, sub)
+}
+
+// keyPrefixOf 本地相对前缀 → 远端 key 前缀（批量操作入口换算；去尾斜杠，
+// 与 normPrefix 同规——带斜杠前缀会让 TrimPrefix 永不匹配，三分类整体失效）。
+func keyPrefixOf(localPrefix string) string { return normPrefix(toKeyRel(localPrefix)) }
 
 // Class 文件三分类。
 type Class int
@@ -116,8 +208,11 @@ func NewLocal(dataDir string) Store { return &localStore{root: dataDir} }
 
 func (s *localStore) Put(key, srcPath string) error { return nil }
 func (s *localStore) Available() bool               { return false }
+
+// LocalPath key → 本地绝对路径。用户域 key 换回镜像布局（本地后端的 key 经
+// ProjectKey 组装时同样带用户域前缀，落盘位置不变）。
 func (s *localStore) LocalPath(key string) string {
-	return filepath.Join(s.root, filepath.FromSlash(key))
+	return filepath.Join(s.root, filepath.FromSlash(toLocalRel(key)))
 }
 
 func (s *localStore) Localize(key string) (string, error) {
@@ -151,8 +246,20 @@ func (s *localStore) Delete(key string) error {
 }
 
 func (s *localStore) List(prefix string) ([]string, error) {
+	keys, err := s.ListSized(prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, len(keys))
+	for i, o := range keys {
+		out[i] = o.Key
+	}
+	return out, nil
+}
+
+func (s *localStore) ListSized(prefix string) ([]Object, error) {
 	dir := filepath.Join(s.root, filepath.FromSlash(prefix))
-	var out []string
+	var out []Object
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -165,7 +272,11 @@ func (s *localStore) List(prefix string) ([]string, error) {
 			if relErr != nil {
 				return relErr
 			}
-			out = append(out, filepath.ToSlash(rel))
+			var size int64
+			if fi, statErr := d.Info(); statErr == nil {
+				size = fi.Size()
+			}
+			out = append(out, Object{Key: filepath.ToSlash(rel), Size: size})
 		}
 		return nil
 	})
@@ -173,7 +284,7 @@ func (s *localStore) List(prefix string) ([]string, error) {
 }
 
 func (s *localStore) DeletePrefix(prefix string) error {
-	return os.RemoveAll(filepath.Join(s.root, filepath.FromSlash(prefix)))
+	return os.RemoveAll(filepath.Join(s.root, filepath.FromSlash(toLocalRel(prefix))))
 }
 
 func (s *localStore) Fetch(key, dstPath string) error {
@@ -185,12 +296,15 @@ func (s *localStore) Fetch(key, dstPath string) error {
 }
 
 // ── 批量操作（对两种后端一视同仁；localStore 的上传/回源自然退化为无操作或直取）──
+//
+// prefix 参数一律是「本地相对前缀」（data/ 下，如 projects/<ID>、references/<refID>，
+// 接受尾斜杠）；远端 key 前缀由层内 toKeyRel 换算（项目 → 用户域，其余镜像）。
 
-// normPrefix 批量操作入口统一去尾斜杠：调用方常传 ProjectKey(id,"") 这种带尾
+// normPrefix 批量操作入口统一去尾斜杠：调用方常传 LocalPrefix(id) + "/" 这种带尾
 // 斜杠的「整实体」前缀，而内部 TrimPrefix(key, prefix+"/") 会拼出双斜杠永不
 // 匹配 → Classify 拿到整 key，三分类整体失效（2026-10-19 高-2：一切文件被判
 // Keeper——设计上不上传的垃圾全量上云、GC 永不清 Discard、Restore 拉回垃圾）。
-func normPrefix(prefix string) string { return strings.TrimSuffix(prefix, "/") }
+func normPrefix(prefix string) string { return strings.TrimSuffix(filepath.ToSlash(prefix), "/") }
 
 // SyncUp 把 root/prefix 下本地有而远端缺的 Keeper 文件传上去（幂等，Stat 已在则跳过）。
 // 返回上传文件数。单文件失败记日志继续——不打断制作，缺口由后续检查点或 -storage-sync 补。
@@ -199,6 +313,7 @@ func SyncUp(st Store, root, prefix string) (int, error) {
 	if !st.Available() {
 		return 0, nil
 	}
+	keyPrefix := keyPrefixOf(prefix)
 	dir := filepath.Join(root, filepath.FromSlash(prefix))
 	n := 0
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
@@ -215,8 +330,8 @@ func SyncUp(st Store, root, prefix string) (int, error) {
 		if relErr != nil {
 			return relErr
 		}
-		key := filepath.ToSlash(rel)
-		if Classify(strings.TrimPrefix(key, prefix+"/")) != Keeper {
+		key := toKeyRel(rel)
+		if Classify(strings.TrimPrefix(key, keyPrefix+"/")) != Keeper {
 			return nil
 		}
 		if st.Stat(key) {
@@ -239,17 +354,18 @@ func Restore(st Store, root, prefix string) (int, error) {
 	if !st.Available() {
 		return 0, nil
 	}
-	keys, err := st.List(prefix)
+	keyPrefix := keyPrefixOf(prefix)
+	keys, err := st.List(keyPrefix)
 	if err != nil {
 		return 0, err
 	}
 	n := 0
 	for _, key := range keys {
-		rel := strings.TrimPrefix(key, prefix+"/")
+		rel := strings.TrimPrefix(key, keyPrefix+"/")
 		if rel == "" || Classify(rel) != Keeper {
 			continue
 		}
-		local := filepath.Join(root, filepath.FromSlash(key))
+		local := filepath.Join(root, filepath.FromSlash(toLocalRel(key)))
 		if _, err := os.Stat(local); err == nil {
 			continue
 		}
@@ -261,6 +377,50 @@ func Restore(st Store, root, prefix string) (int, error) {
 			continue
 		}
 		n++
+	}
+	return n, nil
+}
+
+// RestoreSmall 打开云端项目的小件快恢复（docs/storage-rework-2026-10-28.md §3.2）：
+// 只回源 ≤maxFile 字节的 Keeper 文件（契约 JSON/transcripts/manifest/样张图），
+// 视频/字体等大件不整箱搬——播放走流式回源，开跑走 EnsureWorkspace 全量 Restore。
+// 累计回源超过 maxTotal 提前收手（首开体验有界）。与 Restore 同为 localStore 无操作。
+func RestoreSmall(st Store, root, prefix string, maxFile, maxTotal int64) (int, error) {
+	prefix = normPrefix(prefix)
+	if !st.Available() {
+		return 0, nil
+	}
+	keyPrefix := keyPrefixOf(prefix)
+	objs, err := st.ListSized(keyPrefix)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	var total int64
+	for _, o := range objs {
+		if maxTotal > 0 && total >= maxTotal {
+			break
+		}
+		if o.Size > maxFile {
+			continue
+		}
+		rel := strings.TrimPrefix(o.Key, keyPrefix+"/")
+		if rel == "" || Classify(rel) != Keeper {
+			continue
+		}
+		local := filepath.Join(root, filepath.FromSlash(toLocalRel(o.Key)))
+		if fi, err := os.Stat(local); err == nil && !fi.IsDir() {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
+			return n, err
+		}
+		if err := st.Fetch(o.Key, local); err != nil {
+			log.Printf("[artifacts] 回源 %s 失败: %v", o.Key, err)
+			continue
+		}
+		n++
+		total += o.Size
 	}
 	return n, nil
 }
@@ -277,6 +437,7 @@ func Prune(st Store, root, prefix string) (freed int64, files int, err error) {
 	if !st.Available() {
 		return 0, 0, nil
 	}
+	keyPrefix := keyPrefixOf(prefix)
 	dir := filepath.Join(root, filepath.FromSlash(prefix))
 	var dirs []string
 	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
@@ -296,8 +457,8 @@ func Prune(st Store, root, prefix string) (freed int64, files int, err error) {
 		if relErr != nil {
 			return relErr
 		}
-		key := filepath.ToSlash(rel)
-		cls := Classify(strings.TrimPrefix(key, prefix+"/"))
+		key := toKeyRel(rel)
+		cls := Classify(strings.TrimPrefix(key, keyPrefix+"/"))
 		if cls == Keeper && !heavy(key) {
 			return nil
 		}

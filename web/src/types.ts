@@ -25,6 +25,7 @@ export interface ProjectRow {
   // 最近一轮制作终态（后端与 agent 状态摘要同源）：error/interrupted 时列表标"上次制作失败"
   last_produce?: { event: string; ts: string } | null
   mode?: string // 'music' = 音乐驱动 PV（缺省/空 = 文稿驱动，后端老项目不回此字段）
+  local?: boolean // 工作区在本机；false = 只在云端（换机场景，打开时后端自动恢复小件）
 }
 
 // 文稿（GET/PUT /manuscript；api.ts / App.vue / StagePanel 共用）

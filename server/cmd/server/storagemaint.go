@@ -13,12 +13,14 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"webpage-video-agent/server/internal/artifacts"
 	"webpage-video-agent/server/internal/config"
+	"webpage-video-agent/server/internal/store"
 )
 
 func newArtifactsStore() (artifacts.Store, *config.Config) {
@@ -36,6 +38,27 @@ func newArtifactsStore() (artifacts.Store, *config.Config) {
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
+	}
+	// 前缀表播种（用户域 key 映射）：账本在 PG 时照实灌；PG 未配/连不上则项目 key
+	// 退回镜像布局——2026-10-28 后新建项目会被漏掉，届时明确喊出来提示先修 PG。
+	if cfg.PGDSN != "" {
+		st, err := store.Open(cfg.PGDSN)
+		if err != nil {
+			fmt.Println("⚠  PG 不可达（" + err.Error() + "）：无法读 projects.storage_prefix，" +
+				"用户域项目会被当镜像布局漏传/漏清——先修好 PG 再跑本命令")
+			os.Exit(1)
+		}
+		if rows, err := st.ListProjects(); err == nil {
+			m := make(map[string]string, len(rows))
+			for _, r := range rows {
+				if r.StoragePrefix != "" {
+					m[r.ID] = r.StoragePrefix
+				}
+			}
+			artifacts.SeedPrefixes(m)
+		} else {
+			log.Printf("⚠  账本读取失败（%v），前缀表为空", err)
+		}
 	}
 	return art, cfg
 }
@@ -55,7 +78,8 @@ func entityPrefixes(dataDir, kind string) []string {
 			if strings.HasPrefix(e.Name(), "_") {
 				continue
 			}
-			out = append(out, artifacts.ProjectKey(e.Name(), ""))
+			// 本地口径前缀（artifacts 层内换算远端用户域 key）
+			out = append(out, artifacts.LocalPrefix(e.Name()))
 		} else {
 			if !strings.HasPrefix(e.Name(), "ref") {
 				continue

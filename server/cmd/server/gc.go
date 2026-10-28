@@ -57,7 +57,7 @@ func sweepStorage(art artifacts.Store, dataDir string, delay time.Duration, busy
 			if lastActivity(dir, "manifest.jsonl", "project.json").After(cutoff) {
 				continue
 			}
-			if freed, files, err := artifacts.Prune(art, dataDir, artifacts.ProjectKey(id, "")); err == nil && files > 0 {
+			if freed, files, err := artifacts.Prune(art, dataDir, artifacts.LocalPrefix(id)); err == nil && files > 0 {
 				freedTotal += freed
 				log.Printf("[gc] 项目 %s 清理 %d 个文件，释放 %.1f MB", id, files, float64(freed)/(1<<20))
 			}

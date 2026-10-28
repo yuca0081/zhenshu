@@ -133,7 +133,7 @@ func (r *Runner) Start(id, idea string, force bool) (bool, error) {
 		defer cancelRun()
 		// 清理过的老项目先回源工作区；链终了全量补传（工件/样张/manifest 上正本）
 		if r.Deps.Artifacts != nil && r.Deps.Artifacts.Available() {
-			if n, err := artifacts.Restore(r.Deps.Artifacts, r.DataDir, artifacts.ProjectKey(id, "")); err != nil {
+			if n, err := artifacts.Restore(r.Deps.Artifacts, r.DataDir, artifacts.LocalPrefix(id)); err != nil {
 				fmt.Printf("[artifacts] %s 准备前回源中断: %v\n", id, err)
 			} else if n > 0 {
 				fmt.Printf("[artifacts] %s 回源 %d 个文件\n", id, n)
@@ -141,7 +141,7 @@ func (r *Runner) Start(id, idea string, force bool) (bool, error) {
 		}
 		err := RunStrict(runCtx, p, r.Deps)
 		if r.Deps.Artifacts != nil && r.Deps.Artifacts.Available() {
-			if n, err := artifacts.SyncUp(r.Deps.Artifacts, r.DataDir, artifacts.ProjectKey(id, "")); err != nil {
+			if n, err := artifacts.SyncUp(r.Deps.Artifacts, r.DataDir, artifacts.LocalPrefix(id)); err != nil {
 				// 补传失败必须留痕：链终了的「全量补传」静默丢了，云端正本会
 				// 缺一截而无人知晓（后续检查点/-storage-sync 会再试）
 				fmt.Printf("[artifacts] %s 准备产物补传失败: %v\n", id, err)

@@ -29,12 +29,14 @@ type Config struct {
 // （http/https 由 Secure 定）；服务器容器部署端点为 minio:9000（infra 网络服务名，
 // deploy.sh 自动改写）。Bucket 供风格库（开 versioning）；DataBucket 供项目产物
 // （不开 versioning，覆写即弃旧版，防同盘版本堆积）。
+// 2026-10-28 桶更名（docs/storage-rework-2026-10-28.md §4）：zhenshu → zhenshu-style、
+// zhenshu-data → zhenshu-project，名实相符；存量桶全清后为空，建新删旧零迁移。
 type MinIOConfig struct {
 	Endpoint   string
 	AccessKey  string
 	SecretKey  string
-	Bucket     string // 缺省 zhenshu
-	DataBucket string // 缺省 zhenshu-data
+	Bucket     string // 缺省 zhenshu-style
+	DataBucket string // 缺省 zhenshu-project
 	Secure     bool
 }
 
@@ -65,8 +67,8 @@ func Load() (*Config, error) {
 			Endpoint:   os.Getenv("MINIO_ENDPOINT"),
 			AccessKey:  os.Getenv("MINIO_ACCESS_KEY"),
 			SecretKey:  os.Getenv("MINIO_SECRET_KEY"),
-			Bucket:     get("MINIO_BUCKET", "zhenshu"),
-			DataBucket: get("MINIO_DATA_BUCKET", "zhenshu-data"),
+			Bucket:     get("MINIO_BUCKET", "zhenshu-style"),
+			DataBucket: get("MINIO_DATA_BUCKET", "zhenshu-project"),
 			Secure:     os.Getenv("MINIO_SECURE") == "1",
 		},
 	}

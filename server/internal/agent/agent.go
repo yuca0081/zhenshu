@@ -888,6 +888,8 @@ func (a *Agent) PostNotice(projectID, content string) {
 // NotifyResult 制作管线终态回聊天。制作/重做是对话轮结束后异步跑的，
 // 成败必须由这里兜底写进对话框，否则用户无从得知结果（OnDone 由 main 接线到本方法）。
 // 同时回写项目状态：启动时标了 producing，终态不回写会让项目列表永远「制作中」。
+// 终态事件顺手落账（last_event/last_event_ts，列表「上次制作结果」的事实源）：
+// manifest 终态行先于本回调写入（segpipe/finishJob 顺序），LastTerminal 直读即得。
 func (a *Agent) NotifyResult(projectID, status, detail string) {
 	switch status {
 	case "video":
@@ -899,6 +901,11 @@ func (a *Agent) NotifyResult(projectID, status, detail string) {
 			a.setDoneStatus(projectID, "video")
 		} else {
 			a.setDoneStatus(projectID, "style")
+		}
+	}
+	if ev, _, ts := produce.LastTerminal(pipeline.NewProject(a.DataDir, projectID)); ev != "" {
+		if t, err := time.Parse(time.RFC3339, ts); err == nil {
+			_ = a.Store.SetLastEvent(projectID, ev, t)
 		}
 	}
 	var content, typ string

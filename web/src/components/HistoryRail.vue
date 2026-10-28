@@ -55,7 +55,7 @@ function clickDel(id: string) {
             <span v-if="!collapsed" class="info">
               <span class="nm">{{ p.name }}</span>
               <span class="sub">
-                <i class="st" :class="[statusOf(p.status).cls, { 's-fail': lastProduceFailed(p) }]" />{{ statusOf(p.status).label }}{{ lastProduceFailed(p) ? ' · 上次制作失败' : '' }}
+                <i class="st" :class="[statusOf(p.status).cls, { 's-fail': lastProduceFailed(p) }]" />{{ statusOf(p.status).label }}{{ p.local === false ? ' · 在云端' : '' }}{{ lastProduceFailed(p) ? ' · 上次制作失败' : '' }}
                 <em>{{ dateOf(p.created_at) }}</em>
               </span>
             </span>
@@ -66,7 +66,7 @@ function clickDel(id: string) {
         </template>
         <div class="pop">
           <div class="pop-name">{{ p.name }}</div>
-          <div class="pop-meta">{{ statusOf(p.status).label }}{{ p.has_video ? ' · 可下载成片' : '' }}{{ lastProduceFailed(p) ? ' · 上次制作失败' : '' }}</div>
+          <div class="pop-meta">{{ statusOf(p.status).label }}{{ p.local === false ? ' · 在云端' : '' }}{{ p.has_video ? ' · 可下载成片' : '' }}{{ lastProduceFailed(p) ? ' · 上次制作失败' : '' }}</div>
           <button class="pop-del" :class="{ armed: armed === p.id }" @click="clickDel(p.id)">
             {{ armed === p.id ? '再点一次，确认删除（不可恢复）' : '删除项目…' }}
           </button>

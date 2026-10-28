@@ -36,19 +36,22 @@ import (
 	"webpage-video-agent/server/internal/events"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
-	"webpage-video-agent/server/internal/store"
 )
 
 type Runner struct {
 	DataDir   string // 仓库根 data/（项目在 data/projects/<id>）
 	RootDir   string // 仓库根（ai/ 脚本所在）
 	Hub       *events.Hub
-	Store     store.Store                            // render_jobs 记账（nil = 不记账，测试场景）；manifest 仍是事实源
 	Artifacts artifacts.Store                        // 产物正本后端（nil/本地 = 不上传，docs/storage-cloud-migration.md）
 	OnDone    func(projectID, status, detail string) // 终态回写（status: video|failed|cancelled；detail 供聊天汇报失败原因等）
+	// Lease 制作租约（串行换机，docs/storage-rework-2026-10-28.md Q5）：开制作/重做前
+	// 占坑，ok=false = 另一台机器已在开。main 从 store.TryProductionLease 接线；
+	// nil = 不设闸（内存存储/单机）。释放幂等，终态收尾处统一调 releaseLease。
+	Lease func(projectID string) (release func(), ok bool, err error)
 
 	wg       sync.WaitGroup // 在跑的制作/重做 goroutine（优雅停机等待终态落盘）
 	stopping atomic.Bool    // 停机中：取消语义从「用户取消」改「服务停机中断」，并拒绝新任务
+	leases   sync.Map       // projectID → func() 幂等租约释放（acquireLease 登记）
 }
 
 // manifest 制作事件协议（跨包契约：本包写、Reconcile 启动对账扫、agent 状态摘要与
@@ -160,6 +163,41 @@ func awaitNotOrphaned(projectID string) {
 	}
 }
 
+// acquireLease 占制作租约（同步慢操作，调用方须在互斥锁外调）。残留租约（泄漏
+// goroutine 场景）先回收再占。失败返回 false，调用方拒绝开工。
+func (r *Runner) acquireLease(projectID string) bool {
+	if r.Lease == nil {
+		return true
+	}
+	if prev, loaded := r.leases.LoadAndDelete(projectID); loaded {
+		prev.(func())() // 上一轮租约没走到释放（孤儿收尾）：先解锁再占
+	}
+	release, ok, err := r.Lease(projectID)
+	if err != nil {
+		log.Printf("[produce] %s 制作租约查询失败（放行，退化为无跨机闸）: %v", projectID, err)
+		return true
+	}
+	if !ok {
+		return false
+	}
+	var once sync.Once
+	wrapped := func() {
+		once.Do(func() {
+			release()
+			r.leases.Delete(projectID)
+		})
+	}
+	r.leases.Store(projectID, wrapped)
+	return true
+}
+
+// releaseLease 释放制作租约（幂等；多处收尾竞速时只有一次真释放）。
+func (r *Runner) releaseLease(projectID string) {
+	if v, loaded := r.leases.LoadAndDelete(projectID); loaded {
+		v.(func())()
+	}
+}
+
 // Start 启动制作（同项目幂等：已在跑则返回 false）。
 func (r *Runner) Start(projectID string) (bool, error) {
 	awaitNotOrphaned(projectID)
@@ -188,10 +226,18 @@ func (r *Runner) Start(projectID string) (bool, error) {
 		r.wg.Done()
 		return false, fmt.Errorf("项目不存在: %w", err)
 	}
+	// 制作租约（串行换机）：占坑失败 = 另一台机器在开，拒绝并提示（Q5 拍板）。
+	if !r.acquireLease(projectID) {
+		mu.Lock()
+		releaseRun(projectID, gen)
+		mu.Unlock()
+		r.wg.Done()
+		return false, errors.New("该项目已在另一台机器开工（制作租约被占用）——同一项目同时只能在一台机器上制作")
+	}
 	p.Manifest(EventProduceStart, "") // 启动对账依据：有 start 无终态 = 进程死在中途（Reconcile 补写）
-	r.jobStart(projectID, "produce")
 	go func() {
 		defer func() {
+			r.releaseLease(projectID)
 			mu.Lock()
 			releaseRun(projectID, gen)
 			done := orphaned[projectID] // 强制终局留下的收尾标记：本 goroutine 退出即解除
@@ -390,11 +436,11 @@ func (r *Runner) awaitGraceThen(projectID string, selfGen uint64, grace time.Dur
 	write(pipeline.NewProject(r.DataDir, projectID))
 }
 
-// forceTerminal 强制终态落账（manifest + render_jobs + 事件 + 聊天汇报）。
+// forceTerminal 强制终态落账（manifest + 事件 + 聊天汇报）。
 func (r *Runner) forceTerminal(p *pipeline.Project, ev, detail, status, errMsg string) {
+	defer r.releaseLease(p.ID)
 	log.Printf("[produce] %s %s", p.ID, detail)
 	r.Manifest(p, ev, detail)
-	r.jobTerminal(p.ID, status, "", errMsg)
 	r.emit(p.ID, "stage", "pipeline", "error: "+detail)
 	r.emit(p.ID, "error", "", detail)
 	r.notifyOnDone(p.ID, status, detail)
@@ -423,7 +469,7 @@ func (r *Runner) Rework(projectID string, segIDs []string, instruction string) (
 	gen := claimRun(projectID, cancel)
 	// 新一轮任务重置终态认领（与 Start 同款）：上一轮失败的 finishJob 已认领
 	// finished，不重置的话本轮重做失败时 claimFinish 拒收——终态不落账、
-	// render_jobs 卡 running、无通知（2026-10-19 高-9）
+	// 无通知（2026-10-19 高-9）
 	delete(finished, projectID)
 	mu.Unlock()
 	p := pipeline.NewProject(r.DataDir, projectID)
@@ -447,10 +493,19 @@ func (r *Runner) Rework(projectID string, segIDs []string, instruction string) (
 		}
 		segs = append(segs, seg)
 	}
+	// 制作租约（重做同闸）：另一台机器在开就拒——重做同样互踩产物。
+	if !r.acquireLease(projectID) {
+		cancel()
+		mu.Lock()
+		releaseRun(projectID, gen)
+		mu.Unlock()
+		return false, errors.New("该项目已在另一台机器开工（制作租约被占用）——同一项目同时只能在一台机器上重做")
+	}
 	r.appendReworkHistory(p, segIDs, instruction)
 	r.wg.Add(1)
 	go func() {
 		defer func() {
+			r.releaseLease(projectID)
 			mu.Lock()
 			releaseRun(projectID, gen)
 			mu.Unlock()
@@ -479,13 +534,14 @@ type jobTail struct {
 	stopDetail     string // 服务停机中断时给用户看的话
 }
 
-// finishJob 制作/重做 goroutine 的终态收尾（共用）：manifest 记账、render_jobs 终态
-// 回写、emit 事件、聊天汇报（OnDone）。err == nil（成功）时不动——成功路径两边形态
+// finishJob 制作/重做 goroutine 的终态收尾（共用）：manifest 记账、emit 事件、
+// 聊天汇报（OnDone）。err == nil（成功）时不动——成功路径两边形态
 // 差异大，由调用方各自处理。
 // 顺序铁律：终态落盘先行，广播/聊天在后——账本是 Reconcile 与 agent 状态摘要的
 // 唯一依据，下游展示出乱子（panic/断连）不许拖累它；OnDone 曾无 recover，panic
 // 会带崩整个进程并把已写一半的终态变成悬挂 start。
 func (r *Runner) finishJob(p *pipeline.Project, projectID string, err error, t jobTail) {
+	defer r.releaseLease(projectID) // 幂等：与 goroutine 退出/强制终局的释放竞速时只有一次真释放
 	// 终态全量补传（成功/失败/取消都走）：把本轮新增的 Keeper 产物与 manifest 送上
 	// 正本后端——之后清理器才敢删本地。best-effort，缺口由 -storage-sync 兜底。
 	r.syncUp(p, "")
@@ -511,7 +567,6 @@ func (r *Runner) finishJob(p *pipeline.Project, projectID string, err error, t j
 			detail = t.stopDetail
 		}
 		r.Manifest(p, t.evCancelled, t.manifestPrefix+detail)
-		r.jobTerminal(projectID, "cancelled", "", detail)
 		defer swallow("取消收尾")()
 		r.emit(projectID, "stage", "pipeline", "cancelled")
 		r.emit(projectID, "cancelled", "", detail)
@@ -521,7 +576,6 @@ func (r *Runner) finishJob(p *pipeline.Project, projectID string, err error, t j
 		return
 	}
 	r.Manifest(p, t.evError, t.manifestPrefix+err.Error())
-	r.jobTerminal(projectID, "failed", "", err.Error())
 	defer swallow("失败收尾")()
 	r.emit(projectID, "stage", "pipeline", "error: "+err.Error())
 	r.emit(projectID, "error", "", err.Error())
@@ -601,7 +655,6 @@ func (r *Runner) runRework(ctx context.Context, p *pipeline.Project, segs []cont
 		labels[i] = fmt.Sprintf("段%d「%s」", s.Idx, s.Key)
 	}
 	r.Manifest(p, EventReworkStart, only+": "+pipeline.FirstLine(instruction, 80))
-	r.jobStart(id, "rework")
 	r.emit(id, "progress", "rework", "重做 "+strings.Join(labels, "、"))
 
 	// 1. 目标段画面重生成（删旧场景文件强制重出；其余段产物原样复用）
@@ -655,7 +708,6 @@ func (r *Runner) runRework(ctx context.Context, p *pipeline.Project, segs []cont
 	}
 	r.emit(id, "done", "", "renders/main.mp4")
 	r.Manifest(p, EventReworkDone, only)
-	r.jobTerminal(id, "done", "renders/main.mp4", "")
 	if r.OnDone != nil {
 		// 带伤交付必须带伤情进对话（2026-10-23 中-3）：修复上限到了仍不过，
 		// 成片照常交付，但用户得知道这片还带着已知问题、明细在哪。
@@ -727,7 +779,6 @@ func (r *Runner) Reconcile() {
 			ev = EventReworkInterrupted
 		}
 		r.Manifest(p, ev, detail)
-		r.jobTerminal(id, "failed", "", detail)
 		log.Printf("[produce] 对账：%s %s中断，已补写终态\n", id, what)
 		if r.OnDone != nil {
 			r.notifyOnDone(id, "failed", detail)
@@ -761,32 +812,17 @@ func (r *Runner) Manifest(p *pipeline.Project, event, detail string) { p.Manifes
 
 // syncUp 检查点补传（best-effort）：把项目内 rel 前缀下本地有而远端缺的 Keeper
 // 文件送上正本后端。失败只记日志——本地仍是工作区，清理器删前会验证远端正本。
+// 前缀走本地口径（projects/<ID>/<rel>），远端 key 的用户域换算在 artifacts 层内。
 func (r *Runner) syncUp(p *pipeline.Project, rel string) {
 	if r.Artifacts == nil || !r.Artifacts.Available() {
 		return
 	}
-	if _, err := artifacts.SyncUp(r.Artifacts, r.DataDir, artifacts.ProjectKey(p.ID, rel)); err != nil {
+	prefix := artifacts.LocalPrefix(p.ID)
+	if rel != "" {
+		prefix += "/" + rel
+	}
+	if _, err := artifacts.SyncUp(r.Artifacts, r.DataDir, prefix); err != nil {
 		log.Printf("[artifacts] %s 补传 %s 中断: %v", p.ID, rel, err)
-	}
-}
-
-// jobStart/jobTerminal render_jobs 记账，与同名 manifest 事件成对出现。best-effort：
-// 库不可写只打日志绝不挡制作——manifest 才是对账事实源，这里只是可查询镜像。
-func (r *Runner) jobStart(projectID, kind string) {
-	if r.Store == nil {
-		return
-	}
-	if err := r.Store.StartRenderJob(projectID, kind); err != nil {
-		log.Printf("[produce] render_jobs 起跑记账失败 %s: %v", projectID, err)
-	}
-}
-
-func (r *Runner) jobTerminal(projectID, status, outputPath, errMsg string) {
-	if r.Store == nil {
-		return
-	}
-	if err := r.Store.FinishRenderJob(projectID, status, outputPath, errMsg); err != nil {
-		log.Printf("[produce] render_jobs 终态记账失败 %s: %v", projectID, err)
 	}
 }
 

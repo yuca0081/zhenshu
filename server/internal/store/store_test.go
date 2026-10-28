@@ -1,48 +1,11 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"testing"
+	"time"
 )
-
-// 内存实现 render_jobs 生命周期：起跑 running → 终态回写最近一行 running；
-// 历史行保留；无 running 行时终态回写是 no-op 不虚报。（ListRenderJobs 已随
-// overview 死路由退役——读侧没了，直接断言内部切片。）
-func TestMemRenderJobs(t *testing.T) {
-	s := newMem()
-	if err := s.StartRenderJob("p1", "produce"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.StartRenderJob("p1", "rework"); err != nil {
-		t.Fatal(err)
-	}
-	// 回写只关最晚的 running（rework），先起的 produce 仍 running
-	if err := s.FinishRenderJob("p1", "done", "renders/main.mp4", ""); err != nil {
-		t.Fatal(err)
-	}
-	jobs := s.jobs
-	if len(jobs) != 2 {
-		t.Fatalf("应 2 行，得 %d", len(jobs))
-	}
-	// 新在后（时间正序）
-	if jobs[1].Kind != "rework" || jobs[1].Status != "done" || jobs[1].OutputPath != "renders/main.mp4" {
-		t.Fatalf("rework 行终态不符: %+v", jobs[1])
-	}
-	if jobs[0].Status != "running" || jobs[0].FinishedAt != nil {
-		t.Fatalf("produce 行不该被动: %+v", jobs[0])
-	}
-	// 再回写关掉 produce 行
-	if err := s.FinishRenderJob("p1", "failed", "", "boom"); err != nil {
-		t.Fatal(err)
-	}
-	if jobs[0].Kind != "produce" || jobs[0].Status != "failed" || jobs[0].Error != "boom" {
-		t.Fatalf("二次回写不符: %+v", jobs[0])
-	}
-	// 项目隔离 + 无 running 行时 no-op
-	if err := s.FinishRenderJob("p2", "done", "", ""); err != nil {
-		t.Fatal(err)
-	}
-}
 
 // ListMsgsTail 取最近 limit 条且保持时间正序：对话历史窗口依赖这个语义——
 // 取最旧 100 条会让超量后的最新对话永远进不了 LLM 上下文。
@@ -101,4 +64,65 @@ func TestMemUpdateProjectMeta(t *testing.T) {
 	if err := s.UpdateProjectMeta("p-none", meta); err != nil {
 		t.Fatalf("不存在项目的 meta 同步应 no-op: %v", err)
 	}
+}
+
+// 账本读取面（0008 列表事实源）：ListProjects/GetProject/SetLastEvent——
+// listProjects 直出、云端项目首触归属判定、制作终态落账都吃这三个方法。
+func TestMemProjectLedger(t *testing.T) {
+	s := newMem()
+	if err := s.CreateProject("p1", "甲", "u1"); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.CreateProject("p2", "乙", "")
+	if err := s.UpdateProjectMeta("p1", ProjectMeta{Mode: "music", Status: "created"}); err != nil {
+		t.Fatal(err)
+	}
+	ts := time.Now().Add(-time.Hour)
+	if err := s.SetLastEvent("p1", "produce.done", ts); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateStatus("p1", "video"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ListProjects()
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("ListProjects = %v, %v", rows, err)
+	}
+	row, err := s.GetProject("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Mode != "music" || row.LastEvent != "produce.done" || !row.LastEventTs.Equal(ts) {
+		t.Fatalf("终态/模式落账不符: %+v", row)
+	}
+	if row.Status != "video" {
+		t.Fatalf("status 转移不符: %s", row.Status)
+	}
+	// 无行项目：GetProject 报 ErrNoProjectRow（云端首触据此判定真不存在）
+	if _, err := s.GetProject("p-none"); !errors.Is(err, ErrNoProjectRow) {
+		t.Fatalf("无行应回 ErrNoProjectRow: %v", err)
+	}
+}
+
+// 制作租约（串行换机，Q5）：同项目二占拒绝、释放后可再占；释放幂等。
+func TestMemProductionLease(t *testing.T) {
+	s := newMem()
+	_ = s.CreateProject("p1", "t", "")
+	r1, ok, err := s.TryProductionLease("p1")
+	if err != nil || !ok {
+		t.Fatalf("首占应成功: %v %v", ok, err)
+	}
+	if _, ok, _ := s.TryProductionLease("p1"); ok {
+		t.Fatal("租约未释放前二占应被拒")
+	}
+	r2, ok, err := s.TryProductionLease("p2")
+	if err != nil || !ok {
+		t.Fatalf("其他项目占坑应成功: %v %v", ok, err)
+	}
+	r1()
+	r1() // 幂等：重复释放不炸
+	if _, ok, _ := s.TryProductionLease("p1"); !ok {
+		t.Fatal("释放后应可再占")
+	}
+	r2()
 }

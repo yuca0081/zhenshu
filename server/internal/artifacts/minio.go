@@ -2,9 +2,10 @@ package artifacts
 
 // MinIO 产物后端：正本在对象存储，本地目录只是工作区+缓存。与 stylelib/media.go 的
 // minioMedia 同源同纪律，两处差异是刻意的：
-//   - 独立桶（MINIO_DATA_BUCKET，默认 zhenshu-data）：产物会反复覆写（段片重渲、终片
-//     重混），不开 versioning——桶级 versioning 会把每个历史版本整份留在同一块磁盘上，
-//     与「省空间」的初衷背道而驰；风格库桶（zhenshu）的 versioning 后悔药不适用这里。
+//   - 独立桶（MINIO_DATA_BUCKET，默认 zhenshu-project，2026-10-28 由 zhenshu-data
+//     更名）：产物会反复覆写（段片重渲、终片重混），不开 versioning——桶级 versioning
+//     会把每个历史版本整份留在同一块磁盘上，与「省空间」的初衷背道而驰；风格库桶
+//     （zhenshu-style，原 zhenshu）的 versioning 后悔药不适用这里。
 //   - 不设 PG 前置：风格库要求 PG 已接是因为它的账本挂靠 PG；产物层没有账（前缀即
 //     清单），只依赖 MinIO 自身存活。
 
@@ -56,8 +57,9 @@ func NewMinio(endpoint, accessKey, secretKey, bucket string, secure bool, dataDi
 
 func (s *minioStore) Available() bool { return true }
 
+// LocalPath key → 本地绝对路径。用户域 key 换回镜像布局（本地磁盘仍 projects/<ID>/）。
 func (s *minioStore) LocalPath(key string) string {
-	return filepath.Join(s.root, filepath.FromSlash(key))
+	return filepath.Join(s.root, filepath.FromSlash(toLocalRel(key)))
 }
 
 func contentType(name string) string {
@@ -130,16 +132,28 @@ func (s *minioStore) Delete(key string) error {
 }
 
 func (s *minioStore) List(prefix string) ([]string, error) {
+	objs, err := s.ListSized(prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, len(objs))
+	for i, o := range objs {
+		out[i] = o.Key
+	}
+	return out, nil
+}
+
+func (s *minioStore) ListSized(prefix string) ([]Object, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	var out []string
+	var out []Object
 	for obj := range s.cli.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{
 		Prefix: prefix, Recursive: true,
 	}) {
 		if obj.Err != nil {
 			return nil, obj.Err
 		}
-		out = append(out, obj.Key)
+		out = append(out, Object{Key: obj.Key, Size: obj.Size})
 	}
 	return out, nil
 }

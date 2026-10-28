@@ -98,11 +98,25 @@ func main() {
 		}
 		art = m
 	}
+	// 项目远端前缀表（用户域映射，docs/storage-rework-2026-10-28.md）：启动时从
+	// projects.storage_prefix 账本全量播种——此后 key↔本地路径换算零 DB 读。
+	if rows, err := st.ListProjects(); err == nil {
+		m := make(map[string]string, len(rows))
+		for _, r := range rows {
+			if r.StoragePrefix != "" {
+				m[r.ID] = r.StoragePrefix
+			}
+		}
+		artifacts.SeedPrefixes(m)
+	} else {
+		log.Printf("⚠  项目前缀表播种失败（%v）——新项目远端 key 将退回镜像布局", err)
+	}
 	pipeline.SetArtifacts(art)
 	prep.SetCloudStore(art)
 
 	producer := &produce.Runner{
-		DataDir: cfg.DataDir, RootDir: root, Hub: hub, Store: st, Artifacts: art,
+		DataDir: cfg.DataDir, RootDir: root, Hub: hub, Artifacts: art,
+		Lease: st.TryProductionLease, // 制作租约：同一项目同时只允许一台机器开工（Q5）
 	}
 	ag := &agent.Agent{
 		DataDir: cfg.DataDir, RootDir: root, Store: st, Lib: lib, Producer: producer, Artifacts: art,
@@ -164,7 +178,7 @@ func main() {
 		Artifacts:     art,
 		APIToken:      os.Getenv("API_TOKEN"),
 		SessionSecret: sessionSecret, AuthActive: authActive,
-		CookieSecure:  os.Getenv("COOKIE_SECURE") == "1" || strings.EqualFold(os.Getenv("COOKIE_SECURE"), "true"),
+		CookieSecure: os.Getenv("COOKIE_SECURE") == "1" || strings.EqualFold(os.Getenv("COOKIE_SECURE"), "true"),
 	}
 
 	// 开发诊断：DEBUG_PPROF=1 时挂 net/http/pprof（goroutine 转储定位段级流水线卡点用）。

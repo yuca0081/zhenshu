@@ -407,7 +407,6 @@ func (r *Runner) runSegmentPipeline(ctx context.Context, p *pipeline.Project) er
 	r.Manifest(p, "stage.finish", "compositions")
 	r.emit(id, "done", "", "renders/main.mp4")
 	r.Manifest(p, EventProduceDone, "renders/main.mp4")
-	r.jobTerminal(id, "done", "renders/main.mp4", "")
 	// 完成通知如实区分「全过」与「带伤」（2026-10-19 中-13），并按本轮实际
 	// 作业量措辞（2026-10-23 低-2）：恢复复用的轮不说「逐段审核」——恢复了
 	// 几段、新做了几段写进账，用户不被「全部通过」误导成这轮逐段审过。
