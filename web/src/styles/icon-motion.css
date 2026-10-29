@@ -1,0 +1,135 @@
+/* ============================================================
+   帧述 · Rhine 系图标微动效规范 V1.0（移植自 yuca-next icon-motion.css）
+   ------------------------------------------------------------
+   原则（沿用 Rhine-Music-Demo 的动效纪律）：
+   1. 动效只反映状态变化，不做纯装饰；静态图标保持静态。
+   2. 统一时长档位与缓动，全局可乘一个速度倍率。
+   3. 只动 transform / opacity / stroke-dashoffset，保持 GPU 合成。
+   4. prefers-reduced-motion 下一切动效直接落到终态。
+
+   用法约定：
+   <span class="ric" data-icon="shelf"><svg …/></span>
+   状态类挂在 .ric 上：.is-busy / .is-done / .is-night
+   ============================================================ */
+
+/* ---------- 时长档位（×全局倍率） ---------- */
+.ric{
+  /* 180ms 悬停反馈 / 260ms 状态切换 / 380ms 结构移动 / 360ms 划入 */
+  --im-fast: calc(180ms * var(--im-speed, 1));
+  --im-base: calc(260ms * var(--im-speed, 1));
+  --im-slow: calc(380ms * var(--im-speed, 1));
+  --im-draw: calc(360ms * var(--im-speed, 1));
+  --im-ease: cubic-bezier(.25, .6, .25, 1);
+}
+.ric *{ transform-box: fill-box; transform-origin: center; }
+.ric svg{ transition: opacity var(--im-fast) ease; }
+
+/* ---------- A · 方向轻推（悬停 180ms） ---------- */
+.ric[data-icon="open"] svg{ transition: transform var(--im-fast) var(--im-ease); }
+.ric[data-icon="open"]:hover svg{ transform: translate(1.5px, -1.5px); }
+.ric[data-icon="back"] svg{ transition: transform var(--im-fast) var(--im-ease); }
+.ric[data-icon="back"]:hover svg{ transform: translateX(-1.5px); }
+.ric[data-icon="upload"] svg{ transition: transform var(--im-fast) var(--im-ease); }
+.ric[data-icon="upload"]:hover svg{ animation: im-up calc(360ms * var(--im-speed, 1)) var(--im-ease); }
+@keyframes im-up{ 40%{ transform: translateY(-2px); } }
+
+/* ---------- B · 升起与聚焦（悬停 260ms） ---------- */
+.ric[data-icon="shelf"] svg rect{ transition: transform var(--im-base) var(--im-ease), opacity var(--im-base) ease; }
+.ric[data-icon="shelf"]:hover svg rect:nth-of-type(1),
+.ric[data-icon="shelf"]:hover svg rect:nth-of-type(3){ opacity: .45; }
+.ric[data-icon="shelf"]:hover svg rect:nth-of-type(2){ transform: translateY(-1.6px); }
+
+.ric[data-icon="focus"] svg path{ transition: transform var(--im-base) var(--im-ease); }
+.ric[data-icon="focus"]:hover svg path:first-of-type{ transform: translateX(1.2px); }
+.ric[data-icon="focus"]:hover svg path:last-of-type{ transform: translateX(-1.2px); }
+
+.ric[data-icon="expand"] svg{ transition: transform var(--im-base) var(--im-ease); }
+.ric[data-icon="expand"]:hover svg{ transform: scale(1.07); }
+
+.ric[data-icon="search"] svg rect{ transition: transform var(--im-base) var(--im-ease); }
+.ric[data-icon="search"]:hover svg rect{ transform: scale(1.09); }
+
+/* ---------- C · 顺序与流动（悬停，错峰 40ms） ---------- */
+.ric[data-icon="ruler"] svg path.t{
+  transform-origin: center bottom;
+}
+.ric[data-icon="ruler"]:hover svg path.t{ animation: im-tick calc(500ms * var(--im-speed, 1)) var(--im-ease) backwards; }
+.ric[data-icon="ruler"]:hover svg path.t:nth-of-type(2){ animation-delay: calc(40ms * var(--im-speed, 1)); }
+.ric[data-icon="ruler"]:hover svg path.t:nth-of-type(3){ animation-delay: calc(80ms * var(--im-speed, 1)); }
+.ric[data-icon="ruler"]:hover svg path.t:nth-of-type(4){ animation-delay: calc(120ms * var(--im-speed, 1)); }
+.ric[data-icon="ruler"]:hover svg path.t:nth-of-type(5){ animation-delay: calc(160ms * var(--im-speed, 1)); }
+@keyframes im-tick{ 0%{ transform: scaleY(.35); } 60%{ transform: scaleY(1.18); } 100%{ transform: scaleY(1); } }
+
+.ric[data-icon="overview"] svg rect{ animation: none; }
+.ric[data-icon="overview"]:hover svg rect{ animation: im-pulse calc(480ms * var(--im-speed, 1)) ease backwards; }
+.ric[data-icon="overview"]:hover svg rect:nth-of-type(2){ animation-delay: calc(60ms * var(--im-speed, 1)); }
+.ric[data-icon="overview"]:hover svg rect:nth-of-type(3){ animation-delay: calc(120ms * var(--im-speed, 1)); }
+.ric[data-icon="overview"]:hover svg rect:nth-of-type(4){ animation-delay: calc(180ms * var(--im-speed, 1)); }
+@keyframes im-pulse{ 40%{ opacity: .25; } }
+
+.ric[data-icon="film"] svg path:last-of-type{
+  stroke-dasharray: 3 2.4;
+}
+.ric[data-icon="film"]:hover svg path:last-of-type{ animation: im-flow calc(700ms * var(--im-speed, 1)) linear infinite; }
+@keyframes im-flow{ to{ stroke-dashoffset: -10.8; } }
+
+/* ---------- D · 旋转与轨道（状态驱动） ---------- */
+.ric[data-icon="sync"] svg{
+  transform-box: view-box; transform-origin: center;
+}
+.ric[data-icon="sync"]:hover svg{ animation: im-spin calc(900ms * var(--im-speed, 1)) var(--im-ease); }
+.ric[data-icon="sync"].is-busy svg{ animation: im-spin calc(720ms * var(--im-speed, 1)) linear infinite; }
+@keyframes im-spin{ to{ transform: rotate(360deg); } }
+
+.ric[data-icon="ai"] svg circle:last-of-type{
+  transform-box: view-box; transform-origin: center;
+}
+.ric[data-icon="ai"]:hover svg circle:last-of-type{ animation: im-orbit calc(1100ms * var(--im-speed, 1)) linear infinite; }
+.ric[data-icon="ai"].is-busy svg circle:last-of-type{ animation: im-orbit calc(2600ms * var(--im-speed, 1)) linear infinite; }
+@keyframes im-orbit{ to{ transform: rotate(360deg); } }
+
+/* ---------- E · 形变（状态切换 380ms） ---------- */
+.ric[data-icon="theme"] svg g{
+  transform-box: view-box; transform-origin: 50% 50%;
+  transition: opacity var(--im-base) ease, transform var(--im-slow) var(--im-ease);
+}
+.ric[data-icon="theme"] svg .g-moon{ opacity: 0; transform: rotate(-90deg) scale(.55); }
+.ric[data-icon="theme"].is-night svg .g-sun{ opacity: 0; transform: rotate(90deg) scale(.55); }
+.ric[data-icon="theme"].is-night svg .g-moon{ opacity: 1; transform: none; }
+
+/* ---------- F · 划入（确认 360ms，pathLength="1"） ---------- */
+.ric[data-icon="check"] svg path,
+.ric[data-icon="close"] svg path{
+  stroke-dasharray: 1; stroke-dashoffset: 0;
+}
+.ric[data-icon="check"].is-entering svg path,
+.ric[data-icon="close"].is-entering svg path{
+  stroke-dashoffset: 1;
+  animation: im-draw var(--im-draw) var(--im-ease) forwards;
+}
+.ric[data-icon="close"].is-entering svg path:nth-of-type(2){ animation-delay: calc(110ms * var(--im-speed, 1)); }
+@keyframes im-draw{ to{ stroke-dashoffset: 0; } }
+
+/* ---------- G · 仪器手感（滑块/星屑，悬停） ---------- */
+.ric[data-icon="settings"] svg circle{ transition: transform var(--im-base) var(--im-ease); }
+.ric[data-icon="settings"]:hover svg circle:nth-of-type(1){ transform: translateY(-2px); }
+.ric[data-icon="settings"]:hover svg circle:nth-of-type(2){ transform: translateY(2px); }
+
+.ric[data-icon="tools"] svg circle{ transition: transform var(--im-base) var(--im-ease); }
+.ric[data-icon="tools"]:hover svg circle:nth-of-type(1){ transform: translateX(2.6px); }
+.ric[data-icon="tools"]:hover svg circle:nth-of-type(2){ transform: translateX(-2.6px); }
+
+.ric[data-icon="polish"] svg path:nth-of-type(2),
+.ric[data-icon="polish"] svg path:nth-of-type(3){ transform-origin: center; }
+.ric[data-icon="polish"]:hover svg path:nth-of-type(2){ animation: im-twinkle calc(520ms * var(--im-speed, 1)) ease backwards; }
+.ric[data-icon="polish"]:hover svg path:nth-of-type(3){ animation: im-twinkle calc(520ms * var(--im-speed, 1)) ease calc(120ms * var(--im-speed, 1)) backwards; }
+@keyframes im-twinkle{ 40%{ transform: scale(1.3); opacity: .55; } }
+
+/* ---------- 静态图标（刻意不动）：home palette film video edit
+   translate image —— 悬停只有容器透明度反馈，符合「动效反映状态」的纪律。 ---------- */
+
+/* ---------- 减少动态 ---------- */
+@media (prefers-reduced-motion: reduce){
+  .ric *, .ric{ animation: none !important; transition: none !important; }
+}
+.ric.reduced *, .ric.reduced{ animation: none !important; transition: none !important; }

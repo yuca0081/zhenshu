@@ -6,6 +6,7 @@ import { fmtClock } from '../segtime'
 import { lastProduceFailed, stageLabel } from '../format'
 import { api, videoURL } from '../api'
 import Timeline from './Timeline.vue'
+import RIcon from './RIcon.vue'
 
 // 视频页签（原 StagePanel 成片/制作中两态合并 + 过期重做入口）：
 // - 无视频未制作 → 开工引导；制作中 → 进度面板（含段级重做细进度）
@@ -126,7 +127,7 @@ watch([() => props.videoRev, localRev], () => {
   <div v-if="view" class="video-pane" :class="{ vertical: view.aspect === '9:16', plain: !view.has_video }">
     <!-- 制作暂停：上次制作失败/中断，智能体带着失败原因在对话栏等回复 -->
     <template v-if="pausedIdle">
-      <div class="prod-title">⏸ 制作暂停</div>
+      <div class="prod-title"><RIcon name="pause" :size="16" />制作暂停</div>
       <p class="prep-hint">
         上次制作{{ pausedWhy }}，产物已保留——文稿、分镜、风格都还在。
         到下方<b>对话栏</b>看智能体的失败说明：回一句「继续」它就接着修，或直接说要改什么。
@@ -135,7 +136,7 @@ watch([() => props.videoRev, localRev], () => {
 
     <!-- 就绪待开工（三件齐+终审已确认） -->
     <template v-else-if="readyToStart">
-      <div class="prod-title">✓ 终审已通过，随时开工</div>
+      <div class="prod-title ok"><RIcon name="check" :size="16" />终审已通过，随时开工</div>
       <p class="prep-hint">
         文稿、风格、分镜三件已齐，打包终审也确认过了——到下方<b>对话栏</b>说「<b>开始</b>」就开工制作。
       </p>
@@ -160,14 +161,14 @@ watch([() => props.videoRev, localRev], () => {
           <span class="dot" />{{ stageLabel(st.key) }}
         </div>
       </div>
-      <button v-if="view.producing" class="stop-btn" @click="emit('cancel')">■ 停止制作</button>
+      <button v-if="view.producing" class="stop-btn" @click="emit('cancel')"><RIcon name="stop" :size="13" />停止制作</button>
     </template>
 
     <!-- 成片：播放器 + 时间轴（整片过期重做按钮在上方页签行） -->
     <template v-else>
       <!-- 上次制作/重做失败且没在跑：当前播放的是失败前旧版，恢复入口在对话栏 -->
       <div v-if="failedIdleBanner" class="paused-banner">
-        ⏸ 上次制作没有走完，当前播放的是旧版——到对话栏回复「继续」接着修
+        <RIcon name="pause" :size="14" />上次制作没有走完，当前播放的是旧版——到对话栏回复「继续」接着修
       </div>
       <!-- 段级重做中：细进度条（其余段的画面/音频不动） -->
       <div v-if="stageSummary" class="rework-strip">
@@ -178,16 +179,16 @@ watch([() => props.videoRev, localRev], () => {
           <span class="dot" />{{ st.key === 'tts' && st.state === 'pending' && ttsIdle ? '配音不动' : stageLabel(st.key) }}
         </div>
         <span class="rework-hint">段级重做中</span>
-        <button v-if="view.producing" class="stop-btn" @click="emit('cancel')">■ 停止</button>
+        <button v-if="view.producing" class="stop-btn" @click="emit('cancel')"><RIcon name="stop" :size="13" />停止</button>
       </div>
       <div v-if="progressLine && stageSummary" class="progress-line">{{ progressLine }}</div>
       <!-- 配乐条：当前曲+选曲理由 · 试听 · 换曲下拉 · 应用/关闭 -->
       <div class="bgm-bar">
         <span class="bgm-now" :title="view.bgm?.reason || ''">
-          ♪ {{ view.bgm?.name || '无配乐' }}<i v-if="view.bgm?.reason"> · {{ view.bgm.reason }}</i>
+          <RIcon name="music" :size="14" />{{ view.bgm?.name || '无配乐' }}<i v-if="view.bgm?.reason"> · {{ view.bgm.reason }}</i>
         </span>
         <button class="bgm-btn" :disabled="!view.bgm?.name" @click="toggleAudition">
-          {{ auditionName === view.bgm?.name ? '■ 停' : '▶ 试听' }}
+          <RIcon :name="auditionName === view.bgm?.name ? 'stop' : 'play'" :size="12" />{{ auditionName === view.bgm?.name ? '停' : '试听' }}
         </button>
         <NSelect
           v-model:value="bgmPick" size="tiny" style="width: 240px"
@@ -230,59 +231,66 @@ watch([() => props.videoRev, localRev], () => {
 /* 播放器吃剩余高度，其余行（重做条/时间轴）保持固有高度不被挤出面板 */
 .video-pane > .rework-strip, .video-pane > .tl { flex: none; }
 .player { position: relative; width: min(100%, 1080px); flex: 1 1 0; min-height: 0; display: flex; justify-content: center; align-items: center; }
-.player video { width: 100%; height: 100%; object-fit: contain; border-radius: 8px; background: #000; display: block; }
+.player video { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
 .video-pane.vertical .player { width: auto; }
 
 /* 「引用此刻」悬浮在视频右上角（播放中隐藏），避开底部原生控制条 */
 .now-btn {
   position: absolute; right: 10px; top: 10px; z-index: 4; cursor: pointer;
-  border: 1px solid rgba(240, 198, 116, .45); background: rgba(16, 14, 8, .72); color: #f0c674;
-  font-size: 12px; padding: 4px 12px; border-radius: 999px; backdrop-filter: blur(3px);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  background: rgb(var(--veil) / 0.72); color: var(--accent);
+  font-size: 12px; font-family: inherit; padding: 4px 12px; backdrop-filter: blur(3px);
+  font-variant-numeric: tabular-nums;
 }
-.now-btn:hover { background: rgba(42, 36, 22, .9); }
+.now-btn:hover { background: rgb(var(--veil) / 0.9); }
 .rework-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.rework-hint { font-size: 12px; color: #f0c674; }
-.progress-line { flex: none; width: 100%; font-size: 12px; color: #8a8a96; padding: 0 4px; }
+.rework-hint { font-size: 12px; color: var(--accent); letter-spacing: 0.08em; }
+.progress-line { flex: none; width: 100%; font-size: 12px; color: var(--muted); padding: 0 4px; }
 /* 配乐条：当前曲（含选曲理由）+ 试听/换曲/应用，与时间轴同宽 */
 .bgm-bar {
   flex: none; width: min(100%, 1080px); display: flex; align-items: center; gap: 8px;
   font-size: 12px; padding: 0 4px;
 }
-.bgm-now { color: #c9b8e8; flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.bgm-now i { font-style: normal; color: #7c7c88; }
+.bgm-now { color: var(--ink); flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.bgm-now i { font-style: normal; color: var(--muted); }
 .bgm-btn {
-  flex: none; cursor: pointer; font-size: 11px; padding: 2px 10px; border-radius: 999px;
-  color: #c9b8e8; background: #1a1424; border: 1px solid #4a3666;
+  flex: none; cursor: pointer; font-size: 11px; padding: 3px 10px; font-family: inherit;
+  display: inline-flex; align-items: center; gap: 5px;
+  color: var(--muted); background: transparent; border: 1px solid var(--line);
 }
-.bgm-btn:hover:not(:disabled) { border-color: #b39ddb; }
+.bgm-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .bgm-btn:disabled { opacity: .4; cursor: default; }
 /* 制作暂停横幅（有旧成片）：琥珀警示，与 video_stale 黄灯同族色 */
 .paused-banner {
-  flex: none; width: 100%; box-sizing: border-box; font-size: 13px; color: #ffcf87;
-  background: rgba(66, 46, 16, .3); border: 1px solid #5a4522; border-radius: 8px; padding: 7px 14px;
+  flex: none; width: 100%; box-sizing: border-box; font-size: 13px; color: var(--warn);
+  display: inline-flex; align-items: center; gap: 8px;
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); padding: 7px 14px;
 }
 .pstage[data-skip="true"] { opacity: .45; border-style: dashed; }
 
-/* 制作中（pstage = 进度胶囊） */
-.prod-title { color: #c3c3cd; font-size: 15px; }
-.prep-hint { max-width: 500px; text-align: center; color: #8a8a96; font-size: 13px; line-height: 1.9; margin: 0; }
-.prep-hint b { color: #f0c674; font-weight: 600; }
+/* 制作中（pstage = 进度块） */
+.prod-title { color: var(--ink); font-size: 15px; display: inline-flex; align-items: center; gap: 8px; }
+.prod-title.ok { color: var(--ok); }
+.prep-hint { max-width: 500px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.9; margin: 0; }
+.prep-hint b { color: var(--accent); font-weight: 600; }
 .stages { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
 .pstage {
-  display: flex; align-items: center; gap: 6px; font-size: 13px; color: #7c7c88;
-  border: 1px solid #2b2b33; border-radius: 999px; padding: 5px 14px;
+  display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted);
+  border: 1px solid var(--line); padding: 5px 14px; font-variant-numeric: tabular-nums;
 }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: #3a3a45; }
-.pstage[data-state="running"] { color: #8fc7ff; border-color: #2b4a66; }
-.pstage[data-state="running"] .dot { background: #8fc7ff; animation: pulse 1.2s infinite; }
-.pstage[data-state="done"] { color: #7ee2a8; border-color: #2c5c40; }
-.pstage[data-state="done"] .dot { background: #7ee2a8; }
-.pstage[data-state="error"] { color: #ff9d9d; border-color: #66302b; }
-.pstage[data-state="error"] .dot { background: #ff9d9d; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); opacity: .5; }
+.pstage[data-state="running"] { color: var(--info); border-color: color-mix(in srgb, var(--info) 40%, transparent); }
+.pstage[data-state="running"] .dot { background: var(--info); opacity: 1; animation: pulse 1.2s infinite; }
+.pstage[data-state="done"] { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+.pstage[data-state="done"] .dot { background: var(--ok); opacity: 1; }
+.pstage[data-state="error"] { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); }
+.pstage[data-state="error"] .dot { background: var(--err); opacity: 1; }
 .stop-btn {
-  align-self: center; padding: 6px 16px; border-radius: 8px; cursor: pointer;
-  color: #ffb3b3; background: #2a1a1c; border: 1px solid #5a3230; font-size: 13px;
+  align-self: center; padding: 6px 16px; cursor: pointer; font-family: inherit;
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--err); background: transparent; border: 1px solid color-mix(in srgb, var(--err) 45%, transparent); font-size: 13px;
 }
-.stop-btn:hover { background: #3a2224; border-color: #7a403e; }
+.stop-btn:hover { background: color-mix(in srgb, var(--err) 10%, transparent); border-color: var(--err); }
 @keyframes pulse { 50% { opacity: .35; } }
 </style>

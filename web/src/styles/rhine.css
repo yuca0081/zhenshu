@@ -1,0 +1,558 @@
+/* ============================================================
+   帧述 · Rhine 风格令牌系统（移植自 yuca-next）
+   晨雾(day)/月影(night) 双主题 —— data-theme 切换，650ms 缓变
+   体系根：所有组件颜色一律走这里的令牌，禁止新写 hex 字面量
+   ============================================================ */
+
+@import 'misans/lib/Normal/MiSansVF.min.css';
+
+:root,
+:root[data-theme='day'] {
+  color-scheme: light;
+  --bg: #e8e5e1;                          /* 页面底 */
+  --surface: #efede7;                     /* 卡片面 */
+  --panel: rgba(245, 244, 239, 0.98);     /* 玻璃面板底（近不透明） */
+  --ink: #232722;                         /* 主文字 */
+  --muted: #74786f;                       /* 次文字 */
+  --line: rgba(42, 49, 42, 0.22);         /* 强边框 */
+  --line-soft: rgba(42, 49, 42, 0.12);    /* 弱边框 */
+  --accent: #b56834;                      /* 强调色：赭棕/焦糖 */
+  --accent-hover: #c47a44;
+  --accent-pressed: #9a5828;
+  --accent-ink: #f6f1e7;                  /* 强调色上的文字 */
+  --veil: 232, 229, 225;                  /* 遮罩底色 rgb（rgb(var(--veil)/α) 用） */
+  --glass-tint: 245, 244, 239;            /* 3D 玻璃色调 */
+  --glass-transmission: 0.64;
+  --glass-roughness: 0.52;
+  --shadow-panel: 0 18px 50px rgba(42, 49, 42, 0.14);
+  --light-band: rgba(255, 255, 250, 0.5); /* 顶部光带 */
+  /* 状态色（亮底压深一档，与暗色不共用） */
+  --ok: #2e6b45;
+  --err: #b23c35;
+  --info: #3a5f8f;
+  --warn: #96661a;
+}
+
+:root[data-theme='night'] {
+  color-scheme: dark;
+  --bg: #0c121d;
+  --surface: #141d2b;
+  --panel: rgba(19, 27, 41, 0.97);
+  --ink: #eef1f5;
+  --muted: #8a93a3;
+  --line: rgba(255, 255, 255, 0.14);
+  --line-soft: rgba(255, 255, 255, 0.07);
+  --accent: #d0a04c;                      /* 强调色：鎏金 */
+  --accent-hover: #ddb268;
+  --accent-pressed: #b3873c;
+  --accent-ink: #161a22;
+  --veil: 12, 18, 29;
+  --glass-tint: 19, 27, 41;
+  --glass-transmission: 0.88;
+  --glass-roughness: 0.25;
+  --shadow-panel: 0 22px 60px rgba(0, 0, 0, 0.5);
+  --light-band: rgba(190, 205, 235, 0.16);
+  --ok: #7ee2a8;
+  --err: #ff6b6b;
+  --info: #8fc7ff;
+  --warn: #d9b25f;
+}
+
+/* 动效令牌：180 nudge / 260 状态切换 / 380 结构移动 / 650 主题 */
+:root {
+  --font-sans: 'MiSans VF', 'MiSans', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --dur-1: 180ms;
+  --dur-2: 260ms;
+  --dur-3: 380ms;
+  --dur-4: 650ms;
+  --ease: cubic-bezier(0.25, 0.6, 0.25, 1);
+}
+
+/* 主题切换的全局缓变（setTheme 时给 html 挂 .theming） */
+html.theming,
+html.theming *,
+html.theming *::before,
+html.theming *::after {
+  transition:
+    background-color 650ms var(--ease),
+    color 650ms var(--ease),
+    border-color 650ms var(--ease),
+    fill 650ms var(--ease),
+    box-shadow 650ms var(--ease) !important;
+}
+
+/* ---------- 基础 ---------- */
+html {
+  background: var(--bg);
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------- HUD 语言 ---------- */
+
+/* EN 微标：全大写宽字距小字 */
+.micro {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* 玻璃面板 */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: blur(14px);
+}
+
+/* 发丝线：两端钉文字的规格线 */
+.hairline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+}
+.hairline::before,
+.hairline::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+/* 零填充计数/表格数字 */
+.num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+}
+
+/* 通用按钮 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease),
+    background-color var(--dur-2) var(--ease),
+    transform var(--dur-1) var(--ease);
+}
+.btn:hover {
+  border-color: var(--ink);
+  transform: translateY(-1px);
+}
+.btn:active {
+  transform: translateY(0);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.btn-primary:hover {
+  border-color: var(--accent);
+  filter: brightness(1.06);
+}
+.btn-danger {
+  border-color: var(--err);
+  color: var(--err);
+  background: transparent;
+}
+.btn-danger:hover {
+  border-color: var(--err);
+  background: color-mix(in srgb, var(--err) 10%, transparent);
+}
+
+/* 文本输入 */
+.field {
+  width: 100%;
+  padding: 9px 12px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 13.5px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color var(--dur-1) var(--ease);
+}
+.field::placeholder {
+  color: var(--muted);
+  opacity: 0.7;
+}
+.field:focus {
+  border-color: var(--accent);
+}
+
+/* ---------- 关键帧库 ---------- */
+@keyframes rhine-fade-in {
+  from { opacity: 0; }
+}
+@keyframes rhine-fade-out {
+  to { opacity: 0; }
+}
+@keyframes swap-in {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+}
+@keyframes slide-down-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+@keyframes reel-in {
+  from {
+    transform: translateY(108%);
+  }
+}
+@keyframes rhine-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes grid-drift {
+  to {
+    background-position: 72px 72px;
+  }
+}
+
+/* ---------- 页面转场（View Transitions，配合 vt.ts） ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root) {
+    animation: rhine-fade-out 150ms var(--ease) both,
+      vt-old-lift 150ms var(--ease) both;
+  }
+  ::view-transition-new(root) {
+    animation: vt-new-rise 420ms var(--ease) both;
+  }
+  /* HUD 头尾在转场期间纹丝不动 */
+  ::view-transition-old(hud-top),
+  ::view-transition-new(hud-top),
+  ::view-transition-old(hud-bottom),
+  ::view-transition-new(hud-bottom) {
+    animation: none;
+    mix-blend-mode: normal;
+  }
+}
+@keyframes vt-old-lift {
+  to {
+    transform: translateY(-8px);
+  }
+}
+@keyframes vt-new-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+
+/* ---------- 导航链接下划线 ---------- */
+.nav-link {
+  position: relative;
+}
+.nav-link::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 0;
+  height: 1px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 220ms var(--ease);
+}
+.nav-link:hover::after,
+.nav-link.active::after {
+  transform: scaleX(1);
+}
+
+/* ---------- 主题胶囊滑动拇指 ---------- */
+.theme-capsule {
+  position: relative;
+  display: inline-flex;
+  border: 1px solid var(--line);
+}
+.theme-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 5px);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  transition: transform 260ms var(--ease);
+}
+.theme-capsule[data-active='night'] .theme-thumb {
+  transform: translateX(calc(100% + 4px));
+}
+.theme-btn {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- 入场：上浮显现 / 换场 ---------- */
+@keyframes rhine-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise {
+  animation: rhine-rise 380ms var(--ease) both;
+}
+.swap-in {
+  animation: swap-in 260ms var(--ease) both;
+}
+.slide-down {
+  animation: slide-down-in 260ms var(--ease) both;
+}
+
+/* ---------- 模块卡：左侧强调刻线 + 图标上浮 ---------- */
+.module-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px;
+  background: var(--surface);
+  border: 0;
+  color: var(--ink);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 300ms var(--ease);
+}
+.module-card:hover {
+  background: var(--panel);
+}
+.module-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  transform: scaleY(0);
+  transform-origin: top center;
+  transition: transform 300ms var(--ease);
+}
+.module-card:hover::before {
+  transform: scaleY(1);
+}
+.module-card .ric svg {
+  transition: transform 260ms var(--ease);
+}
+.module-card:hover .ric svg {
+  transform: translateY(-2px);
+}
+
+/* ---------- 对话框（自绘弹窗用；Naive 弹窗走 themeOverrides） ---------- */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(var(--veil) / 0.55);
+  backdrop-filter: blur(6px);
+  animation: rhine-fade-in 240ms var(--ease) both;
+}
+.dialog-overlay.closing {
+  animation: rhine-fade-out 200ms var(--ease) both;
+}
+.dialog-panel {
+  max-height: min(84vh, 720px);
+  overflow-y: auto;
+  padding: 28px;
+  animation: dialog-in 320ms var(--ease) both;
+}
+.dialog-panel.closing {
+  animation: dialog-out 200ms var(--ease) both;
+}
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.985);
+  }
+}
+@keyframes dialog-out {
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+}
+
+/* ---------- 数据行 / 统计卡 ---------- */
+.data-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  transition: background-color 200ms var(--ease);
+}
+.data-row:hover {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+.stat-card {
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+  padding: 18px 20px;
+}
+
+/* ---------- 侧栏列表项 ---------- */
+.side-item {
+  position: relative;
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  color: var(--muted);
+  transition: color 180ms var(--ease), background-color 180ms var(--ease);
+}
+.side-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--accent);
+  transform: scaleY(0);
+  transform-origin: top center;
+  transition: transform 240ms var(--ease);
+}
+.side-item:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.side-item.active {
+  color: var(--ink);
+}
+.side-item.active::before {
+  transform: scaleY(1);
+}
+
+/* ---------- AI 消息气泡入场 ---------- */
+.msg-in {
+  animation: swap-in 300ms var(--ease) both;
+}
+
+/* 字轮标题（Rhine 招牌）：逐字翻入 */
+.word-reel .ch {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+.word-reel .ch > span {
+  display: inline-block;
+  animation: reel-in 460ms var(--ease) both;
+}
+
+/* 书架画布入场 */
+.shelf-fade {
+  animation: rhine-fade-in 650ms var(--ease) both;
+}
+
+/* 登录页网格缓慢漂移（reduced-motion 下被全局守卫停用） */
+.grid-drift {
+  animation: grid-drift 26s linear infinite;
+}
+
+/* 状态点（红绿灯家族）：颜色一律走令牌 */
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex: none;
+}
+.dot.ok { background: var(--ok); }
+.dot.err { background: var(--err); }
+.dot.run { background: var(--accent); animation: dot-pulse 1.2s var(--ease) infinite; }
+.dot.wait { background: var(--muted); opacity: 0.55; }
+.dot.warn { background: var(--warn); }
+@keyframes dot-pulse {
+  50% { opacity: 0.35; }
+}

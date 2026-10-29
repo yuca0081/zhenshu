@@ -33,16 +33,21 @@ function onSelect(key: string) {
 <style scoped>
 .acct {
   display: flex; align-items: center; gap: 8px; border: 0; cursor: pointer;
-  background: transparent; padding: 4px 8px; border-radius: 999px; color: #c9c9d4;
+  background: transparent; padding: 4px 8px; color: var(--muted); font-family: inherit;
+  transition: color var(--dur-1) var(--ease);
 }
-.acct:hover { background: #1b1b22; }
+.acct:hover { color: var(--ink); }
 .acct-avatar {
-  width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-  background: linear-gradient(135deg, #f0c674, #c89b4b); color: #14140f; font-weight: 700; font-size: 13px;
+  width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--accent); color: var(--accent); font-weight: 600; font-size: 12px;
 }
-.acct-name { font-size: 13px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-name {
+  font-size: 12px; letter-spacing: 0.06em;
+  max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .acct-role {
-  font-size: 11px; color: #f0c674; border: 1px solid rgba(240, 198, 116, .45);
-  padding: 1px 7px; border-radius: 999px;
+  font-size: 10px; color: var(--accent); font-family: inherit;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  padding: 0 6px; letter-spacing: 0.1em;
 }
 </style>

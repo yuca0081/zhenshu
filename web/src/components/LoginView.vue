@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { NButton, NInput } from 'naive-ui'
 import { api } from '../api'
 import { errMsg } from '../format'
 import type { UserInfo } from '../types'
+import ThemeCapsule from './ThemeCapsule.vue'
 
 const emit = defineEmits<{ 'logged-in': [user: UserInfo] }>()
 const username = ref('')
@@ -37,24 +37,55 @@ async function submit() {
 
 <template>
   <div class="login-page">
-    <div class="login-card">
-      <div class="lg-brand">
-        <span class="lg-logo">帧</span>
-        <div>
-          <b>帧述</b>
-          <p>AI 视频生产平台</p>
+    <!-- 背景装饰：网格缓慢漂移 + 光带 -->
+    <div
+      class="grid-drift bg-grid" aria-hidden="true"
+    />
+    <div class="light-band" aria-hidden="true" />
+
+    <div class="capsule-slot">
+      <ThemeCapsule />
+    </div>
+
+    <div class="wrap">
+      <!-- 左：品牌 -->
+      <div class="brand rise">
+        <div class="brand-row">
+          <span class="brand-name">帧述</span>
+          <span class="micro">ZHENSU</span>
         </div>
+        <div class="micro brand-sub">VIDEO STUDIO · AI 短视频制作台</div>
+
+        <div class="hairline brand-line"><span class="micro">ACCESS</span></div>
+        <p class="brand-copy">
+          聊天即创作——粘贴一篇文章，<br />还你一部带配音、字幕、动画的成片。
+        </p>
       </div>
-      <form @submit.prevent="submit">
-        <span class="field-label">用户名</span>
-        <NInput v-model:value="username" maxlength="32" placeholder="用户名" autofocus @keydown.enter="onEnter" />
-        <span class="field-label">密码</span>
-        <NInput
-          v-model:value="password" type="password" show-password-on="click"
-          placeholder="密码" @keydown.enter="onEnter"
+
+      <!-- 右：表单面板 -->
+      <form class="panel form rise" style="animation-delay: 80ms" @submit.prevent="submit">
+        <div class="micro">IDENTITY VERIFY</div>
+        <h1 class="form-title">登录</h1>
+
+        <label class="micro form-label" for="lg-user">账号 / ACCOUNT</label>
+        <input
+          id="lg-user" v-model="username" class="field" maxlength="32"
+          placeholder="用户名" autocomplete="username" autofocus @keydown.enter="onEnter"
         />
+
+        <label class="micro form-label" for="lg-pass">密码 / PASSWORD</label>
+        <input
+          id="lg-pass" v-model="password" class="field" type="password"
+          placeholder="密码" autocomplete="current-password" @keydown.enter="onEnter"
+        />
+
         <p v-if="error" class="lg-error">{{ error }}</p>
-        <NButton type="primary" attr-type="submit" block :loading="busy" class="lg-btn">登 录</NButton>
+
+        <button type="submit" class="btn btn-primary lg-btn" :disabled="busy || !username.trim() || !password">
+          {{ busy ? '验证中…' : '进入制作台' }}
+        </button>
+
+        <div class="hairline foot-line"><span>ZHENSU · VIDEO STUDIO</span></div>
       </form>
     </div>
   </div>
@@ -62,23 +93,50 @@ async function submit() {
 
 <style scoped>
 .login-page {
-  height: 100vh; display: flex; align-items: center; justify-content: center;
-  background: radial-gradient(1200px 600px at 70% -10%, #1c1a14 0%, #0e0e12 55%);
+  position: relative; height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: var(--bg); color: var(--ink); overflow: hidden; padding: 24px;
 }
-.login-card {
-  width: 340px; padding: 34px 32px 30px; border-radius: 16px;
-  background: #14141a; border: 1px solid #26262e;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, .45);
+.bg-grid {
+  position: absolute; inset: 0; pointer-events: none; opacity: 0.35;
+  background-image:
+    linear-gradient(var(--line-soft) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+  background-size: 72px 72px;
 }
-.lg-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 26px; }
-.lg-logo {
-  width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
-  background: linear-gradient(135deg, #f0c674, #c89b4b); color: #14140f; font-weight: 700; font-size: 20px;
-  box-shadow: 0 2px 10px rgba(240, 198, 116, .3);
+.light-band {
+  position: absolute; inset-inline: 0; top: 0; height: 160px; pointer-events: none;
+  background: linear-gradient(180deg, var(--light-band), transparent);
 }
-.lg-brand b { color: #f0c674; font-size: 18px; letter-spacing: 3px; display: block; }
-.lg-brand p { color: #7c7c88; font-size: 12px; margin-top: 2px; }
-.field-label { display: block; color: #9a9aa6; font-size: 12.5px; margin: 14px 0 6px; }
-.lg-error { color: #ff8484; font-size: 12.5px; margin-top: 12px; }
-.lg-btn { margin-top: 20px; font-weight: 700; letter-spacing: 6px; }
+.capsule-slot { position: absolute; right: 24px; top: 24px; }
+
+.wrap {
+  position: relative; width: 100%; max-width: 880px;
+  display: grid; gap: 40px; grid-template-columns: 1fr;
+}
+@media (min-width: 760px) {
+  .wrap { grid-template-columns: 1fr 380px; gap: 64px; }
+}
+
+/* 左：品牌 */
+.brand { display: none; }
+@media (min-width: 760px) {
+  .brand { display: block; }
+}
+.brand-row { display: flex; align-items: baseline; gap: 12px; }
+.brand-name { font-size: 30px; font-weight: 600; letter-spacing: 0.32em; }
+.brand-sub { margin-top: 8px; }
+.brand-line { margin-top: 56px; }
+.brand-copy { margin-top: 32px; max-width: 320px; font-size: 13px; line-height: 1.9; color: var(--muted); }
+
+/* 右：表单 */
+.form { padding: 32px; }
+.form-title { margin-top: 8px; font-size: 24px; font-weight: 600; letter-spacing: 0.04em; }
+.form-label { display: block; margin-top: 28px; }
+.form .field { margin-top: 8px; }
+.lg-error {
+  margin-top: 16px; color: var(--err); font-size: 12px;
+  border-left: 2px solid var(--err); padding: 2px 0 2px 10px;
+}
+.lg-btn { margin-top: 28px; width: 100%; }
+.foot-line { margin-top: 32px; font-size: 10px; }
 </style>

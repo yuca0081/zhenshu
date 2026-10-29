@@ -92,24 +92,25 @@ const fmtDate = (iso: string) => iso.replace('T', ' ').slice(0, 16)
 
 <style scoped>
 .ua-list { min-height: 120px; max-height: 320px; overflow: auto; margin-bottom: 18px; }
-.ua-empty { color: #55555f; font-size: 13px; padding: 28px 0; text-align: center; }
+.ua-empty { color: var(--muted); font-size: 13px; padding: 28px 0; text-align: center; }
 .ua-row {
   display: flex; align-items: center; gap: 10px; padding: 8px 4px;
-  border-bottom: 1px solid #1d1d24; font-size: 13.5px;
+  border-bottom: 1px solid var(--line-soft); font-size: 13.5px;
 }
 .ua-row:last-child { border-bottom: 0; }
 .ua-avatar {
-  width: 26px; height: 26px; border-radius: 50%; flex: none;
+  width: 26px; height: 26px; flex: none;
   display: flex; align-items: center; justify-content: center;
-  background: #23232b; color: #f0c674; font-weight: 700; font-size: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent); font-weight: 600; font-size: 12px;
 }
 .ua-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ua-role { color: #9a9aa6; font-size: 12px; }
-.ua-role.adm { color: #f0c674; }
-.ua-date { color: #55555f; font-size: 12px; }
-.ua-label { display: block; color: #9a9aa6; font-size: 12.5px; margin-bottom: 8px; }
+.ua-role { color: var(--muted); font-size: 12px; }
+.ua-role.adm { color: var(--accent); }
+.ua-date { color: var(--muted); opacity: .7; font-size: 12px; font-variant-numeric: tabular-nums; }
+.ua-label { display: block; color: var(--muted); font-size: 12.5px; margin-bottom: 8px; }
 .ua-inputs { display: flex; gap: 8px; }
 .ua-un { width: 180px; flex: none; }
 .ua-role-sel { width: 110px; flex: none; }
-.ua-error { color: #ff8484; font-size: 12.5px; margin-top: 10px; }
+.ua-error { color: var(--err); font-size: 12.5px; margin-top: 10px; }
 </style>

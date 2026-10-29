@@ -81,23 +81,28 @@ async function save() {
 <style scoped>
 .ms-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 20px 16px; }
 .ms-toolbar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.ms-hint { font-size: 11.5px; color: #55555f; line-height: 1.6; flex: 1; min-width: 200px; }
-.ms-count { font-size: 12px; color: #7c7c88; margin-left: auto; }
+.ms-hint { font-size: 11.5px; color: var(--muted); opacity: .75; line-height: 1.6; flex: 1; min-width: 200px; }
+.ms-count { font-size: 12px; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
 /* 编辑框吃满剩余高度：NInput textarea 需要高度穿透 */
 .ms-editor { position: relative; flex: 1; min-height: 120px; display: flex; }
 .ms-input { flex: 1; min-height: 120px; }
 .ms-input :deep(.n-input-wrapper) { height: 100%; }
 .ms-input :deep(textarea) { height: 100%; resize: none; }
-/* Agent 占用编辑区：覆盖在编辑框内部的琥珀提示 + 内联出口按钮（不单独占一行） */
+/* Agent 占用编辑区：覆盖在编辑框内部的提示 + 内联出口按钮（不单独占一行） */
 .ms-lock-cover {
   position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 5;
   display: flex; align-items: center; justify-content: center; gap: 12px;
-  background: rgba(20, 20, 26, .66); border-radius: 8px;
-  color: #f0c674; font-size: 12.5px; text-align: center; padding: 0 16px;
+  background: color-mix(in srgb, var(--bg) 66%, transparent);
+  color: var(--accent); font-size: 12.5px; text-align: center; padding: 0 16px;
 }
-.ms-lock-cover :deep(.n-button) { color: #f0c674; flex: none; }
-.ms-lock-cover :deep(.n-button:hover) { color: #ffdd9a; }
-.ms-warn { color: #f0c674; font-size: 12px; background: #211d12; border: 1px solid #5c4d24; border-radius: 8px; padding: 8px 12px; }
-.ms-err { color: #ff9d9d; font-size: 12.5px; }
-.ms-ok { color: #7ee2a8; font-size: 12.5px; }
+.ms-lock-cover :deep(.n-button) { color: var(--accent); flex: none; }
+.ms-lock-cover :deep(.n-button:hover) { color: var(--accent-hover); }
+.ms-warn {
+  color: var(--warn); font-size: 12px;
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  padding: 8px 12px;
+}
+.ms-err { color: var(--err); font-size: 12.5px; }
+.ms-ok { color: var(--ok); font-size: 12.5px; }
 </style>

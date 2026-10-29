@@ -11,6 +11,7 @@ import IdeaPane from './IdeaPane.vue'
 import MusicIdeaPane from './MusicIdeaPane.vue'
 import VideoPane from './VideoPane.vue'
 import ActivityPane from './ActivityPane.vue'
+import RIcon from './RIcon.vue'
 
 // 舞台页签宿主（弹窗体系退役）：文稿/分镜/风格/终审/视频/过程页占据中间区域。
 // 页签常亮 + 红绿灯（门过没过）+ 过期点（成片落后上游）——App 持有 activeTab
@@ -302,10 +303,10 @@ async function parseToLibrary() {
       <!-- 页签行：五页 + 状态灯（红绿灯/过期点）+ 右上角 下载成片/过程 -->
       <header v-if="view" class="tabs">
         <button
-          v-for="t in tabs" :key="t.id" class="tab" :class="[tabState(t.id).cls, { on: tab === t.id }]"
+          v-for="(t, ti) in tabs" :key="t.id" class="tab" :class="[tabState(t.id).cls, { on: tab === t.id }]"
           :title="tabState(t.id).title" @click="emit('tab', t.id)"
         >
-          <span class="dot" />{{ t.label }}<span v-if="tabState(t.id).label" class="tab-sub">{{ tabState(t.id).label }}</span>
+          <span class="dot" /><span class="num tab-no">{{ String(ti + 1).padStart(2, '0') }}</span>{{ t.label }}<span v-if="tabState(t.id).label" class="tab-sub">{{ tabState(t.id).label }}</span>
         </button>
         <div class="head-right">
           <!-- 整片过期重做：悬停显示哪几样改过；两段式确认（第一枪只亮确认态） -->
@@ -321,13 +322,13 @@ async function parseToLibrary() {
             v-if="view.has_video && !view.producing" class="dl-btn parse-btn" :disabled="parsing"
             title="解析到风格库：把本片风格解析成风格库条目——读定稿设计系统与样张，去「风格库 → 视频解析」修订后入库，之后新建项目可选用"
             @click="parseToLibrary"
-          >{{ parsing ? '解析中…' : '⇪ 解析入库' }}</button>
+          ><RIcon name="upload" :size="13" />{{ parsing ? '解析中…' : '解析入库' }}</button>
           <!-- 下载成片 -->
           <a
             v-if="view.has_video" class="dl-btn"
             :href="videoURL(videoId, videoRev)" :download="`${view.name}.mp4`"
-          >↓ 下载成片</a>
-          <!-- 过程回看：独立胶囊按钮（原事件流按钮样式），点击切到整页「过程」内容；
+          ><RIcon name="download" :size="13" />下载成片</a>
+          <!-- 过程回看：独立按钮（点击切到整页「过程」内容）；
                右侧小字 = 本次制作全部智能体任务的输入 token 与缓存命中率（projectView.tokens） -->
           <button
             class="feed-btn" :class="{ on: tab === 'activity' }"
@@ -335,7 +336,7 @@ async function parseToLibrary() {
             @click="emit('tab', tab === 'activity' ? 'video' : 'activity')"
           ><span v-if="view.producing" class="live-dot" /><span v-else-if="failUnseen" class="fail-dot" />过程<span
               v-if="view.tokens?.calls"
-              class="feed-tok"
+              class="feed-tok num"
               title="本次制作全部智能体任务的输入 token 累计与平台前缀缓存命中率（manifest 全量累计，含此前每一轮）"
             >输入{{ fmtTok(view.tokens.prompt) }}<template v-if="view.tokens.cached">·缓存{{ cachePct(view.tokens.cached, view.tokens.prompt) }}</template></span></button>
         </div>
@@ -434,41 +435,44 @@ async function parseToLibrary() {
 </template>
 
 <style scoped>
-.stage { flex: 1; min-height: 0; padding: 16px 20px 20px; display: flex; }
+.stage { flex: 1; min-height: 0; padding: 12px 16px 16px; display: flex; }
 .pane {
   position: relative; /* 事件流面板的定位锚 */
   flex: 1; min-width: 0; display: flex; flex-direction: column;
-  background: #14141a; border: 1px solid #232329; border-radius: 12px; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--line-soft); overflow: hidden;
   container-type: inline-size; /* 页签行按面板实宽做响应式（窄时收起 token 小账） */
 }
 
-/* ── 页签行 ── */
+/* ── 页签行（RhineTabs 语法：零填充编号 + 激活强调色下划线） ── */
 /* 三栏布局里中间栏宽度有限（对话栏 400px 固定），这行内容多——所有元素
    nowrap + flex:none 保证文字不折行；真放不下时整行横向滚动兜底，
    不让页签文字被挤成两行（2026-10-29 修）。 */
 .tabs {
   flex: none; display: flex; align-items: center; gap: 2px;
-  padding: 8px 8px 0; border-bottom: 1px solid #202027;
+  padding: 6px 8px 0; border-bottom: 1px solid var(--line-soft);
   overflow-x: auto; scrollbar-width: thin;
 }
 .tab {
   display: inline-flex; align-items: center; gap: 7px; cursor: pointer; flex: none;
   white-space: nowrap;
   border: 0; border-bottom: 2px solid transparent; background: transparent;
-  color: #8a8a96; font-size: 13px; padding: 7px 8px 9px;
+  color: var(--muted); font-size: 13px; padding: 7px 8px 9px; font-family: inherit;
+  transition: color var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
 }
-.tab:hover { color: #d9d9e0; background: #191920; }
-.tab.on { color: #f0c674; border-bottom-color: #f0c674; font-weight: 600; }
-.tab-sub { font-size: 11px; color: #7c7c88; font-weight: 400; }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: #3a3a45; flex: none; }
-.tab.ok .dot { background: #7ee2a8; }
+.tab:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.tab-no { font-size: 10.5px; color: var(--muted); opacity: 0.8; }
+.tab.on .tab-no { color: var(--accent); }
+.tab-sub { font-size: 11px; color: var(--muted); font-weight: 400; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); opacity: 0.5; flex: none; }
+.tab.ok .dot { background: var(--ok); opacity: 1; }
 /* 黄=这一关还没过（没存/没生成/没确认），常亮不闪——闪是"进行中"的语言 */
-.tab.wait .dot { background: #f0c674; }
-.tab.run .dot { background: #8fc7ff; animation: pulse 1.2s infinite; }
+.tab.wait .dot { background: var(--warn); opacity: 1; }
+.tab.run .dot { background: var(--info); opacity: 1; animation: pulse 1.2s infinite; }
 /* 过期：整颗页签描琥珀边（黄灯语义=成片落后于我） */
-.tab.stale { color: #f0c674; box-shadow: inset 0 0 0 1px rgba(240, 198, 116, .35); border-radius: 8px 8px 0 0; }
-.tab.stale .dot { background: #f0c674; }
-.tab.on.stale { border-bottom-color: #f0c674; }
+.tab.stale { color: var(--warn); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 35%, transparent); }
+.tab.stale .dot { background: var(--warn); opacity: 1; }
+.tab.on.stale { border-bottom-color: var(--warn); }
 @keyframes pulse { 50% { opacity: .35; } }
 
 /* ── 页签行右上角：重做/下载（过程回看走「过程」页签）── */
@@ -479,62 +483,65 @@ async function parseToLibrary() {
 .redo-btn { margin-bottom: 0; }
 .dl-btn {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
-  border: 1px solid #2b2b33; background: #191920; color: #c9c9d3;
-  font-size: 12px; padding: 4px 10px; border-radius: 999px; text-decoration: none;
+  border: 1px solid var(--line); background: transparent; color: var(--muted);
+  font-size: 12px; letter-spacing: 0.04em; padding: 4px 10px; text-decoration: none; font-family: inherit;
+  transition: color var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
 }
-.dl-btn:hover { border-color: rgba(240, 198, 116, .45); color: #f0c674; background: #1e1a12; }
-/* 解析到风格库：同 dl-btn 胶囊，button 元素补字体继承与禁用态 */
+.dl-btn:hover { border-color: var(--accent); color: var(--accent); }
+/* 解析到风格库：同 dl-btn 方角按钮，button 元素补字体继承与禁用态 */
 .parse-btn { font-family: inherit; }
 .parse-btn:disabled { opacity: .55; cursor: default; }
-.parse-btn:hover:not(:disabled) { border-color: rgba(240, 198, 116, .45); color: #f0c674; background: #1e1a12; }
-/* 过程回看按钮：原「事件流」胶囊样式；on=当前正看过程页，live-dot=制作中呼吸灯 */
+.parse-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+/* 过程回看按钮；on=当前正看过程页，live-dot=制作中呼吸灯 */
 .feed-btn {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
-  border: 1px solid #2b2b33; background: #191920; color: #c9c9d3;
-  font-size: 12px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent; color: var(--muted);
+  font-size: 12px; letter-spacing: 0.04em; padding: 4px 10px; font-family: inherit;
+  transition: color var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
 }
-.feed-btn:hover { border-color: #3a3a45; color: #e6e6ea; }
-.feed-btn.on { border-color: rgba(240, 198, 116, .45); color: #f0c674; background: #1e1a12; }
-.feed-btn .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #8fc7ff; animation: pulse 1.2s infinite; }
+.feed-btn:hover { border-color: var(--muted); color: var(--ink); }
+.feed-btn.on { border-color: var(--accent); color: var(--accent); }
+.feed-btn .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--info); animation: pulse 1.2s infinite; }
 /* 全程 token 小账：输入 token + 缓存命中率，做次要信息色不抢「过程」本体；
    面板窄于 ~740px 时收起（悬停「过程」的 title 仍在），保页签行单行放下 */
-.feed-btn .feed-tok { margin-left: 2px; font-size: 11px; color: #7c7c88; font-variant-numeric: tabular-nums; }
+.feed-btn .feed-tok { margin-left: 2px; font-size: 11px; color: var(--muted); opacity: .85; }
 .feed-btn:hover .feed-tok, .feed-btn.on .feed-tok { color: inherit; opacity: .75; }
 @container (max-width: 739px) { .feed-tok { display: none; } }
 /* 失败未读红点：最近一次制作失败/中断后还没看过过程页 */
-.feed-btn .fail-dot { width: 7px; height: 7px; border-radius: 50%; background: #ff6b6b; box-shadow: 0 0 6px rgba(255, 107, 107, .8); }
+.feed-btn .fail-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--err); box-shadow: 0 0 6px color-mix(in srgb, var(--err) 80%, transparent); }
 
 .empty { flex: 1; display: flex; align-items: center; justify-content: center; }
-.none { color: #55555f; }
+.none { color: var(--muted); }
 
-/* ── 分镜表 ── */
+/* ── 分镜表（发丝线 + tabular 数字） ── */
 .sb-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .sb-head {
   flex: none; display: flex; align-items: center; gap: 10px;
-  padding: 12px 18px; font-weight: 600; border-bottom: 1px solid #202027; color: #d9d9e0;
+  padding: 12px 18px; font-weight: 600; border-bottom: 1px solid var(--line-soft); color: var(--ink);
 }
-.sb-meta { font-size: 12px; font-weight: 400; color: #7c7c88; }
+.sb-meta { font-size: 12px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
 .sb-dur { margin-left: auto; display: flex; align-items: center; gap: 6px; font-weight: 400; }
 .sb-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .sb { width: 100%; border-collapse: collapse; font-size: 13px; }
-.sb th { position: sticky; top: 0; background: #14141a; text-align: left; padding: 10px 12px; color: #7c7c88; font-weight: 600; border-bottom: 1px solid #232329; }
-.sb td { padding: 6px 8px; border-bottom: 1px solid #1d1d24; vertical-align: top; }
+.sb th { position: sticky; top: 0; background: var(--surface); text-align: left; padding: 10px 12px; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); }
+.sb td { padding: 6px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
 .sb-para td {
-  background: #17171f; padding: 7px 12px; font-size: 12.5px; color: #f0c674;
-  border-bottom: 1px solid #232329; letter-spacing: .3px;
+  background: color-mix(in srgb, var(--ink) 3%, var(--surface));
+  padding: 7px 12px; font-size: 12.5px; color: var(--accent);
+  border-bottom: 1px solid var(--line-soft); letter-spacing: .3px;
 }
-.sb-para b { font-weight: 600; margin-right: 8px; opacity: .75; }
-.sb-para i { font-style: normal; color: #7c7c88; margin-left: 10px; font-size: 11.5px; }
-.c { color: #7c7c88; text-align: center; vertical-align: middle; }
-.hint { padding: 10px 14px; color: #55555f; font-size: 12px; }
-.sb-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: #55555f; font-size: 13px; line-height: 1.9; text-align: center; padding: 20px 40px; }
-/* Agent 轮进行中的分镜锁：覆盖整个分镜区域（含表头按钮行）的琥珀提示 + 中断出口 */
+.sb-para b { font-weight: 600; margin-right: 8px; opacity: .8; font-variant-numeric: tabular-nums; }
+.sb-para i { font-style: normal; color: var(--muted); margin-left: 10px; font-size: 11.5px; }
+.c { color: var(--muted); text-align: center; vertical-align: middle; font-variant-numeric: tabular-nums; }
+.hint { padding: 10px 14px; color: var(--muted); opacity: .7; font-size: 12px; }
+.sb-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; line-height: 1.9; text-align: center; padding: 20px 40px; }
+/* Agent 轮进行中的分镜锁：覆盖整个分镜区域（含表头按钮行）的提示 + 中断出口 */
 .sb-lock {
   position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 30;
   display: flex; align-items: center; justify-content: center; gap: 12px;
-  background: rgba(20, 20, 26, .66);
-  color: #f0c674; font-size: 12.5px; text-align: center; padding: 0 24px;
+  background: color-mix(in srgb, var(--bg) 66%, transparent);
+  color: var(--accent); font-size: 12.5px; text-align: center; padding: 0 24px;
 }
-.sb-lock :deep(.n-button) { color: #f0c674; flex: none; }
-.sb-lock :deep(.n-button:hover) { color: #ffdd9a; }
+.sb-lock :deep(.n-button) { color: var(--accent); flex: none; }
+.sb-lock :deep(.n-button:hover) { color: var(--accent-hover); }
 </style>

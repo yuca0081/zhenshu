@@ -99,50 +99,59 @@ const refKey = (r: ChatRef) => r.elementId ?? (r.t != null ? `s${r.idx}t${r.t}` 
 <style scoped>
 .chat {
   width: 400px; flex: none; display: flex; flex-direction: column;
-  background: #121217; border-left: 1px solid #1d1d24;
+  background: var(--bg); border-left: 1px solid var(--line-soft);
 }
 .list { flex: 1; padding: 14px 12px; }
-.none { color: #55555f; font-size: 13px; line-height: 1.9; text-align: center; padding: 40px 20px; }
+.none { color: var(--muted); font-size: 13px; line-height: 1.9; text-align: center; padding: 40px 20px; }
 .row { margin-bottom: 12px; }
-.meta { font-size: 11px; color: #55555f; margin: 0 6px 3px; }
+.meta { font-size: 11px; color: var(--muted); opacity: 0.8; margin: 0 6px 3px; letter-spacing: 0.06em; }
 .row.agent .meta { text-align: left; }
 .row.user .meta { text-align: right; }
 .bubble {
-  padding: 9px 13px; border-radius: 12px; font-size: 13.5px; line-height: 1.75;
+  padding: 9px 13px; font-size: 13.5px; line-height: 1.75;
   white-space: pre-wrap; word-break: break-word; max-width: 92%;
 }
-.bubble.user { background: #2b3a52; color: #e8eef8; margin-left: auto; border-bottom-right-radius: 4px; }
-.bubble.agent { background: #1c1c23; color: #c9c9d1; border-bottom-left-radius: 4px; }
-.bubble.err { background: #2a1a1a; color: #ff9d9d; }
+.bubble.user {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--ink); margin-left: auto;
+}
+.bubble.agent {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  border: 1px solid var(--line-soft); color: var(--ink);
+}
+.bubble.err { background: color-mix(in srgb, var(--err) 10%, transparent); border: 1px solid color-mix(in srgb, var(--err) 35%, transparent); color: var(--err); }
 .tool { text-align: center; }
 .tname {
-  font-size: 11px; color: #8a8a96; background: #17171d; border: 1px dashed #2b2b33;
-  border-radius: 999px; padding: 3px 12px;
+  display: inline-block; font-size: 11px; color: var(--muted);
+  background: color-mix(in srgb, var(--ink) 3%, transparent); border: 1px dashed var(--line);
+  padding: 3px 12px;
 }
 .refs { flex: none; display: flex; gap: 8px; padding: 8px 10px 0; align-items: flex-start; }
-.refs-label { flex: none; font-size: 11px; color: #f0c674; padding-top: 5px; }
+.refs-label { flex: none; font-size: 11px; color: var(--accent); padding-top: 5px; letter-spacing: 0.08em; }
 /* 最多露出 5 行，超出滚轮滚动 */
 .ref-chips {
   flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 5px; align-content: flex-start;
-  max-height: 145px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #3a3a45 transparent;
+  max-height: 145px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent;
 }
 .ref-chips::-webkit-scrollbar { width: 5px; }
-.ref-chips::-webkit-scrollbar-thumb { background: #3a3a45; border-radius: 3px; }
+.ref-chips::-webkit-scrollbar-thumb { background: var(--line); }
 .ref-chip {
   display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
-  font-size: 12px; color: #f0c674; background: #241f14; border: 1px solid rgba(240, 198, 116, .35);
-  border-radius: 999px; padding: 3px 6px 3px 10px;
+  font-size: 12px; color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  padding: 3px 6px 3px 10px;
 }
 .rm {
-  border: 0; background: transparent; color: #8a7a4d; cursor: pointer; font-size: 13px;
-  width: 16px; height: 16px; line-height: 1; border-radius: 50%; padding: 0;
+  border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px;
+  width: 16px; height: 16px; line-height: 1; padding: 0;
 }
-.rm:hover { color: #fff; background: rgba(240, 198, 116, .3); }
+.rm:hover { color: var(--accent-ink); background: var(--accent); }
 /* 历史消息内的引用 chips（结构化 refs 回显） */
 .msg-refs { display: flex; flex-wrap: wrap; gap: 4px; margin: 3px 6px 0 auto; justify-content: flex-end; }
 .msg-ref {
-  font-size: 11px; color: #c9a75f; background: #1d1a12; border: 1px solid rgba(240, 198, 116, .25);
-  border-radius: 999px; padding: 1px 8px;
+  font-size: 11px; color: var(--muted); background: color-mix(in srgb, var(--ink) 4%, transparent);
+  border: 1px solid var(--line-soft); padding: 1px 8px;
 }
-.input { flex: none; display: flex; gap: 8px; padding: 10px; border-top: 1px solid #1d1d24; align-items: flex-end; }
+.input { flex: none; display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line-soft); align-items: flex-end; }
 </style>

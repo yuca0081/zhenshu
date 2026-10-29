@@ -1,4 +1,6 @@
 import { createApp } from 'vue'
+import './styles/rhine.css'
+import './styles/icon-motion.css'
 import App from './App.vue'
 
 const app = createApp(App)

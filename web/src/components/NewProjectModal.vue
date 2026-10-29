@@ -106,10 +106,10 @@ async function create() {
    漏了这半），画幅行挤作一团——恢复自 642c01d，勿再并入全局块 */
 .body { display: flex; flex-direction: column; gap: 14px; }
 .field { display: flex; flex-direction: column; gap: 6px; }
-.label { font-size: 12px; color: #9a9aa6; display: flex; align-items: baseline; gap: 8px; }
-.label em { font-style: normal; font-size: 11px; color: #55555f; }
+.label { font-size: 12px; color: var(--muted); display: flex; align-items: baseline; gap: 8px; letter-spacing: 0.04em; }
+.label em { font-style: normal; font-size: 11px; color: var(--muted); opacity: 0.65; }
 .opts { display: flex; align-items: center; gap: 12px; }
-.err { color: #ff9d9d; font-size: 13px; }
+.err { color: var(--err); font-size: 13px; }
 .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; gap: 12px; }
-.hint { color: #55555f; font-size: 11.5px; line-height: 1.5; }
+.hint { color: var(--muted); opacity: 0.7; font-size: 11.5px; line-height: 1.5; }
 </style>

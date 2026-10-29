@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import {
-  NConfigProvider, NMessageProvider, createDiscreteApi, darkTheme,
-} from 'naive-ui'
+import { NConfigProvider, NMessageProvider, createDiscreteApi } from 'naive-ui'
+import ThemeCapsule from './components/ThemeCapsule.vue'
+import RIcon from './components/RIcon.vue'
+import { naiveTheme, naiveOverrides } from './theme'
+import { startVt } from './vt'
 import HistoryRail from './components/HistoryRail.vue'
 import StagePanel from './components/StagePanel.vue'
 import ChatPanel from './components/ChatPanel.vue'
@@ -71,9 +73,27 @@ const current = ref<string>('')
 // / 设置（模型设置，不进页签组——顶栏「设置」按钮进，admin 专属）
 type PageID = 'home' | 'workspace' | 'materials' | 'settings'
 const tabs = [
-  { id: 'home', label: '首页' }, { id: 'workspace', label: '工作区' }, { id: 'materials', label: '风格库' },
+  { id: 'home', label: '首页', en: 'HOME', icon: 'home' },
+  { id: 'workspace', label: '工作区', en: 'STUDIO', icon: 'film' },
+  { id: 'materials', label: '风格库', en: 'LIBRARY', icon: 'palette' },
 ] as const
 const page = ref<PageID>('home')
+// 页签切换带 View Transition（旧页上浮淡出/新页升起，HUD 头尾锁定不动）
+function goPage(p: PageID) { startVt(() => { page.value = p }) }
+
+// HUD 右下角时钟（tabular 秒表）
+const now = ref(new Date())
+const clockText = computed(() => {
+  const d = now.value
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+})
+const clockTimer = window.setInterval(() => { now.value = new Date() }, 1000)
+// 底部状态栏的模块名
+const hudModule = computed(() => {
+  if (page.value === 'settings') return 'SETTINGS'
+  return tabs.find(t => t.id === page.value)?.en ?? 'HOME'
+})
 // 风格库页签：风格库 / 视频解析（工作区「解析到风格库」按钮跳转时直接落在视频解析）
 const materialsTab = ref<'styles' | 'videos'>('styles')
 const view = ref<ProjectView | null>(null)
@@ -97,21 +117,10 @@ const videoRev = ref(0) // 成片代次：done 后递增 → video 换 URL 强�
 const progressLine = ref('') // 制作/重做细粒度进度（SSE progress，瞬时态不入聊天史）
 const activity = ref<ActivityEvent[]>([]) // 制作事件流（manifest 原样事件，「过程」页数据源）
 
-// naive-ui 全局主色对齐页面金色（创建按钮/单选/焦点等不再出现默认绿）
-const themeOverrides = {
-  common: {
-    primaryColor: '#f0c674',
-    primaryColorHover: '#ffdd9a',
-    primaryColorPressed: '#d9ae5b',
-    primaryColorSuppl: '#f0c674',
-    borderRadius: '8px',
-  },
-}
-
-// App 自身在 n-message-provider 之外（provider 包的是模板内容），useMessage 拿不到
-// 上下文——顶层加载/确认失败的反馈走离散 API，避免静默吞错 + unhandled rejection
+// naive-ui 主题走 theme.ts 令牌接线：晨雾=亮色(null)/月影=darkTheme，
+// overrides 每次切换后现读 CSS 令牌生成（主色/圆角 0/表面色全随主题）
 const { message: topMsg } = createDiscreteApi(['message'], {
-  configProviderProps: { theme: darkTheme, themeOverrides },
+  configProviderProps: computed(() => ({ theme: naiveTheme.value, themeOverrides: naiveOverrides.value })),
 })
 
 let es: EventSource | null = null
@@ -164,8 +173,10 @@ async function publishPack(id: string) {
 
 // 跳风格库页并落到指定页签（工作区「解析到风格库」按钮用：解析提交后跟进进度）
 function openMaterials(tab: 'styles' | 'videos') {
-  materialsTab.value = tab
-  page.value = 'materials'
+  startVt(() => {
+    materialsTab.value = tab
+    page.value = 'materials'
+  })
 }
 
 async function loadProject(id: string) {
@@ -258,26 +269,29 @@ function throttledLoadActivity() {
 function selectProject(id: string) {
   // 同项目重复点选只切页不重载：下面是无条件清场，而 current 同值赋值不触发
   // watch → refresh 不会执行，清掉的数据永不回来（页面空白）
-  if (id === current.value) { page.value = 'workspace'; return }
-  current.value = id
-  page.value = 'workspace'
-  ++reqSeq // 在途响应全部作废：先于清场，晚到的旧数据在 resolve 处直接丢弃
-  msgs.value = []
-  chatRefs.value = []
-  chatDraft.value = '' // 草稿不随项目带（中-40：两份清场曾都漏了它，切项目后半截话串台）
-  progressLine.value = ''
-  stageState.value = {}
-  activity.value = []
-  agentBusy.value = false // 上一项目的「Agent 工作中」不带给新项目（不然转圈挂到 90s 超时）
-  endTurn() // 上一项目的对话轮锁同理不带给新项目
-  manualTab.value = null // 换项目回到自动落页
-  // 先清上一项目的全部展示数据：loadProject 是异步的，不清会在新项目页闪现旧内容
-  view.value = null
-  storyboard.value = null
-  style.value = null
-  manuscript.value = null
-  prep.value = null
-  audioMeta.value = null
+  if (id === current.value) { goPage('workspace'); return }
+  // 切项目包 View Transition：整段清场是同步的，回调内等 nextTick 后截新帧
+  startVt(() => {
+    current.value = id
+    page.value = 'workspace'
+    ++reqSeq // 在途响应全部作废：先于清场，晚到的旧数据在 resolve 处直接丢弃
+    msgs.value = []
+    chatRefs.value = []
+    chatDraft.value = '' // 草稿不随项目带（中-40：两份清场曾都漏了它，切项目后半截话串台）
+    progressLine.value = ''
+    stageState.value = {}
+    activity.value = []
+    agentBusy.value = false // 上一项目的「Agent 工作中」不带给新项目（不然转圈挂到 90s 超时）
+    endTurn() // 上一项目的对话轮锁同理不带给新项目
+    manualTab.value = null // 换项目回到自动落页
+    // 先清上一项目的全部展示数据：loadProject 是异步的，不清会在新项目页闪现旧内容
+    view.value = null
+    storyboard.value = null
+    style.value = null
+    manuscript.value = null
+    prep.value = null
+    audioMeta.value = null
+  })
 }
 
 // 📎 引用：点分镜/时间轴加段级（按段去重）；双击轨道/「引用此刻」加时刻级（按 ±0.75s 去重）；
@@ -446,6 +460,7 @@ onBeforeUnmount(() => {
   if (projLoadTimer != null) clearTimeout(projLoadTimer)
   if (busyTimer) clearTimeout(busyTimer)
   if (turnTimer) clearTimeout(turnTimer)
+  clearInterval(clockTimer)
   window.removeEventListener('hashchange', applyHash)
 })
 
@@ -582,81 +597,114 @@ async function confirmStyle() {
 </script>
 
 <template>
-  <n-config-provider :theme="darkTheme" :theme-overrides="themeOverrides">
+  <n-config-provider :theme="naiveTheme" :theme-overrides="naiveOverrides">
     <n-message-provider>
       <!-- 登录页（鉴权启用且未登录时独占全屏）；服务不可达的 boot 失败同样停在登录页可重试 -->
       <LoginView v-if="authReady && authRequired && !user" @logged-in="onLoggedIn" />
       <div v-else-if="authReady" class="app">
-        <nav class="navbar">
-          <div class="nb-brand">
-            <span class="nb-logo">帧</span>
-            <b>帧述</b>
-          </div>
-          <div class="nb-tabs">
-            <button
-              v-for="t in tabs" :key="t.id" class="nb-tab" :class="{ on: page === t.id }" @click="page = t.id"
-            >{{ t.label }}</button>
-          </div>
-          <button class="nb-new" @click="showNew = true">＋ 新建</button>
-          <button v-if="user?.role === 'admin'" class="nb-set" :class="{ on: page === 'settings' }"
-            title="各工位的大模型与 URL" @click="page = 'settings'">设置</button>
-          <AccountMenu v-if="user" :user="user" @logout="onLogout" @manage="showUserAdmin = true" />
-        </nav>
-
-        <!-- 首页：落地 + 快速开始 -->
-        <HomeView
-          v-if="page === 'home'" :projects="projects"
-          @new="showNew = true" @open="selectProject" @materials="page = 'materials'"
-          @delete="onDeleteProject"
-        />
-
-        <!-- 风格库页：风格 + 视频解析 -->
-        <LibraryCenter
-          v-else-if="page === 'materials'" :packs="library" :initial-tab="materialsTab" @publish="publishPack" @ingested="loadLibrary" @deleted="loadLibrary"
-        />
-
-        <!-- 设置页：模型设置（大模型台账 + 工位图绑定） -->
-        <LlmSettingsPage v-else-if="page === 'settings'" />
-
-        <!-- 工作区：项目三栏 -->
-        <div v-else class="shell">
-          <HistoryRail :projects="projects" :current="current" @select="selectProject" @delete="onDeleteProject" />
-          <main class="center">
-            <!-- :key=current：切项目强制重挂载。StagePanel/ChatPanel 内部持有 per-project
-                 的编辑态脏标记（分镜 sbDirty、文稿 dirty、风格 detail/direction），
-                 其 watch 都是"dirty 时不回灌服务器数据"——组件实例跨项目复用的话，A 项目
-                 未保存的编辑会原样保存进 B 项目（切项目清的是 App 级 props，清不到这些
-                 内部脏标记，详见 StagePanel sbDirty watch / ManuscriptPane dirty watch）。
-                 全局态（主题等）在 App 层，不受重挂载影响。 -->
-            <StagePanel
-              v-if="current" :key="current"
-              :tab="activeTab" :view="view" :storyboard="storyboard" :style-samples="style" :manuscript="manuscript"
-              :prep="prep"
-              :stage-summary="stageSummary" :video-id="current" :audio-meta="audioMeta"
-              :picked-idx="pickedIdx" :video-rev="videoRev" :progress-line="progressLine"
-              :activity="activity" :agent-busy="turnActive" :prep-progress="prepProgress"
-              @tab="setTab" @go-tab="setTab"
-              @saved="refresh" @chat-sent="markBusy"
-              @confirm-style="confirmStyle"
-              @confirm-prep="refresh"
-              @prep-refresh="refresh"
-              @seg="addRef"
-              @pick-time="addTimeRef"
-              @cancel="async () => { if (current) { await api.cancel(current).catch(() => {}); refresh() } }"
-              @cancel-agent="cancelAgentTurn"
-              @rework-started="refresh"
-              @parse-started="openMaterials"
-            />
-            <div v-else class="empty-ws">
-              从左侧选择一个项目，或
-              <button class="link" @click="showNew = true">新建一个</button>
+        <!-- HUD 四角构图：左上品牌、右上主题胶囊+导航、底部状态条（转场期间头尾锁定不动） -->
+        <header class="hud-top">
+          <div class="rise">
+            <div class="hb-row">
+              <span class="hb-name">帧述</span>
+              <span class="micro">ZHENSU</span>
             </div>
-          </main>
-          <ChatPanel
-            :key="current" :project-id="current" :msgs="msgs" :busy="agentBusy" v-model:draft="chatDraft" :refs="chatRefs"
-            @sent="markBusy" @remove-ref="removeRef" @clear-refs="chatRefs = []"
+            <div class="micro hb-sub">VIDEO STUDIO · AI 短视频制作台</div>
+          </div>
+          <div class="hud-right">
+            <ThemeCapsule />
+            <nav class="hud-nav" aria-label="主导航">
+              <button
+                v-for="t in tabs" :key="t.id"
+                class="nav-link hud-nav-btn" :class="{ active: page === t.id }"
+                @click="goPage(t.id)"
+              >
+                <RIcon :name="t.icon" :size="15" />
+                <span>{{ t.en }}</span>
+              </button>
+              <button
+                v-if="user?.role === 'admin'"
+                class="nav-link hud-nav-btn" :class="{ active: page === 'settings' }"
+                title="各工位的大模型与 URL" @click="goPage('settings')"
+              >
+                <RIcon name="settings" :size="15" />
+                <span>SETTINGS</span>
+              </button>
+              <button class="hud-new" @click="showNew = true">
+                <RIcon name="plus" :size="13" />新建
+              </button>
+            </nav>
+          </div>
+        </header>
+
+        <main class="hud-main">
+          <!-- 首页：落地 + 快速开始 -->
+          <HomeView
+            v-if="page === 'home'" :projects="projects"
+            @new="showNew = true" @open="selectProject" @materials="openMaterials('styles')"
+            @delete="onDeleteProject"
           />
-        </div>
+
+          <!-- 风格库页：风格 + 视频解析 -->
+          <LibraryCenter
+            v-else-if="page === 'materials'" :packs="library" :initial-tab="materialsTab" @publish="publishPack" @ingested="loadLibrary" @deleted="loadLibrary"
+          />
+
+          <!-- 设置页：模型设置（大模型台账 + 工位图绑定） -->
+          <LlmSettingsPage v-else-if="page === 'settings'" />
+
+          <!-- 工作区：项目三栏 -->
+          <div v-else class="shell">
+            <HistoryRail :projects="projects" :current="current" @select="selectProject" @delete="onDeleteProject" />
+            <main class="center">
+              <!-- :key=current：切项目强制重挂载。StagePanel/ChatPanel 内部持有 per-project
+                   的编辑态脏标记（分镜 sbDirty、文稿 dirty、风格 detail/direction），
+                   其 watch 都是"dirty 时不回灌服务器数据"——组件实例跨项目复用的话，A 项目
+                   未保存的编辑会原样保存进 B 项目（切项目清的是 App 级 props，清不到这些
+                   内部脏标记，详见 StagePanel sbDirty watch / ManuscriptPane dirty watch）。
+                   全局态（主题等）在 App 层，不受重挂载影响。 -->
+              <StagePanel
+                v-if="current" :key="current"
+                :tab="activeTab" :view="view" :storyboard="storyboard" :style-samples="style" :manuscript="manuscript"
+                :prep="prep"
+                :stage-summary="stageSummary" :video-id="current" :audio-meta="audioMeta"
+                :picked-idx="pickedIdx" :video-rev="videoRev" :progress-line="progressLine"
+                :activity="activity" :agent-busy="turnActive" :prep-progress="prepProgress"
+                @tab="setTab" @go-tab="setTab"
+                @saved="refresh" @chat-sent="markBusy"
+                @confirm-style="confirmStyle"
+                @confirm-prep="refresh"
+                @prep-refresh="refresh"
+                @seg="addRef"
+                @pick-time="addTimeRef"
+                @cancel="async () => { if (current) { await api.cancel(current).catch(() => {}); refresh() } }"
+                @cancel-agent="cancelAgentTurn"
+                @rework-started="refresh"
+                @parse-started="openMaterials"
+              />
+              <div v-else class="empty-ws">
+                从左侧选择一个项目，或
+                <button class="link" @click="showNew = true">新建一个</button>
+              </div>
+            </main>
+            <ChatPanel
+              :key="current" :project-id="current" :msgs="msgs" :busy="agentBusy" v-model:draft="chatDraft" :refs="chatRefs"
+              @sent="markBusy" @remove-ref="removeRef" @clear-refs="chatRefs = []"
+            />
+          </div>
+        </main>
+
+        <footer class="hud-bottom">
+          <div class="hf-side">
+            <span class="hf-live"><span class="hf-dot" />SYS ONLINE</span>
+            <span class="hf-module">{{ hudModule }}</span>
+          </div>
+          <div class="hf-side">
+            <AccountMenu v-if="user" :user="user" @logout="onLogout" @manage="showUserAdmin = true" />
+            <span v-else>GUEST</span>
+            <span class="num">{{ clockText }}</span>
+          </div>
+        </footer>
       </div>
       </n-message-provider>
       <NewProjectModal v-model:show="showNew" @created="onCreated" />
@@ -665,66 +713,86 @@ async function confirmStyle() {
   </template>
 
 <style>
-:root { color-scheme: dark; }
-* { box-sizing: border-box; margin: 0; }
-html, body, #app { height: 100%; }
-body {
-  background: #0e0e12; color: #e6e6ea;
-  font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
-  font-size: 14px; overflow: hidden;
-}
+/* ============================================================
+   App 骨架层：只管布局，颜色一律走 rhine.css 令牌
+   ============================================================ */
+
+/* ── HUD 四角构图 ─────────────────────────────── */
 .app { height: 100vh; display: flex; flex-direction: column; }
 
-/* ── 全局导航栏 ─────────────────────────────── */
-.navbar {
-  height: 48px; flex: none; display: flex; align-items: center; gap: 22px;
-  padding: 0 18px; border-bottom: 1px solid #232329; background: #121217;
+.hud-top {
+  view-transition-name: hud-top;
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 18px 24px 12px;
 }
-.nb-brand { display: flex; align-items: center; gap: 9px; }
-.nb-logo {
-  width: 27px; height: 27px; border-radius: 8px; display: flex; align-items: center; justify-content: center;
-  background: linear-gradient(135deg, #f0c674, #c89b4b); color: #14140f; font-weight: 700; font-size: 14px;
-  box-shadow: 0 2px 8px rgba(240, 198, 116, .25);
+.hb-row { display: flex; align-items: baseline; gap: 12px; }
+.hb-name { font-size: 20px; font-weight: 600; letter-spacing: 0.32em; }
+.hb-sub { margin-top: 4px; }
+.hud-right { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.hud-nav { display: flex; align-items: center; gap: 4px; }
+.hud-nav-btn {
+  display: flex; align-items: center; gap: 7px;
+  border: 0; background: transparent; cursor: pointer;
+  padding: 7px 12px; font-family: inherit;
+  font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--muted);
+  transition: color var(--dur-2) var(--ease);
 }
-.nb-brand b { letter-spacing: 2px; color: #f0c674; font-size: 14.5px; }
-.nb-tabs { display: flex; gap: 6px; flex: 1; }
-.nb-tab {
-  border: 0; background: transparent; color: #9a9aa6; font-size: 13.5px;
-  padding: 6px 16px; border-radius: 999px; cursor: pointer;
+.hud-nav-btn:hover { color: var(--ink); }
+.hud-nav-btn.active { color: var(--accent); }
+.hud-new {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: 8px;
+  border: 1px solid var(--accent); background: var(--accent);
+  color: var(--accent-ink); font-family: inherit;
+  font-size: 12px; letter-spacing: 0.1em;
+  padding: 6px 14px; cursor: pointer;
+  transition: filter var(--dur-1) var(--ease), transform var(--dur-1) var(--ease);
 }
-.nb-tab:hover { color: #e6e6ea; background: #1b1b22; }
-.nb-tab.on { background: #f0c674; color: #14140f; font-weight: 600; }
-.nb-new {
-  border: 0; background: linear-gradient(135deg, #f0c674, #d9ae5b); color: #14140f;
-  font-size: 13px; font-weight: 700; padding: 6px 18px; border-radius: 999px; cursor: pointer;
+.hud-new:hover { filter: brightness(1.06); transform: translateY(-1px); }
+.hud-new:active { transform: translateY(0); }
+
+.hud-main { flex: 1; min-height: 0; position: relative; }
+
+.hud-bottom {
+  view-transition-name: hud-bottom;
+  flex: none;
+  display: flex; align-items: center; justify-content: space-between;
+  border-top: 1px solid var(--line-soft);
+  padding: 7px 24px;
+  font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--muted);
 }
-.nb-new:hover { filter: brightness(1.06); }
-.nb-set {
-  border: 1px solid #2a2a33; background: transparent; color: #9a9aa6;
-  font-size: 13px; padding: 5px 14px; border-radius: 999px; cursor: pointer;
+.hf-side { display: flex; align-items: center; gap: 20px; }
+.hf-live { display: inline-flex; align-items: center; gap: 8px; }
+.hf-dot {
+  width: 4px; height: 4px; border-radius: 999px;
+  background: var(--accent);
 }
-.nb-set:hover { color: #e6e6ea; border-color: #f0c674; }
-.nb-set.on { color: #14140f; background: #f0c674; border-color: #f0c674; font-weight: 600; }
 
 /* ── 工作区三栏 ─────────────────────────────── */
-.shell { flex: 1; min-height: 0; display: flex; }
+.shell { height: 100%; display: flex; }
 .center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.empty-ws { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; color: #55555f; }
-.link { border: 0; background: transparent; color: #8fc7ff; cursor: pointer; font-size: 14px; }
+.empty-ws { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--muted); }
+.link { border: 0; background: transparent; color: var(--accent); cursor: pointer; font-size: 14px; font-family: inherit; }
 .link:hover { text-decoration: underline; }
 
 /* ── 弹窗通用皮（NModal teleport 到 body，必须全局）：NewProjectModal/重做弹窗用，
       各自只留宽高等差异 ── */
 .app-modal {
-  background: #14141a; border: 1px solid #26262e; border-radius: 14px;
-  --n-padding-left: 22px; --n-padding-right: 22px; --n-padding-top: 20px; --n-padding-bottom: 20px;
+  background: var(--surface); border: 1px solid var(--line-soft); border-radius: 0;
+  box-shadow: var(--shadow-panel);
+  --n-padding-left: 24px; --n-padding-right: 24px; --n-padding-top: 20px; --n-padding-bottom: 20px;
 }
-.app-modal .n-card-header { padding: 18px 22px 0; }
-.app-modal .n-card-header__main { font-weight: 700; letter-spacing: 2px; color: #f0c674; font-size: 15px; }
-.app-modal .n-card__content { padding: 14px 22px 20px; }
-.app-modal .n-base-close { color: #7c7c88; top: 16px; right: 16px; }
-.app-modal .n-base-close:hover { color: #e6e6ea; }
-.app-modal .n-input { background: #101016; border: 1px solid #232329; border-radius: 10px; }
-.app-modal .n-input:hover { border-color: #3a3a45; }
-.app-modal .n-input--focus { border-color: rgba(240, 198, 116, .55); }
+.app-modal .n-card-header { padding: 18px 24px 0; }
+.app-modal .n-card-header__main { font-weight: 600; letter-spacing: 0.06em; color: var(--ink); font-size: 15px; }
+.app-modal .n-card__content { padding: 14px 24px 20px; }
+.app-modal .n-base-close { color: var(--muted); top: 16px; right: 16px; }
+.app-modal .n-base-close:hover { color: var(--ink); }
+.app-modal .n-input { background: transparent; border: 1px solid var(--line); border-radius: 0; }
+.app-modal .n-input:hover { border-color: var(--muted); }
+.app-modal .n-input--focus { border-color: var(--accent); }
 </style>

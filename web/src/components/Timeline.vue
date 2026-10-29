@@ -270,76 +270,77 @@ function onLaneDblClick(e: MouseEvent, start: number, dur: number) {
 <style scoped>
 .tl { width: min(100%, 1080px); display: flex; gap: 8px; user-select: none; }
 .gutter { flex: none; width: 46px; display: flex; flex-direction: column; }
-.corner { height: 20px; font-size: 11px; color: #9a9aa6; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.corner em { font-style: normal; color: #55555f; margin-left: 3px; }
-.lbl { flex: 1; display: flex; align-items: center; font-size: 10px; color: #55555f; letter-spacing: 2px; }
+.corner { height: 20px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.corner em { font-style: normal; color: var(--muted); opacity: .6; margin-left: 3px; }
+.lbl { flex: 1; display: flex; align-items: center; font-size: 10px; color: var(--muted); opacity: .7; letter-spacing: 0.18em; }
 
 /* 视口层：长片出横向滚动条（细样式，贴时间轴下方）；内容层定宽保证块可读 */
 .viewport {
   flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden;
   padding-bottom: 9px; /* 给滚动条留位，不压轨道 */
-  scrollbar-width: thin; scrollbar-color: #2e2e38 #101016;
+  scrollbar-width: thin; scrollbar-color: var(--line) transparent;
 }
 .viewport::-webkit-scrollbar { height: 8px; }
-.viewport::-webkit-scrollbar-track { background: #101016; border-radius: 4px; }
-.viewport::-webkit-scrollbar-thumb { background: #2e2e38; border-radius: 4px; }
-.viewport::-webkit-scrollbar-thumb:hover { background: #3a3a45; }
+.viewport::-webkit-scrollbar-track { background: transparent; }
+.viewport::-webkit-scrollbar-thumb { background: var(--line); }
+.viewport::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
 .tracks { position: relative; min-width: 100%; display: flex; flex-direction: column; gap: 3px; }
 
 .ruler {
-  position: relative; height: 20px; border-radius: 5px; cursor: crosshair;
-  background: #14141a; border: 1px solid #232329;
+  position: relative; height: 20px; cursor: crosshair;
+  background: var(--surface); border: 1px solid var(--line-soft);
 }
-.minor { position: absolute; top: 60%; width: 1px; height: 40%; background: #2b2b33; }
-.tick { position: absolute; top: 1px; font-size: 9px; color: #6b6b77; transform: translateX(3px); font-variant-numeric: tabular-nums; }
+.minor { position: absolute; top: 60%; width: 1px; height: 40%; background: var(--line-soft); }
+.tick { position: absolute; top: 1px; font-size: 9px; color: var(--muted); transform: translateX(3px); font-variant-numeric: tabular-nums; }
 
-.lane { position: relative; height: 26px; border-radius: 5px; background: #101016; overflow: hidden; }
+.lane { position: relative; height: 26px; background: color-mix(in srgb, var(--ink) 3%, transparent); overflow: hidden; }
 .lane.seg { height: 30px; }
 
 .blk {
   position: absolute; top: 0; bottom: 0; cursor: pointer; overflow: hidden;
-  background: #1c1c23; border: 1px solid #2b2b33; border-radius: 5px;
+  background: color-mix(in srgb, var(--ink) 6%, var(--surface)); border: 1px solid var(--line-soft);
   display: flex; align-items: center; gap: 5px; padding: 0 6px;
-  transition: border-color .15s, background .15s;
+  transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
 }
-.blk:hover { border-color: #f0c674; }
-.blk.on { background: #241f14; border-color: rgba(240, 198, 116, .55); }
-.blk.picked { border-color: #f0c674; background: #2a2416; }
-.blk b { font-size: 10px; color: #7c7c88; flex: none; }
-.blk i { font-style: normal; font-size: 11px; color: #c3c3cd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.blk.on i { color: #f0c674; }
+.blk:hover { border-color: var(--accent); }
+.blk.on { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.blk.picked { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 20%, var(--surface)); }
+.blk b { font-size: 10px; color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }
+.blk i { font-style: normal; font-size: 11px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.blk.on i { color: var(--accent); }
 
 .ph {
   position: absolute; top: 0; bottom: 0; cursor: pointer; overflow: hidden; white-space: nowrap;
-  background: #14211a; border: 1px solid #2c5c40; border-radius: 5px; color: #9fd8b6;
+  background: color-mix(in srgb, var(--ok) 12%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent);
+  color: var(--ok);
   font-size: 10.5px; line-height: 24px; padding: 0 5px; text-overflow: ellipsis;
-  transition: background .15s;
+  transition: background var(--dur-1) var(--ease);
 }
-.ph:hover { background: #1b3226; }
+.ph:hover { background: color-mix(in srgb, var(--ok) 20%, transparent); }
 
 .wav {
   position: absolute; top: 0; bottom: 0; cursor: pointer; overflow: hidden;
-  background: #121b24; border: 1px solid #2b4a66; border-radius: 5px;
+  background: color-mix(in srgb, var(--info) 8%, transparent); border: 1px solid color-mix(in srgb, var(--info) 30%, transparent);
 }
-.wav.on { border-color: #8fc7ff; }
+.wav.on { border-color: var(--info); }
 .wav i {
-  position: absolute; top: 50%; transform: translateY(-50%); border-radius: 1px;
-  background: #3f6d94; min-width: 1px;
+  position: absolute; top: 50%; transform: translateY(-50%);
+  background: color-mix(in srgb, var(--info) 55%, transparent); min-width: 1px;
 }
-.wav.on i { background: #8fc7ff; }
+.wav.on i { background: var(--info); }
 
-/* 配乐轨：紫调区分配音蓝调；head 块带曲名，后续循环块淡化只留 ♪ */
+/* 配乐轨：中性灰调区分配音蓝调；head 块带曲名，后续循环块淡化只留 ♪ */
 .bgmblk {
   position: absolute; top: 0; bottom: 0; cursor: pointer; overflow: hidden; white-space: nowrap;
   display: flex; align-items: center; gap: 4px; padding: 0 6px;
-  background: #1a1424; border: 1px solid #4a3666; border-radius: 5px;
-  color: #c9b8e8; font-size: 10.5px; text-overflow: ellipsis;
-  transition: border-color .15s;
+  background: color-mix(in srgb, var(--ink) 6%, transparent); border: 1px solid var(--line-soft);
+  color: var(--muted); font-size: 10.5px; text-overflow: ellipsis;
+  transition: border-color var(--dur-1) var(--ease);
 }
-.bgmblk:hover { border-color: #b39ddb; }
+.bgmblk:hover { border-color: var(--muted); }
 .bgmblk.alt { opacity: .62; }
-.bgmblk .note { font-size: 10px; color: #9d7fd0; }
+.bgmblk .note { font-size: 10px; color: var(--accent); }
 
 .handle {
   position: absolute; top: -1px; width: 11px; height: 22px; margin-left: -5px; z-index: 3;
@@ -347,19 +348,19 @@ function onLaneDblClick(e: MouseEvent, start: number, dur: number) {
 }
 .handle::before {
   content: ''; position: absolute; left: 50%; top: 7px; transform: translateX(-50%);
-  border: 5px solid transparent; border-top: 7px solid #f0c674; filter: drop-shadow(0 1px 2px #000);
+  border: 5px solid transparent; border-top: 7px solid var(--accent); filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.4));
 }
-.handle:hover::before, .handle.scrubbing::before { border-top-color: #ffe2a0; }
+.handle:hover::before, .handle.scrubbing::before { border-top-color: var(--accent-hover); }
 .bubble {
   pointer-events: none; position: absolute; top: -22px; left: 50%; transform: translateX(-50%);
-  background: #f0c674; color: #14140f; font-size: 10px; font-weight: 600;
-  padding: 1px 6px; border-radius: 4px; white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: var(--accent); color: var(--accent-ink); font-size: 10px; font-weight: 600;
+  padding: 1px 6px; white-space: nowrap; font-variant-numeric: tabular-nums;
 }
 .line {
   position: absolute; top: 20px; bottom: 0; width: 1px; margin-left: -0.5px; z-index: 2;
-  background: #f0c674; pointer-events: none;
+  background: var(--accent); pointer-events: none;
 }
-.line.scrubbing { background: #ffe2a0; }
+.line.scrubbing { background: var(--accent-hover); }
 .handle, .line { transition: left .25s linear; }
 .handle.scrubbing, .line.scrubbing { transition: none; }
 </style>

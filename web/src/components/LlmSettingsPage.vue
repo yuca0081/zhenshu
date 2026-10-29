@@ -248,12 +248,12 @@ async function save() {
 <style scoped>
 .lm-page { flex: 1; min-height: 0; overflow: auto; }
 .lm-wrap { max-width: 880px; margin: 0 auto; padding: 26px 28px 40px; }
-.lm-head h2 { font-size: 18px; letter-spacing: 2px; color: #f0c674; margin-bottom: 6px; }
-.lm-head p { color: #9a9aa6; font-size: 13px; margin-bottom: 18px; line-height: 1.6; }
-.lm-empty { color: #55555f; font-size: 13px; padding: 48px 0; text-align: center; }
-.lm-hint { color: #9a9aa6; font-size: 12.5px; margin: 2px 0 14px; line-height: 1.6; }
+.lm-head h2 { font-size: 18px; letter-spacing: 0.12em; color: var(--ink); margin-bottom: 6px; }
+.lm-head p { color: var(--muted); font-size: 13px; margin-bottom: 18px; line-height: 1.6; }
+.lm-empty { color: var(--muted); font-size: 13px; padding: 48px 0; text-align: center; }
+.lm-hint { color: var(--muted); font-size: 12.5px; margin: 2px 0 14px; line-height: 1.6; }
 .lm-prov {
-  border: 1px solid #1d1d24; border-radius: 8px; padding: 12px;
+  border: 1px solid var(--line-soft); padding: 12px;
   display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px;
 }
 .lm-row { display: flex; gap: 8px; align-items: center; }
@@ -261,18 +261,18 @@ async function save() {
 .lm-name { flex: 1; }
 .lm-model { width: 220px; flex: none; }
 .lm-clear { flex: none; }
-.lm-test { font-size: 12.5px; color: #ff8484; margin: 0; word-break: break-all; }
-.lm-test.ok { color: #7ed99a; }
-.lm-roles { border: 1px solid #1d1d24; border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
-.lm-role-title { color: #55555f; font-size: 12px; letter-spacing: 1px; }
-.lm-role-name { width: 52px; flex: none; color: #f0c674; font-size: 13px; font-weight: 600; }
+.lm-test { font-size: 12.5px; color: var(--err); margin: 0; word-break: break-all; }
+.lm-test.ok { color: var(--ok); }
+.lm-roles { border: 1px solid var(--line-soft); padding: 10px 12px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
+.lm-role-title { color: var(--muted); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; }
+.lm-role-name { width: 52px; flex: none; color: var(--accent); font-size: 13px; font-weight: 600; }
 .lm-eff { width: 150px; flex: none; }
 .lm-group { margin-bottom: 12px; }
-.lm-group-title { color: #55555f; font-size: 12px; margin: 6px 0; letter-spacing: 1px; }
+.lm-group-title { color: var(--muted); font-size: 11px; margin: 6px 0; letter-spacing: 0.14em; text-transform: uppercase; }
 .lm-st { margin-bottom: 6px; }
 .lm-st-name { width: 96px; flex: none; font-size: 13px; }
-.lm-st-eff { flex: none; color: #55555f; font-size: 12px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lm-st-eff { flex: none; color: var(--muted); opacity: .75; font-size: 12px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .lm-foot { display: flex; align-items: center; justify-content: flex-end; gap: 14px; margin-top: 18px; }
-.lm-error { color: #ff8484; font-size: 12.5px; flex: 1; text-align: right; word-break: break-all; }
-.lm-saved { color: #7ed99a; font-size: 12.5px; flex: 1; text-align: right; }
+.lm-error { color: var(--err); font-size: 12.5px; flex: 1; text-align: right; word-break: break-all; }
+.lm-saved { color: var(--ok); font-size: 12.5px; flex: 1; text-align: right; }
 </style>
