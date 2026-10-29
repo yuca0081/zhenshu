@@ -9,6 +9,7 @@ import os
 import pathlib
 import re
 import shutil
+import subprocess
 import sys
 
 # gsap 资产固定来源：ai/assets（随仓库分发）。
@@ -396,6 +397,53 @@ def main(proj_dir: str) -> int:
 
     # 跨段统一角标（P0-2）：配置在分镜层，注入每段页面（单段重渲各自带全）。
     ovl, chapters, style_id = load_overlay(proj)
+    # ── 段落制（2026-10-29 换骨，para-transition-plan §5）：unit=para 且单元表在 →
+    # 挂载/音轨/字幕带/单段工程按段落单元。分镜退居旁白/字幕层：真分镜 wav 经
+    # atrim(旁白时长)+apad(0.35 尾垫=格子) 拼成单元 wav；词级时间戳与 phrases 按
+    # 格子偏移合并（字幕带=单元一条，词时刻=单元绝对时间）；章节角标=首分镜章。
+    # 下游全部复用：重绑 ids/scene/starts/durs/chapters/meta.voices 为单元口径。
+    units = None
+    _upath = proj / 'storyboards' / 'units.json'
+    if str(pj.get('unit') or '').strip().lower() == 'para' and _upath.exists():
+        try:
+            units = json.loads(_upath.read_text(encoding='utf-8'))
+        except Exception:
+            units = None
+    if units:
+        per_voice = {v['id']: v for v in meta['voices']}
+        starts, acc = {}, 0.0
+        for u in units:
+            starts[u['id']] = round(acc, 3)
+            acc = round(acc + u['dur'], 3)
+        merged = []
+        for u in units:
+            words, phrases, en = [], [], []
+            for c in u['segs']:
+                v = per_voice.get(c['id']) or {}
+                off, n0 = c['start'], len(words)
+                words += [{'text': w['text'], 'start': round(w['start'] + off, 3),
+                           'end': round(w['end'] + off, 3)} for w in v.get('words') or []]
+                for rng in v.get('phrases') or []:
+                    phrases.append([rng[0] + n0, rng[1] + n0])
+                en += [e for e in (v.get('phrases_en') or []) if e]
+            merged.append({'id': u['id'], 'duration_s': round(u['dur'] - 0.35, 3),
+                           'words': words, 'phrases': phrases, 'phrases_en': en})
+            # 单元 wav：各分镜裁到旁白时长 + 垫 0.35 尾 → concat（格子即如此切）
+            ins, fc, labels = [], [], []
+            for i, c in enumerate(u['segs']):
+                ins += ['-i', str(proj / 'audio' / f"{c['id']}.wav")]
+                fc.append(f"[{i}:a]atrim=duration={c['narr_dur']},apad=pad_dur=0.35,aresample=48000[a{i}]")
+                labels.append(f"[a{i}]")
+            fc.append(''.join(labels) + f"concat=n={len(u['segs'])}:v=0:a=1[out]")
+            subprocess.run(['ffmpeg', '-y', '-v', 'error', *ins, '-filter_complex', ';'.join(fc),
+                            '-map', '[out]', '-c:a', 'pcm_s16le',
+                            str(proj / 'audio' / f"{u['id']}.wav")], check=True)
+        meta = {'voices': merged}
+        durs = {m['id']: m['duration_s'] for m in merged}
+        scene = {u['id']: round(u['dur'], 3) for u in units}
+        ids = [u['id'] for u in units]
+        total = round(sum(scene.values()), 3)
+        chapters = {u['id']: chapters.get(u['segs'][0]['id'], '') for u in units}
     tokens = load_style_tokens(style_id)
     # lint 合规：为 token/角标字体栈中的 OS 自带字体生成 @font-face local 声明；
     # 目录字体（font_assets.json 解析产物）补真字体 url 声明

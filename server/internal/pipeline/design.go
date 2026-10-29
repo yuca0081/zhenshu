@@ -837,6 +837,10 @@ func postFXOf(ss *contract.StyleSamples) any {
 }
 
 // readProjectField 读 project.json 顶层字段（缺失/损坏返回零值；幂等短路用）。
+// ReadProjectField project.json 顶层字符串字段（缺省 ""）。段落制单元钉选
+// （produce/units.go）等 produce 侧读取用。
+func ReadProjectField(p *Project, key string) string { return readProjectField(p, key) }
+
 func readProjectField(p *Project, key string) string {
 	b, err := os.ReadFile(p.Artifact("project.json"))
 	if err != nil {

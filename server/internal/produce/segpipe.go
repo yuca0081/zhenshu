@@ -388,6 +388,20 @@ func (r *Runner) runSegmentPipeline(ctx context.Context, p *pipeline.Project) er
 		return err
 	}
 
+	// ── 段落制换骨（2026-10-29，para-transition-plan §5）：渲染单位从分镜换成
+	// 段落。单元表就位后协调器与全下游（写画面/渲染/机检/判卷/拼接）吃单元表，
+	// 分镜退居旁白/字幕/锚句层（句匹配按合并旁白前缀游走自动收齐）。老项目钉
+	// seg 永不静默迁移；新项目（处女）默认段落制。
+	if units := BuildUnitsIfEligible(p, sb, voices); units != nil {
+		nSegs := 0
+		for _, u := range units {
+			voices[u.ID] = MergedVoice(u, voices)
+			nSegs += len(u.Segs)
+		}
+		r.Manifest(p, "produce.units", fmt.Sprintf("段落制：%d 渲染单元 / %d 分镜（旁白字幕仍按分镜）", len(units), nSegs))
+		sb = UnitStoryboard(sb, units)
+	}
+
 	// ── 1.6 配乐工位（bgmpick.go）：实测语速+弧线在手，自动选曲写 project.json；
 	// 填空不推翻（用户 set_bgm 过=拍板过），失败兜底规则/跳过，永不挡片。
 	// 拼接混音（mixBGM）按 project.json 自动消费，本步零混音逻辑。

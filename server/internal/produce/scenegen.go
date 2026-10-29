@@ -57,7 +57,11 @@ func sceneSidecarPath(p *pipeline.Project, segID string) string {
 // 设计未变时指纹不变，缓存照常命中。旧旁车（无冒号后缀）与新格式必然不等 → 首跑全量刷新一次。
 // 无导演字段且无段落层（老项目）时后两项为空串，指纹与旧格式逐字节一致（老项目缓存不冲）。
 func sceneSidecarFingerprint(p *pipeline.Project, sb *contract.Storyboard, seg contract.Segment) string {
-	return sceneFingerprint(seg) + ":" + designFingerprint(p) + directorFingerprint(sb) + paraNoteFingerprint(p, seg.ID)
+	tail := paraNoteFingerprint(p, seg.ID)
+	if p.UnitMode() {
+		tail = unitPlanFingerprint(p, seg.ID) // 段落制：单元计划指纹（分组/格子变化→过期）
+	}
+	return sceneFingerprint(seg) + ":" + designFingerprint(p) + directorFingerprint(sb) + tail
 }
 
 // paraNote 段在本片的段落定位注（工件 C 段落层 → 生成侧注入，production-
@@ -121,13 +125,24 @@ const qSegMaterials = "以下是本段素材真图（公版检索所得）——
 // sceneGen 每段一个场景文件。instruction = 用户改画要求（最高优先级位，修复轮必须
 // 带上否则会丢）；feedback = lint/check/审查回喂（必须修正位）；only 非空只处理该段。
 func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction, feedback, only string) error {
-	sb, err := p.LoadStoryboard()
+	sb, err := p.WorkStoryboard() // 段落制=单元表（写画面单位=段落），分镜制=原表
 	if err != nil {
 		return fmt.Errorf("先完成 storyboard: %w", err)
 	}
 	voices, err := loadAudioMeta(p)
 	if err != nil {
 		return err
+	}
+	// 段落制作业书（2026-10-29 换骨）：单元表在 → 该单元走 paraUnitPrompt
+	// （连续时间轴编排+观感补丁）；分镜制走原 sceneUserPrompt。素材两段式仅分镜制。
+	unitList := LoadUnits(p)
+	unitOf := func(id string) (contract.RenderUnit, bool) {
+		for _, u := range unitList {
+			if u.ID == id {
+				return u, true
+			}
+		}
+		return contract.RenderUnit{}, false
 	}
 	// 主脑走文本主力档（2026-10-28 换脑 glm-5.3，无多模态）：写画面会话纯文本，
 	// 看图活全走视觉副驾（llm.VisionDigest，flash 档）——样张/真迹细读成全片
@@ -369,6 +384,12 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			}
 			styleSeg += materialsNote(segMats)
 		}
+		promptFor := func(fb, prev string) string {
+			if u, ok := unitOf(seg.ID); ok {
+				return paraUnitPrompt(seg, v, u, unitList, instruction, fb, cv, styleShared, styleSeg, golden, sceneM, compM, prev)
+			}
+			return sceneUserPrompt(seg, v, instruction, fb, cv, styleShared, styleSeg, golden, sceneM, compM, len(segMats) == 0, prev, pn)
+		}
 		fp := sceneSidecarFingerprint(p, sb, seg)
 		var payload struct {
 			HTML          string                  `json:"html"`
@@ -396,7 +417,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			}
 		}
 		if hist == nil { // 全新会话（首写或续写不可用的修复兜底，行为同旧版）
-			user := sceneUserPrompt(seg, v, instruction, feedback, cv, styleShared, styleSeg, golden, sceneM, compM, len(segMats) == 0, prevSceneHTML(p, seg.ID), pn)
+			user := promptFor(feedback, prevSceneHTML(p, seg.ID))
 			_, gerr := gen(acc, user, &payload)
 			if gerr != nil {
 				werr = fmt.Errorf("%s 场景生成失败: %w", seg.ID, gerr)
@@ -414,7 +435,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 						styleSeg += materialNote(len(segMats))
 					}
 					styleSeg += materialsNote(segMats)
-					_, err2 := gen(acc, sceneUserPrompt(seg, v, instruction, feedback, cv, styleShared, styleSeg, golden, sceneM, compM, false, "", pn), &payload)
+					_, err2 := gen(acc, promptFor(feedback, ""), &payload)
 					if err2 != nil {
 						werr = fmt.Errorf("%s 带素材终稿生成失败: %w", seg.ID, err2)
 						fail(werr)
@@ -440,7 +461,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 					HTML     string                  `json:"html"`
 					Elements []contract.NamedElement `json:"elements"`
 				}
-				_, err2 = gen(acc, sceneUserPrompt(seg, v, "", fb, cv, styleShared, styleSeg, golden, sceneM, compM, false, payload.HTML, pn), &fixed)
+				_, err2 = gen(acc, promptFor(fb, payload.HTML), &fixed)
 				if err2 == nil {
 					payload.HTML, payload.Elements = fixed.HTML, fixed.Elements
 				}
@@ -479,7 +500,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			saveSceneHistory(p, seg.ID, &sceneHistory{
 				FP: fp,
 				Messages: []openai.ChatCompletionMessage{
-					{Role: openai.ChatMessageRoleUser, Content: sceneUserPrompt(seg, v, instruction, feedback, cv, styleShared, styleSeg, golden, sceneM, compM, false, "", pn)},
+					{Role: openai.ChatMessageRoleUser, Content: promptFor(feedback, "")},
 					{Role: openai.ChatMessageRoleAssistant, Content: scenePayloadJSON(payload.HTML, payload.Elements)},
 				},
 			})

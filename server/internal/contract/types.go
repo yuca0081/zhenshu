@@ -711,3 +711,34 @@ type NamedElement struct {
 	ID   string `json:"id"`   // 稳定 id，如 seg03-loop-arrow
 	Name string `json:"name"` // 人话名，如「箭头：蓝光弹开」
 }
+
+// ── 段落制渲染单元（2026-10-29 换骨，para-transition-plan §5）──────────
+// 渲染单位=段落（一单元一张 HTML/一个 mp4），分镜退居旁白/字幕/锚句层。
+// units.json 由 produce 在 TTS 后构建；pipeline（边界分类/segmap/帧定位）与
+// ai/assemble.py（单元挂载/合并音轨/单元字幕）同读这一份契约。
+
+// RenderUnit 一个渲染单元：一整个段落（超限强制拆分的段落=同 ParaIdx 多个 Part，
+// 拆点边界按段内 fade 叠化兜底）。
+type RenderUnit struct {
+	ID        string    `json:"id"`        // para01 / para03b（段落序 1 起 + 拆分后缀）
+	ParaIdx   int       `json:"para"`      // 段落序（0 基；拆分各 Part 共用）
+	Part      int       `json:"part"`      // 第几拆（1 起，未拆=1）
+	Parts     int       `json:"parts"`     // 同段落共几拆
+	Title     string    `json:"title"`     // 段落主题（拆分带「上/中/下」注）
+	Chapter   string    `json:"chapter"`   // 章节角标（首分镜的章；overlay 用）
+	Narration string    `json:"narration"` // 段落内全部分镜旁白拼接（句匹配按前缀游走）
+	Dur       float64   `json:"dur"`       // Σ(旁白+收尾垫)；timeline 全长
+	Segs      []UnitSeg `json:"segs"`
+}
+
+// UnitSeg 单元内的一个分镜格子：旁白贴格、画面穿格（plan §5.1）。
+// 三要素（Key/Narration/Brief）随格子携带——段落作业书、字幕、锚句都按真分镜。
+type UnitSeg struct {
+	ID        string  `json:"id"`    // segNN（真分镜 id，字幕/TTS/锚句仍按它）
+	Start     float64 `json:"start"` // 单元内格子起点 = Σ_{k<i}(旁白k+SegTail)
+	End       float64 `json:"end"`
+	NarrDur   float64 `json:"narr_dur"`  // 旁白时长（不含尾垫）
+	Key       string  `json:"key"`       // 分镜标题（段落作业书各分镜信息行）
+	Narration string  `json:"narration"` // 分镜旁白
+	Brief     string  `json:"brief"`     // 分镜画面提示
+}

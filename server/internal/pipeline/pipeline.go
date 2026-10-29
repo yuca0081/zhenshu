@@ -898,7 +898,7 @@ func checkStale(p *Project) bool {
 // 耗时与段长成正比而非片长。
 // main.mp4 = 人声母版 concat -c copy 后按项目配乐混音（见 stageStitch）。
 func stageRender(p *Project) error {
-	sb, err := p.LoadStoryboard()
+	sb, err := p.WorkStoryboard() // 段落制=单元表（渲染单位=段落），分镜制=原表
 	if err != nil {
 		return err
 	}
@@ -934,7 +934,45 @@ func stageRender(p *Project) error {
 	}
 	p.Manifest("render.done", "renders/main_voice.mp4")
 	syncArtifacts(artifacts.LocalPrefix(p.ID) + "/renders") // 母版/timeline/list.txt/段片兜底补传
+	if p.UnitMode() {
+		writeSegmap(p)
+	}
 	return nil
+}
+
+// writeSegmap 段落制分镜时刻表（renders/segmap.json）：分镜行 = 单元起点 + 格子
+// 偏移（timeline.json 是单元行——sfx/终审的拼接真值；分镜粒度的定位以本表为准：
+// 前端时间轴分镜标/聊天引用跳转/锚句抽帧换算）。分镜制不写（timeline 本身即分镜行）。
+func writeSegmap(p *Project) {
+	tl := LoadTimeline(p)
+	cells := p.unitCells()
+	sb, err := p.LoadStoryboard() // 真分镜表（顺序与 id 权威）
+	if err != nil || len(tl) == 0 || len(cells) == 0 {
+		return
+	}
+	unitStart := map[string]float64{}
+	for _, r := range tl {
+		unitStart[r.ID] = r.Start
+	}
+	rows := make([]TimelineRow, 0, len(sb.Segments))
+	for _, seg := range sb.Segments {
+		c, ok := cells[seg.ID]
+		if !ok {
+			continue
+		}
+		st, ok := unitStart[c.Unit]
+		if !ok {
+			continue
+		}
+		rows = append(rows, TimelineRow{ID: seg.ID, Start: st + c.Start, End: st + c.End})
+	}
+	if len(rows) == 0 {
+		return
+	}
+	if b, err := json.MarshalIndent(rows, "", "  "); err == nil {
+		_ = WriteFileAtomic(p.Artifact("renders/segmap.json"), b, 0o644)
+		p.Manifest("render.segmap", fmt.Sprintf("%d 分镜时刻（%d 段落单元）", len(rows), len(tl)))
+	}
 }
 
 // RenderSeg 渲单个段片（.hf-seg 单段工程 → renders/segs/segNN.mp4），落指纹旁车
@@ -1285,10 +1323,14 @@ const (
 	paraEdgeKind = "smoothleft" // 段界选型：定向推切（2026-10-29 拍板；备选 pixelize）
 )
 
-// segParaIndex 分镜→段落序号：storyboards/draft.json 段落层直读（pipeline 不
-// import prep——反向依赖环；同 project.json 直读惯例，只解边界分类要用的字段）。
-// 读不到/无段落层回 nil，调用方按「全段界」保守处理。
+// segParaIndex 边界分类表（工作单位 id → 段落序）：段落制优先单元表（unitID→
+// ParaIdx，同段落强制拆分各 Part 同号 → 拆点落段内 fade，异段落 → smoothleft）；
+// 分镜制读 storyboards/draft.json 段落层（pipeline 不 import prep——反向依赖环；
+// 同 project.json 直读惯例）。读不到/无段落层回 nil，调用方按「全段界」保守处理。
 func segParaIndex(p *Project) map[string]int {
+	if m := unitParaIndex(p); m != nil {
+		return m
+	}
 	b, err := os.ReadFile(p.Artifact("storyboards/draft.json"))
 	if err != nil {
 		return nil
@@ -1308,6 +1350,95 @@ func segParaIndex(p *Project) map[string]int {
 		}
 	}
 	return m
+}
+
+// unitParaIndex 段落制边界分类表：units.json 各单元 → 段落序。单元表不在（分镜制）
+// 返回 nil。本地小结构直读（完整契约在 contract 包，produce 侧持有）。
+func unitParaIndex(p *Project) map[string]int {
+	b, err := os.ReadFile(p.Artifact("storyboards/units.json"))
+	if err != nil {
+		return nil
+	}
+	var us []struct {
+		ID      string `json:"id"`
+		ParaIdx int    `json:"para"`
+	}
+	if json.Unmarshal(b, &us) != nil || len(us) == 0 {
+		return nil
+	}
+	m := make(map[string]int, len(us))
+	for _, u := range us {
+		m[u.ID] = u.ParaIdx
+	}
+	return m
+}
+
+// UnitMode 段落制开关：project.json unit=para 且单元表在。写画面/渲染/审片/拼接
+// 的工作单位=段落单元（produce/units.go 构建；老项目钉 seg 永不静默迁移）。
+func (p *Project) UnitMode() bool {
+	if strings.ToLower(strings.TrimSpace(readProjectField(p, "unit"))) != "para" {
+		return false
+	}
+	_, err := os.Stat(p.Artifact("storyboards/units.json"))
+	return err == nil
+}
+
+// WorkStoryboard 工作分镜表：段落制=单元分镜表（storyboards/units-storyboard.json，
+// Segments=段落单元），分镜制=原分镜表。渲染/拼接/写画面/审片的段列表统一从这里取；
+// 单元表损坏退原分镜表（宁慢勿错）。
+func (p *Project) WorkStoryboard() (*contract.Storyboard, error) {
+	if p.UnitMode() {
+		b, err := os.ReadFile(p.Artifact("storyboards/units-storyboard.json"))
+		if err == nil {
+			var sb contract.Storyboard
+			if json.Unmarshal(b, &sb) == nil && len(sb.Segments) > 0 {
+				return &sb, nil
+			}
+		}
+	}
+	return p.LoadStoryboard()
+}
+
+// unitCell 段内格子（本地小结构）。SegVideoLocate 与 segmap 换算用。
+type unitCell struct {
+	Unit  string
+	Start float64
+	End   float64
+}
+
+// unitCells 分镜→所在单元与格子（段落制；分镜制 nil）。
+func (p *Project) unitCells() map[string]unitCell {
+	b, err := os.ReadFile(p.Artifact("storyboards/units.json"))
+	if err != nil {
+		return nil
+	}
+	var us []struct {
+		ID   string `json:"id"`
+		Segs []struct {
+			ID    string  `json:"id"`
+			Start float64 `json:"start"`
+			End   float64 `json:"end"`
+		} `json:"segs"`
+	}
+	if json.Unmarshal(b, &us) != nil {
+		return nil
+	}
+	m := map[string]unitCell{}
+	for _, u := range us {
+		for _, c := range u.Segs {
+			m[c.ID] = unitCell{Unit: u.ID, Start: c.Start, End: c.End}
+		}
+	}
+	return m
+}
+
+// SegVideoLocate 分镜画面载体定位：段落制=（段落片, 段内格子偏移）；分镜制=
+// （段片, 0）。逐分镜粒度的抽帧消费方（frameQA 锚帧/聊天引用跳转）用它换算。
+func SegVideoLocate(p *Project, segID string) (string, float64) {
+	if c, ok := p.unitCells()[segID]; ok {
+		return p.Artifact("renders/segs/" + c.Unit + ".mp4"), c.Start
+	}
+	return p.Artifact("renders/segs/" + segID + ".mp4"), 0
 }
 
 // paraEdges 边界分类（§4.1）：相邻分镜同段落 → 段内 fade；异段落/无段落层

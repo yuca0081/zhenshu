@@ -145,7 +145,7 @@ func (r *Runner) frameQA(ctx context.Context, p *pipeline.Project, instruction, 
 // 抽帧 + 视觉调用都在并发区，429/网络抖动由 provider 重试兜底。
 // 单段审查调用失败视为审查器抖动：manifest 记账后跳过（宁可放过不误杀管线）。
 func (r *Runner) reviewSegments(ctx context.Context, p *pipeline.Project, only string) (map[string]string, error) {
-	sb, err := p.LoadStoryboard()
+	sb, err := p.WorkStoryboard() // 段落制=单元表（抽帧按单元片：首/尾帧=段落首尾帧，与接续契约同粒度）
 	if err != nil {
 		return nil, err
 	}
