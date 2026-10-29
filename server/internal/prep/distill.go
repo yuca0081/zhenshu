@@ -748,14 +748,15 @@ var distillExactVersionRe = regexp.MustCompile(`^\d+\.\d+\.\d+(-[0-9A-Za-z.\-+]+
 
 // distillPainterProv 画师本体必须多模态（read_file 回看渲染结果走附图通道）。
 func distillPainterProv() *llm.Provider {
-	prov, _ := llm.FromEnv(llm.RoleVisual)
+	prov, _ := llm.FromEnv(llm.StationDistill)
 	return prov
 }
 
-// distillJudgeProv 判卷官：DISTILL_JUDGE_MODEL 可指定不同模型（判卷≠画师，
-// 防自夸偏差）；缺省与画师同模型——配了第二个视觉模型就分家。
+// distillJudgeProv 判卷官：走「审核」工位（与制作判卷同门，面板一处换判卷模型）；
+// DISTILL_JUDGE_MODEL 可指定不同模型（判卷≠画师，防自夸偏差）——工位绑定之上
+// 的后置覆盖，配了就赢。
 func distillJudgeProv() *llm.Provider {
-	prov, _ := llm.FromEnv(llm.RoleVisual)
+	prov, _ := llm.FromEnv(llm.StationJudge)
 	if v := os.Getenv("DISTILL_JUDGE_MODEL"); v != "" && prov != nil {
 		cp := *prov
 		cp.Model = v

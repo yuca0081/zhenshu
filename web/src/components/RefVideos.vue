@@ -168,18 +168,19 @@ const frameURL = (r: RefVideo, f: string) => referenceMediaURL(r.id, f)
     <header class="head">
       <div>
         <h2>视频解析</h2>
-        <p>上传参考视频（支持多选批量），AI 打公认风格标签、提炼它独有的手法特色（词表没有的标签自动申请新词）。一个视频解析出一个风格条目：点开看标签、特色与证据帧，右上角入库，入库后新建项目可选用。</p>
+        <p>两路解析，同一套草稿修订→入库流程。路一：上传参考视频（支持多选批量），AI 看片打公认风格标签、提炼独有手法特色；路二：工作区出片项目点「解析到风格库」，读平台留存的定稿设计系统与样张直接解析，不用抽帧。词表没有的标签自动申请新词。</p>
       </div>
       <NButton type="primary" :loading="uploading" @click="pick">上传视频</NButton>
       <input ref="fileEl" type="file" accept="video/*" multiple hidden @change="onFile" />
     </header>
 
-    <div v-if="!refs.length" class="none">还没有解析记录。上传 mp4/mov/webm 试试（建议 ≤ 200MB）。</div>
+    <div v-if="!refs.length" class="none">还没有解析记录。上传 mp4/mov/webm 试试（建议 ≤ 200MB），或在工作区出片项目右上角点「解析到风格库」。</div>
     <div v-else class="list">
       <article v-for="row in rows" :key="row.r.id" class="refitem" :class="{ bad: row.r.status === 'error' }">
-        <!-- 视频行：文件名 + 状态 + 时间 -->
+        <!-- 来源行：名称 + 来源/状态 + 时间 -->
         <div class="vhead">
-          <b class="vname" :title="row.r.name">{{ row.r.name }}</b>
+          <b class="vname" :title="row.r.source === 'project' ? `项目解析：${row.r.name}` : row.r.name">{{ row.r.name }}</b>
+          <NTag v-if="row.r.source === 'project'" size="small" :bordered="false" type="info">项目解析</NTag>
           <NTag size="small" :bordered="false"
             :type="row.r.status === 'done' ? 'success' : row.r.status === 'error' ? 'error' : 'warning'">
             {{ row.r.status === 'done' ? '已解析' : row.r.status === 'error' ? '失败' : '解析中' }}

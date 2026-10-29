@@ -35,6 +35,13 @@ func (s *Store) runAgent(ctx context.Context, ref *Ref) {
 	}
 	_ = s.mutateRef(ref.ID, func(r *Ref) error { r.Status, r.Error = "running", ""; return nil })
 
+	// 两路解析分叉（2026-10-29）：project = 项目解析（读设计系统文本打标，不抽帧，
+	// 见 project.go）；其余（空/"upload"）= 上传视频解析（抽帧+多模态，本函数主路径）。
+	if ref.Source == SourceProject {
+		s.runProjectParse(ctx, ref, fail)
+		return
+	}
+
 	// 1. 找视频
 	var videos []string
 	if es, rerr := os.ReadDir(s.dir(ref.ID)); rerr == nil {
@@ -64,7 +71,7 @@ func (s *Store) runAgent(ctx context.Context, ref *Ref) {
 		return
 	}
 
-	prov, err := llm.FromEnv(llm.RoleVisual)
+	prov, err := llm.FromEnv(llm.StationRefAnalyze)
 	if err != nil {
 		fail(fmt.Errorf("解析需要 API 模式（LLM_API_KEY）: %w", err))
 		return

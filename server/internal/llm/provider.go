@@ -56,45 +56,130 @@ type Provider struct {
 	EffortOverride Effort
 }
 
-// FromEnv 按环境变量构造供应商：LLM_API_KEY / LLM_BASE_URL / LLM_MODEL（旧名 DEEPSEEK_* 仍兼容），
-// 单档模型可用 LLM_VISUAL_MODEL / LLM_PLAN_MODEL / LLM_DIALOGUE_MODEL 覆盖。
-// 默认 GLM 编码套餐端点 + glm-5.3-flash。缺 key 返回错误（调用方转 ErrAwaitLLM 降级会话模式）。
-func FromEnv(role Role) (*Provider, error) {
+// ParseEffort 思考档字符串 → 枚举。空串 = 不覆盖；非法值 ok=false（调用方按没配处理，
+// 与端点对非法档位静默按默认跑同口径）。
+func ParseEffort(s string) (Effort, bool) {
+	switch Effort(s) {
+	case EffortDefault, EffortLow, EffortHigh, EffortDisabled:
+		return Effort(s), true
+	}
+	return EffortDefault, false
+}
+
+// resolved 一条角色解析链的终值：FromEnv 与设置视图（ResolveEffective）共用。
+type resolved struct {
+	name    string // 供应商 id；未绑定 = "llm"（env 层）
+	key     string
+	baseURL string
+	model   string
+	eff     Effort
+	source  string // model 值的来源：station / role / env / default（视图标注用）
+}
+
+// resolveRole 跑完整条解析链：设置文件（工位绑定 → 档位兜底）→ .env → 内置默认。
+// 供应商字段留空 = 沿用 .env 值；不做 key 缺失检查（FromEnv 管，视图要能裸看）。
+func resolveRole(role Role) (resolved, error) {
+	base := BaseRole(role)
+	if (role != base && !IsStation(role)) || (base != RoleDialogue && base != RolePlan && base != RoleVisual) {
+		return resolved{}, fmt.Errorf("未知角色 %s", role)
+	}
 	get := func(newName, oldName string) string {
 		if v := os.Getenv(newName); v != "" {
 			return v
 		}
 		return os.Getenv(oldName)
 	}
-	switch role {
-	case RolePlan, RoleDialogue, RoleVisual:
-		key := get("LLM_API_KEY", "DEEPSEEK_API_KEY")
-		if key == "" {
-			return nil, errors.New("LLM_API_KEY 未配置（旧名 DEEPSEEK_API_KEY 亦未配置）")
-		}
-		base := get("LLM_BASE_URL", "DEEPSEEK_BASE_URL")
-		if base == "" {
-			base = "https://open.bigmodel.cn/api/coding/paas/v4"
-		}
-		model := get("LLM_MODEL", "DEEPSEEK_MODEL")
-		if model == "" {
-			model = "glm-5.3-flash"
-		}
-		// 按档分模型（bake-off 口子，2026-10-28 起用）：LLM_<ROLE>_MODEL 覆盖单档
-		// （LLM_VISUAL_MODEL / LLM_PLAN_MODEL / LLM_DIALOGUE_MODEL），不设回落
-		// LLM_MODEL。BaseURL/Key 三档共享——只分模型不分平台。
-		if m := get("LLM_"+strings.ToUpper(string(role))+"_MODEL", ""); m != "" {
-			model = m
-		}
-		eff := Effort(os.Getenv("LLM_EFFORT"))
-		switch eff { // 非法值当没配（端点对非法档位也是静默按默认跑，同口径）
-		case EffortDefault, EffortLow, EffortHigh, EffortDisabled:
-		default:
-			eff = EffortDefault
-		}
-		return &Provider{Name: "llm", BaseURL: base, APIKey: key, Model: model, EffortOverride: eff}, nil
+	r := resolved{name: "llm", key: get("LLM_API_KEY", "DEEPSEEK_API_KEY"), baseURL: get("LLM_BASE_URL", "DEEPSEEK_BASE_URL")}
+	r.model = get("LLM_MODEL", "DEEPSEEK_MODEL")
+	r.source = "env"
+	// 按档分模型（bake-off 口子，2026-10-28 起用）：LLM_<ROLE>_MODEL 覆盖单档，
+	// 不设回落 LLM_MODEL。BaseURL/Key 三档共享——只分模型不分平台。
+	if m := get("LLM_"+strings.ToUpper(string(base))+"_MODEL", ""); m != "" {
+		r.model = m
 	}
-	return nil, fmt.Errorf("未知角色 %s", role)
+	r.eff, _ = ParseEffort(os.Getenv("LLM_EFFORT"))
+	snap := SettingsSnapshot()
+	if pid, pc, ok := snap.resolveProvider(role); ok {
+		r.name = pid
+		if pc.BaseURL != "" {
+			r.baseURL = pc.BaseURL
+		}
+		if pc.APIKey != "" {
+			r.key = pc.APIKey
+		}
+		if pc.Model != "" {
+			r.model = pc.Model
+			r.source = sourceLayer(role)
+		}
+	}
+	if e := snap.resolveEffort(role); e != "" {
+		if v, ok := ParseEffort(e); ok {
+			r.eff = v
+		}
+	}
+	if r.baseURL == "" {
+		r.baseURL = defaultBaseURL
+	}
+	if r.model == "" {
+		r.model = defaultModel
+		r.source = "default"
+	}
+	return r, nil
+}
+
+// sourceLayer model 来自设置文件的哪一层：工位绑定 = station，档位兜底 = role。
+func sourceLayer(role Role) string {
+	snap := SettingsSnapshot()
+	if snap == nil {
+		return "role"
+	}
+	if IsStation(role) {
+		if b, ok := snap.Stations[string(role)]; ok && b.Provider != "" {
+			if _, ok := snap.Providers[b.Provider]; ok {
+				return "station"
+			}
+		}
+	}
+	return "role"
+}
+
+const (
+	defaultBaseURL = "https://open.bigmodel.cn/api/coding/paas/v4"
+	defaultModel   = "glm-5.3-flash"
+)
+
+// Effective 某角色的生效配置（不含 key 明文），GET /api/llm-settings 视图用。
+type Effective struct {
+	Provider string `json:"provider"` // 供应商 id；空串 = 未绑定（env/default 兜底）
+	Model    string `json:"model"`
+	BaseURL  string `json:"base_url"`
+	Effort   string `json:"effort"`
+	Source   string `json:"source"`
+}
+
+// ResolveEffective 角色生效值（三档 + 全部工位各调一次拼全图）。
+func ResolveEffective(role Role) Effective {
+	r, err := resolveRole(role)
+	if err != nil {
+		return Effective{}
+	}
+	return Effective{Provider: r.name, Model: r.model, BaseURL: r.baseURL, Effort: string(r.eff), Source: r.source}
+}
+
+// FromEnv 构造供应商（角色可为三档或具体工位，见 settings.go StationRegistry）。
+// 解析链：设置文件（工位绑定 → 档位兜底，docs/llm-settings-2026-10-29.md）→
+// .env（LLM_API_KEY / LLM_BASE_URL / LLM_MODEL，旧名 DEEPSEEK_* 仍兼容；
+// 单档覆盖 LLM_VISUAL_MODEL / LLM_PLAN_MODEL / LLM_DIALOGUE_MODEL）→ 内置默认。
+// 缺 key 返回错误（调用方转 ErrAwaitLLM 降级会话模式）。
+func FromEnv(role Role) (*Provider, error) {
+	r, err := resolveRole(role)
+	if err != nil {
+		return nil, err
+	}
+	if r.key == "" {
+		return nil, errors.New("LLM_API_KEY 未配置（旧名 DEEPSEEK_API_KEY 亦未配置）")
+	}
+	return &Provider{Name: r.name, BaseURL: r.baseURL, APIKey: r.key, Model: r.model, EffortOverride: r.eff}, nil
 }
 
 // Effort 思考档位。2026-09-30 实测编码端点：reasoning_effort 可用（low/high/max），

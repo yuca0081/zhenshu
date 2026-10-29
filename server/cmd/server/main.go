@@ -25,6 +25,7 @@ import (
 	"webpage-video-agent/server/internal/auth"
 	"webpage-video-agent/server/internal/config"
 	"webpage-video-agent/server/internal/events"
+	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
 	"webpage-video-agent/server/internal/prep"
 	"webpage-video-agent/server/internal/produce"
@@ -57,6 +58,10 @@ func main() {
 	if _, err := os.Stat(filepath.Join(root, "ai")); err != nil {
 		log.Fatalf("仓库根推断失败（%s 下无 ai/），检查 DATA_DIR", root)
 	}
+
+	// 工位模型设置（docs/llm-settings-2026-10-29.md）：设置面板写 data/llm-config.json，
+	// FromEnv 解析链 = 工位绑定 → 档位兜底 → .env → 内置默认；文件缺失/损坏不拒启。
+	llm.InitSettings(filepath.Join(cfg.DataDir, "llm-config.json"))
 
 	pipeline.EnsureFFmpeg()
 	pipeline.SetRootDir(root)

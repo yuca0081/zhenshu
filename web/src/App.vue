@@ -12,6 +12,7 @@ import HomeView from './components/HomeView.vue'
 import LoginView from './components/LoginView.vue'
 import AccountMenu from './components/AccountMenu.vue'
 import UserAdminModal from './components/UserAdminModal.vue'
+import LlmSettingsPage from './components/LlmSettingsPage.vue'
 import { api, setOnUnauthorized, sseURL } from './api'
 import type { ActivityEvent, AudioMeta, ChatRef, Manuscript, Msg, PrepView, ProjectRow, ProjectView, Storyboard, Style, StyleSamples, TabID, UserInfo } from './types'
 import { errMsg } from './format'
@@ -66,12 +67,15 @@ async function onLogout() {
 
 const projects = ref<ProjectRow[]>([])
 const current = ref<string>('')
-// 三页导航：首页（落地+快速开始）/ 工作区（项目三栏）/ 风格库（风格+视频解析）
-type PageID = 'home' | 'workspace' | 'materials'
+// 四页导航：首页（落地+快速开始）/ 工作区（项目三栏）/ 风格库（风格+视频解析）
+// / 设置（模型设置，不进页签组——顶栏「设置」按钮进，admin 专属）
+type PageID = 'home' | 'workspace' | 'materials' | 'settings'
 const tabs = [
   { id: 'home', label: '首页' }, { id: 'workspace', label: '工作区' }, { id: 'materials', label: '风格库' },
 ] as const
 const page = ref<PageID>('home')
+// 风格库页签：风格库 / 视频解析（工作区「解析到风格库」按钮跳转时直接落在视频解析）
+const materialsTab = ref<'styles' | 'videos'>('styles')
 const view = ref<ProjectView | null>(null)
 const storyboard = ref<Storyboard | null>(null)
 const style = ref<StyleSamples | null>(null)
@@ -121,7 +125,24 @@ let reqSeq = 0 // 会话内自增：切项目即作废在途响应——A 项目
 // finally 里同样校验代次再删：先完成的旧代请求不许误删新代请求的在途标记。
 const inflight = new Map<string, number>()
 
-const stageOrder = ['tts', 'compositions', 'assemble', 'check', 'render', 'frameqa']
+// 本次运行收到的第一粒 stage 键（stageState 每次清空后重播）：首制第一粒必是
+// tts（复用轮后端也发 done），重做第一粒是 compositions——判运行类型用；
+// SSE 半路接入错过了首粒时，靠下面 runKind 的独有键纠偏。
+const firstStageKey = ref('')
+// 制作阶段序按运行类型取（2026-10-22 起首制全是段级流水线，旧栅栏六格里
+// assemble/frameqa 只有段级重做路径还会发，首制永远灰着）：首制 = 配音→画面
+// （字体/样张准备＋段级流水线主体，逐段 check 不单列——细账在过程页与进度行）→
+// 拼接渲→全片终审；重做保持六格，tts 不跑但由 VideoPane 显示「配音不动」。
+const runKind = computed<'produce' | 'rework'>(() => {
+  const s = stageState.value
+  if (s.segpipe || s.review) return 'produce' // 首制独有键
+  if (s.assemble || s.frameqa) return 'rework' // 重做独有键
+  return firstStageKey.value === 'compositions' ? 'rework' : 'produce'
+})
+const stageOrder = computed(() =>
+  runKind.value === 'rework'
+    ? ['tts', 'compositions', 'assemble', 'check', 'render', 'frameqa']
+    : ['tts', 'compositions', 'render', 'review'])
 
 async function loadProjects() {
   try {
@@ -139,6 +160,12 @@ async function loadLibrary() {
 async function publishPack(id: string) {
   await api.publishPack(id).catch(e => topMsg.error(`入库失败：${errMsg(e)}`))
   await loadLibrary()
+}
+
+// 跳风格库页并落到指定页签（工作区「解析到风格库」按钮用：解析提交后跟进进度）
+function openMaterials(tab: 'styles' | 'videos') {
+  materialsTab.value = tab
+  page.value = 'materials'
 }
 
 async function loadProject(id: string) {
@@ -352,6 +379,7 @@ function openSSE(id: string) {
       const st = d.detail.startsWith('running') ? 'running'
         : d.detail.startsWith('done') ? 'done'
         : d.detail.startsWith('error') || d.detail.startsWith('repair') ? 'error' : 'running'
+      if (!Object.keys(stageState.value).length) firstStageKey.value = d.stage
       stageState.value = { ...stageState.value, [d.stage]: st }
       loadMsgs()
       throttledLoadActivity() // 阶段推进即拉事件流（用时/打回记帐在 manifest 里；3s 节流）
@@ -426,10 +454,11 @@ onBeforeUnmount(() => {
 boot()
 
 // ── 页面状态 ↔ URL hash：刷新/前进后退/分享链接不再弹回首页 ──────────
-// #/home（缺省）/ #/materials / #/workspace/<项目id>
+// #/home（缺省）/ #/materials[/videos] / #/workspace/<项目id>
 function hashTarget(): string {
   if (page.value === 'workspace') return current.value ? `#/workspace/${current.value}` : '#/workspace'
-  if (page.value === 'materials') return '#/materials'
+  if (page.value === 'materials') return materialsTab.value === 'videos' ? '#/materials/videos' : '#/materials'
+  if (page.value === 'settings') return '#/settings'
   return '#/home'
 }
 watch([page, current], () => {
@@ -440,11 +469,14 @@ function applyHash() {
   const h = location.hash
   if (h.startsWith('#/materials')) {
     page.value = 'materials'
+    if (/^#\/materials\/videos/.test(h)) materialsTab.value = 'videos'
   } else if (h.startsWith('#/workspace')) {
     const id = /^#\/workspace\/([A-Za-z0-9_-]+)/.exec(h)?.[1] ?? ''
     // 同项目只切页不重载（重载会清聊天/阶段态）；异项目走完整选择流程
     if (id && id !== current.value) selectProject(id)
     else page.value = 'workspace'
+  } else if (h.startsWith('#/settings')) {
+    page.value = 'settings'
   } else {
     page.value = 'home'
   }
@@ -515,9 +547,9 @@ async function onDeleteProject(id: string) {
 }
 
 const stageSummary = computed(() => {
-  const states = stageOrder.map(s => stageState.value[s] ?? (view.value?.producing ? 'pending' : ''))
+  const states = stageOrder.value.map(s => stageState.value[s] ?? (view.value?.producing ? 'pending' : ''))
   if (!states.some(Boolean)) return null
-  return stageOrder.map((s, i) => ({ key: s, state: states[i] }))
+  return stageOrder.value.map((s, i) => ({ key: s, state: states[i] }))
 })
 
 // 挑选中的段序号（中-L5：原先模板内联 map，App 任意状态变更都新建数组触发
@@ -566,6 +598,8 @@ async function confirmStyle() {
             >{{ t.label }}</button>
           </div>
           <button class="nb-new" @click="showNew = true">＋ 新建</button>
+          <button v-if="user?.role === 'admin'" class="nb-set" :class="{ on: page === 'settings' }"
+            title="各工位的大模型与 URL" @click="page = 'settings'">设置</button>
           <AccountMenu v-if="user" :user="user" @logout="onLogout" @manage="showUserAdmin = true" />
         </nav>
 
@@ -578,8 +612,11 @@ async function confirmStyle() {
 
         <!-- 风格库页：风格 + 视频解析 -->
         <LibraryCenter
-          v-else-if="page === 'materials'" :packs="library" @publish="publishPack" @ingested="loadLibrary" @deleted="loadLibrary"
+          v-else-if="page === 'materials'" :packs="library" :initial-tab="materialsTab" @publish="publishPack" @ingested="loadLibrary" @deleted="loadLibrary"
         />
+
+        <!-- 设置页：模型设置（大模型台账 + 工位图绑定） -->
+        <LlmSettingsPage v-else-if="page === 'settings'" />
 
         <!-- 工作区：项目三栏 -->
         <div v-else class="shell">
@@ -608,6 +645,7 @@ async function confirmStyle() {
               @cancel="async () => { if (current) { await api.cancel(current).catch(() => {}); refresh() } }"
               @cancel-agent="cancelAgentTurn"
               @rework-started="refresh"
+              @parse-started="openMaterials"
             />
             <div v-else class="empty-ws">
               从左侧选择一个项目，或
@@ -661,6 +699,12 @@ body {
   font-size: 13px; font-weight: 700; padding: 6px 18px; border-radius: 999px; cursor: pointer;
 }
 .nb-new:hover { filter: brightness(1.06); }
+.nb-set {
+  border: 1px solid #2a2a33; background: transparent; color: #9a9aa6;
+  font-size: 13px; padding: 5px 14px; border-radius: 999px; cursor: pointer;
+}
+.nb-set:hover { color: #e6e6ea; border-color: #f0c674; }
+.nb-set.on { color: #14140f; background: #f0c674; border-color: #f0c674; font-weight: 600; }
 
 /* ── 工作区三栏 ─────────────────────────────── */
 .shell { flex: 1; min-height: 0; display: flex; }

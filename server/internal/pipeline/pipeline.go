@@ -419,7 +419,7 @@ func stageStoryboard(p *Project) error {
 	}
 
 	// API 模式
-	prov, perr := llm.FromEnv(llm.RolePlan)
+	prov, perr := llm.FromEnv(llm.StationPrepStoryboard)
 	if perr == nil {
 		article, _ := os.ReadFile(p.Artifact("input/article.txt"))
 		var sb contract.Storyboard
@@ -510,7 +510,7 @@ func storyboardUserPrompt(p *Project, article string) string {
 // 校验拒绝回喂重出（≤3 轮，同设计阶段循环）；烧尽或无 provider → 降级：
 // 清空导演字段按原分镜入库，绝不阻塞分镜落地（无 key 老路径零行为变化）。
 func directorPass(p *Project, sb *contract.Storyboard) {
-	prov, perr := llm.FromEnv(llm.RolePlan)
+	prov, perr := llm.FromEnv(llm.StationDirector)
 	if perr != nil {
 		p.Manifest("director.plan_skipped", "无 LLM 配置，分镜不带导演统筹（全链路可正常制作）")
 		return
@@ -667,7 +667,7 @@ func stageStyleSamples(p *Project) error {
 	if err != nil {
 		return fmt.Errorf("先完成 storyboard: %w", err)
 	}
-	prov, perr := llm.FromEnv(llm.RolePlan)
+	prov, perr := llm.FromEnv(llm.StationPrepStyleText)
 	if perr == nil {
 		var ss contract.StyleSamples
 		// 简报证据帧（原片真迹）随作业附图：v3 条目的风格本体在帧里不在文字里，

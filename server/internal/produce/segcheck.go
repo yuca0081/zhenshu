@@ -156,13 +156,23 @@ func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string
 		r.emit(id, "stage", "check", fmt.Sprintf("%s 第 %d 次（单段）", segID, attempt))
 		r.Manifest(p, "stage.start", "check/"+segID)
 		var err, blocking error
-		// out=check 原始全量输出。cheap-fix 修复器必须吃它：contrastSuggRe/gsapOpacityNoopRe
-		// 依赖 Contrast 段与「Try rgb/source」续行，而那些行会被 blockingCheckErrors 过滤掉，
-		// 喂 blocking（过滤版）两个修复器永远匹配不上（2026-10-26 审查发现：段级路径因此
-		// 白烧 LLM 修复轮）。LLM 回喂仍走 blocking 过滤版（斩 Contrast warning 回喂循环）。
+		// out=check 原始全量输出。cheap-fix 修复器必须吃它：gsapOpacityNoopRe
+		// 依赖 check 的原文续行形态，而那些行会被 blockingCheckErrors 过滤掉，
+		// 喂 blocking（过滤版）修复器永远匹配不上（2026-10-26 审查发现：段级路径因此
+		// 白烧 LLM 修复轮）。LLM 回喂仍走 blocking 过滤版（斩诊断噪音回喂循环）。
 		var out string
 		if err = ensureSegCheckDir(p, segID); err == nil {
 			out, err = pipeline.RunCLI(p, "npx", pipeline.HyperframesPkg, "check", ".hf-check/"+segID, "--no-browser-gpu")
+			// 摘闸放行（2026-10-29）：美术类诊断（对比度/版面）剥光后没有真 blocking
+			// 且 check 跑出了分项骨架 → 视为通过。首版条件是「out 里有对比度行」，
+			// 当天 seg09 就打脸：6 条版面 content_overlap 独占而对比度 19/19 全过，
+			// 条件不成立 → TailLines 兜底把原始输出尾当 blocking → 白烧 3 轮重写
+			// 整链失败。骨架判断防浏览器崩溃（无分项输出）被误放——那种失败维持
+			// 旧行为回喂尾部。
+			if err != nil && blockingCheckErrors(out) == "" && checkRanSections(out) {
+				r.Manifest(p, "check.gates_stripped", segID+": 机检诊断全是已摘闸美术类，放行")
+				err = nil
+			}
 			if err == nil {
 				// check 过了还差回放门禁（canvas 段）与段间接缝亮度闸（D5，全段）
 				if rerr := r.segReplayCheck(ctx, p, segID, dur); rerr != nil {
@@ -210,10 +220,10 @@ func (r *Runner) segCheck(ctx context.Context, p *pipeline.Project, segID string
 			// LLM 修复轮都无从下手，直接如实上抛（下方 blocking.Error() 会 panic）
 			return fmt.Errorf("%s check 环境类失败: %w", segID, err)
 		}
-		// 廉价修复先行：checker 给了对比度建议色 / opacity 冲突就机械回填再检，
-		// 不烧 LLM 修复轮（与全局 checkWithRepair 同一经验：LLM 修这两类从不收敛）。
-		// 输入用全量 out（同全局路径喂 err.Error()），blocking 过滤版只服务下方 LLM 回喂。
-		fixN := applyContrastFixes(p, out) + applyGsapOpacityFixes(p, out)
+		// 廉价修复先行：checker 给了 opacity 冲突建议就机械回填再检，不烧 LLM
+		// 修复轮。对比度机械回填已摘（2026-10-29：可读性属美术表达，机器不再改
+		// 色、不再因它打回）。输入用全量 out，blocking 过滤版只服务下方 LLM 回喂。
+		fixN := applyGsapOpacityFixes(p, out)
 		if fixN > 0 {
 			r.emit(id, "stage", "check", fmt.Sprintf("%s cheap-fix：机械回填 %d 处", segID, fixN))
 			r.Manifest(p, "check.contrast_fix", fmt.Sprintf("%s %d 处", segID, fixN))

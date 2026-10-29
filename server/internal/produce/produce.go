@@ -905,12 +905,12 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 			attempt--
 			continue
 		}
-		// 廉价修复先行：checker 对对比度项给了建议色就直接回填 HTML 再检，
-		// 不烧 LLM 修复轮——LLM 回喂修对比度从未收敛过（同色反复重生成）。
-		fixN := applyContrastFixes(p, err.Error())
-		fixN += applyGsapOpacityFixes(p, err.Error())
+		// 廉价修复先行：checker 对 opacity 冲突给了建议就直接回填 HTML 再检，
+		// 不烧 LLM 修复轮。对比度机械回填已摘（2026-10-29：可读性属美术表达，
+		// 机器不再改色；blockingCheckErrors 也不再因对比度判死）。
+		fixN := applyGsapOpacityFixes(p, err.Error())
 		if fixN > 0 {
-			r.emit(p.ID, "stage", "check", fmt.Sprintf("cheap-fix：机械回填 %d 处（对比度/opacity 冲突）", fixN))
+			r.emit(p.ID, "stage", "check", fmt.Sprintf("cheap-fix：机械回填 %d 处（opacity 冲突）", fixN))
 			r.Manifest(p, "check.contrast_fix", fmt.Sprintf("%d 处", fixN))
 			if perr := r.assemble(ctx, p); perr == nil {
 				if cerr := pipeline.Run(ctx, p, "check"); cerr == nil {
@@ -969,29 +969,60 @@ func (r *Runner) checkWithRepair(ctx context.Context, p *pipeline.Project, instr
 // segIDRe 段 id（seg01、seg02…）。
 var segIDRe = regexp.MustCompile(`seg\d{2,}`)
 
-// blockingCheckErrors 取 check 诊断里真正阻塞门禁的错误行：Layout/Motion/Lint 段的
-// ✗ 行。Contrast 段的 ✗ 是 warning 级不判门禁死，且已由 applyContrastFixes 廉价回填
-// （LLM 回喂修对比度从未收敛）；把它的行喂进修复反馈只会让健康段被反复重出、
-// 把已修好的段改坏——2026-10-10 宗教裁判所片实测：一处 Layout error + 八条 Contrast
-// warning 的诊断整包回喂，修复轮连烧三轮重出十余段仍不过，正是本函数要斩的循环。
+// blockingCheckErrors 取 check 诊断里真正阻塞门禁的错误行。美术类两段整体摘闸
+// （用户口径 2026-10-29：机器不判美术，设计已由风格判卷与打包终审确认）：
+//   - Contrast 对比度：低对比可以是美术表达（氛围/留白/歌词未点亮暗字）。checker
+//     0.8.55 把它报成 error 且不冠段标题，按行特征剥：「✗ …比值:1 (need …)」及其
+//     Try/source 续行（seg09 六轮误判实测）。
+//   - Layout 版面：九种诊断全围文字可见性/位置（文字互叠/被盖/出画布/贴边裁字/
+//     隐形字/坐标错等），条条有故意用法（层次排版/字从物后滑出/海报裁字/出血面板），
+//     整段摘。真事故的兜底仍在：AI 判卷官看帧（带伤放行机制）+ 终审。
+// 仍然判死的：Lint（缺库）/Motion（动画卡顿类）/Runtime（JS 崩溃）的 ✗——那是
+// 「能不能跑」不是「好不好看」。
 func blockingCheckErrors(out string) string {
 	var keep []string
-	inContrast := false
+	skipSection := false
+	skipNext := false
 	for _, line := range strings.Split(out, "\n") {
 		t := strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(t, "Contrast"):
-			inContrast = true
+		switch { // 段标题切换必须先于续行消费：skipNext 挂着时来了新段标题要正常翻段
+		case strings.HasPrefix(t, "Contrast"), strings.HasPrefix(t, "Layout"):
+			skipSection = true
 			continue
-		case strings.HasPrefix(t, "Lint"), strings.HasPrefix(t, "Layout"),
+		case strings.HasPrefix(t, "Lint"),
 			strings.HasPrefix(t, "Motion"), strings.HasPrefix(t, "Runtime"), strings.HasPrefix(t, "Snapshots"):
-			inContrast = false
+			skipSection = false
 		}
-		if !inContrast && strings.Contains(t, "✗") {
+		if skipNext { // 对比度行的 Try rgb(..); source … 续行一并剥掉
+			skipNext = strings.HasPrefix(t, "Try ") || strings.Contains(t, "source compositions/")
+			continue
+		}
+		if contrastDiagRe.MatchString(t) {
+			skipNext = true
+			continue
+		}
+		if !skipSection && strings.Contains(t, "✗") {
 			keep = append(keep, t)
 		}
 	}
 	return strings.Join(keep, "\n")
+}
+
+// contrastDiagRe 对比度诊断行：「✗ 选择器 2.53:1 (need 3:1, t=…)」——判据是
+// 「比值:1 (need 比值」形态，别的检查项没有这个形状。
+var contrastDiagRe = regexp.MustCompile(`✗.*\d+(?:\.\d+)?:1\s*\(need\s*\d+(?:\.\d+)?:1`)
+
+// checkRanSections 判断 check 输出有没有分项骨架（任一已知段标题独占一行）。
+// check 真跑完才会输出这个骨架；浏览器崩溃/环境失败没有——「剥光后无真
+// blocking」必须配合它才敢放行，否则环境失败会被当成全是摘闸诊断。
+func checkRanSections(out string) bool {
+	for _, ln := range strings.Split(out, "\n") {
+		switch strings.TrimSpace(ln) {
+		case "Lint", "Layout", "Motion", "Contrast", "Runtime", "Snapshots":
+			return true
+		}
+	}
+	return false
 }
 
 // failingSegs 从 check 诊断提取报错（✗ 行）涉及的段 id：选择器前缀 #segNN-… 与
@@ -1540,7 +1571,7 @@ func (r *Runner) translateSubtitles(ctx context.Context, p *pipeline.Project) er
 	if len(jobs) == 0 {
 		return nil
 	}
-	prov, perr := llm.FromEnv(llm.RoleDialogue)
+	prov, perr := llm.FromEnv(llm.StationSupervisor)
 	if perr != nil {
 		return perr
 	}
@@ -2007,6 +2038,8 @@ func applyGsapOpacityFixes(p *pipeline.Project, checkOut string) int {
 // 任意单色背景的对比度数学下限 4.58:1，永过闸不再试探。
 // 已在 HTML 里的同条规则跳过（内容去重）：LLM 修复轮重生成 HTML 会冲掉旧补丁，
 // 此时规则缺席会重新回填；规则在却还报同项，说明该建议色无效，不重复打转。
+// 2026-10-29 起摘闸：可读性属美术表达，机器不再改色/打回（用户拍板），两处生产
+// 调用点已移除；函数与测试保留——若未来要「软回填」（只改色不判死）可直接复用。
 func applyContrastFixes(p *pipeline.Project, checkOut string) int {
 	type fix struct {
 		file, css string

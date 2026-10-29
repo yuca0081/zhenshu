@@ -50,7 +50,7 @@
 | `server/internal/styleref/analyze.go` | `runAgent`（抽帧→detectStructure 判单/多风格→递归细拆→逐段合成） | 流程骨架**保留**，逐段合成换新作业 |
 | `server/internal/styleref/video.go` | （并行 WIP）视频直读校验 | 若已落地：camera 类特色识别接 video_url；未落地：按帧通道先行（§4.4） |
 | `ai/extract_video_features.py` | 抽帧（≤36 帧）+网格图+色板 k-means+硬切点 | **保留不动** |
-| `server/internal/agent/agent.go` | 工具 `draft_style_samples`（选定条目→拷 StyleSamplesJSON；无选定→自由发挥）、`search_styles`、`extract_stylepack`；`selectedStyle` | 选定分支改写 brief（§5 M1）；检索输出换新字段 |
+| `server/internal/agent/agent.go` | 工具 `draft_style_samples`（选定条目→拷 StyleSamplesJSON；无选定→自由发挥）、`search_styles`、`extract_stylepack`（**2026-10-29 已退役**，见 §M1 第 4 条）；`selectedStyle` | 选定分支改写 brief（§5 M1）；检索输出换新字段 |
 | `server/internal/pipeline/design.go` | `designSystemPrompt`/`designBrief`/`designJSONShape`/`DesignDoc`/`LockDesign`；铁律"系统是发明的" | 注入简报块 + 自报落点（§4.5） |
 | `server/internal/pipeline/pipeline.go` | `stageStyleSamples`（草稿校验 3 轮→落 final→LockDesign）；`Run(ctx,p,until)` 从头跑到 until、产物在则跳过 | 校验处加落点覆盖检查（§4.5） |
 | `server/internal/contract/` | `StyleSamples`（设计系统载体，含 skins/fonts/motion/device/layouts/anti_patterns/samples/confirmed）；`ValidateStyleSamples(Draft)` | 加可选字段 `signature_absorption`（§4.5），其余不动 |
@@ -219,7 +219,7 @@ type StyleBrief struct {
 1. `stylelib`：新 schema + 校验（§4.1）；vocab 读写与查重（§4.2）；`IngestVideoRef` 新载荷；保留 Delete/Publish/媒体快照；**临时保留** `Get/List`（检索用）。
 2. `styleref`：synthesize prompt 重写（打标+特色+查词表/申请新词两工具）；`StyleDraft` 换新字段（顺手删 Photo 死字段）；validateStyle 换 §4.1 规则；`ValidateDesignSystem` 若仅 stylebackfill/旧校验用则一并退役。
 3. `api`：`ingestRefStyle` 换新载荷；`applyStyle` 改写 brief（接收特色开关数组）；`/api/vocab` 只读端点（前端展示词条 brief，可选）。
-4. `agent`：`draft_style_samples` 选定分支改"确保 brief 落盘后走 pipeline.Run(style_samples)"；`search_styles` 输出新字段；`extract_stylepack`（成片反哺入库）改为起草"标签+特色"草稿（成片只有本片无原片帧，样张证据帧缺省，允许 frames 为空的草稿，人工在库页补）。
+4. `agent`：`draft_style_samples` 选定分支改"确保 brief 落盘后走 pipeline.Run(style_samples)"；`search_styles` 输出新字段；`extract_stylepack`（成片反哺入库）改为起草"标签+特色"草稿（成片只有本片无原片帧，样张证据帧缺省，允许 frames 为空的草稿，人工在库页补）。**【2026-10-29 退役】** 出片自动沉淀已下线（Agent 不再自动起草、`DraftFromProject` 直写库路径已删）；项目→风格库改走「项目解析」路：工作区「解析到风格库」按钮 → `POST /api/projects/:id/style/parse` → 与上传视频解析同走暂存区草稿→修订→确认入库（读定稿设计系统+样张帧，文本打标，见 `styleref/project.go`）。
 5. `pipeline/contract`：brief 注入 + signature_absorption 字段与落点校验 + DesignDoc 落点表（§4.5）。
 6. `produce/stylenote.go`：`projectStyle` 的 tokens/ByDirection 兜底分支移除（M1 就删，因为 schema 已无此字段）；真迹图切 brief evidence。
 7. `web`：types/api/LibraryPanel/TemplateDetail/GatesModal 按 §3 表改版；特色开关面板（默认全开）。

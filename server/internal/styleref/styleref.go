@@ -1,8 +1,13 @@
-// Package styleref：参考视频 → 风格条目（风格库「视频解析」后端，v3）。
+// Package styleref：参考视频/出片项目 → 风格条目（风格库「视频解析」后端，v3）。
 //
-// 链路：上传视频存 data/references/<id>/ → ai/extract_video_features.py 抽帧+取色
-// （确定性，不碰 LLM）→ 解析智能体两阶段（构图观察 + 打标提炼，见 analyze.go）
-// → 用户确认入库（api 层调 stylelib.IngestVideoRef 写 data/library/styles.json）。
+// 两路解析（2026-10-29），同一暂存区（data/references/）+ 修订 + 确认入库流程：
+//   - 路1 上传视频（Source=空/"upload"）：上传存 data/references/<id>/ →
+//     ai/extract_video_features.py 抽帧+取色（确定性，不碰 LLM）→ 解析智能体
+//     两阶段（构图观察 + 打标提炼，见 analyze.go）；
+//   - 路2 项目解析（Source="project"）：读出片项目定稿设计系统+样张帧，文本通道
+//     打标（见 project.go），不抽帧不碰多模态。
+//
+// 入库：用户确认（api 层调 stylelib.IngestVideoRef 写风格库）。
 //
 // v3 作业 = 打标 + 特色提炼（一次轻解析，§4.4）：
 //   - 公认风格只打标签：词表（vocab.json）里有的引用 id，没有的「申请新词」
@@ -31,14 +36,20 @@ import (
 	"webpage-video-agent/server/internal/stylelib"
 )
 
+// SourceProject 解析路来源（Ref.Source）：项目解析（读项目设计系统，无视频文件）。
+// 空 / "upload" = 上传视频解析（老数据无该字段，零迁移）。
+const SourceProject = "project"
+
 type Ref struct {
 	ID        string      `json:"id"`
-	Name      string      `json:"name"`   // 原始文件名（含扩展名）
+	Name      string      `json:"name"`   // 上传=原始文件名；项目解析=项目名
 	Status    string      `json:"status"` // pending | running | done | error
 	Error     string      `json:"error,omitempty"`
 	Confirmed bool        `json:"confirmed"` // 已入库（styles.json）
 	CreatedAt time.Time   `json:"created_at"`
-	Style     *StyleDraft `json:"style,omitempty"` // 解析产出的草稿（一视频一条目）
+	Style     *StyleDraft `json:"style,omitempty"` // 解析产出的草稿（一片一条目）
+	Source    string      `json:"source,omitempty"`
+	ProjectID string      `json:"project_id,omitempty"` // Source=project 时的出处项目
 }
 
 // StyleDraft 解析产出的标签+特色草稿（入库前形态；确认页可增删改）。
@@ -167,14 +178,13 @@ func (s *Store) Reconcile() {
 
 func (s *Store) dir(id string) string { return filepath.Join(s.DataDir, "references", id) }
 
-// Save 上传的视频落盘并登记（pending）。id 秒级时间戳：并发/连点上传会同秒
-// 撞号——Stat 探测再 MkdirAll 有竞态窗口（两个请求双通过检查互写同一目录），
-// 直接用 Mkdir 原子占号，撞号换下一个。
-func (s *Store) Save(name string, save func(dst string) error) (*Ref, error) {
+// claimRefID 抢一个未占用的引用目录号：id 秒级时间戳，并发/连点会同秒撞号——
+// Stat 探测再 MkdirAll 有竞态窗口（两个请求双通过检查互写同一目录），直接用
+// Mkdir 原子占号，撞号换下一个。Save（上传路）与 SaveProject（项目解析路）共用。
+func (s *Store) claimRefID() (string, error) {
 	if err := os.MkdirAll(filepath.Join(s.DataDir, "references"), 0o755); err != nil {
-		return nil, err
+		return "", err
 	}
-	var id string
 	for n := 1; ; n++ {
 		cand := "ref" + time.Now().Format("20060102-150405")
 		if n > 1 {
@@ -182,12 +192,19 @@ func (s *Store) Save(name string, save func(dst string) error) (*Ref, error) {
 		}
 		err := os.Mkdir(s.dir(cand), 0o755)
 		if err == nil {
-			id = cand
-			break
+			return cand, nil
 		}
 		if !os.IsExist(err) {
-			return nil, err
+			return "", err
 		}
+	}
+}
+
+// Save 上传的视频落盘并登记（pending）。
+func (s *Store) Save(name string, save func(dst string) error) (*Ref, error) {
+	id, err := s.claimRefID()
+	if err != nil {
+		return nil, err
 	}
 	ext := strings.ToLower(filepath.Ext(name))
 	if ext == "" || len(ext) > 6 {
@@ -206,6 +223,51 @@ func (s *Store) Save(name string, save func(dst string) error) (*Ref, error) {
 		return nil, err
 	}
 	return ref, nil
+}
+
+// SaveProject 项目解析路建条目（两路解析入口二）：不落视频——解析走文本通道
+// （设计系统摘要→打标，见 project.go runProjectParse）；样张 poster 拷作证据帧，
+// 并写合成 features.json（帧坐标系：封面挑选与入库帧校验共用，upload 路由
+// extract_video_features.py 产）。
+func (s *Store) SaveProject(name, projectID string, sampleFrames []string) (*Ref, error) {
+	id, err := s.claimRefID()
+	if err != nil {
+		return nil, err
+	}
+	// 目录由本次 Mkdir 原子占号新建，任一步失败清掉它（纪律同 Save）
+	var frames []featureFrame
+	for i, src := range sampleFrames {
+		dst := filepath.Join(s.dir(id), fmt.Sprintf("frame-%02d.png", i+1))
+		if err := copyFile(src, dst); err != nil {
+			os.RemoveAll(s.dir(id))
+			return nil, err
+		}
+		frames = append(frames, featureFrame{Path: dst, T: float64(i)})
+	}
+	b, merr := json.MarshalIndent(videoFeatures{Frames: frames}, "", "  ")
+	if merr != nil {
+		os.RemoveAll(s.dir(id))
+		return nil, merr
+	}
+	if werr := pipeline.WriteFileAtomic(filepath.Join(s.dir(id), "features.json"), b, 0o644); werr != nil {
+		os.RemoveAll(s.dir(id))
+		return nil, werr
+	}
+	ref := &Ref{ID: id, Name: name, Status: "pending", CreatedAt: time.Now(),
+		Source: SourceProject, ProjectID: projectID}
+	if err := s.saveRef(ref); err != nil {
+		os.RemoveAll(s.dir(id))
+		return nil, err
+	}
+	return ref, nil
+}
+
+func copyFile(src, dst string) error {
+	b, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, b, 0o644)
 }
 
 // List 全部引用，新在前。
@@ -525,7 +587,7 @@ func synthesizeUserPrompt(lib *stylelib.Library, name string, feats videoFeature
 		contract.SignatureKindNames(), dynamicSrc, videoBlock, retryNote)
 }
 
-// resolveDraft LLM 原始输出 → 落表草稿（视频解析版）。词表落表机制与成片反哺的
+// resolveDraft LLM 原始输出 → 落表草稿（上传视频解析版）。词表落表机制与项目解析的
 // resolveDesignDraft 共用 resolveTaggerDraft——此前两处约 60 行逐字重复，改一处
 // 漏一处即行为漂移。唯一差异是证据帧：解析版带 frames（存在性校验由调用方
 // synthesize 的 validateStyle 做）。

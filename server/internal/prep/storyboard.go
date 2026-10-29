@@ -63,7 +63,7 @@ func runStoryboardStation(ctx context.Context, p *pipeline.Project, d Deps) erro
 
 func mustTextProv() react.ChatClient {
 	// ③纯文本模型。
-	prov, _ := llm.FromEnv(llm.RolePlan)
+	prov, _ := llm.FromEnv(llm.StationPrepStoryboard)
 	return prov
 }
 

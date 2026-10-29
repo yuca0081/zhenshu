@@ -28,9 +28,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -356,6 +358,9 @@ func (r *Runner) runSegmentPipeline(ctx context.Context, p *pipeline.Project) er
 	}
 	if reuseTTS {
 		r.Manifest(p, "produce.tts", "reused")
+		// 复用也要点亮前端「配音」胶囊（stage 事件是唯一驱动；只落 manifest 的话
+		// 恢复轮配音永远 pending、后面阶段却在跑）。detail 以 done 开头=绿。
+		r.emit(id, "stage", "tts", "done: 复用上轮配音（旁白未变）")
 	} else {
 		r.emit(id, "stage", "tts", "running")
 		r.Manifest(p, "stage.start", "tts")
@@ -641,6 +646,10 @@ func (c *coordinator) run(ctx context.Context) error {
 
 	c.emit("stage", "segpipe", fmt.Sprintf("running（%d 段；写≤%d 审≤%d 渲≤%d）",
 		len(c.segs), writeConcurrency(), auditConcurrency(), renderConcurrency()))
+	// stage.start/finish 落账：段级流水线是全管线最长的主体阶段，此前只发 SSE
+	// 不落 manifest，过程页（吃 manifest）整段隐身。失败路径同样 finish（口径同
+	// checkWithRepair：工位行要能算出耗时）。
+	c.r.Manifest(c.p, "stage.start", "segpipe")
 
 	// 恢复（§4.4）：journal 已 audited 的段不重做——代际取自账面，边界对齐后
 	// 只补它参与的边界审；其余段从断点状态重新走链（write/check/render 各自幂等）。
@@ -724,6 +733,7 @@ func (c *coordinator) run(ctx context.Context) error {
 	c.chainWg.Wait()
 	trackerWg.Wait()
 	c.cleanup()
+	c.r.Manifest(c.p, "stage.finish", "segpipe")
 	if finalErr == nil {
 		finalErr = c.brakes.failure() // 保链：哨兵（预算耗尽/check 不收敛）活着到达调度层
 	}
@@ -1164,6 +1174,7 @@ func (c *coordinator) auditSegment(ctx context.Context, req auditReq) {
 		Samples:     samples,
 		Dur:         s.dur,
 		Round:       round,
+		SourceText:  segSourceText(c.p, s.seg.ID),
 		AnchorTimes: c.anchorFramesFor(s, ends),
 		LogPath:     c.p.Artifact(fmt.Sprintf("reviews/seg-%s.tools.jsonl", s.seg.ID)),
 	}
@@ -1527,6 +1538,10 @@ func (c *coordinator) finalAudit(ctx context.Context, round int, recheck []strin
 	if err := llm.CheckBudget(ctx); err != nil { // 预算耗尽=刹车（勿降级放行）
 		return nil, err
 	}
+	// 终审每轮起止都记账（SSE+manifest）：此前只在 done/error 发 SSE，跑审查的
+	// 十几分钟里前端「全片终审」胶囊全灰、过程页没有行——看着像卡死。
+	c.emit("stage", "review", fmt.Sprintf("running（第 %d 轮）", round))
+	c.r.Manifest(c.p, "stage.start", "review")
 	tl := pipeline.LoadTimeline(c.p)
 	if len(tl) == 0 {
 		return nil, errors.New("终审缺 timeline（拼接未落 timeline.json）")
@@ -1561,6 +1576,7 @@ func (c *coordinator) finalAudit(ctx context.Context, round int, recheck []strin
 		// 记账出片带账（review.final_error），意见单缺失如实可见。
 		c.r.Manifest(c.p, "review.final_error", pipeline.FirstLine(err.Error(), 140))
 		c.log(journalLine{Kind: "final", ID: "all", State: stAudited, Round: round, Detail: "终审审查器故障降级"})
+		c.r.Manifest(c.p, "stage.finish", "review")
 		c.emit("stage", "review", "done: 全片终审审查器故障，降级放行（账在 manifest）")
 		return nil, nil
 	}
@@ -1568,6 +1584,7 @@ func (c *coordinator) finalAudit(ctx context.Context, round int, recheck []strin
 	high := v.HighFindings()
 	if len(high) == 0 {
 		c.log(journalLine{Kind: "final", ID: "all", State: stAudited, Round: round, Detail: "全片终审通过"})
+		c.r.Manifest(c.p, "stage.finish", "review")
 		c.emit("stage", "review", "done: 全片终审通过")
 		return nil, nil
 	}
@@ -1609,6 +1626,10 @@ func (c *coordinator) finalAudit(ctx context.Context, round int, recheck []strin
 			ids = append(ids, s.seg.ID)
 		}
 	}
+	// 打回收口本轮终审账（重写过审回 loop 后重开 stage.start=下一轮行）：
+	// 胶囊短暂转绿、重进转蓝，轮次与耗时在过程页逐轮可读。
+	c.r.Manifest(c.p, "stage.finish", "review")
+	c.emit("stage", "review", fmt.Sprintf("done: 第 %d 轮打回 %d 段重写", round, len(ids)))
 	c.emit("progress", "review", fmt.Sprintf("终审 %d 条 high → 重写 %s（第 %d 轮）", len(high), strings.Join(ids, ","), round))
 	return ids, nil
 }
@@ -1801,6 +1822,28 @@ func (c *coordinator) loadVerdictFile(kind, id string, round int) *review.Verdic
 
 // designRulesDigest 设计规则要点（§6.3 可空段）：贯穿装置 + 皮肤切换规则 +
 // 标准入/收尾模板——审核判「装置落点」维的依据。
+// segSourceText 段画面源文本：剥掉 style/script 与标签后的全部可见文字（按 DOM
+// 顺序）。段审的「画面源文本」材料——错字/数字/专名的判定权威（2026-10-29 职责
+// 划分：视觉判卷管美术与可读性，文字内容对不对以源码为准，缩图读字误差不立案）。
+// 段帧缺失或解析为空时返回 ""（判卷端按「帧读存疑降 low」退化口径处理）。
+func segSourceText(p *pipeline.Project, segID string) string {
+	b, err := os.ReadFile(p.Artifact(filepath.Join("compositions", "frames", segID+".html")))
+	if err != nil {
+		return ""
+	}
+	s := reStyleScriptBlock.ReplaceAllString(string(b), " ")
+	s = reHTMLTag.ReplaceAllString(s, " ")
+	s = html.UnescapeString(s)
+	fields := strings.Fields(s)
+	return strings.Join(fields, " ")
+}
+
+var (
+	// RE2 无反向引用，style/script 各写一支交替（\1 不支持，编译期 panic 实测）
+	reStyleScriptBlock = regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style>|<script\b[^>]*>.*?</script>`)
+	reHTMLTag          = regexp.MustCompile(`<[^>]*>`)
+)
+
 func designRulesDigest(sp *contract.StylePack) string {
 	if sp == nil || sp.DesignSystem == nil {
 		return ""

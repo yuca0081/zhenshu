@@ -67,7 +67,7 @@ func EnsureSampleClips(p *Project, ss *contract.StyleSamples, sb *contract.Story
 	fail := func(why string) {
 		p.Manifest("style.clips.error", why+"——样张保持静态，确认门不受影响")
 	}
-	prov, perr := llm.FromEnv(llm.RolePlan)
+	prov, perr := llm.FromEnv(llm.StationStyleClips)
 	if perr != nil {
 		fail("LLM 不可用: " + perr.Error())
 		return false

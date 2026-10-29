@@ -32,12 +32,23 @@ export function errMsg(e: unknown): string {
 
 // 制作管线阶段 key → 中文名（历史上 ActivityFeed/VideoPane 各抄一份且互有缺漏，
 // 这里是并集；未收录的 key 回退原样——过程页 ActivityPane.knownStage 靠
-// "回退=原样"判未知工位不上屏）
+// "回退=原样"判未知工位不上屏）。段级流水线（2026-10-22 起唯一首制路径）后
+// 键集分两条路径：首制 tts/compositions/render/review＋segpipe；段级重做
+// compositions/assemble/check/render/frameqa（App.vue stageOrder 按运行类型取）。
+// materials 是 legacy 栅栏时代的键，现管线无发射点——留着翻译旧项目 manifest 回放。
 const stageNames: Record<string, string> = {
   tts: '配音', materials: '素材', compositions: '画面', assemble: '组装',
   check: '质量检查', render: '渲染', frameqa: '画面审查',
+  segpipe: '段级流水线', review: '全片终审',
 }
+// 段级流水线的 stage.start detail 带段号（check/seg03）——按首个 "/" 前缀翻译，
+// 段号接在 "·" 后；前缀不认识则整串回退（保住"回退=原样"契约）。
 export function stageLabel(stage: string): string {
+  const i = stage.indexOf('/')
+  if (i > 0) {
+    const head = stageNames[stage.slice(0, i)]
+    if (head) return `${head}·${stage.slice(i + 1)}`
+  }
   return stageNames[stage] ?? stage
 }
 

@@ -264,7 +264,7 @@ func (r *Runner) pickBGM(ctx context.Context, p *pipeline.Project,
 	wantTempo := tempoForPace(cps)
 	wantE := wantEnergy(sb)
 
-	prov, perr := llm.FromEnv(llm.RoleDialogue)
+	prov, perr := llm.FromEnv(llm.StationBgmPick)
 	if perr != nil {
 		prov = nil
 	} else if err := llm.CheckBudget(ctx); err != nil {

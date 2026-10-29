@@ -101,7 +101,7 @@ func (l *Library) migrateMedia(mm *minioMedia, s *Style) {
 		if dir, ok := l.refMediaDir(s.ID); ok {
 			src = dir
 		} else {
-			return // 无媒体可迁（成片反哺草稿本就无帧）
+			return // 无媒体可迁（无帧条目本就无媒体目录）
 		}
 	}
 	entries, err := os.ReadDir(src)

@@ -388,65 +388,6 @@ func (a *Agent) selectedStyle(p *pipeline.Project) *stylelib.Style {
 	return st
 }
 
-// draftedStyle 幂等探测（extract_stylepack 前行）：style_samples.style_id 命中库内
-// 条目（本就出自库）或同项目已起草过 → 返回该条目；nil = 需要走 LLM 起草。
-func (a *Agent) draftedStyle(p *pipeline.Project) *stylelib.Style {
-	if st := a.selectedStyle(p); st != nil {
-		return st
-	}
-	styles, err := a.Lib.List()
-	if err != nil {
-		return nil
-	}
-	for i := range styles {
-		if styles[i].OriginProject == p.ID {
-			return &styles[i]
-		}
-	}
-	return nil
-}
-
-// designDigest 本片设计系统人话摘要（extract_stylepack 的打标原料）。
-func designDigest(p *pipeline.Project) (string, error) {
-	b, err := os.ReadFile(p.Artifact("style/style_samples.json"))
-	if err != nil {
-		return "", fmt.Errorf("项目无设计系统（style_samples.json 缺失）")
-	}
-	var ss contract.StyleSamples
-	if err := json.Unmarshal(b, &ss); err != nil {
-		return "", err
-	}
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "- 方向：%s\n- 概念：%s\n", ss.Direction, ss.Concept)
-	for i, sk := range ss.EffectiveSkins() {
-		label := "皮肤"
-		if i == 1 {
-			label = "副皮肤"
-		}
-		fmt.Fprintf(&sb, "- %s「%s」：底 %s / 字 %s / 强调 %s；css %s\n",
-			label, sk.Name, sk.Slots.BG, sk.Slots.TXT, sk.Slots.Accent, pipeline.FirstLine(sk.CSS, 200))
-	}
-	if ss.SkinRule != "" {
-		fmt.Fprintf(&sb, "- 皮肤切换：%s\n", ss.SkinRule)
-	}
-	if f := ss.Fonts; f != nil {
-		fmt.Fprintf(&sb, "- 字体：display %s / body %s / data %s\n", f.Display.Stack, f.Body.Stack, f.Data.Stack)
-	}
-	if m := ss.Motion; m != nil {
-		fmt.Fprintf(&sb, "- 动效：%s，进场 %.2fs 落定 %.2fs 错峰 %.2fs——%s\n", m.Ease, m.DurIn, m.DurSettle, m.Stagger, m.Notes)
-	}
-	if d := ss.Device; d != nil {
-		fmt.Fprintf(&sb, "- 贯穿装置「%s」：%s；逐段：%s\n", d.Name, d.Desc, d.PerSeg)
-	}
-	for _, l := range ss.Layouts {
-		fmt.Fprintf(&sb, "- 版式 %s（%s）：%s\n", l.ID, l.Name, l.Desc)
-	}
-	if len(ss.AntiPatterns) > 0 {
-		fmt.Fprintf(&sb, "- 负面清单：%s\n", strings.Join(ss.AntiPatterns, "、"))
-	}
-	return sb.String(), nil
-}
-
 // regenerateStyle 按用户修改要求重新出样张：旧样张备份防翻车，要求写 input/style_notes.txt，
 // 跑 style_samples 阶段（API 直调；未配 LLM 时降级为会话请求文件）。
 // 失败还原旧样张——项目任何时刻都不留「样张空洞」；成功则清库内指向与截图缓存。
@@ -614,7 +555,7 @@ const maxSteps = 16
 // 2026-10-28 边界化：system 只装跨工具流程与政策（📎≈rework、起草默认不落盘、
 // 三前置硬门、诚实准则）；单工具机制住 tools.go 的各工具 description（工具块同在
 // 稳定前缀里，机制贴着工具看）——下载地址形态在 export、额度纪律在 web_search、
-// 音色/沉淀的连锁动作在 set_voice/extract_stylepack、rework 细节在其参数 schema。
+// 音色的连锁动作在 set_voice、rework 细节在其参数 schema。
 func (a *Agent) systemPrompt(id, name string) string {
 	return fmt.Sprintf(`你是「帧述」的主管 Agent——靠谱的剪辑搭档：懂行、话少、主动汇报、给专业建议但尊重用户决定。
 
@@ -628,7 +569,7 @@ func (a *Agent) systemPrompt(id, name string) string {
 - 用户停制作：cancel_production。别劝阻，取消终态会自动报进对话。
 - 起草新稿（draft_manuscript）默认只出稿给用户过目；用户明确说「直接用/存下来」才 save=true 一步落盘。已有文稿时再起草先确认是「重写」。
 - 换风格/调样张：调 draft_style_samples 并把用户要求原样放进 instruction，样张没重新生成就不能说「已出新样张」——没做工具调用就当没做。
-- 成片就绪后：改某段画面用 rework；用户带 📎 段/元素引用的消息几乎都是 rework 意图，元素引用指名了改哪个元素就在 instruction 里点名它。要精确定位段与元素先 list_segments。换配音音色用 set_voice。出片后主动 extract_stylepack 沉淀一次风格。
+- 成片就绪后：改某段画面用 rework；用户带 📎 段/元素引用的消息几乎都是 rework 意图，元素引用指名了改哪个元素就在 instruction 里点名它。要精确定位段与元素先 list_segments。换配音音色用 set_voice。把本片风格存进风格库用「风格库页 → 视频解析」的项目解析，不由你发起。
 - 默认自主连贯：能做的直接做（出分镜→出样张→自检一路做下去），到用户门（风格确认）停下说清楚等什么。
 - 涉及时效性事实（新闻/版本/价格/数据）先用 web_search 核实再写进文稿/分镜；搜索不可用就说明信息可能过时，别编。
 - 用户贴了链接、或要细读某条搜索结果时用 fetch_url 抓网页正文；读不到正文就如实说，让用户直接粘贴。
@@ -649,7 +590,7 @@ func (a *Agent) Run(ctx context.Context, projectID, userText string, refs []stor
 		}
 	}()
 	p := pipeline.NewProject(a.DataDir, projectID)
-	prov, err := llm.FromEnv(llm.RoleDialogue)
+	prov, err := llm.FromEnv(llm.StationSupervisor)
 	if err != nil {
 		a.finish(projectID, "当前未配置 LLM API（LLM_API_KEY），我只能看不能想。配好 .env 再聊。", "error")
 		return

@@ -30,7 +30,7 @@ type Signature struct {
 	Kind      string   `json:"kind"`               // SignatureKind 枚举
 	Name      string   `json:"name"`               // 人话短名
 	Mechanism string   `json:"mechanism"`          // 机制描述 1-2 句，可执行
-	Frames    []string `json:"frames,omitempty"`   // 证据帧 ≥1（成片反哺草稿允许空，人工在库页补）
+	Frames    []string `json:"frames,omitempty"`   // 证据帧 ≥1（项目解析路草稿允许空，人工在确认页补）
 	UseHint   string   `json:"use_hint,omitempty"` // 什么节拍/场景适合用
 }
 

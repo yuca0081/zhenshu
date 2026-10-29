@@ -12,6 +12,7 @@ package llm
 import (
 	"context"
 	"strings"
+	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -26,13 +27,19 @@ func VisionDigest(ctx context.Context, images []string, question string) (string
 	if len(images) == 0 {
 		return "", openai.Usage{}
 	}
-	prov, err := FromEnv(RoleVisual)
+	prov, err := FromEnv(StationVisionDigest)
 	if err != nil {
 		return "", openai.Usage{}
 	}
 	var out struct {
 		Digest string `json:"digest"`
 	}
+	// 站级 180s 总闸（2026-10-29 实测：端点按概率黑洞时，300s leash×3 次重试把
+	// 一个秒级细读作业挂满 15 分钟，风格工位整段停摆）。细读是 flash 档 NoThink
+	// 秒级作业，180s 有 3 倍余量；总闸到期连重试一起死（postChatNet 的子 leash 取
+	// min(300s, 父闸剩余)），黑洞快速失败走空串降级，不再挂死调用方工位。
+	ctx, cancel := context.WithTimeout(ctx, 180*time.Second)
+	defer cancel()
 	user := question + "\n输出：{\"digest\":\"多行文字画像，每图一段\"}"
 	usage, err := prov.GenerateJSONVisionNoThink(ctx, digestSystem, user, images, 0.2, &out)
 	if err != nil {

@@ -64,9 +64,14 @@ func doneStations(p *pipeline.Project) string {
 }
 
 // Available LLM 是否可用（不可用时管线入口降级 legacy，反馈重跑入口报错）。
+// 查 prep 链实际用的工位而非规划档：工位各自绑定供应商后，规划档没 key 不再误杀。
 func Available() bool {
-	_, err := llm.FromEnv(llm.RolePlan)
-	return err == nil
+	for _, st := range []llm.Role{llm.StationPrepScript, llm.StationPrepStyleText, llm.StationPrepStyleVision, llm.StationPrepStoryboard} {
+		if _, err := llm.FromEnv(st); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // LegacyProject 老项目判定：没有文字稿工件、但 legacy 分镜已在——prep 不碰它

@@ -356,6 +356,8 @@ export interface RefVideo {
   confirmed: boolean
   created_at: string
   style?: RefVideoStyle
+  source?: string // ''/'upload' = 上传视频解析；'project' = 项目解析（工作区按钮发起）
+  project_id?: string
 }
 
 // ── 风格详情抽屉（风格库/视频解析卡片点开共用）──────────────
@@ -378,4 +380,70 @@ export interface TemplateDetailData {
   editable?: boolean // 解析草稿（未入库）：特色可增删改
   draft?: RefVideoStyle // editable 时的完整草稿（含 name/subject）
   selectMode?: boolean // 选风格模式（风格页签用）：特色开关搬进抽屉（看着截图点菜）+「就选它」
+}
+
+// ── 模型设置（docs/llm-settings-2026-10-29.md）：大模型台账 + 工位图绑定 ──
+
+// 大模型台账条目（GET 视图：Key 只出掩码，不回明文）
+export interface LlmProviderView {
+  id: string
+  label: string
+  base_url: string
+  model: string
+  has_key: boolean
+  key_tail: string
+}
+
+// 绑定：工位/档位 → 供应商。provider 空 = 跟随下一层；effort 空 = .env 默认档
+export interface LlmBinding {
+  provider: string
+  effort?: string
+}
+
+export interface LlmStationMeta {
+  id: string
+  label: string
+  group: 'prep' | 'produce' | 'library' | 'common'
+  base: 'dialogue' | 'plan' | 'visual'
+}
+
+// 单个工位/档位的生效值（来源标注：station/role/env/default）
+export interface LlmEffective {
+  provider: string
+  model: string
+  base_url: string
+  effort: string
+  source: 'station' | 'role' | 'env' | 'default'
+}
+
+export interface LlmSettingsView {
+  providers: LlmProviderView[]
+  role_default: Record<string, LlmBinding>
+  stations: Record<string, LlmBinding>
+  station_meta: LlmStationMeta[]
+  effective: Record<string, LlmEffective>
+  env: { key_set: boolean; base_url: string; model: string; effort: string }
+}
+
+// PUT 载荷：api_key 空 = 保持已存；clear_api_key=true 显式清除
+export interface LlmProviderInput {
+  id: string
+  label: string
+  base_url: string
+  model: string
+  api_key?: string
+  clear_api_key?: boolean
+}
+
+export interface LlmSettingsInput {
+  providers: LlmProviderInput[]
+  role_default: Record<string, LlmBinding>
+  stations: Record<string, LlmBinding>
+}
+
+export interface LlmTestResult {
+  ok: boolean
+  latency_ms: number
+  reply?: string
+  error?: string
 }

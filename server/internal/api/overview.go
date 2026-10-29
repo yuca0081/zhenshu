@@ -55,7 +55,7 @@ func tailManifest(path string, n int) []manifestEvent {
 // activity 制作活动流：GET /projects/:id/activity —— manifest.jsonl 原样事件
 // （尾部 n 条默认 500，「过程」页传 limit 最多 2000，时间正序）。前端事件流
 // 面板/过程页的数据源：每步用时由 stage.start/finish 的毫秒差算出，打回
-// （check.repair / prereview / frameqa）与终态事件原样给前端翻译。轻量只读
+// （check.repair / review.* / frameqa）与终态事件原样给前端翻译。轻量只读
 // （不像 overview 全树扫产物），供制作中轮询。无 manifest（新建项目没开过工）
 // 回 [] 而不是 404/null：前端 .length/.map 直吃。
 func (s *Server) activity(c *gin.Context) {

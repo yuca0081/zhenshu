@@ -43,7 +43,7 @@ func runBackfillFacets(args []string) {
 		os.Exit(1)
 	}
 	lib := stylelib.NewWith(cfg.DataDir, st.DB(), nil) // 账本按 PG/文件与主服务同源；分面回填不碰媒体
-	prov, err := llm.FromEnv(llm.RolePlan)
+	prov, err := llm.FromEnv(llm.StationRefTag)
 	if err != nil {
 		fmt.Println("分面归纳需要 API 模式（LLM_API_KEY）：", err)
 		os.Exit(1)

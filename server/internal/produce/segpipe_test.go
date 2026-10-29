@@ -521,7 +521,7 @@ func TestFramesInSegs(t *testing.T) {
 func TestSceneUserPromptHasContentFidelityClause(t *testing.T) {
 	got := sceneUserPrompt(contract.Segment{ID: "seg01", Key: "k", Narration: "n"},
 		voiceMeta{}, "", "", contract.Canvas{W: 1080, H: 1920, Aspect: "9:16"},
-		"", "", "", "", "", false, "")
+		"", "", "", "", "", false, "", "")
 	for _, want := range []string{"内容忠实", "首拍", "末拍", "逐字一致", "首帧即景", "末帧定格"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("提示词缺硬条款关键词 %q", want)

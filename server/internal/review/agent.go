@@ -65,6 +65,10 @@ type SegInput struct {
 	Round     int          // 1=首审 ≥2=修复轮
 	Prior     *Verdict     // 修复轮的既往意见单
 	LogPath   string       // 取证留痕 jsonl（可空）
+	// SourceText 画面源文本（本段 HTML 剥标签后的全部文字，2026-10-29）：错字/
+	// 数字/专名的判定权威——缩图上读字会糊（黄油体误读「那句话」为「那可话」实测），
+	// 视觉判卷只管美术表达与可读性，文字内容对不对以源码为准。
+	SourceText string
 	// AnchorTimes 锚点帧时刻表（程序按句末时刻+首末帧算好，标注随图注入）
 	AnchorTimes []AnchorFrame
 }
@@ -108,7 +112,7 @@ type FinalInput struct {
 
 // provider 审核模型：RoleVisual 档（多模态），判卷低温。
 func auditProvider() (ChatClient, error) {
-	prov, err := llm.FromEnv(llm.RoleVisual)
+	prov, err := llm.FromEnv(llm.StationJudge)
 	if err != nil {
 		return nil, fmt.Errorf("审核需要 API 模式（LLM_API_KEY）: %w", err)
 	}
@@ -298,6 +302,11 @@ const segmentSystem = `你是成片审片员，对本段成片判卷，产出结
 4. 设计规则要点——贯穿装置与皮肤切换规则（可能为空）
 5. 事实清单——硬事实与出处
 6. 锚点帧——每帧标注「此刻刚念完 N 几」
+7. 画面源文本——本段 HTML 的全部文字，是画面文字内容的唯一权威
+
+## 职责划分（先读这个）
+你是视觉审片员：帧用来判断**美术风格、视觉表达、可读性**（好不好看、清不清楚、承诺的元素画没画）。
+**文字内容（错字/缺字/数字/专名）以「画面源文本」为准**——你是从压缩缩图上读字的，艺术字体在缩图上必然糊（读「那句话」为「那可话」这类误读已有实测），帧上读到的字与源文本不一致时，错的是你的眼睛不是画面，**不得据此立案**。源文本里没有的字你却"读到了"，同样不成立。
 
 ## 判卷流程
 1. 先读 brief 与旁白，列出本段承诺了什么：该出现什么、每句承载什么画面。
@@ -309,11 +318,11 @@ const segmentSystem = `你是成片审片员，对本段成片判卷，产出结
 | # | 维度 | 判什么 | 记 fail | 记 NA |
 |---|---|---|---|---|
 | ① | 内容一致 | 承诺的元素是否出现、旁白说到的是否画了 | 承诺没画、画错（多画不算错） | 无 |
-| ② | 事实 | 画面的数字、年份、专名与旁白及事实清单是否一致 | 出现且冲突 | 画面未出现数字/专名 |
+| ② | 事实 | 画面出现的数字、年份、专名与旁白及事实清单是否一致——**先在画面源文本里核对**，源文本与旁白一致即 pass | 源文本与旁白/清单均对不上 | 画面未出现数字/专名 |
 | ③ | 风格 | 质感、色彩、字体、装饰密度像不像样张 | 明显出戏 | 无 |
 | ④ | 首末拍合规 | 首帧按 brief 首拍开场、末帧收在 brief 末拍 | 开场或收尾与承诺不符 | 无 |
 | ⑤ | 装置落点 | 贯穿装置/皮肤切换符合设计规则 | 违反规则或漏落点 | 设计规则为空 |
-| ⑥ | 字幕文字 | 字幕与画面文字无乱码、缺字、错字、断句错位 | 出现任一 | 画面无文字 |
+| ⑥ | 字幕文字 | 分两层判：**错字/缺字/乱码看画面源文本**（源文本无错即 pass，帧上读差异不立案）；**渲染与节拍看帧**——文字糊成团/被裁切/被遮挡导致不可读、字幕断句或进度与旁白错配 | 源文本有错，或帧上文字确实不可读/错配 | 画面无文字 |
 
 ## 意见条目
 每条 fail 写一条 finding：
@@ -331,7 +340,7 @@ const segmentSystem = `你是成片审片员，对本段成片判卷，产出结
   },
   "findings": [
     { "category": "fact", "anchor": "N3", "severity": "high",
-      "evidence": "帧 t=12.4s：画面标题写 1985，N3 旁白为 1984",
+      "evidence": "画面源文本「成立于1985年」与 N3 旁白 1984 冲突（帧 t=12.4s 同现）",
       "fix": "redraw" },
     { "category": "subtitle", "anchor": "t=8.0", "severity": "low",
       "evidence": "帧 t=8.0s：字幕「绿素」缺字显示为「绿 x」",
@@ -412,6 +421,13 @@ func (s *Service) AuditSegment(ctx context.Context, in SegInput) (Verdict, error
 		imgs = append(imgs, smp.URL)
 		refs = append(refs, smp)
 		fmt.Fprintf(&kick, "图%d = 样张%d（风格实物基准）\n", len(in.AnchorTimes)+i+1, i+1)
+	}
+	// 画面源文本（2026-10-29）：错字/数字/专名的判定权威——判卷官从缩图读字必糊，
+	// 职责划分=视觉管美术与可读性，文字内容以源码为准（见 segmentSystem 职责划分段）。
+	if in.SourceText != "" {
+		kick.WriteString("\n## 7. 画面源文本（画面文字的唯一权威）\n" + in.SourceText + "\n")
+	} else {
+		kick.WriteString("\n## 7. 画面源文本：（缺——字幕文字维的错字/缺字退化为按帧判，须标注「帧读存疑」并降 low）\n")
 	}
 	if in.Prior != nil {
 		b, _ := json.MarshalIndent(in.Prior, "", "  ")

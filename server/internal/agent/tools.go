@@ -20,7 +20,6 @@ import (
 	"webpage-video-agent/server/internal/prep"
 	"webpage-video-agent/server/internal/produce"
 	"webpage-video-agent/server/internal/stylelib"
-	"webpage-video-agent/server/internal/styleref"
 	"webpage-video-agent/server/internal/webfetch"
 )
 
@@ -321,7 +320,7 @@ var tools = []tool{
 			if in.Words > 5000 { // 与文稿弹窗同上限：更长的一次性成稿后半段易注水
 				in.Words = 5000
 			}
-			prov, err := llm.FromEnv(llm.RoleDialogue)
+			prov, err := llm.FromEnv(llm.StationSupervisor)
 			if err != nil {
 				return "起草需要 API 模式（LLM_API_KEY）。可让用户直接把文稿发进来，你调 save_manuscript 存下"
 			}
@@ -472,7 +471,7 @@ var tools = []tool{
 		},
 	},
 	{
-		def: toolDef("start_production", "启动制作管线（TTS→画面→检查→渲染，全程自动，进度实时播报）。成片过期或上次失败/中断后的整片重做也走这里", nil),
+		def: toolDef("start_production", "启动制作管线（配音→段级流水线：逐段写/审/渲＋边界审→拼接→全片终审，全程自动，进度实时播报）。成片过期或上次失败/中断后的整片重做也走这里", nil),
 		gate: func(s State) string {
 			var missing []string
 			if !s.HasManuscript {
@@ -576,50 +575,6 @@ var tools = []tool{
 			// 旁白真源已变时必须点名 rework 的边界：它只重画不重配，别让用户
 			// 以为改了文稿再 rework 就能换旁白
 			return msg + reworkStaleNote(a.State(p.ID))
-		},
-	},
-	{
-		def: toolDef("extract_stylepack", "把本片风格沉淀成风格库草稿（标签+特色清单，LLM 打标；成片出片后自动做，用户在风格库确认入库后可复用；草稿的证据帧留空，由用户在库页回看补录）。一次就够，已提炼过不必重复调用", nil),
-		gate: func(s State) string {
-			if !s.HasVideo {
-				return "成片未就绪，出片后再提炼"
-			}
-			return ""
-		},
-		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
-			// 幂等先行：本就出自库内风格 / 已起草过 → 直接交代（不起 LLM）
-			if st := a.draftedStyle(p); st != nil {
-				if st.Published {
-					return fmt.Sprintf("「%s」已在风格库（已发布）", st.Name)
-				}
-				return fmt.Sprintf("风格「%s」已是草稿，用户在风格库页点「入库」确认", st.Name)
-			}
-			prov, err := llm.FromEnv(llm.RolePlan)
-			if err != nil {
-				return "提炼需要 API 模式（LLM_API_KEY）"
-			}
-			digest, derr := designDigest(p)
-			if derr != nil {
-				return "提炼失败：" + derr.Error()
-			}
-			ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-			defer cancel()
-			d, terr := styleref.DraftFromDesign(ctx, prov, a.Lib, a.State(p.ID).Name, digest)
-			if terr != nil {
-				return "提炼失败：" + terr.Error()
-			}
-			pack, err := a.Lib.DraftFromProject(p.Dir, p.ID, stylelib.ProjectDraftIn{
-				Name: d.Name, Subject: d.Subject, Facets: d.Facets, Tags: d.Tags,
-				TagEvidence: d.TagEvidence, Signatures: d.Signatures,
-			})
-			if err != nil {
-				return "提炼失败：" + err.Error()
-			}
-			if pack.Published {
-				return fmt.Sprintf("「%s」已在风格库（已发布）", pack.Name)
-			}
-			return fmt.Sprintf("风格「%s」已起草（标签 %s + 特色×%d，草稿）。用户在风格库页点「入库」确认后，之后新建项目可直接复用",
-				pack.Name, pack.Tags.Main, len(pack.Signatures))
 		},
 	},
 	{
@@ -1274,7 +1229,7 @@ var tools = []tool{
 		},
 	},
 	{
-		def:  toolDef("read_check", "读最近一轮制作的逐段检查报告（frameqa 各段 pass/fail 与问题明细）与制作过程事件。用户问「哪几段没过/为什么」、或制作失败要定位原因时用它", nil),
+		def:  toolDef("read_check", "读最近一轮制作的检查与审核账：逐段 check 打回明细（check.*）、段审/边界审/全片终审的打回与带伤放行（review.*）、刹车/预算停机原因（review.brake/budget.*）、段级重做的画面审查（frameqa.*）。用户问「哪几段没过/为什么失败」、或制作失败要定位原因时用它", nil),
 		gate: nil,
 		run: func(ctx context.Context, a *Agent, p *pipeline.Project, _ string) string {
 			lines, err := produce.ReadJSONLTail(p.Artifact("manifest.jsonl"), 512)
@@ -1296,16 +1251,22 @@ var tools = []tool{
 					line = e.TS[11:19] + " "
 				}
 				line += e.Detail
+				// 审核类（frameqa=段级重做路径、review=段审/边界审/终审）进 qa 段；
+				// prereview 已随 legacy 栅栏退役不再采集。review 带事件名前缀——
+				// rework（打回）/brake（刹车）/pass_degraded（带伤）语义靠它区分。
 				switch {
 				case strings.HasPrefix(e.Event, "frameqa."):
 					qa = append(qa, line)
+				case strings.HasPrefix(e.Event, "review."):
+					qa = append(qa, e.Event+" "+line)
 				case strings.HasPrefix(e.Event, "produce.") || strings.HasPrefix(e.Event, "rework.") ||
-					strings.HasPrefix(e.Event, "prereview.") || strings.HasPrefix(e.Event, "check."):
+					strings.HasPrefix(e.Event, "segpipe.") || strings.HasPrefix(e.Event, "budget.") ||
+					strings.HasPrefix(e.Event, "check."):
 					proc = append(proc, e.Event+" "+line)
 				}
 			}
 			if len(qa) == 0 && len(proc) == 0 {
-				return "manifest 里没有画面检查/制作事件（还没制作过，或记录太老被截断）"
+				return "manifest 里没有检查/审核/制作事件（还没制作过，或记录太老被截断）"
 			}
 			// 过程事件只留尾部 30 条：过程很长，头部全是开场白
 			if len(proc) > 30 {
@@ -1313,7 +1274,7 @@ var tools = []tool{
 			}
 			var b strings.Builder
 			if len(qa) > 0 {
-				b.WriteString("画面检查（最近一轮）：\n" + strings.Join(qa, "\n") + "\n\n")
+				b.WriteString("检查与审核（最近一轮）：\n" + strings.Join(qa, "\n") + "\n\n")
 			}
 			b.WriteString("制作过程（尾部）：\n" + strings.Join(proc, "\n"))
 			return b.String()

@@ -62,3 +62,84 @@ Runtime
 		t.Fatalf("filtered output must not feed opacity fixer, got %d", n)
 	}
 }
+
+// TestBlockingCheckErrorsStripsBareContrastLines 钉住对比度摘闸（2026-10-29）：
+// checker 0.8.55 把对比度报成 error 且不冠 Contrast 段标题（seg09 六轮误判实测
+// 形态），旧版按段标题过滤匹配不到、全判死。现按行特征剥——对比度 ✗ 行及其
+// Try/source 续行都不许出现在 blocking 里；Layout 等真 bug 照旧保留。
+func TestBlockingCheckErrorsStripsBareContrastLines(t *testing.T) {
+	out := `
+  ✗ #kicker 2.53:1 (need 3:1, t=16.712s)
+    Try rgb(45,49,60); source compositions/frames/seg09.html
+  ✗ div > div:nth-of-type(1) > div > div > div:nth-of-type(2) > div:nth-of-type(3) > b 1.96:1 (need 3:1, t=16.712s)
+    Try rgb(63,56,80); source compositions/frames/seg09.html
+  15 error(s), 0 warning(s), 0 info(s)
+
+Snapshots
+  ◇ disabled
+
+◇  Check failed
+`
+	filtered := blockingCheckErrors(out)
+	if strings.Contains(filtered, ":1 (need") || strings.Contains(filtered, "Try rgb") {
+		t.Fatalf("bare contrast lines must be stripped (美术表达不判死): %q", filtered)
+	}
+
+	mixed := `
+  ✗ #h1 2.05:1 (need 3:1, t=12.78s)
+    Try rgb(80,74,89); source compositions/frames/seg09.html
+Layout
+  ✗ Two text blocks overlap and may render unreadable.
+Motion
+  ✗ gsap tween snaps to integer device pixels
+`
+	filtered2 := blockingCheckErrors(mixed)
+	if !strings.Contains(filtered2, "integer device pixels") {
+		t.Fatalf("motion errors (能不能跑) must survive the strip: %q", filtered2)
+	}
+	if strings.Contains(filtered2, ":1 (need") || strings.Contains(filtered2, "overlap") {
+		t.Fatalf("contrast/layout (美术) lines must not survive: %q", filtered2)
+	}
+}
+
+// 2026-10-29 seg09 实测：6 条版面 content_overlap 独占（对比度 19/19 全过），
+// 旧放行条件「out 里有对比度行」不成立 → TailLines 兜底当 blocking → 白烧 3 轮
+// 重写整链失败。摘闸放行的判据改为「剥光后无真 blocking + 有分项骨架」。
+func TestLayoutOnlyCheckOutputPassesAfterStrip(t *testing.T) {
+	out := `
+Lint
+  ◇ 0 errors, 0 warning(s), 0 info(s)
+
+Runtime
+  ◇ 0 errors, 0 warnings
+
+Layout
+  ✗ t=3.98-6.72s (23 samples) content_overlap #seg09-labL inside #seg09-subL "收拢腿 · 转得快" — Two text blocks overlap and may render unreadable.
+  ✗ t=5.11-6.72s (14 samples) content_overlap #seg09-labL inside #seg09-labR "收拢腿 · 转得快" — Two text blocks overlap and may render unreadable.
+  6 error(s), 0 warning(s), 0 info(s)
+
+Motion
+  ◇ 0 errors, 0 warnings
+
+Contrast
+  ◇ 19/19 text checks pass WCAG AA
+
+◇  Check failed
+`
+	if blockingCheckErrors(out) != "" {
+		t.Fatalf("layout-only output must strip to empty blocking: %q", blockingCheckErrors(out))
+	}
+	if !checkRanSections(out) {
+		t.Fatal("layout-only output has section skeleton, checkRanSections must be true")
+	}
+
+	crash := `node:internal/process/promises: A callbacked function timed out
+  ✗ Cannot access 'a' before initialization
+    at index.html:12:3`
+	if checkRanSections(crash) {
+		t.Fatal("crash output has no section skeleton, checkRanSections must be false")
+	}
+	if blockingCheckErrors(crash) == "" {
+		t.Fatal("crash runtime error is 能不能跑, must stay blocking")
+	}
+}

@@ -110,11 +110,14 @@ def lint_text(html: str, seg_hint: str = '') -> list:
         errs.append(('F6', f'禁 vw/vh 视口单位（画幅固定像素）：出现 {vw[:5]}'))
 
     # T4：canvas 存在 → 必须是 __draw_ 纯函数模式
+    # 2026-10-29 seg04 实测：模型惯用单引号 window['__draw_x']，旧正则只认双引号
+    # → 语义合规的定义被判「没有定义」，修复轮 15 代原样保留死循环。对齐 Go 版
+    # samplecheck reDrawDef：单双引号都收。
     n_canvas = len(re.findall(r'<canvas\b', html))
     if n_canvas:
-        if not re.search(r'window\s*\[\s*"__draw_[^"]+"\s*\]\s*=\s*function\s*\(\s*t\b', html) \
-           and not re.search(r'window\.__draw_\w+\s*=\s*function\s*\(\s*t\b', html):
-            errs.append(('T4', '有 <canvas> 但没有 window["__draw_…"]=function(t,…) 参数化绘制（draw 必须是 t 的纯函数）'))
+        if not re.search(r"window\s*\[\s*[\"']__draw_[^\"']+[\"']\s*\]\s*=\s*function\s*\(\s*t\b", html) \
+           and not re.search(r"window\.__draw_\w+\s*=\s*function\s*\(\s*t\b", html):
+            errs.append(('T4', '有 <canvas> 但没有 window["__draw_…"]=function(t,…) 参数化绘制（draw 必须是 t 的纯函数；单双引号均可）'))
 
     # T9：CSS transform 的元素被 GSAP 补间引用（GSAP 覆盖整个 transform，
     # CSS 里的 translateX(-50%) 居中等会被静默丢弃——bakeoff 实测模型高发）

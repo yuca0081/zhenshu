@@ -5,10 +5,12 @@ import LibraryPanel from './LibraryPanel.vue'
 import RefVideos from './RefVideos.vue'
 import type { Style } from '../types'
 
-const props = defineProps<{ packs: Style[] }>()
+const props = defineProps<{ packs: Style[]; initialTab?: 'styles' | 'videos' }>()
 const emit = defineEmits<{ publish: [id: string]; ingested: []; deleted: [] }>()
 
-const tab = ref<'styles' | 'videos'>('styles')
+// 初始页签由外部指定（工作区「解析到风格库」按钮跳转时直接落在视频解析）；
+// 挂载后以用户点选为准，不随 prop 回灌。
+const tab = ref<'styles' | 'videos'>(props.initialTab ?? 'styles')
 </script>
 
 <template>

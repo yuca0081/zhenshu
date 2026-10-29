@@ -3,8 +3,10 @@ package review
 // tools.go —— 审核取证工具（§6.2 两读一交）：get_frame 指定时刻单帧、
 // get_clip 连续短片段。取帧结果按（段+时刻）缓存——修复轮/重放不重取；
 // 取证调用留痕由 Loop.OnTool 交给调用方落盘。
-// 帧压缩到宽 480 的 JPEG dataURL（与准备工位缩图同参：检查分辨率足够，
-// 整图 base64 会让多轮成本滚雪球）。
+// 帧压缩到宽 960 的 JPEG dataURL：480 下中文展示字体（黄油体 88px 标题）缩成
+// 22px 会糊成错形，判卷官按画面读出「那可话/去黑/指窑」这类不存在的错字——
+// seg09 两轮 high 触发签名刹车（2026-10-29 实测）；960 下 44px 可稳读。
+// 整图 base64 会让多轮成本滚雪球，故仍走 JPEG q5 压缩不放大原辨析率。
 
 import (
 	"bytes"
@@ -83,7 +85,7 @@ func (fs *serviceFS) extractFrame(ctx context.Context, segID string, t float64, 
 		return "", "", err
 	}
 	cmd := exec.CommandContext(ctx, ff, "-y", "-v", "error", "-ss", strconv.FormatFloat(t, 'f', 3, 64),
-		"-i", src, "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", dst)
+		"-i", src, "-frames:v", "1", "-vf", "scale=960:-2", "-q:v", "5", dst)
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	if err := cmd.Run(); err != nil {

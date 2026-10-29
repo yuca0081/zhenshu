@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { NButton, NInput, useMessage } from 'naive-ui'
 import { api } from '../api'
-import type { PrepView } from '../types'
+import type { PrepDraftSeg, PrepView } from '../types'
 import SampleFrame from './SampleFrame.vue'
 
 // 打包终审（全流程唯一人工门，docs/prep-agents-design.md §2）：
@@ -83,6 +83,36 @@ const segs = computed(() => props.prep?.draft?.segments ?? [])
 const paragraphs = computed(() => props.prep?.draft?.paragraphs ?? [])
 const sentences = computed(() => props.prep?.script?.sentences ?? [])
 
+// ── ③ 段落分组行（工件 C 段落层）：段落主题作分界行插进段表 ──
+// draft 缺段落（老项目）或段落与段表对不齐时退回平铺，不硬凑。
+interface ParaRow {
+  para: { title: string; segs: string[] } | null
+  no: number
+  seg?: PrepDraftSeg
+}
+const paraRows = computed<ParaRow[]>(() => {
+  const ss = segs.value
+  const flat = () => ss.map(s => ({ para: null, no: 0, seg: s }))
+  const ps = paragraphs.value
+  if (!ps.length || !ss.length) return flat()
+  const byId = new Map(ss.map(s => [s.id, s]))
+  const rows: ParaRow[] = []
+  let cursor = 0
+  for (let i = 0; i < ps.length; i++) {
+    rows.push({ para: ps[i], no: i + 1 })
+    for (const id of ps[i].segs) {
+      const s = byId.get(id)
+      if (!s || ss[cursor]?.id !== id) return flat()
+      cursor++
+      rows.push({ para: null, no: 0, seg: s })
+    }
+  }
+  if (cursor !== ss.length) return flat()
+  return rows
+})
+const paraSecs = (p: { segs: string[] }) =>
+  p.segs.reduce((a, id) => a + (segs.value.find(s => s.id === id)?.duration_hint ?? 0), 0)
+
 // ── 自采依赖（终审披露）：样张阶段模型装了哪些库、哪些字体，一次列清 ──
 const vendLibs = computed(() => props.prep?.design?.vend_libs ?? [])
 const customFonts = computed(() => props.prep?.design?.custom_fonts ?? [])
@@ -113,7 +143,7 @@ const hasDeps = computed(() => vendLibs.value.length > 0 || customFonts.value.le
           <h3>打包终审</h3>
           <p class="sub">
             文字稿 {{ sentences.length }} 句 · 风格「{{ prep.stylepack.direction || prep.style_name || prep.stylepack.style_id }}」 ·
-            分镜 {{ segs.length }} 段 / 约 {{ Math.round(segs.reduce((a, s) => a + s.duration_hint, 0)) }} 秒
+            分镜 {{ segs.length }} 段<template v-if="paragraphs.length"> · {{ paragraphs.length }} 段落</template> / 约 {{ Math.round(segs.reduce((a, s) => a + s.duration_hint, 0)) }} 秒
           </p>
         </div>
         <div v-if="confirmed" class="ok-badge">✓ 已确认，可开工</div>
@@ -184,21 +214,26 @@ const hasDeps = computed(() => vendLibs.value.length > 0 || customFonts.value.le
 
         <!-- ③ 分镜稿 -->
         <section class="card">
-          <h4>③ 分镜稿<span v-if="paragraphs.length" class="meta">段落：{{ paragraphs.map(p => p.title).join(' → ') }}</span></h4>
+          <h4>③ 分镜稿<span v-if="paragraphs.length" class="meta">{{ paragraphs.length }} 个段落——段落内是同一话题的画面延续，段落之间换话题</span></h4>
           <table class="sb">
             <thead><tr><th style="width:44px">段</th><th style="width:120px">标题</th><th style="width:80px">旁白</th><th>场景 / 首拍 / 末拍</th><th style="width:56px">秒</th></tr></thead>
             <tbody>
-              <tr v-for="s in segs" :key="s.id">
-                <td class="c">{{ s.idx }}</td>
-                <td>{{ s.key }}</td>
-                <td class="c refs">{{ s.narration_refs }}</td>
-                <td class="brief">
-                  <p><b>场景</b> {{ s.visual_brief.scene }}</p>
-                  <p><b>首拍</b> {{ s.visual_brief.first_frame }}</p>
-                  <p><b>末拍</b> {{ s.visual_brief.last_frame }}</p>
-                </td>
-                <td class="c">{{ Math.round(s.duration_hint) }}</td>
-              </tr>
+              <template v-for="r in paraRows" :key="r.seg ? r.seg.id : 'para' + r.no">
+                <tr v-if="r.para" class="para-row">
+                  <td colspan="5"><b>段落 {{ r.no }}</b>{{ r.para.title }}<i>{{ r.para.segs.length }} 段 · 约 {{ Math.round(paraSecs(r.para)) }} 秒</i></td>
+                </tr>
+                <tr v-else-if="r.seg">
+                  <td class="c">{{ r.seg.idx }}</td>
+                  <td>{{ r.seg.key }}</td>
+                  <td class="c refs">{{ r.seg.narration_refs }}</td>
+                  <td class="brief">
+                    <p><b>场景</b> {{ r.seg.visual_brief.scene }}</p>
+                    <p><b>首拍</b> {{ r.seg.visual_brief.first_frame }}</p>
+                    <p><b>末拍</b> {{ r.seg.visual_brief.last_frame }}</p>
+                  </td>
+                  <td class="c">{{ Math.round(r.seg.duration_hint) }}</td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </section>
@@ -271,6 +306,12 @@ const hasDeps = computed(() => vendLibs.value.length > 0 || customFonts.value.le
 .sb { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .sb th { text-align: left; padding: 8px 10px; color: #7c7c88; font-weight: 600; border-bottom: 1px solid #232329; }
 .sb td { padding: 8px 10px; border-bottom: 1px solid #1d1d24; vertical-align: top; color: #c9c9d3; line-height: 1.6; }
+.para-row td {
+  background: #17171f; padding: 7px 12px; font-size: 12.5px; color: #f0c674;
+  border-bottom: 1px solid #232329; letter-spacing: .3px;
+}
+.para-row b { font-weight: 600; margin-right: 8px; opacity: .75; }
+.para-row i { font-style: normal; color: #7c7c88; margin-left: 10px; font-size: 11.5px; }
 .c { color: #7c7c88; text-align: center; }
 .refs { font-family: Consolas, monospace; font-size: 11.5px; }
 .brief b { color: #6b6b78; font-weight: 600; margin-right: 6px; font-size: 11.5px; }

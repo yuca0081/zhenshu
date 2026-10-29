@@ -3,7 +3,7 @@ import { KeepAlive, computed, ref, watch } from 'vue'
 import { NButton, NInput, NInputNumber, NSelect, NSpin, useMessage } from 'naive-ui'
 import { api, videoURL } from '../api'
 import { cachePct, fmtTok } from '../format'
-import type { ActivityEvent, AudioMeta, Manuscript, PrepView, ProjectView, Storyboard, StyleSamples, TabID } from '../types'
+import type { ActivityEvent, AudioMeta, Manuscript, PrepView, ProjectView, Segment, Storyboard, StyleSamples, TabID } from '../types'
 import ManuscriptPane from './ManuscriptPane.vue'
 import StylePane from './StylePane.vue'
 import PrepPane from './PrepPane.vue'
@@ -48,6 +48,7 @@ const emit = defineEmits<{
   'go-tab': [t: TabID]
   'cancel-agent': []
   'prep-refresh': []
+  'parse-started': [tab: 'styles' | 'videos'] // 项目解析已提交——App 跳风格库页跟进
 }>()
 
 // 页签状态灯（title 悬停说明）：绿=这关过了；黄=还没弄好（没存文稿/没生成分镜/
@@ -213,6 +214,33 @@ async function saveSb() {
   }
 }
 
+// ── 段落分组行（工件 C 段落层）：段落主题作分界行插进分镜表 ──
+// 行对象直接引用 edSb.segments 的段（v-model 绑定不受影响，保存逻辑零改动）。
+// 编辑只改文案/时长（保存接口锁 id/idx，段数段序不可变），分组不受编辑影响；
+// draft 缺失（老项目）或段落与当前分镜对不齐时退回平铺表，不硬凑。
+type SbRow = { para: null | { title: string; segs: string[] }; no: number; seg: Segment | null }
+const sbRows = computed<SbRow[]>(() => {
+  const segs = edSb.value?.segments ?? props.storyboard?.segments ?? []
+  const flat = (): SbRow[] => segs.map(s => ({ para: null, no: 0, seg: s }))
+  const paras = props.prep?.draft?.paragraphs ?? []
+  if (!paras.length || !segs.length) return flat()
+  const byId = new Map(segs.map(s => [s.id, s]))
+  const rows: SbRow[] = []
+  let cursor = 0
+  for (let i = 0; i < paras.length; i++) {
+    rows.push({ para: paras[i], no: i + 1, seg: null })
+    for (const id of paras[i].segs) {
+      const s = byId.get(id)
+      if (!s || segs[cursor]?.id !== id) return flat()
+      cursor++
+      rows.push({ para: null, no: 0, seg: s })
+    }
+  }
+  if (cursor !== segs.length) return flat()
+  return rows
+})
+const sbParaCount = computed(() => props.prep?.draft?.paragraphs?.length ?? 0)
+
 // ── 整片过期重做（页签行右侧）：上游（文稿/分镜/风格）在成片生成后又改过 ──
 // 按钮收进页签行靠右（原视频页整行黄条太占地），悬停 title 说明具体哪几样改过。
 const message = useMessage()
@@ -248,6 +276,24 @@ async function redoFull() {
     redoing.value = false
   }
 }
+
+// ── 解析到风格库（项目解析路，2026-10-29）：本片设计系统 → 视频解析暂存区 ──
+// 与上传视频解析同走草稿修订→入库；成功即跳「风格库 → 视频解析」看进度。
+const parsing = ref(false)
+async function parseToLibrary() {
+  if (parsing.value) return
+  parsing.value = true
+  try {
+    const r = await api.parseProjectStyle(props.videoId)
+    emit('parse-started', 'videos')
+    if (r.existing) message.info('本项目已有解析记录，已跳到「风格库 → 视频解析」')
+    else message.success('解析已开始，已跳到「风格库 → 视频解析」跟进')
+  } catch (e) {
+    message.error(`解析启动失败：${(e as Error).message}`)
+  } finally {
+    parsing.value = false
+  }
+}
 </script>
 
 <template>
@@ -268,6 +314,14 @@ async function redoFull() {
             :title="`${redoNames.join('、')}在成片生成后又改过——成片还是旧版。点此按最新内容重做：没变的产物会复用，只重做出入的部分。`"
             @click="redoFull"
           >{{ redoArmed ? '确认重做？' : '按最新内容重做' }}</NButton>
+          <!-- 解析到风格库：项目解析路入口（读定稿设计系统+样张，与上传视频解析同走
+               暂存区草稿→修订→入库；幂等，重复点击复用既有条目。按钮文案取短——
+               页签行宽度紧张，全称在悬停 title 里） -->
+          <button
+            v-if="view.has_video && !view.producing" class="dl-btn parse-btn" :disabled="parsing"
+            title="解析到风格库：把本片风格解析成风格库条目——读定稿设计系统与样张，去「风格库 → 视频解析」修订后入库，之后新建项目可选用"
+            @click="parseToLibrary"
+          >{{ parsing ? '解析中…' : '⇪ 解析入库' }}</button>
           <!-- 下载成片 -->
           <a
             v-if="view.has_video" class="dl-btn"
@@ -308,7 +362,7 @@ async function redoFull() {
           <div v-else-if="tab === 'storyboard' && storyboard" class="sb-wrap">
             <div class="sb-head">
               分镜表
-              <span class="sb-meta">{{ edSb?.segments.length ?? storyboard.segments.length }} 段 / 约 {{ Math.round(edTotalSec || view.total_hint) }} 秒</span>
+              <span class="sb-meta">{{ edSb?.segments.length ?? storyboard.segments.length }} 段<template v-if="sbParaCount"> / {{ sbParaCount }} 段落</template> / 约 {{ Math.round(edTotalSec || view.total_hint) }} 秒</span>
               <span class="sb-dur">
                 <NSelect v-model:value="targetMin" size="tiny" :options="minOptions" :disabled="agentBusy" style="width: 108px" />
                 <NButton size="tiny" :loading="replanning" :disabled="agentBusy" @click="replanStoryboard">按此时长重排</NButton>
@@ -320,13 +374,18 @@ async function redoFull() {
               <table class="sb">
                 <thead><tr><th style="width:44px">段</th><th style="width:130px">标题</th><th>旁白</th><th style="width:200px">画面</th><th style="width:86px">秒</th></tr></thead>
                 <tbody>
-                  <tr v-for="s in edSb!.segments" :key="s.id" class="sb-row edit">
-                    <td class="c">{{ s.idx }}</td>
-                    <td><NInput v-model:value="s.key" size="tiny" :disabled="agentBusy" @update:value="sbDirty = true" /></td>
-                    <td><NInput v-model:value="s.narration" type="textarea" size="tiny" :autosize="{ minRows: 2, maxRows: 7 }" :disabled="agentBusy" @update:value="sbDirty = true" /></td>
-                    <td><NInput v-model:value="s.visual_brief" type="textarea" size="tiny" :autosize="{ minRows: 2, maxRows: 7 }" :disabled="agentBusy" @update:value="sbDirty = true" /></td>
-                    <td class="c"><NInputNumber v-model:value="s.duration_hint" size="tiny" :min="0.5" :max="180" :step="0.5" :disabled="agentBusy" style="width: 80px" @update:value="sbDirty = true" /></td>
-                  </tr>
+                  <template v-for="r in sbRows" :key="r.seg ? r.seg.id : 'para' + r.no">
+                    <tr v-if="r.para" class="sb-para">
+                      <td colspan="5"><b>段落 {{ r.no }}</b>{{ r.para.title }}<i>{{ r.para.segs.length }} 段</i></td>
+                    </tr>
+                    <tr v-else-if="r.seg" class="sb-row edit">
+                      <td class="c">{{ r.seg.idx }}</td>
+                      <td><NInput v-model:value="r.seg.key" size="tiny" :disabled="agentBusy" @update:value="sbDirty = true" /></td>
+                      <td><NInput v-model:value="r.seg.narration" type="textarea" size="tiny" :autosize="{ minRows: 2, maxRows: 7 }" :disabled="agentBusy" @update:value="sbDirty = true" /></td>
+                      <td><NInput v-model:value="r.seg.visual_brief" type="textarea" size="tiny" :autosize="{ minRows: 2, maxRows: 7 }" :disabled="agentBusy" @update:value="sbDirty = true" /></td>
+                      <td class="c"><NInputNumber v-model:value="r.seg.duration_hint" size="tiny" :min="0.5" :max="180" :step="0.5" :disabled="agentBusy" style="width: 80px" @update:value="sbDirty = true" /></td>
+                    </tr>
+                  </template>
                 </tbody>
               </table>
               <div class="hint">直接在表格里改文案和秒数，改完点右上「保存修改」（保存后成片会标记为旧版）；要增删段或大改结构，在对话里说。加聊天引用请到时间轴点段。</div>
@@ -380,17 +439,23 @@ async function redoFull() {
   position: relative; /* 事件流面板的定位锚 */
   flex: 1; min-width: 0; display: flex; flex-direction: column;
   background: #14141a; border: 1px solid #232329; border-radius: 12px; overflow: hidden;
+  container-type: inline-size; /* 页签行按面板实宽做响应式（窄时收起 token 小账） */
 }
 
 /* ── 页签行 ── */
+/* 三栏布局里中间栏宽度有限（对话栏 400px 固定），这行内容多——所有元素
+   nowrap + flex:none 保证文字不折行；真放不下时整行横向滚动兜底，
+   不让页签文字被挤成两行（2026-10-29 修）。 */
 .tabs {
-  flex: none; display: flex; align-items: center; gap: 4px;
-  padding: 8px 12px 0; border-bottom: 1px solid #202027;
+  flex: none; display: flex; align-items: center; gap: 2px;
+  padding: 8px 8px 0; border-bottom: 1px solid #202027;
+  overflow-x: auto; scrollbar-width: thin;
 }
 .tab {
-  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer; flex: none;
+  white-space: nowrap;
   border: 0; border-bottom: 2px solid transparent; background: transparent;
-  color: #8a8a96; font-size: 13px; padding: 7px 14px 9px; margin-bottom: -1px;
+  color: #8a8a96; font-size: 13px; padding: 7px 8px 9px;
 }
 .tab:hover { color: #d9d9e0; background: #191920; }
 .tab.on { color: #f0c674; border-bottom-color: #f0c674; font-weight: 600; }
@@ -407,26 +472,35 @@ async function redoFull() {
 @keyframes pulse { 50% { opacity: .35; } }
 
 /* ── 页签行右上角：重做/下载（过程回看走「过程」页签）── */
-.head-right { margin-left: auto; display: flex; align-items: center; gap: 8px; padding: 0 2px 6px; }
+.head-right {
+  margin-left: auto; flex: none; white-space: nowrap;
+  display: flex; align-items: center; gap: 6px; padding: 0 2px 6px;
+}
 .redo-btn { margin-bottom: 0; }
 .dl-btn {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
   border: 1px solid #2b2b33; background: #191920; color: #c9c9d3;
-  font-size: 12px; padding: 4px 12px; border-radius: 999px; text-decoration: none;
+  font-size: 12px; padding: 4px 10px; border-radius: 999px; text-decoration: none;
 }
 .dl-btn:hover { border-color: rgba(240, 198, 116, .45); color: #f0c674; background: #1e1a12; }
+/* 解析到风格库：同 dl-btn 胶囊，button 元素补字体继承与禁用态 */
+.parse-btn { font-family: inherit; }
+.parse-btn:disabled { opacity: .55; cursor: default; }
+.parse-btn:hover:not(:disabled) { border-color: rgba(240, 198, 116, .45); color: #f0c674; background: #1e1a12; }
 /* 过程回看按钮：原「事件流」胶囊样式；on=当前正看过程页，live-dot=制作中呼吸灯 */
 .feed-btn {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
   border: 1px solid #2b2b33; background: #191920; color: #c9c9d3;
-  font-size: 12px; padding: 4px 12px; border-radius: 999px;
+  font-size: 12px; padding: 4px 10px; border-radius: 999px;
 }
 .feed-btn:hover { border-color: #3a3a45; color: #e6e6ea; }
 .feed-btn.on { border-color: rgba(240, 198, 116, .45); color: #f0c674; background: #1e1a12; }
 .feed-btn .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #8fc7ff; animation: pulse 1.2s infinite; }
-/* 全程 token 小账：输入 token + 缓存命中率，做次要信息色不抢「过程」本体 */
+/* 全程 token 小账：输入 token + 缓存命中率，做次要信息色不抢「过程」本体；
+   面板窄于 ~740px 时收起（悬停「过程」的 title 仍在），保页签行单行放下 */
 .feed-btn .feed-tok { margin-left: 2px; font-size: 11px; color: #7c7c88; font-variant-numeric: tabular-nums; }
 .feed-btn:hover .feed-tok, .feed-btn.on .feed-tok { color: inherit; opacity: .75; }
+@container (max-width: 739px) { .feed-tok { display: none; } }
 /* 失败未读红点：最近一次制作失败/中断后还没看过过程页 */
 .feed-btn .fail-dot { width: 7px; height: 7px; border-radius: 50%; background: #ff6b6b; box-shadow: 0 0 6px rgba(255, 107, 107, .8); }
 
@@ -445,6 +519,12 @@ async function redoFull() {
 .sb { width: 100%; border-collapse: collapse; font-size: 13px; }
 .sb th { position: sticky; top: 0; background: #14141a; text-align: left; padding: 10px 12px; color: #7c7c88; font-weight: 600; border-bottom: 1px solid #232329; }
 .sb td { padding: 6px 8px; border-bottom: 1px solid #1d1d24; vertical-align: top; }
+.sb-para td {
+  background: #17171f; padding: 7px 12px; font-size: 12.5px; color: #f0c674;
+  border-bottom: 1px solid #232329; letter-spacing: .3px;
+}
+.sb-para b { font-weight: 600; margin-right: 8px; opacity: .75; }
+.sb-para i { font-style: normal; color: #7c7c88; margin-left: 10px; font-size: 11.5px; }
 .c { color: #7c7c88; text-align: center; vertical-align: middle; }
 .hint { padding: 10px 14px; color: #55555f; font-size: 12px; }
 .sb-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: #55555f; font-size: 13px; line-height: 1.9; text-align: center; padding: 20px 40px; }

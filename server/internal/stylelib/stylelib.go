@@ -12,7 +12,6 @@
 package stylelib
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -109,7 +108,7 @@ type UsageStats struct {
 var ErrNoEntry = errors.New("风格库没有该条目")
 
 // Library 风格库：账本后端（cat）+ 媒体后端（media）的组合。
-// mu 串行化「读-查重-写」复合操作（词表查重、成片反哺幂等）——行级 upsert 管单行
+// mu 串行化「读-查重-写」复合操作（词表查重、解析入库幂等）——行级 upsert 管单行
 // 原子性，管不了查重序列；跨进程的同名并发由单用户场景兜底。
 type Library struct {
 	cat   catalog
@@ -175,7 +174,7 @@ func (l *Library) Get(id string) (*Style, bool) {
 	return s, true
 }
 
-// VideoStyleIn 参考视频风格入库载荷 v3（api 层从解析草稿变形；IngestVideoRef 消费）。
+// VideoStyleIn 参考解析风格入库载荷 v3（api 层从解析草稿变形；IngestVideoRef 消费）。
 type VideoStyleIn struct {
 	Name        string
 	Subject     string // 原片题材一句话（浏览/检索用，不进生成提示词）
@@ -183,17 +182,23 @@ type VideoStyleIn struct {
 	Tags        contract.StyleTags
 	TagEvidence []contract.TagEvidence
 	Signatures  []contract.Signature // ID 允许缺省，入库时统一编 sig1..sigN
+	Origin      string               // OriginProject 出处：空 = "video:"+refID（上传视频解析路）；项目解析路传项目 ID
 }
 
-// IngestVideoRef 参考视频风格入库（upsert，published=true）。
-// 校验 §4.1 全规则（含词表核对）；同 seed 重复入库覆盖式重写（v3 条目都是解析
-// 产物，重解析=用户对同一视频再来一次，旧值不保——确认页已让人工过目）。
+// IngestVideoRef 参考解析风格入库（upsert，published=true）。两路解析共用：
+// 上传视频路（seed=refID）与项目解析路（api 层在 Origin 传真实项目 ID，条目可
+// 追溯出处）。校验 §4.1 全规则（含词表核对）；同 seed 重复入库覆盖式重写（v3
+// 条目都是解析产物，重解析=用户对同一来源再来一次，旧值不保——确认页已让人工过目）。
 func (l *Library) IngestVideoRef(refID string, in VideoStyleIn) (*Style, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	styles, err := l.cat.ListStyles()
 	if err != nil {
 		return nil, err
+	}
+	origin := in.Origin
+	if origin == "" {
+		origin = "video:" + refID
 	}
 	s := Style{
 		ID:             videoStyleID(refID),
@@ -202,7 +207,7 @@ func (l *Library) IngestVideoRef(refID string, in VideoStyleIn) (*Style, error) 
 		TagEvidence:    in.TagEvidence,
 		Subject:        in.Subject,
 		Facets:         in.Facets,
-		OriginProject:  "video:" + refID,
+		OriginProject:  origin,
 		Published:      true,
 		CreatedAt:      time.Now(),
 		DistillPending: true,
@@ -246,67 +251,6 @@ func uniqueName(styles []Style, selfID, name, subject string) string {
 			return cand
 		}
 	}
-}
-
-// ProjectDraftIn 成片反哺起草载荷（extract_stylepack，agent 侧 LLM 打标后组装）。
-type ProjectDraftIn struct {
-	Name        string
-	Subject     string
-	Facets      StyleFacets
-	Tags        contract.StyleTags
-	TagEvidence []contract.TagEvidence
-	Signatures  []contract.Signature // frames 允许为空（本片无原片帧，人工在库页补）
-}
-
-// DraftFromProject 从已出片项目起草风格（Agent 自动，published=false 等用户确认）。
-// 幂等：style_samples 带 style_id（本就出自库内风格）或同项目已起草过 → 返回既有条目。
-func (l *Library) DraftFromProject(projectDir, projectID string, in ProjectDraftIn) (*Style, error) {
-	var ss struct {
-		StyleID string `json:"style_id"`
-	}
-	if b, err := os.ReadFile(filepath.Join(projectDir, "style", "style_samples.json")); err == nil {
-		_ = json.Unmarshal(b, &ss)
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	styles, err := l.cat.ListStyles()
-	if err != nil {
-		// 读失败不写入：幂等查重做不了，宁可不起草也不能出重复条目
-		return nil, fmt.Errorf("风格库读取失败（不写入）: %w", err)
-	}
-	if ss.StyleID != "" {
-		for i := range styles {
-			if styles[i].ID == ss.StyleID {
-				return &styles[i], nil // 库内风格出的片，无需再起草
-			}
-		}
-	}
-	for i := range styles {
-		if styles[i].OriginProject == projectID {
-			return &styles[i], nil // 已起草过
-		}
-	}
-
-	s := Style{
-		ID:            newID(styles),
-		Name:          uniqueName(styles, "", strings.TrimSpace(in.Name), in.Subject),
-		Tags:          in.Tags,
-		TagEvidence:   in.TagEvidence,
-		Subject:       in.Subject,
-		Facets:        in.Facets,
-		OriginProject: projectID,
-		Published:     false,
-		CreatedAt:     time.Now(),
-	}
-	s.Signatures = renumberSigs(in.Signatures)
-	if err := l.validateWrite(&s); err != nil {
-		return nil, err
-	}
-	if err := l.cat.PutStyle(&s); err != nil {
-		return nil, err
-	}
-	return &s, nil
 }
 
 // validateWrite 写入校验（§4.1）：tags 在词表、signatures ≤6/kind 枚举/mechanism 非空。
@@ -426,7 +370,7 @@ func validateEntryVocab(s *Style, vocab *Vocab) []string {
 }
 
 // ValidateSignatures 特色清单校验：≤6、id 条目内唯一、kind 枚举、name/mechanism 非空。
-// frames 允许为空（成片反哺草稿，人工在库页补）。
+// frames 允许为空（项目解析路草稿，样张帧由系统挂/人工在确认页补）。
 func ValidateSignatures(sigs []contract.Signature) error {
 	if len(sigs) > 6 {
 		return fmt.Errorf("signatures %d 条超上限（≤6）", len(sigs))

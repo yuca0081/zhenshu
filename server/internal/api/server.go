@@ -149,6 +149,15 @@ func (s *Server) Router() *gin.Engine {
 	libAdm.POST("/references/:id/analyze", s.analyzeReference)
 	libAdm.POST("/references/:id/confirm", s.confirmReference)
 	libAdm.PUT("/references/:id/draft", s.updateReferenceDraft)
+	// 项目解析（两路解析入口二，2026-10-29）：读项目定稿设计系统+样张帧 → 暂存条目
+	// → 文本打标；与上传视频解析同走暂存区/修订/确认入库。同属全局资产写口径收管理员。
+	libAdm.POST("/projects/:id/style/parse", s.parseProjectStyle)
+	// 模型设置（docs/llm-settings-2026-10-29.md）：供应商台账 + 工位绑定，PUT 落盘
+	// 即热生效。URL/Key 属运维面，admin 收口；GET 只出掩码。
+	llmAdm := api.Group("", s.requireAdmin())
+	llmAdm.GET("/llm-settings", s.getLLMSettings)
+	llmAdm.PUT("/llm-settings", s.saveLLMSettings)
+	llmAdm.POST("/llm-settings/test", s.testLLMProvider)
 	// 留痕图片取件走通配路径（style/xxx、reports/prereview/round1/xxx 多级目录），
 	// 进不了 secureParams（它禁参数里的斜杠）——单开一组，鉴权/项目归属照旧，
 	// 穿越防线由 handler 侧路径清洗 + 目录/扩展名白名单承担。
@@ -2031,7 +2040,64 @@ func (s *Server) analyzeReference(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true})
 }
 
-// confirmReference 解析结果入库：styles.json 写「标签+特色」条目（一视频一条目）。
+// parseProjectStyle 项目解析（两路解析入口二）：读项目定稿设计系统+样张帧建暂存
+// 条目，异步文本打标（RolePlan 纯文本脑，不抽帧不碰多模态）——与上传视频解析同一
+// 暂存区/修订/确认入库流程，前端轮询 GET /api/references 看进度。
+func (s *Server) parseProjectStyle(c *gin.Context) {
+	p, ok := s.project(c)
+	if !ok {
+		return
+	}
+	if _, err := os.Stat(p.Artifact("style/style_samples.json")); err != nil {
+		c.JSON(400, gin.H{"error": "项目还没有定稿的设计系统（先完成风格样张并确认）"})
+		return
+	}
+	// 幂等：本项目已有解析条目 → 复用（重复点击不建第二条；重解析走卡片上的「重新解析」）
+	refs, err := s.Refs.List()
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	for _, r := range refs {
+		if r.Source == styleref.SourceProject && r.ProjectID == p.ID {
+			c.JSON(200, gin.H{"ok": true, "ref_id": r.ID, "existing": true})
+			return
+		}
+	}
+	ref, err := s.Refs.SaveProject(projectDisplayName(p), p.ID, projectSampleFrames(p))
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if _, err := s.Refs.Analyze(ref.ID); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(202, gin.H{"ok": true, "ref_id": ref.ID})
+}
+
+// projectDisplayName 项目陈列名：project.json 快照的 name，缺失回退项目 ID。
+func projectDisplayName(p *pipeline.Project) string {
+	name := p.ID
+	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil {
+		var meta struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(b, &meta) == nil && strings.TrimSpace(meta.Name) != "" {
+			name = strings.TrimSpace(meta.Name)
+		}
+	}
+	return name
+}
+
+// projectSampleFrames 项目里现成的风格证据帧（设计样张 poster，所见即所得）：
+// 制作过程已渲染好，项目解析路零 ffmpeg 直接拷。没有（老项目）就空——草稿帧允许空。
+func projectSampleFrames(p *pipeline.Project) []string {
+	matches, _ := filepath.Glob(p.Artifact("style/sample-*.png"))
+	return matches
+}
+
+// confirmReference 解析结果入库：styles.json 写「标签+特色」条目（一片一条目）。
 func (s *Server) confirmReference(c *gin.Context) {
 	ref, err := s.Refs.Get(c.Param("id"))
 	if err != nil {
@@ -2043,7 +2109,12 @@ func (s *Server) confirmReference(c *gin.Context) {
 		return
 	}
 
-	st, err := s.ingestRefStyle(ref.ID, ref.Name, ref.Style, filepath.Join(s.DataDir, "references", ref.ID))
+	// 条目出处按解析路分：上传视频 = video:<refID>；项目解析 = 真实项目 ID（可追溯）
+	origin := "video:" + ref.ID
+	if ref.Source == styleref.SourceProject {
+		origin = ref.ProjectID
+	}
+	st, err := s.ingestRefStyle(ref.ID, ref.Name, ref.Style, filepath.Join(s.DataDir, "references", ref.ID), origin)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -2060,8 +2131,9 @@ func (s *Server) confirmReference(c *gin.Context) {
 // 条目名 = LLM 起的独特陈列名（2026-10-24 翻转：此前拿视频标题当条目名，营销
 // 标题「震惊瘫坐!!」入库既难辨识也不好友好检索；视频标题只在 LLM 缺名时兜底）；
 // 同名撞车由库侧带题材词消歧（uniqueName）。
-// seedID 是 IngestVideoRef 的 refID 种子（重复入库同 seed upsert 幂等）。
-func (s *Server) ingestRefStyle(seedID, origName string, d *styleref.StyleDraft, dir string) (*stylelib.Style, error) {
+// seedID 是 IngestVideoRef 的 refID 种子（重复入库同 seed upsert 幂等）；
+// origin 是条目出处（OriginProject），按解析路由 confirmReference 传入。
+func (s *Server) ingestRefStyle(seedID, origName string, d *styleref.StyleDraft, dir, origin string) (*stylelib.Style, error) {
 	feats := styleref.ReadFeatures(dir)
 	valid := map[string]bool{}
 	for _, f := range feats {
@@ -2094,6 +2166,7 @@ func (s *Server) ingestRefStyle(seedID, origName string, d *styleref.StyleDraft,
 		Tags:        d.Tags,
 		TagEvidence: d.TagEvidence,
 		Signatures:  d.Signatures,
+		Origin:      origin,
 	})
 	if err != nil {
 		return nil, err

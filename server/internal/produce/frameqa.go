@@ -153,7 +153,7 @@ func (r *Runner) reviewSegments(ctx context.Context, p *pipeline.Project, only s
 	if err != nil {
 		return nil, err
 	}
-	prov, err := llm.FromEnv(llm.RoleVisual)
+	prov, err := llm.FromEnv(llm.StationFrameQA)
 	if err != nil {
 		return nil, fmt.Errorf("画面审查需要 API 模式（LLM_API_KEY）: %w", err)
 	}

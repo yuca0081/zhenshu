@@ -1,4 +1,4 @@
-import type { ActivityEvent, AudioMeta, BgmTrack, TranscriptMsg, AuthStatus, ChatRef, Manuscript, Msg, PrepView, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, UserInfo, UserRow, VocabEntry } from './types'
+import type { ActivityEvent, AudioMeta, BgmTrack, TranscriptMsg, AuthStatus, ChatRef, LlmSettingsInput, LlmSettingsView, LlmTestResult, Manuscript, Msg, PrepView, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, UserInfo, UserRow, VocabEntry } from './types'
 
 // ── 会话认证（cookie 会话，HttpOnly，浏览器自动携带）──────────
 // 凭据不进 JS：localStorage 存 token / ?token= 进 URL 的旧方案已废。
@@ -159,6 +159,23 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ style }),
     }),
+
+  // 项目解析（两路解析入口二）：读项目定稿设计系统+样张帧 → 暂存条目 → 异步文本
+  // 打标；幂等（本项目已有条目返回 existing=true），进度轮询 listReferences
+  parseProjectStyle: (id: string) =>
+    post<{ ok: boolean; ref_id: string; existing?: boolean }>(`/api/projects/${id}/style/parse`),
+
+  // ── 模型设置（管理员，docs/llm-settings-2026-10-29.md）──
+  // GET 视图含工位清单与各工位生效值；PUT 整体保存（key 空=保持已存）；test 连通探针
+  llmSettings: () => req<LlmSettingsView>('/api/llm-settings'),
+  saveLlmSettings: (cfg: LlmSettingsInput) =>
+    req<{ ok: boolean }>('/api/llm-settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cfg),
+    }),
+  testLlmProvider: (t: { provider?: string; base_url?: string; api_key?: string; model?: string }) =>
+    post<LlmTestResult>('/api/llm-settings/test', t),
 }
 
 // rev = 成片代次（重做完成后递增）：同 URL 会被 <video> 惰性复用，重做完必须换 URL 才能看到新画面

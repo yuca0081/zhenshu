@@ -90,7 +90,7 @@ type scriptRun struct {
 
 func (r *scriptRun) prov() react.ChatClient {
 	// ①纯文本；Chat 带 high 思考（llm.Provider.Chat 自带）。
-	prov, _ := llm.FromEnv(llm.RolePlan)
+	prov, _ := llm.FromEnv(llm.StationPrepScript)
 	return prov
 }
 

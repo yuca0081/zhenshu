@@ -1,9 +1,10 @@
 package styleref
 
-// 成片反哺入库（v3 §5 M1-4）：extract_stylepack 把本片已确认的设计系统起草成
-// 「标签+特色」草稿。成片只有本片、无原片帧——特色证据帧缺省（允许 frames 为空
-// 的草稿，人工在库页补），打标走文本通道（设计系统 digest → 词表比对 + 申请新词），
-// 与视频解析共用 resolveDraft 的词表查重/落表机制。
+// 项目解析路的打标提示词（2026-10-29，原「成片反哺」直写库路径已退役——项目解析
+// 现与上传视频解析同走暂存区/修订/确认入库流程）：把项目已确认的设计系统起草成
+// 「标签+特色」草稿。样张帧由 SaveProject 拷进暂存目录，但打标走文本通道（LLM
+// 看不见图）：设计系统 digest → 词表比对 + 申请新词，frames 留空由 Go 侧机械挂
+// 样张；与上传视频解析共用 resolveTaggerDraft 的词表查重/落表机制。
 
 import (
 	"context"
@@ -15,7 +16,7 @@ import (
 	"webpage-video-agent/server/internal/stylelib"
 )
 
-// DraftFromDesign 从项目设计系统起草标签+特色（agent 的 extract_stylepack 调用）。
+// DraftFromDesign 从项目设计系统起草标签+特色（项目解析路 runProjectParse 调用）。
 // designDigest 是设计系统的人话摘要（direction/concept/皮肤槽位/字体/动效/装置/
 // 版式/负面清单），lib 是风格库（词表查重落表用）。
 func DraftFromDesign(ctx context.Context, prov *llm.Provider, lib *stylelib.Library, projectName, designDigest string) (*StyleDraft, error) {
@@ -46,13 +47,13 @@ func DraftFromDesign(ctx context.Context, prov *llm.Provider, lib *stylelib.Libr
 ## 打标签（主 1 + 辅 ≤2）
 - 只收有公认视觉定义的风格名词（设计史/影视行话立得住的）；词表里有的直接引用 id，
   没有合适词条才「申请新词」（name+aliases+brief+tells+小写蛇形英文 id）；
-- note 写人话指认（这套系统里哪个决定支撑了这个判断）；frames 一律留空（成片没有原片帧，
-  证据帧由人工在库页补录）。
+- note 写人话指认（这套系统里哪个决定支撑了这个判断）；frames 一律留空
+  （样张证据帧由系统挂，人工可在确认页调整）。
 
 ## 提炼特色（≤6 条，只写这套系统真正独有的手法）
 - kind 六选一：%s；mechanism 写机制不写物件（换题材照做仍成立），use_hint 写什么节拍适合用；
 - 从 device/motion/skins/layouts/transition 习惯里挑有记号的机制；公认风格自带的手法不算特色；
-- frames 一律留空。
+- frames 一律留空（同上，由系统挂样张、人工可调）。
 
 ## 条目名
 - name 是这套系统在库里的陈列名（≤12 字）：概括它独有气质的独特名（如「冷晶仪象」），
@@ -86,13 +87,13 @@ func DraftFromDesign(ctx context.Context, prov *llm.Provider, lib *stylelib.Libr
 
 // resolveDesignDraft 视频版 resolveDraft 的无帧变体：与 resolveDraft 共用
 // resolveTaggerDraft 的词表落表纪律，只是不做帧证据处理与存在性校验
-// （成片没有原片帧，草稿允许空帧，人工在库页补录）。
+// （项目解析路打标看不见图，草稿帧由 Go 侧机械挂样张、人工可在确认页补）。
 func resolveDesignDraft(ctx context.Context, prov *llm.Provider, lib *stylelib.Library, raw *taggerOutput) (*StyleDraft, error) {
 	return resolveTaggerDraft(ctx, prov, lib, raw, false)
 }
 
-// resolveTaggerDraft 打标原始输出 → 落表草稿的共用执行体（resolveDraft 视频解析 /
-// resolveDesignDraft 成片反哺两路唯一实现）：词表 id 直用；新词申请走查重（归一化
+// resolveTaggerDraft 打标原始输出 → 落表草稿的共用执行体（resolveDraft 上传视频解析 /
+// resolveDesignDraft 项目解析两路唯一实现）：词表 id 直用；新词申请走查重（归一化
 // 精确匹配 → LLM 语义查重）后建词条/挂别名。这是「申请新词」工具的 Go 侧执行体。
 // withFrames=false 时不带证据帧。
 func resolveTaggerDraft(ctx context.Context, prov *llm.Provider, lib *stylelib.Library,

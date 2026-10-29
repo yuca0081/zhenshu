@@ -187,7 +187,7 @@ func (r *styleRun) prov() react.ChatClient {
 	// ②主脑走文本主力档（2026-10-28 换脑 glm-5.3，无多模态）：看图活全走视觉
 	// 副驾（llm.VisionDigest，flash 档细读成文字画像），判卷/修复对照物另起
 	// RoleVisual 单发调用——脑与眼分档，各吃各的模型。
-	prov, _ := llm.FromEnv(llm.RolePlan)
+	prov, _ := llm.FromEnv(llm.StationPrepStyleText)
 	return prov
 }
 
@@ -765,7 +765,7 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 - <canvas> 绘制 = window.__draw_xxx=function(t,ctx,W,H,rng) 纯函数，由时间轴 onUpdate 驱动逐帧重画
 - 需要外部库（three.js/物理/图表等）：在 html 里写 <!-- vend: 包名@精确版本 --> 声明，平台自动采购注入（许可证白名单：MIT/Apache/BSD/CC0 等，白名单外拒收）；静态画面能解决的别引大库
 - 字体：目录字体（%s）＋微软雅黑/黑体/宋体/楷体＋monospace；目录真没有的（像素体/手写体等）在 html 写 <!-- font: Family | 协议 | 直链URL --> 声明自装（ttf/otf 直链或 zip release 资产；Family 与 font-family 用法逐字一致；下载失败会回喂你换）——字体必须在渲前装好，判卷的字体意见才作数；颜色/字体与本片设计系统皮肤槽位逐字一致；自包含无图片无外链
-- 提交后自动过机械检查并渲染判卷（抽首/中/尾三帧对照真迹判风格贴合），不合格带诊断回喂你修复（≤%d 轮）；构图版式必须与本组其他样张明显不同，整组 4–5 张为宜（上限 %d 张）。目标 ≤%d 字符，上限 %d`,
+- 提交后自动过机械检查并渲染判卷（抽首/中/尾三帧对照真迹判风格贴合），只有 high 硬伤（读不出/压叠/空帧/溢出破图/风格明显两路）才打回带诊断修复（≤%d 轮），med/low 毛边记录不立案、别主动返工；构图版式必须与本组其他样张明显不同，整组 4–5 张为宜（上限 %d 张）。目标 ≤%d 字符，上限 %d`,
 		sampleDur, w, h, w, h, sampleDur, sampleDur, pipeline.FontCatalogList(), sampleRepairMax, styleSampleMax, sampleHTMLTarget, sampleHTMLMax)
 	return Tool{
 		Def: toolSchema("render_sample", desc, map[string]any{
@@ -854,7 +854,7 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 			}
 
 			// 渲染验证内循环：机检 → 渲 mp4 → 抽三帧判卷 → 修复（≤sampleRepairMax 轮，同类刹车）
-			html, carried, skipNote := in.HTML, []string(nil), ""
+			html, carried, skipNote, nits := in.HTML, []string(nil), "", []string(nil)
 			var judgeFrames []string
 			for round := 0; ; round++ {
 				fixed, mechIssues := pipeline.CheckSampleHTML(html, pipeline.SampleCanvas{W: w, H: h},
@@ -875,10 +875,10 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 					skipNote = "判卷通道不可用（LLM 调用失败），机检过检即放行"
 					break
 				} else if verdict.Pass {
-					carried, skipNote = nil, ""
+					carried, nits = nil, issueLines(verdict.MedLowIssues())
 					break
 				} else {
-					carried = verdict.IssueLines()
+					carried = issueLines(verdict.HighIssues()) // 修复轮只喂硬伤；med/low 已在判卷里降档不立案
 				}
 				if round >= sampleRepairMax {
 					break // 轮次耗尽：带问题说明放行
@@ -940,7 +940,9 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 			note := fmt.Sprintf("动态样张 %d 已渲染（style/clips/sample-%d.mp4，%.1f 秒）：", idx+1, idx, sampleDur)
 			switch {
 			case len(carried) > 0:
-				note += fmt.Sprintf("机检/判卷还有 %d 项未修掉（已到修复轮上限或同类刹车）：%s。", len(carried), strings.Join(carried, "；"))
+				note += fmt.Sprintf("机检/判卷还有 %d 项硬伤未修掉（已到修复轮上限或同类刹车）：%s。", len(carried), strings.Join(carried, "；"))
+			case len(nits) > 0:
+				note += fmt.Sprintf("机检过检，判卷放行（%d 项 med/low 小疵不立案，不修也行）：%s。", len(nits), strings.Join(nits, "；"))
 			case skipNote != "":
 				note += skipNote + "。"
 			default:
@@ -996,8 +998,9 @@ func orNone(ss []string) string {
 
 // sampleIssue 判卷问题一条。
 type sampleIssue struct {
-	Kind   string `json:"kind"`
-	Detail string `json:"detail"`
+	Kind     string `json:"kind"`
+	Detail   string `json:"detail"`
+	Severity string `json:"severity"` // high=打回修复；med/low=记录不立案（2026-10-29 提速拍板）
 }
 
 // sampleJudge 判卷结论。
@@ -1007,10 +1010,32 @@ type sampleJudge struct {
 	Issues []sampleIssue
 }
 
-// IssueLines 问题清单 → 人话行（回喂修复轮）。
-func (v sampleJudge) IssueLines() []string {
-	out := make([]string, 0, len(v.Issues))
+// HighIssues 全部 high 意见（唯一进修复轮的材料；med/low 留在观察里给模型参考）。
+func (v sampleJudge) HighIssues() []sampleIssue {
+	var out []sampleIssue
 	for _, is := range v.Issues {
+		if strings.EqualFold(is.Severity, "high") {
+			out = append(out, is)
+		}
+	}
+	return out
+}
+
+// MedLowIssues 全部 med/low 意见（放行不立案，观察里亮出来给模型参考）。
+func (v sampleJudge) MedLowIssues() []sampleIssue {
+	var out []sampleIssue
+	for _, is := range v.Issues {
+		if !strings.EqualFold(is.Severity, "high") {
+			out = append(out, is)
+		}
+	}
+	return out
+}
+
+// issueLines 意见清单 → 人话行（修复轮回喂与观察展示共用）。
+func issueLines(ss []sampleIssue) []string {
+	out := make([]string, 0, len(ss))
+	for _, is := range ss {
 		out = append(out, strings.TrimSpace(is.Kind+"："+is.Detail))
 	}
 	return out
@@ -1020,7 +1045,7 @@ func (v sampleJudge) IssueLines() []string {
 // dataURL；refs 非空时真迹跟在样张帧之后，判卷含风格贴合项；refs 为空降级为旧口径
 // （可读性/构图）。ok=false = 判卷通道不可用，调用方降级为「机械过检即放行」。
 func (r *styleRun) judgeSample(ctx context.Context, loop *Loop, brief string, frames []string, w, h int) (sampleJudge, bool) {
-	prov, err := llm.FromEnv(llm.RoleVisual)
+	prov, err := llm.FromEnv(llm.StationPrepStyleVision)
 	if err != nil {
 		return sampleJudge{}, false
 	}
@@ -1032,11 +1057,16 @@ func (r *styleRun) judgeSample(ctx context.Context, loop *Loop, brief string, fr
 	}
 	var criteria string
 	if len(refs) > 0 {
-		criteria = fmt.Sprintf("图1–图%d 是同一条 %.1f 秒动态样张的首/中/尾三帧；图%d–图%d 是该风格来源视频的原片真迹（对照物）。看图判卷：1 文字是否全部可读（字号/对比度/贴边裁切）；2 构图是否成立（主体清晰，无大片失衡空洞）；3 画面元素是否溢出或破图；4 尾帧是否定格在内容帧（尾帧黑屏/空屏=收尾拖尾事故）；5 整体是否贴合场景描述；6 风格贴合——对照真迹核配色（底色/强调色/文字色）、质感（颗粒/描边/纹理）、画面密度、字体气质四个维度；样张画的题材内容与真迹不同是应该的，不算偏离，但这四个维度明显两路（如真迹是粗像素位图字、样张用平滑衬线体）必须 fail。", len(frames), sampleDur, len(frames)+1, len(frames)+len(refs))
+		criteria = fmt.Sprintf("图1–图%d 是同一条 %.1f 秒动态样张的首/中/尾三帧；图%d–图%d 是该风格来源视频的原片真迹（对照物）。看图判卷：1 文字是否全部可读（字号/对比度/贴边裁切）；2 构图是否成立（主体清晰，无大片失衡空洞）；3 画面元素是否溢出或破图；4 尾帧是否定格在内容帧（尾帧黑屏/空屏=收尾拖尾事故）；5 整体是否贴合场景描述；6 风格贴合——对照真迹核配色（底色/强调色/文字色）、质感（颗粒/描边/纹理）、画面密度、字体气质四个维度；样张画的题材内容与真迹不同是应该的，不算偏离。每条 issue 必须带 severity：high=硬伤（文字读不出/互相压叠/空帧黑屏/明显溢出破图/风格四个维度明显两路——如真迹粗像素位图字、样张平滑衬线体）；med=能用但有明确毛边（对比度贴线、密度略偏、同路数但气质小差）；low=口味级吹毛求疵（对齐微偏、间距、可忽略的偏好项）。只有 high 打回修复，med/low 记录不立案——不要把毛边标成 high。", len(frames), sampleDur, len(frames)+1, len(frames)+len(refs))
 	} else {
-		criteria = fmt.Sprintf("图1–图%d 是同一条 %.1f 秒动态样张的首/中/尾三帧。看图判卷：1 文字是否全部可读（字号/对比度/贴边裁切）；2 构图是否成立（主体清晰，无大片失衡空洞）；3 画面元素是否溢出或破图；4 尾帧是否定格在内容帧（尾帧黑屏/空屏=收尾拖尾事故）；5 整体是否贴合场景描述。", len(frames), sampleDur)
+		criteria = fmt.Sprintf("图1–图%d 是同一条 %.1f 秒动态样张的首/中/尾三帧。看图判卷：1 文字是否全部可读（字号/对比度/贴边裁切）；2 构图是否成立（主体清晰，无大片失衡空洞）；3 画面元素是否溢出或破图；4 尾帧是否定格在内容帧（尾帧黑屏/空屏=收尾拖尾事故）；5 整体是否贴合场景描述。每条 issue 必须带 severity：high=硬伤（文字读不出/互相压叠/空帧黑屏/明显溢出破图）；med=能用但有明确毛边；low=口味级吹毛求疵。只有 high 打回修复，med/low 记录不立案——不要把毛边标成 high。", len(frames), sampleDur)
 	}
-	user := fmt.Sprintf("样张场景：%s\n画幅 %d×%d。该图已通过机械检查（无文字互相压叠、无禁用单位、字体可解析）。\n%s\n输出：{\"verdict\":\"pass\"或\"fail\",\"score\":0到10,\"issues\":[{\"kind\":\"unreadable|overlap|overflow|offstyle|blank|other\",\"detail\":\"一句人话\"}]}，没问题 issues 给空数组；风格贴合问题用 offstyle，detail 写清哪个维度和真迹差在哪。", brief, w, h, criteria)
+	user := fmt.Sprintf("样张场景：%s\n画幅 %d×%d。该图已通过机械检查（无文字互相压叠、无禁用单位、字体可解析）。\n%s\n输出：{\"verdict\":\"pass\"或\"fail\",\"score\":0到10,\"issues\":[{\"kind\":\"unreadable|overlap|overflow|offstyle|blank|other\",\"detail\":\"一句人话\",\"severity\":\"high|med|low\"}]}，没问题 issues 给空数组；风格贴合问题用 offstyle，detail 写清哪个维度和真迹差在哪。", brief, w, h, criteria)
+	// 站级 180s 总闸（2026-10-29 实测：端点黑洞时 300s leash×3 重试把秒级判卷挂满
+	// 15 分钟，r7 卡死整段停摆）。判卷 flash 档 NoThink 秒级作业，180s 有余量；到期
+	// 走「判卷通道不可用，机检过检即放行」降级，不挂死工位。
+	ctx, cancel := context.WithTimeout(ctx, 180*time.Second)
+	defer cancel()
 	images := append(append([]string{}, frames...), refs...)
 	usage, err := prov.GenerateJSONVisionNoThink(ctx, sampleJudgeSystem, user, images, 0.2, &out)
 	llm.AccumulateUsage(&loop.Usage, usage)
@@ -1046,21 +1076,28 @@ func (r *styleRun) judgeSample(ctx context.Context, loop *Loop, brief string, fr
 	if err != nil || out.Verdict == "" {
 		return sampleJudge{}, false
 	}
-	j := sampleJudge{Pass: strings.EqualFold(out.Verdict, "pass"), Score: out.Score, Issues: out.Issues}
-	for _, is := range j.Issues { // 压叠/不可读/空帧是硬伤，判卷官放行也不算过
+	j := sampleJudge{Score: out.Score, Issues: out.Issues}
+	applySampleSeverity(&j)
+	return j, true
+}
+
+// applySampleSeverity pass=无 high（2026-10-29 提速拍板）：旧口径任何 issue 一票
+// 否决，实测样张 A 顶着 4 项口味精疵修满 2 轮一项未修掉、照样带伤放行——修复轮
+// 白烧 ~4.5 分钟。硬伤三兄弟（压叠/不可读/空帧）永远 high，模型标低也压不住；
+// severity 缺失按旧口径从严记 high（兼容不守新 schema 的输出）。raw verdict 只作
+// 参考——fail 但全是 med/low 时按新口径放行。
+func applySampleSeverity(j *sampleJudge) {
+	j.Pass = true
+	for i := range j.Issues {
+		is := &j.Issues[i]
 		k := strings.ToLower(is.Kind)
-		if k == "overlap" || k == "unreadable" || k == "blank" {
+		if k == "overlap" || k == "unreadable" || k == "blank" || strings.TrimSpace(is.Severity) == "" {
+			is.Severity = "high"
+		}
+		if strings.EqualFold(is.Severity, "high") {
 			j.Pass = false
 		}
 	}
-	if len(refs) > 0 { // 有真迹对照时风格贴合是判据本体，不是参考项
-		for _, is := range j.Issues {
-			if strings.ToLower(is.Kind) == "offstyle" {
-				j.Pass = false
-			}
-		}
-	}
-	return j, true
 }
 
 // sampleRepairSystem 修复轮（与判卷同一固定前缀形态，利前缀缓存）。
@@ -1070,7 +1107,7 @@ const sampleRepairSystem = `你是样张修复师。重写完整样张 HTML，�
 // 都是视觉副驾产物（问法与 get_style_detail/render_sample 同源，同图同问磁盘缓存
 // 免费重放）——修复师对着画像修，不是凭一句「风格不贴合」瞎猜。
 func (r *styleRun) repairSample(ctx context.Context, loop *Loop, brief, html string, frames []string, issues []string) (string, bool) {
-	prov, err := llm.FromEnv(llm.RolePlan)
+	prov, err := llm.FromEnv(llm.StationPrepStyleText)
 	if err != nil {
 		return "", false
 	}

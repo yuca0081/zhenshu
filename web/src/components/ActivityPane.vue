@@ -212,6 +212,8 @@ const items = computed<Item[]>(() => {
       case 'check.contrast_fix':
         add({ state: 'info', title: '对比度自动回填', timeText: t, detail: ev.detail, minor: true })
         break
+      // prereview.*：legacy 栅栏时代事件，段级流水线起后端已无发射点——翻译留着
+      // 给旧项目 manifest 回放，新项目不会再走到这五个分支。
       case 'prereview.start':
         add({ state: 'info', title: '渲染前预审：' + ev.detail, timeText: t })
         break
@@ -227,6 +229,56 @@ const items = computed<Item[]>(() => {
       case 'prereview.regen_error':
         add({ state: 'fail', title: '预审重出失败', timeText: t, detail: firstLine(ev.detail) })
         break
+      // ── 段级流水线审核账（review.*：段审/边界审/全片终审，segpipe.go）──
+      case 'review.rework': // 两种形态：段审打回（segXX rN: …）/ 边界打回（bNN → segXX）
+        add({ state: 'reject', title: '审核打回：段画面重写', timeText: t, detail: firstLine(ev.detail) })
+        break
+      case 'review.seg_pass_degraded':
+        add({ state: 'reject', title: '段审打回超限，带伤放行', timeText: t, detail: firstLine(ev.detail) })
+        break
+      case 'review.bnd_pass_degraded':
+        add({ state: 'reject', title: '边界审打回超限，带伤放行', timeText: t, detail: firstLine(ev.detail) })
+        break
+      case 'review.seg_error':
+        add({ state: 'fail', title: '段审审查器故障（降级放行）', timeText: t, detail: firstLine(ev.detail) })
+        break
+      case 'review.bnd_error':
+        add({ state: 'fail', title: '边界审审查器故障（降级放行）', timeText: t, detail: firstLine(ev.detail) })
+        break
+      case 'review.final_error':
+        add({ state: 'fail', title: '终审审查器故障，降级放行', timeText: t, detail: firstLine(ev.detail) })
+        break
+      case 'review.brake':
+        add({ state: 'fail', title: '刹车停机（可重跑，产物按段保留）', timeText: t, detail: firstLine(ev.detail) })
+        break
+      case 'review.seg_audit_off':
+        add({ state: 'info', title: '段审已关（机检直过）', timeText: t, minor: true })
+        break
+      case 'review.stitch_fix_applied':
+        add({ state: 'ok', title: '拼接修正已应用', timeText: t, detail: ev.detail, minor: true })
+        break
+      case 'review.final_recheck':
+        add({ state: 'info', title: '终审复核轮（帧格瘦身）', timeText: t, detail: ev.detail, minor: true })
+        break
+      case 'review.verdict_write_error':
+        add({ state: 'fail', title: '审核意见单落盘失败', timeText: t, detail: firstLine(ev.detail), minor: true })
+        break
+      // ── 段级门禁与停机补充账 ──
+      case 'check.seam':
+        add({ state: 'ok', title: '接缝亮度闸通过', timeText: t, detail: ev.detail, minor: true })
+        break
+      case 'check.seam_degraded':
+        add({ state: 'info', title: '接缝亮度闸降级放行', timeText: t, detail: firstLine(ev.detail), minor: true })
+        break
+      case 'check.tdz_recheck':
+        add({ state: 'info', title: '运行时崩溃本地复检（不烧修复轮）', timeText: t, detail: firstLine(ev.detail), minor: true })
+        break
+      case 'budget.exhausted':
+        add({ state: 'fail', title: '预算耗尽，制作停机', timeText: t, detail: firstLine(ev.detail) })
+        break
+      case 'segpipe.watchdog':
+        add({ state: 'fail', title: '管线静默超限，看门狗刹车', timeText: t, detail: firstLine(ev.detail) })
+        break
       case 'frameqa.start':
         add({ state: 'info', title: `画面审查：${ev.detail || '全片'}`, timeText: t })
         break
@@ -239,7 +291,7 @@ const items = computed<Item[]>(() => {
       case 'frameqa.rollback':
         add({ state: 'reject', title: '审查打回：回滚重出', timeText: t, detail: ev.detail })
         break
-      case 'frameqa.skipped_by_prereview':
+      case 'frameqa.skipped_by_prereview': // legacy 栅栏时代联动，现管线无发射点
         add({ state: 'info', title: '预审全过，渲后免审', timeText: t, minor: true })
         break
       case 'render.seg':
@@ -262,7 +314,7 @@ const items = computed<Item[]>(() => {
         add({ state: 'info', title: '字体降级（回退渲染，不挡样张）', timeText: t, detail: firstLine(ev.detail), minor: true })
         break
       default:
-        break // llm.usage / seg.* / stage.done 等技术性事件不上屏
+        break // llm.usage / seg.* 状态机账 / fonts.* / produce.tts 等记账类与技术性事件不上屏
     }
   }
 

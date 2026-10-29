@@ -28,6 +28,7 @@ import (
 	"webpage-video-agent/server/internal/contract"
 	"webpage-video-agent/server/internal/llm"
 	"webpage-video-agent/server/internal/pipeline"
+	"webpage-video-agent/server/internal/prep"
 )
 
 // sceneFingerprint 段级场景文件缓存键（内容指纹）：分镜改稿后段 id 复用而
@@ -51,12 +52,43 @@ func sceneSidecarPath(p *pipeline.Project, segID string) string {
 }
 
 // sceneSidecarFingerprint 段内容指纹 + 设计系统版本（笼子二版本戳）+ 导演统筹
-// 版本（弧线/母题改动 → 全段过期）：
+// 版本（弧线/母题改动 → 全片段过期）+ 段落定位注（③重跑重分组 → 受影响段过期）：
 // 设计一改（确认重出/字段变化）designFingerprint 变 → 按旧版画的段自动过期重生成；
 // 设计未变时指纹不变，缓存照常命中。旧旁车（无冒号后缀）与新格式必然不等 → 首跑全量刷新一次。
-// 无导演字段时 directorFingerprint 为空串，指纹与旧格式逐字节一致（老项目缓存不冲）。
+// 无导演字段且无段落层（老项目）时后两项为空串，指纹与旧格式逐字节一致（老项目缓存不冲）。
 func sceneSidecarFingerprint(p *pipeline.Project, sb *contract.Storyboard, seg contract.Segment) string {
-	return sceneFingerprint(seg) + ":" + designFingerprint(p) + directorFingerprint(sb)
+	return sceneFingerprint(seg) + ":" + designFingerprint(p) + directorFingerprint(sb) + paraNoteFingerprint(p, seg.ID)
+}
+
+// paraNote 段在本片的段落定位注（工件 C 段落层 → 生成侧注入，production-
+// architecture-discussion §4 收益①）：“第 2/5 段落「…」·段内第 1/3 段”。
+// 同段落相邻段是同一话题的画面延续，段落之间允许换舞台换气质——这是提示词行
+// 的语义，注本身只带定位。draft 读不到或段落层为空（老项目）返回空串。
+func paraNote(p *pipeline.Project, segID string) string {
+	d, err := prep.LoadDraft(p)
+	if err != nil {
+		return ""
+	}
+	for pi, para := range d.Paragraphs {
+		for si, id := range para.Segs {
+			if id == segID {
+				return fmt.Sprintf("第 %d/%d 段落「%s」·段内第 %d/%d 段",
+					pi+1, len(d.Paragraphs), para.Title, si+1, len(para.Segs))
+			}
+		}
+	}
+	return ""
+}
+
+// paraNoteFingerprint 段落定位注指纹：段落主题/分组/段内位置任一变化 → 该段过期。
+// 空注（老项目）返回空串，指纹与旧格式逐字节一致（同 directorFingerprint 纪律）。
+func paraNoteFingerprint(p *pipeline.Project, segID string) string {
+	note := paraNote(p, segID)
+	if note == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(note))
+	return ":" + hex.EncodeToString(sum[:4])
 }
 
 // designFingerprint 设计系统内容指纹（style/style_samples.json 文件字节哈希）。
@@ -101,7 +133,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	// 看图活全走视觉副驾（llm.VisionDigest，flash 档）——样张/真迹细读成全片
 	// 共享的「风格画像」，素材图段级细读。判卷链（frameQA/段审/终审）仍整段
 	// flash 直判，不经这里。
-	prov, perr := llm.FromEnv(llm.RolePlan)
+	prov, perr := llm.FromEnv(llm.StationSceneGen)
 	if perr != nil {
 		return fmt.Errorf("场景生成需要 API 模式（LLM_API_KEY）: %w", perr)
 	}
@@ -165,13 +197,13 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 	gen := func(acc *segUsage, user string, out any) (openai.Usage, error) {
 		if acc.rec != nil {
 			if acc.calls == 0 { // 系统提示（设计系统/皮肤笼子）每任务记一次：留痕里看得见注入了什么约束
-				acc.rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: sceneSystemFor(p)})
+				acc.rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: sceneSystemFor()})
 			}
 			acc.rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: user})
 		}
 		// 纯文本主脑（2026-10-28 换脑）：图不入会话——样张/真迹走全片共享的风格
 		// 画像（styleBook），素材走段级细读；NoThink 取舍不变（结构化 HTML 作业）。
-		u, err := prov.GenerateJSONNoThink(ctx, sceneSystemFor(p), user, out)
+		u, err := prov.GenerateJSONNoThink(ctx, sceneSystemFor(), user, out)
 		acc.prompt += u.PromptTokens
 		acc.compl += u.CompletionTokens
 		acc.cached += genCached(u)
@@ -317,6 +349,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			at.Done(werr)
 		}()
 		v := voices[seg.ID]
+		pn := paraNote(p, seg.ID) // 段落定位注（工件 C 段落层；老项目空串不加行）
 		sceneM, compM := methodsFor(r.RootDir, seg)
 		// 稳定前缀布局（七刀#4）：跨段不变的（样张源码/真迹说明/设计系统主体/风格
 		// 画像）连成整块进共享前缀；段变量（导演统筹/本段版式指派/素材细读）全部
@@ -363,7 +396,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			}
 		}
 		if hist == nil { // 全新会话（首写或续写不可用的修复兜底，行为同旧版）
-			user := sceneUserPrompt(seg, v, instruction, feedback, cv, styleShared, styleSeg, golden, sceneM, compM, len(segMats) == 0, prevSceneHTML(p, seg.ID))
+			user := sceneUserPrompt(seg, v, instruction, feedback, cv, styleShared, styleSeg, golden, sceneM, compM, len(segMats) == 0, prevSceneHTML(p, seg.ID), pn)
 			_, gerr := gen(acc, user, &payload)
 			if gerr != nil {
 				werr = fmt.Errorf("%s 场景生成失败: %w", seg.ID, gerr)
@@ -381,7 +414,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 						styleSeg += materialNote(len(segMats))
 					}
 					styleSeg += materialsNote(segMats)
-					_, err2 := gen(acc, sceneUserPrompt(seg, v, instruction, feedback, cv, styleShared, styleSeg, golden, sceneM, compM, false, ""), &payload)
+					_, err2 := gen(acc, sceneUserPrompt(seg, v, instruction, feedback, cv, styleShared, styleSeg, golden, sceneM, compM, false, "", pn), &payload)
 					if err2 != nil {
 						werr = fmt.Errorf("%s 带素材终稿生成失败: %w", seg.ID, err2)
 						fail(werr)
@@ -407,7 +440,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 					HTML     string                  `json:"html"`
 					Elements []contract.NamedElement `json:"elements"`
 				}
-				_, err2 = gen(acc, sceneUserPrompt(seg, v, "", fb, cv, styleShared, styleSeg, golden, sceneM, compM, false, payload.HTML), &fixed)
+				_, err2 = gen(acc, sceneUserPrompt(seg, v, "", fb, cv, styleShared, styleSeg, golden, sceneM, compM, false, payload.HTML, pn), &fixed)
 				if err2 == nil {
 					payload.HTML, payload.Elements = fixed.HTML, fixed.Elements
 				}
@@ -446,7 +479,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			saveSceneHistory(p, seg.ID, &sceneHistory{
 				FP: fp,
 				Messages: []openai.ChatCompletionMessage{
-					{Role: openai.ChatMessageRoleUser, Content: sceneUserPrompt(seg, v, instruction, feedback, cv, styleShared, styleSeg, golden, sceneM, compM, false, "")},
+					{Role: openai.ChatMessageRoleUser, Content: sceneUserPrompt(seg, v, instruction, feedback, cv, styleShared, styleSeg, golden, sceneM, compM, false, "", pn)},
 					{Role: openai.ChatMessageRoleAssistant, Content: scenePayloadJSON(payload.HTML, payload.Elements)},
 				},
 			})
@@ -533,19 +566,15 @@ func (r *Runner) fallbackOldScene(p *pipeline.Project, segID, why string) bool {
 	return true
 }
 
-// sceneSystemFor 系统提示跟随项目已确认的设计系统（笼子二：方向 + 贯穿装置一句话，
-// 细则由 designNoteFor 注入正文）。正常流程到不了缺省分支——样张是三前置硬门，
-// 能进场景生成的项目必有 style_samples.json；这里只兜异常态，给中性措辞不留题材预设。
-func sceneSystemFor(p *pipeline.Project) string {
-	var ss contract.StyleSamples
-	if b, err := os.ReadFile(p.Artifact("style/style_samples.json")); err == nil && json.Unmarshal(b, &ss) == nil && ss.Direction != "" {
-		s := "你是视频的画面工程师，直接写可渲染的场景 HTML。只输出 JSON。风格：" + ss.Direction + "。视觉参照以注入的「风格画像」与设计系统文字为准（你看不到图，画像就是你的眼睛）。"
-		if ss.Device != nil && ss.Device.Name != "" {
-			s += "贯穿装置「" + ss.Device.Name + "」是全片签名，本段按注入的设计系统细则呼应它。"
-		}
-		return s
-	}
-	return "你是视频的画面工程师，直接写可渲染的场景 HTML。只输出 JSON。风格：未注入设计系统——保持干净克制的中性版式，高对比配色、少装饰。"
+// sceneSystemFor 系统提示词只装跨项目通用设定：角色、工作内容、兜底原则、产出
+// 格式（用户原则 2026-10-29，与 agent 工具 description 边界化同源）。项目相关的
+// 一切——风格方向、贯穿装置、设计系统细则——由作业正文（user 侧）注入，且注入块
+// 自带权威性说明（风格画像/设计系统的节标题），注入了什么模型就看什么，system
+// 不做元描述。未注入风格的兜底（中性版式）是工作原则而非项目内容，留在这里。
+func sceneSystemFor() string {
+	return "你是视频的画面工程师，为一段视频直接写可渲染的场景 HTML。\n" +
+		"未注入风格与设计系统时，保持干净克制的中性版式——高对比配色、少装饰。\n" +
+		"只输出 JSON。"
 }
 
 // goldenExample 契约金样例（ai/contract-example/seg-golden.html）作为结构 few-shot。
@@ -696,13 +725,18 @@ func (r *Runner) sceneLintWithVend(ctx context.Context, html string) []string {
 // 文本全够不着。契约摘要里的段 id/段总时长也随之去段化（指向文末段信息）。
 // allowAsk=本段尚无素材，开放真图申请单（image_requests）；已有素材带图生成时关闭。
 // prevHTML=上一版场景文件（修复轮回喂底稿，首稿为空）。
-func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback string, cv contract.Canvas, styleShared, styleSeg, golden, sceneTpl, compMethods string, allowAsk bool, prevHTML string) string {
+func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback string, cv contract.Canvas, styleShared, styleSeg, golden, sceneTpl, compMethods string, allowAsk bool, prevHTML string, paraNote string) string {
 	var wb strings.Builder
 	for i, w := range v.Words {
 		if i > 0 && i%10 == 0 {
 			wb.WriteString("\n")
 		}
 		fmt.Fprintf(&wb, "%d:%s@%.1fs ", i, w.Text, w.Start)
+	}
+	// 段落定位行（工件 C 段落层，§4 收益①）：结构信息紧跟标题；老项目空注不加行
+	paraLine := ""
+	if paraNote != "" {
+		paraLine = "- 段落定位：" + paraNote + "（同段落相邻段是同一话题的画面延续，画面要接得住上段末拍；段落之间是话题切换，允许换舞台换气质）\n"
 	}
 	rules := "- 内容安全区 x∈[0,1080]、y∈[0,1594]；底部 1594px 起是平台字幕带，禁放内容\n" +
 		"- 顶部两角是平台角标保留区（启用章节时左上放章名、右上放计数器）：内容避开左上(x<280,y<150)与右上(x>800,y<150)两个角域\n" +
@@ -779,7 +813,7 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
 ## 段信息（本段专属——从这里到文末逐段不同；上文契约/设计/样张/金样例/规则为全片共享）
 - 段 id（根元素 data-composition-id 与 timeline 注册逐字用它）：%s
 - 标题：%s
-- 旁白（%d 词，%.1f 秒）：%s
+%s- 旁白（%d 词，%.1f 秒）：%s
 - 段总时长：%.3f 秒（timeline 全长，含 %.2fs 收尾垫；canvas 接线里的 duration 用它）
 - %s：%s
 %s
@@ -793,7 +827,7 @@ func sceneUserPrompt(seg contract.Segment, v voiceMeta, instruction, feedback st
 ## 输出（只输出一个 JSON 对象：第一个字符必须是 {、最后一个字符必须是 }，前后不许有任何字、标签、围栏或解释）
 {"note":"画面思路一句话",%s"html":"<template>…整段场景文件…</template>","elements":[{"id":"元素DOM id","name":"人话名（与 data-hf-name 一致）"}]}
 `, int(cv.W), int(cv.H), pipeline.SceneContractCore("段总时长秒", "段id"), styleShared, goldenBlock, rules,
-		seg.ID, seg.Key, len(v.Words), v.DurationS, seg.Narration, v.DurationS+contract.SegTail, contract.SegTail, briefLabel, seg.VisualBrief,
+		seg.ID, seg.Key, paraLine, len(v.Words), v.DurationS, seg.Narration, v.DurationS+contract.SegTail, contract.SegTail, briefLabel, seg.VisualBrief,
 		styleSeg, sceneTpl, compMethods, wb.String(), instrBlock, askBlock, feedbackBlock(feedback, prevHTML), reqField)
 }
 

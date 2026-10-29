@@ -37,6 +37,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 PUNCT = set('，。！？；、：,.!?;:…—·')
 # 百炼档（2026-10-27 用户升级 qwen-audio-3.1-tts-plus，此前 3.0 自 2026-10-10 起用：
@@ -127,14 +128,25 @@ def tts_bailian(text, out_wav, voice=None):
     except ImportError:
         print('  bailian tts 跳过: dashscope 未安装（pip install dashscope）')
         return False
-    try:
-        syn = SpeechSynthesizer(model=BL_MODEL, voice=voice or BL_VOICE)
-        audio = syn.call(text)
-        if not audio or len(audio) < 2000:
-            print(f'  bailian tts 返回过短: {len(audio) if audio else 0} bytes')
-            return False
-    except Exception as e:
-        print(f'  bailian tts 失败: {str(e)[:200]}')
+    # websocket 建连是瞬态失败重灾区：SDK 内 5s 建连窗口是死数改不了，同一次
+    # 运行里前一段刚连上、下一段连挂 3 次（2026-10-29 seg08 实测）→ 整链失败。
+    # 在外面补 3 次重试，抖动间隙 3s；连续失败才算真失败回落 Edge。
+    last_err = ''
+    for attempt in range(3):
+        try:
+            syn = SpeechSynthesizer(model=BL_MODEL, voice=voice or BL_VOICE)
+            audio = syn.call(text)
+            if not audio or len(audio) < 2000:
+                print(f'  bailian tts 返回过短: {len(audio) if audio else 0} bytes')
+                return False
+            break
+        except Exception as e:
+            last_err = str(e)[:200]
+            if attempt < 2:
+                print(f'  bailian tts 建连抖动，重试 {attempt + 1}/2: {last_err[:120]}')
+                time.sleep(3)
+    else:
+        print(f'  bailian tts 失败: {last_err}')
         return False
     mp3 = out_wav.with_suffix('.mp3')
     mp3.write_bytes(audio)
