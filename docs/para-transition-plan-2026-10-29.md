@@ -141,12 +141,55 @@
    方案甲的段界机械转场随本次一并落地（两案通用件）。
 3. 若比武输了（模型写不动连续编排）：退回方案甲独立成立，段内也用叠化。
 
-## 7. 待拍板
+## 7. 拍板（2026-10-29 当日定案）与实施记录
 
-1. 段界程序化转场选型：smoothleft（推荐）/ pixelize / 其他。
-2. 新项目设计锁定默认写 para 令牌？（推荐是；老项目不动）
-3. 现在跑比武实验吗？（推荐先跑，零管线改动、token 花费一条段落）
-4. 方案甲是否先落地段界半边（可与比武并行）。
+1. 段界程序化转场选型：**smoothleft**（拍板采纳推荐；备选 pixelize 未采用）。
+   实测复核（31 段真片 p20261023-110234 重拼）：机理正确（合成红蓝片左旧右新
+   可见软边推切缝、滤镜图数学逐秒吻合），但**暗画面段落观感偏溶解**——smoothleft
+   边缘渐变很宽，两暗场景之间推切读起来像叠化。若人评「翻页感」不足，换硬边
+   转场只需改 `pipeline.go` 的 `paraEdgeKind` 常量（wipeleft 硬边 / slideleft
+   整帧滑入），重跑 assemble 即见。
+2. 新项目设计锁定默认写 para 令牌：**是**。`transitionTokenOf` 缺省映射已改
+   para；明说「直切/硬切」尊重 cut；叠化类措辞仍 xfade。老项目（project.json
+   已写死 cut/xfade）行为不变。
+3. 比武实验：**已跑**（当日），材料=同片段落1（seg01–03，破题段），结果见
+   §8。
+4. 方案甲段界半边：**已随本拍板整体落地**（para 令牌=段内 fade 0.4s + 段界
+   smoothleft 0.5s + 音频裁尾对接，一个令牌两层一起上，未拆半边）。
+
+### 实施坐标（2026-10-29 落地）
+
+| 位置 | 内容 |
+|---|---|
+| `server/internal/pipeline/pipeline.go` | para 令牌全套：`paraInDur/paraEdgeDur/paraEdgeKind` 常量、`segParaIndex`（draft.json 段落层直读）、`paraEdges`（边界分类）、`buildXfadeChain`（泛化视频链，均一窗口下与旧图逐字节一致有回归闸）、`buildTrimAudioChain`（裁尾对接，无 acrossfade）、`buildParaGraph`、`paraConcat`、`transitionEncode`（v1b/v2 共用执行器） |
+| `server/internal/pipeline/design.go` | `transitionTokenOf` 缺省 para + 直切/硬切→cut；设计 schema 转场提示语更新（cut\|xfade\|para） |
+| `server/internal/pipeline/para_test.go` | 泛化回归闸/分层图数学/短段拒绝/边界分类（含认不出保守归段界） |
+| `server/internal/pipeline/para_verify_test.go` | 真片重拼验证夹具（`PARA_VERIFY=<项目ID>` 才跑，零 token） |
+| `server/internal/produce/para_contest_test.go` | 比武实验驱动（`PARA_CONTEST=<项目ID>` 才跑） |
+
+真片验证记录（p20261023-110234，31 段 183.57s）：para 重拼 171.07s，收缩
+12.50s = 25 段内×0.4 + 5 段界×0.5（逐秒吻合）；音频静音带实测 [25.26,25.47]，
+incoming 首字 25.47 满音量起（=段起点+0.13s 首音垫，旁白零损伤）；样张与边界
+抽帧存 `data/projects/p20261023-110234/reports/para-sample/`（main-para.mp4
+完整 para 版成片，原 cut 版已从 renders/backup-cut-20261029/ 恢复）。
+
+## 8. 比武实验结果（2026-10-29，详见 docs/test-result/para-contest-2026-10-29.md）
+
+材料：同片段落 1（seg01–03「破题」，3 分镜 18.996s）。三指标：
+
+1. **契约一次过率：段落制 1/1 一次过（0 修复轮）vs 基线 1/3**（seg01/03 各
+   1–2 轮修复）。段落 HTML ≈ 单段 3 倍体量（compl 4615 tokens）下 lint+契约
+   一次全过——「单次生成变大→返工爆炸半径变大」的担忧未兑现。
+2. **段审：段落制六维全 pass、零 high**（仅 2 low）vs 基线三段各带伤（seg01
+   device fail、seg03 修后仍有 1 条 high content）。
+3. **过渡观感（机器印象，终审权在用户）**：背景舞台全程连续、无黑屏无硬切、
+   每个边界后新信息点按旁白节拍入场——从「两张画硬切」升级为「同一舞台换景」。
+   短板：前景装置在分镜边界整体退场留约 0.3s 空台，非旧元素保留变形的连续演进
+   ——换骨提示词补一条「边界处旧元素优先保留变形（缩小/上移/变淡成引言）」。
+
+**结论：比武赢了，建议进第二步换骨**（§5.2 清单，全量回归护住；段落作业书
+正式化时吸收观感短板的编排要求）。产物在 data/paracontest/（沙盒）与
+reports/para-sample/（方案甲真片样张）。
 
 ## 附：关键坐标
 

@@ -1625,7 +1625,7 @@
       type: "程序化", cls: "", title: "拼接",
       rows: [
         ["职责", "段视频按序拼接 + 音轨合成（ffmpeg）；<em>全部段过审即开拼</em>（边界审撤岗后不再等边界对）。"],
-        ["注", "段间转场＝固定契约：统一直切（拼接层缺省，<code>transitionFor</code>），各段首帧即景/末帧定格由机检亮度闸保证——观众看到统一节奏，不再是各段加戏。<em>拼接层永远零改动</em>。"]
+        ["注", "段间转场＝固定契约，令牌三档（<code>transitionFor</code>）：cut 直切 / xfade 全片叠化 / <em>para 段落制分层（2026-10-29 新缺省）</em>——段内 fade 叠化 0.4s + 段界 smoothleft 推切 0.5s（draft.json 段落层分类边界），音频裁尾对接旁白零损伤（<code>paraConcat</code>）。各段首帧即景/末帧定格由机检亮度闸保证。<em>拼接层永远零改动</em>（换令牌只改 project.json 重拼）。"]
       ]
     },
     final: {
@@ -2053,7 +2053,7 @@
     },
     cf_concat: {
       type: "外部进程 ⚙", cls: "", title: "concatSegs：硬拼",
-      rows: [["拼接", "pipeline.go:1045：ffmpeg concat -c copy 零转码硬拼（:1064）→ renders/main_voice.mp4；xfade 软转场走 xfadeConcat（:1178）。"], ["时间轴", "writeActualTimeline（:1079）把实测时长写回——终审抽帧以此为准。"]]
+      rows: [["拼接", "pipeline.go concatSegs：令牌分发——cut 走 concat -c copy 零转码硬拼 → renders/main_voice.mp4；xfade 走 xfadeConcat；para（新缺省）走 paraConcat 段落制分层（段内 fade 0.4s + 段界 smoothleft 0.5s + 裁尾音频）。"], ["时间轴", "writeActualTimeline / 转场路径的 starts 同源写 timeline.json——终审抽帧与字幕/SFX 落点以此为准。"]]
     },
     cf_mix: {
       type: "外部进程 ⚙", cls: "", title: "stageStitch：终装混音",

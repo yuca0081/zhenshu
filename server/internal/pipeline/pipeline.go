@@ -1045,17 +1045,24 @@ func segSrcSum(p *Project, segID string) (string, error) {
 
 // concatSegs 全部段片 concat -c copy 拼成人声母版 main_voice.mp4（同源输出参数
 // 一致，免重编码）。BGM 在 stitch 阶段从母版混入 main.mp4——换配乐不用重渲画面。
-// 转场 xfade（v1b）时改走交叉叠化链（见 xfadeConcat）。
+// 转场 xfade（v1b）走交叉叠化链；para（v2）走段落制分层链（见 paraConcat）。
 func concatSegs(p *Project, sb *contract.Storyboard, segsDir string) error {
-	if transitionFor(p) == "xfade" {
-		if err := xfadeConcat(p, sb, segsDir); err == nil {
+	tok := transitionFor(p)
+	if tok == "xfade" || tok == "para" {
+		var err error
+		if tok == "para" {
+			err = paraConcat(p, sb, segsDir)
+		} else {
+			err = xfadeConcat(p, sb, segsDir)
+		}
+		if err == nil {
 			return nil
 		} else if !errors.Is(err, errXfadeShort) {
 			return err // 命令级失败是错误（时间轴语义变了，不能静默换路）
 		}
-		// 段过短放不下叠化窗口：回退硬拼 + 清掉可能存在的旧 timeline（口径必须一致）
+		// 段过短放不下转场窗口：回退硬拼 + 清掉可能存在的旧 timeline（口径必须一致）
 		_ = os.Remove(p.Artifact("renders/timeline.json"))
-		p.Manifest("render.xfade_fallback", "段过短，回退 concat")
+		p.Manifest("render.xfade_fallback", tok+"：段过短，回退 concat")
 	}
 	list := filepath.Join(segsDir, "list.txt")
 	var b strings.Builder
@@ -1109,8 +1116,9 @@ const xfadeDur = 0.4
 
 var errXfadeShort = errors.New("xfade: 段过短")
 
-// transitionFor 转场模式：project.json "transition" > "fade"。
-// cut=页内硬切；fade=v1 页内黑场微叠化；xfade=v1b concat 侧真交叉叠化。
+// transitionFor 转场模式：project.json "transition" > "cut"。
+// cut=页内硬切；fade=v1 页内黑场微叠化（已退役不产新）；xfade=v1b concat 侧真
+// 交叉叠化；para=v2 段落制分层（段内 fade 叠化 + 段界 smoothleft，见 paraConcat）。
 // v3 库条目不携带 tokens，读库配置的旧路径已随 schema 退役。
 func transitionFor(p *Project) string {
 	if b, err := os.ReadFile(p.Artifact("project.json")); err == nil {
@@ -1146,8 +1154,38 @@ func LoadTimeline(p *Project) []TimelineRow {
 	return tl
 }
 
+// xfadeEdge 一个段界的转场参数（v2 para 泛化：每边界自带手法与窗口）。
+type xfadeEdge struct {
+	Kind string  // xfade 滤镜的 transition 名（fade/smoothleft/…）
+	Dur  float64 // 窗口（秒）
+}
+
+// buildXfadeChain 视频叠化链（泛化）：每边界 {手法,窗口}，第 i 个边界的 offset =
+// Σ_{k<i}d_k − Σ_{j<i}D_j（前 i 次收缩都已发生）。全同窗口时与旧公式 D·i 同值
+// （%.3f 格式化后与旧版逐字节一致，旧测试语义不破）。
+func buildXfadeChain(durs []float64, edges []xfadeEdge) (vc string, starts []float64) {
+	n := len(durs)
+	var parts []string
+	prev := "[0:v]"
+	cum, sumD := durs[0], 0.0
+	starts = append(starts, 0)
+	for i := 1; i < n; i++ {
+		sumD += edges[i-1].Dur // 本边界的窗口先收缩，再算 offset
+		out := fmt.Sprintf("[xv%d]", i)
+		if i == n-1 {
+			out = "[vout]"
+		}
+		parts = append(parts, fmt.Sprintf("%s[%d:v]xfade=transition=%s:duration=%.2f:offset=%.3f%s",
+			prev, i, edges[i-1].Kind, edges[i-1].Dur, cum-sumD, out))
+		prev = out
+		starts = append(starts, cum-sumD)
+		cum += durs[i]
+	}
+	return strings.Join(parts, ";"), starts
+}
+
 // buildXfadeGraph 纯函数：各段时长 → xfade/acrossfade 链 + 各段实际起点。
-// 第 i 个边界的 offset = Σ_{k<i}d_k − D·i（前 i 次收缩都已发生）。
+// v1b 语义保留不动（para 才走分层/裁尾）：全片均一 fade 窗口 + acrossfade 音频。
 func buildXfadeGraph(durs []float64) (vc, ac string, starts []float64, err error) {
 	n := len(durs)
 	if n < 2 {
@@ -1158,23 +1196,55 @@ func buildXfadeGraph(durs []float64) (vc, ac string, starts []float64, err error
 			return "", "", nil, errXfadeShort
 		}
 	}
-	var vparts, aparts []string
-	prevV, prevA := "[0:v]", "[0:a]"
-	cum := durs[0]
-	starts = append(starts, 0)
-	for i := 1; i < n; i++ {
-		outV, outA := fmt.Sprintf("[xv%d]", i), fmt.Sprintf("[xa%d]", i)
-		if i == n-1 {
-			outV, outA = "[vout]", "[aout]"
-		}
-		vparts = append(vparts, fmt.Sprintf("%s[%d:v]xfade=transition=fade:duration=%.2f:offset=%.3f%s",
-			prevV, i, xfadeDur, cum-xfadeDur*float64(i), outV))
-		aparts = append(aparts, fmt.Sprintf("%s[%d:a]acrossfade=d=%.2f%s", prevA, i, xfadeDur, outA))
-		prevV, prevA = outV, outA
-		starts = append(starts, cum-xfadeDur*float64(i))
-		cum += durs[i]
+	edges := make([]xfadeEdge, n-1)
+	for i := range edges {
+		edges[i] = xfadeEdge{Kind: "fade", Dur: xfadeDur}
 	}
-	return strings.Join(vparts, ";"), strings.Join(aparts, ";"), starts, nil
+	vc, starts = buildXfadeChain(durs, edges)
+	var aparts []string
+	prevA := "[0:a]"
+	for i := 1; i < n; i++ {
+		outA := fmt.Sprintf("[xa%d]", i)
+		if i == n-1 {
+			outA = "[aout]"
+		}
+		aparts = append(aparts, fmt.Sprintf("%s[%d:a]acrossfade=d=%.2f%s", prevA, i, xfadeDur, outA))
+		prevA = outA
+	}
+	return vc, strings.Join(aparts, ";"), starts, nil
+}
+
+// transitionEncode v1b/v2 共用执行器：filter 图 → 整片重编码一次 main_voice.mp4
+// （crf18，与后期链路同价），timeline.json 写实际段起点（sfx 落点/前端字幕轨的
+// 权威边界，两代转场同源同口径）。
+func transitionEncode(p *Project, segsDir, label string, ids []string, vc, ac string, starts, durs []float64) error {
+	args := []string{"-y", "-v", "error"}
+	for _, id := range ids {
+		args = append(args, "-i", id+".mp4")
+	}
+	args = append(args,
+		"-filter_complex", vc+";"+ac,
+		"-map", "[vout]", "-map", "[aout]",
+		"-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
+		"-c:a", "aac", "-b:a", "192k", "../main_voice.mp4")
+	if _, err := runFFmpeg(p, segsDir, label, args...); err != nil {
+		return err
+	}
+	tl := make([]TimelineRow, len(ids))
+	for i, id := range ids {
+		end := starts[i] + durs[i]
+		if i+1 < len(starts) {
+			end = starts[i+1]
+		}
+		tl[i] = TimelineRow{ID: id, Start: starts[i], End: end}
+	}
+	if b, err := json.MarshalIndent(tl, "", "  "); err == nil {
+		// timeline 是 sfx 落点与前端字幕轨的权威边界，写失败必须留痕（否则按裸累计错位）
+		if werr := WriteFileAtomic(p.Artifact("renders/timeline.json"), b, 0o644); werr != nil {
+			p.Manifest("render.xfade.timeline_error", werr.Error())
+		}
+	}
+	return nil
 }
 
 // xfadeConcat 段片链式交叉叠化出 main_voice.mp4（真叠化必须整片重编码一次，
@@ -1193,33 +1263,140 @@ func xfadeConcat(p *Project, sb *contract.Storyboard, segsDir string) error {
 	if err != nil {
 		return err
 	}
-	args := []string{"-y", "-v", "error"}
-	for _, id := range ids {
-		args = append(args, "-i", id+".mp4")
-	}
-	args = append(args,
-		"-filter_complex", vc+";"+ac,
-		"-map", "[vout]", "-map", "[aout]",
-		"-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
-		"-c:a", "aac", "-b:a", "192k", "../main_voice.mp4")
-	if _, err := runFFmpeg(p, segsDir, "交叉叠化拼接", args...); err != nil {
+	if err := transitionEncode(p, segsDir, "交叉叠化拼接", ids, vc, ac, starts, durs); err != nil {
 		return err
 	}
-	tl := make([]TimelineRow, len(ids))
-	for i, id := range ids {
-		end := starts[i] + durs[i]
-		if i+1 < len(starts) {
-			end = starts[i+1]
-		}
-		tl[i] = TimelineRow{ID: id, Start: starts[i], End: end}
-	}
-	if b, err := json.MarshalIndent(tl, "", "  "); err == nil {
-		// timeline 是 sfx 落点与前端字幕轨的权威边界，写失败必须留痕（否则按裸累计错位）
-		if werr := WriteFileAtomic(p.Artifact("renders/timeline.json"), b, 0o644); werr != nil {
-			p.Manifest("render.xfade.timeline_error", werr.Error())
-		}
-	}
 	p.Manifest("render.xfade", fmt.Sprintf("%d 段交叉叠化（每边界 %.2fs）", len(ids), xfadeDur))
+	return nil
+}
+
+// ── 转场 v2：段落制分层（para 令牌，docs/para-transition-plan-2026-10-29.md §4）──
+//
+// 政策（2026-10-29）：段落内的缝顺接（fade 叠化 0.4s），段落之间的缝翻页
+// （smoothleft 推切 0.5s）——全片统一手法，不做设计措辞→花式效果的映射（翻译层
+// 只有两种出口的教训，方案书 §1）。音频不走 acrossfade（叠化窗内 incoming 线性
+// 淡入，每个分镜第一个字从约 32% 音量爬升——旁白开头不能吃），改裁尾对接：
+// outgoing 裁到转场起点（实测段尾 ≥0.5s 全静音，裁掉的无损），incoming 满音量顶上，
+// 旁白零损伤；atrim/asetpts/concat 均十年级老 API，部署环境零版本风险。
+
+const (
+	paraInDur    = 0.4          // 段内叠化窗口（s），与 v1b xfadeDur 同值——观感同源
+	paraEdgeDur  = 0.5          // 段界程序化转场窗口（s）
+	paraEdgeKind = "smoothleft" // 段界选型：定向推切（2026-10-29 拍板；备选 pixelize）
+)
+
+// segParaIndex 分镜→段落序号：storyboards/draft.json 段落层直读（pipeline 不
+// import prep——反向依赖环；同 project.json 直读惯例，只解边界分类要用的字段）。
+// 读不到/无段落层回 nil，调用方按「全段界」保守处理。
+func segParaIndex(p *Project) map[string]int {
+	b, err := os.ReadFile(p.Artifact("storyboards/draft.json"))
+	if err != nil {
+		return nil
+	}
+	var d struct {
+		Paragraphs []struct {
+			Segs []string `json:"segs"`
+		} `json:"paragraphs"`
+	}
+	if json.Unmarshal(b, &d) != nil {
+		return nil
+	}
+	m := make(map[string]int)
+	for pi, para := range d.Paragraphs {
+		for _, id := range para.Segs {
+			m[id] = pi
+		}
+	}
+	return m
+}
+
+// paraEdges 边界分类（§4.1）：相邻分镜同段落 → 段内 fade；异段落/无段落层
+// （老项目、分镜不在草稿段落里）→ 段界 smoothleft。保守口径：认不出就翻页，
+// 不把异段落错认成同段顺接。
+func paraEdges(p *Project, sb *contract.Storyboard) []xfadeEdge {
+	para := segParaIndex(p)
+	edges := make([]xfadeEdge, 0, len(sb.Segments)-1)
+	for i := 1; i < len(sb.Segments); i++ {
+		prev, cur := sb.Segments[i-1].ID, sb.Segments[i].ID
+		pi, ok1 := para[prev]
+		pj, ok2 := para[cur]
+		if ok1 && ok2 && pi == pj {
+			edges = append(edges, xfadeEdge{Kind: "fade", Dur: paraInDur})
+		} else {
+			edges = append(edges, xfadeEdge{Kind: paraEdgeKind, Dur: paraEdgeDur})
+		}
+	}
+	return edges
+}
+
+// buildTrimAudioChain 音频裁尾对接链（§4.3）：第 i 段裁到转场起点（长 durs[i]−D_i，
+// 裁掉的 D_i 秒是实测段尾静音），末段不裁；concat 满音量顶接。段起点与视频共用
+// 同一套图计算（starts），字幕/SFX 自动对齐。
+func buildTrimAudioChain(durs []float64, edges []xfadeEdge) string {
+	n := len(durs)
+	var parts, labels []string
+	for i := 0; i < n-1; i++ {
+		parts = append(parts, fmt.Sprintf("[%d:a]atrim=duration=%.3f,asetpts=PTS-STARTPTS[a%d]",
+			i, durs[i]-edges[i].Dur, i))
+		labels = append(labels, fmt.Sprintf("[a%d]", i))
+	}
+	labels = append(labels, fmt.Sprintf("[%d:a]", n-1))
+	parts = append(parts, fmt.Sprintf("%sconcat=n=%d:v=0:a=1[aout]", strings.Join(labels, ""), n))
+	return strings.Join(parts, ";")
+}
+
+// buildParaGraph para 令牌全图：视频按边界分类 fade/smoothleft，音频裁尾对接。
+// 任一段短于其相邻边界窗口 → errXfadeShort（整片回退硬拼，与 xfade 同口径）。
+func buildParaGraph(durs []float64, edges []xfadeEdge) (vc, ac string, starts []float64, err error) {
+	n := len(durs)
+	if n < 2 || len(edges) != n-1 {
+		return "", "", nil, errXfadeShort
+	}
+	for i, d := range durs {
+		w := 0.0
+		if i > 0 {
+			w = edges[i-1].Dur // 入边窗口
+		}
+		if i < len(edges) && edges[i].Dur > w {
+			w = edges[i].Dur // 出边更宽时按出边（段尾要装得下转场窗）
+		}
+		if d < w+0.05 {
+			return "", "", nil, errXfadeShort
+		}
+	}
+	vc, starts = buildXfadeChain(durs, edges)
+	return vc, buildTrimAudioChain(durs, edges), starts, nil
+}
+
+// paraConcat 段落制分层转场拼出 main_voice.mp4：段内 fade 叠化 + 段界 smoothleft
+// 推切，音频裁尾对接（旁白零损伤）。与 xfade 同为整片重编码一次；实际段起点写
+// renders/timeline.json。
+func paraConcat(p *Project, sb *contract.Storyboard, segsDir string) error {
+	if !hasFFmpegFilter("xfade") {
+		return errXfadeShort // 滤镜缺失：走 concat 老路（与段过短同一回退口径）
+	}
+	ids := make([]string, len(sb.Segments))
+	durs := make([]float64, len(sb.Segments))
+	for i, seg := range sb.Segments {
+		ids[i] = seg.ID
+		durs[i] = probeDuration(filepath.Join(segsDir, seg.ID+".mp4"))
+	}
+	edges := paraEdges(p, sb)
+	vc, ac, starts, err := buildParaGraph(durs, edges)
+	if err != nil {
+		return err
+	}
+	if err := transitionEncode(p, segsDir, "段落制转场拼接", ids, vc, ac, starts, durs); err != nil {
+		return err
+	}
+	inN := 0
+	for _, e := range edges {
+		if e.Kind == "fade" {
+			inN++
+		}
+	}
+	p.Manifest("render.para", fmt.Sprintf("%d 段分层转场：段内叠化 %d 处×%.2fs + 段界 %s %d 处×%.2fs",
+		len(ids), inN, paraInDur, paraEdgeKind, len(edges)-inN, paraEdgeDur))
 	return nil
 }
 

@@ -356,7 +356,7 @@ func designJSONShape() string {
     "rhythm": "旁白每推进一个信息点画面响应一次；约每 3–5 秒一个可见事件（新元素入场/已有元素强调变色/运镜变向），入场后静坐到段尾=失败",
     "exits": "旁白收尾前该退的退完（淡出/反向滑出/缩小回收），留下的元素停稳——段尾定格在内容帧，禁整页淡出收黑，禁拖尾",
     "camera": "全段持续运动：10 秒内 scale≥1.08 或位移≥画面宽度 5%，方向与叙事呼应",
-    "transition": "全片统一直切（首帧即景+末帧定格由各段开场/收尾保证）；简报确有转场类特色才写机制令牌（cut|fade|xfade）",
+    "transition": "默认段落制分层转场（para：段内叠化顺接+段界推切翻页，首帧即景/末帧定格仍由各段开场/收尾保证）——不写即用；确要全片硬切才写明直切（cut）；简报确有叠化类特色才写机制令牌（cut|xfade|para）",
     "notes": "性格一句话：什么怎么动、禁什么动" },
   "device": { "name": "装置名（如：访客卡片）", "desc": "装置是什么、观众为什么会记住它",
               "per_seg": "seg01 首次亮相…seg02 变奏…seg03 起每章复现…" },
@@ -751,19 +751,23 @@ func LockDesign(p *Project, ss *contract.StyleSamples) error {
 }
 
 // transitionTokenOf 设计系统的转场政策 → 机械令牌。现场发明的转场千姿百态，
-// 机械层只认两种出口：cut（直切——默认）、xfade（真交叉叠化，D5 允许的全局
-// 统一过渡）。映射只认**未被否定的**关键词：「叠化/交叉」→ xfade；其余一切
-// （含缺省）→ cut。黑场/闪黑类（旧映射 → fade 页内黑场微叠化）随 2026-10-21
-// D5 撤边界审一并退役：段间禁切黑，clampBoundaryFades 改掉措辞，这里兜住漏网。
+// 机械层不实现手法本体（翻译层教训，para-transition-plan §1）。映射（2026-10-29
+// 政策）：明说叠化/交叉/淡入淡出 → xfade（真交叉叠化）；明说直切/硬切 → cut；
+// 其余一切（含缺省）→ para——段落制分层：段内叠化顺接 + 段界程序化推切。
+// 黑场/闪黑类（旧映射 → fade 页内黑场）随 2026-10-21 D5 退役：落默认 para，
+// 不做黑场；clampBoundaryFades 改措辞，这里兜住漏网。
 func transitionTokenOf(ss *contract.StyleSamples) string {
 	if ss == nil || ss.Motion == nil {
-		return "cut"
+		return "para"
 	}
 	t := strings.ToLower(ss.Motion.Transition)
 	if hasUnnegated(t, "叠化") || hasUnnegated(t, "交叉") || hasUnnegated(t, "淡入淡出") {
 		return "xfade"
 	}
-	return "cut"
+	if hasUnnegated(t, "直切") || hasUnnegated(t, "硬切") {
+		return "cut"
+	}
+	return "para"
 }
 
 // hasUnnegated t 里存在未被否定的 kw 出现：关键词前 2 字内出现否定词
