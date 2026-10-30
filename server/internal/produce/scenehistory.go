@@ -12,6 +12,10 @@ package produce
 // 全新会话重置；③历史只存文本：首轮的样张/素材图不进历史，续写请求零图片
 // 载荷，修复轮不再重传图（风格已由 assistant 成稿体现）。同签名打转由
 // segCheck 的签名刹车（回退上一版过检画面）兜底，不在此重复。
+//
+// 2026-10-30 补一格：机器验收退回（契约/注册表检查未过）也走续写——失败时
+// 对话带 Pending（退回原因）落盘，produce 自动重跑带原因回到原对话续修，
+// 不再失忆重掷（para05 同错连犯四轮的病灶）。成稿落盘清 Pending。
 
 import (
 	"encoding/json"
@@ -42,9 +46,10 @@ func scenePayloadJSON(html string, elements []contract.NamedElement) string {
 const maxSceneContinuations = 3
 
 type sceneHistory struct {
-	FP       string                         `json:"fp"`       // 场景指纹（sceneSidecarFingerprint 同源）：分镜/设计改稿即失效
-	Messages []openai.ChatCompletionMessage `json:"messages"` // user(首轮大提示) + assistant(成稿JSON) + [user(修复指令)+assistant]×N
-	Cont     int                            `json:"cont"`     // 已续写次数
+	FP       string                         `json:"fp"`                 // 场景指纹（sceneSidecarFingerprint 同源）：分镜/设计改稿即失效
+	Messages []openai.ChatCompletionMessage `json:"messages"`           // user(首轮大提示) + assistant(成稿JSON) + [user(修复指令)+assistant]×N
+	Cont     int                            `json:"cont"`               // 已续写次数
+	Pending  string                         `json:"pending,omitempty"` // 机器验收退回原因（契约/注册表未过时失败落盘）：自动重跑带它回到原对话续修（2026-10-30）；成稿时清空
 }
 
 func sceneHistoryPath(p *pipeline.Project, segID string) string {
@@ -80,6 +85,22 @@ func saveSceneHistory(p *pipeline.Project, segID string, h *sceneHistory) {
 		return
 	}
 	_ = pipeline.WriteFileAtomic(sceneHistoryPath(p, segID), b, 0o644)
+}
+
+// savePendingSceneHistory 机器验收退回的失败落盘（2026-10-30）：对话带退回原因
+// 存档，自动重跑时带原因续用（scenegen 的 Pending 入口）。只在已有成稿对话
+// （msgs 非空）时才有意义——模型调用本身失败没有可续的对话，不存。续写计数
+// 沿用护栏帽：pending 链每续一轮 Cont+1，到 maxSceneContinuations 后 loadSceneHistory
+// 拒载，重跑自然重置为全新会话。
+func savePendingSceneHistory(p *pipeline.Project, segID, fp string, msgs []openai.ChatCompletionMessage, prev *sceneHistory, reason string) {
+	if len(msgs) == 0 {
+		return
+	}
+	cont := 1
+	if prev != nil {
+		cont = prev.Cont + 1
+	}
+	saveSceneHistory(p, segID, &sceneHistory{FP: fp, Messages: msgs, Cont: cont, Pending: reason})
 }
 
 // removeSceneHistory 首写/全片重生成前清旧历史（宁无历史不错历史）。

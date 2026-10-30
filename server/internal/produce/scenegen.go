@@ -400,21 +400,34 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		// 会话历史 → 修复指令追加在原对话上（模型带着首轮全上下文改自己的稿），
 		// 不再重发全套注入包+prevHTML。历史缺失/指纹失配/超帽/续写失败 → 落回
 		// 下方全新会话路径，行为同旧版。
+		// 2026-10-30 补第二个入口：机器验收退回的自动重跑（上轮契约/注册表未过、
+		// 失败对话带 Pending 落盘）同样带原因回到原对话续修——首写失败不再重掷新骰。
 		var hist *sceneHistory
 		var contMsgs []openai.ChatCompletionMessage
-		if instruction != "" || feedback != "" {
-			if h := loadSceneHistory(p, seg.ID, fp); h != nil {
-				var cur scenePayload
-				if json.Unmarshal([]byte(h.Messages[len(h.Messages)-1].Content), &cur) == nil &&
-					cur.HTML != "" && len(cur.Elements) > 0 {
-					np, msgs2, cerr := contRepair(acc, h.Messages, cur, sceneContRepairMsg(instruction, feedback))
-					if cerr == nil {
-						payload.HTML, payload.Elements = np.HTML, np.Elements
-						contMsgs = msgs2
-						hist = h
-					}
-				}
+		tryCont := func(h *sceneHistory, msg string) bool {
+			if h == nil {
+				return false
 			}
+			var cur scenePayload
+			if json.Unmarshal([]byte(h.Messages[len(h.Messages)-1].Content), &cur) != nil ||
+				cur.HTML == "" || len(cur.Elements) == 0 {
+				return false
+			}
+			np, msgs2, cerr := contRepair(acc, h.Messages, cur, msg)
+			if cerr != nil {
+				return false
+			}
+			payload.HTML, payload.Elements = np.HTML, np.Elements
+			contMsgs = msgs2
+			hist = h
+			return true
+		}
+		if instruction != "" || feedback != "" { // 打回轮：段审/终审/frameQA/用户改画
+			tryCont(loadSceneHistory(p, seg.ID, fp), sceneContRepairMsg(instruction, feedback))
+		} else if h := loadSceneHistory(p, seg.ID, fp); h != nil && h.Pending != "" {
+			// 机器验收退回的自动重跑（2026-10-30 用户拍板）：携带退回原因回到
+			// 上轮对话继续修改，对话历史沿用之前的。
+			tryCont(h, sceneContRepairMsg("", "机器验收退回（上轮自动重跑遗留，逐条修正）：\n"+h.Pending))
 		}
 		if hist == nil { // 全新会话（首写或续写不可用的修复兜底，行为同旧版）
 			user := promptFor(feedback, prevSceneHTML(p, seg.ID))
@@ -423,6 +436,12 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 				werr = fmt.Errorf("%s 场景生成失败: %w", seg.ID, gerr)
 				fail(werr)
 				return
+			}
+			// 轮内会话追加形态（2026-10-30）：首写对话在内存里成阵——下方机器
+			// 验收退回与失败落盘都续用这串对话，不再每轮全量重发。
+			contMsgs = []openai.ChatCompletionMessage{
+				{Role: openai.ChatMessageRoleUser, Content: user},
+				{Role: openai.ChatMessageRoleAssistant, Content: scenePayloadJSON(payload.HTML, payload.Elements)},
 			}
 			// 素材申请单（两段式）：第一段式模型交了申请 → 检索公版图 → 带图出终稿。
 			// 检索全落空就按无素材继续——第一段式的画面稿直接生效，不挡出片。
@@ -435,27 +454,36 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 						styleSeg += materialNote(len(segMats))
 					}
 					styleSeg += materialsNote(segMats)
-					_, err2 := gen(acc, promptFor(feedback, ""), &payload)
+					u2 := promptFor(feedback, "")
+					_, err2 := gen(acc, u2, &payload)
 					if err2 != nil {
 						werr = fmt.Errorf("%s 带素材终稿生成失败: %w", seg.ID, err2)
 						fail(werr)
 						return
 					}
+					contMsgs = append(contMsgs,
+						openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: u2},
+						openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: scenePayloadJSON(payload.HTML, payload.Elements)})
 				}
 			}
 		}
 		errs := sceneValidate(r, ctx, p, payload.HTML, seg.ID)
 		for repair := 0; repair < 2 && len(errs) > 0; repair++ { // 外科修复：违规逐条回喂
+			// 2026-10-30：机器验收退回统一带错误清单回原对话续修（含首写轮内，
+			// patch 改动单优先）；续写失败才落回全量重发兜底，行为同旧版。
 			var err2 error
-			if hist != nil { // 续写会话：lint 违规也走 patch 优先的续写修复
+			if len(contMsgs) > 0 {
 				var np scenePayload
 				np, contMsgs, err2 = contRepair(acc, contMsgs,
 					scenePayload{HTML: payload.HTML, Elements: payload.Elements},
 					"上一版场景文件被契约检查拒绝，逐条修正（只修列出的错，其余保持原样）：\n- "+strings.Join(errs, "\n- "))
 				if err2 == nil {
 					payload.HTML, payload.Elements = np.HTML, np.Elements
+				} else {
+					acc.rec.Note("续写修复失败，本轮回退全量重发: %v", err2)
 				}
-			} else {
+			}
+			if err2 != nil {
 				fb := instruction + feedback + "\n上一版场景文件被契约检查拒绝，必须逐条修正：\n- " + strings.Join(errs, "\n- ")
 				var fixed struct {
 					HTML     string                  `json:"html"`
@@ -464,6 +492,12 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 				_, err2 = gen(acc, promptFor(fb, payload.HTML), &fixed)
 				if err2 == nil {
 					payload.HTML, payload.Elements = fixed.HTML, fixed.Elements
+					// 全量重发＝另起会话：轮内对话据此重建（user 不背 prevHTML——
+					// 成稿已取代旧稿），后续轮继续会话追加形态。
+					contMsgs = []openai.ChatCompletionMessage{
+						{Role: openai.ChatMessageRoleUser, Content: promptFor(fb, "")},
+						{Role: openai.ChatMessageRoleAssistant, Content: scenePayloadJSON(fixed.HTML, fixed.Elements)},
+					}
 				}
 			}
 			if err2 != nil {
@@ -477,6 +511,9 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			if instruction == "" && feedback == "" && r.fallbackOldScene(p, seg.ID, "重生成契约检查三轮未过") {
 				return
 			}
+			// 失败对话带退回原因落盘：自动重跑走上方 Pending 入口带原因续修，
+			// 不再失忆重掷（2026-10-30）。
+			savePendingSceneHistory(p, seg.ID, fp, contMsgs, hist, "契约检查三轮未过：\n- "+strings.Join(errs, "\n- "))
 			werr = fmt.Errorf("%s 契约检查三轮未过：\n- %s", seg.ID, strings.Join(errs, "\n- "))
 			fail(werr)
 			return
@@ -485,6 +522,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			if instruction == "" && feedback == "" && r.fallbackOldScene(p, seg.ID, "重生成的元素注册表不足 3 条") {
 				return
 			}
+			savePendingSceneHistory(p, seg.ID, fp, contMsgs, hist, "元素注册表不足 3 条（元素级指认依赖它）——补齐 elements 注册表后重交")
 			werr = fmt.Errorf("%s 元素注册表不足 3 条（元素级指认依赖它）", seg.ID)
 			fail(werr)
 			return
@@ -495,6 +533,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		if hist != nil {
 			hist.Messages = contMsgs
 			hist.Cont++
+			hist.Pending = "" // 成稿清退回原因：后续打回轮走正常续写入口，不再误判为重跑遗留
 			saveSceneHistory(p, seg.ID, hist)
 		} else {
 			saveSceneHistory(p, seg.ID, &sceneHistory{
