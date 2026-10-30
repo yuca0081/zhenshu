@@ -56,6 +56,8 @@ export interface ProjectView {
   last_produce?: { event: string; ts: string } | null
   // 项目配乐（配乐工位自动选/用户手动换；name 空 = 无配乐）
   bgm?: { name: string; reason?: string } | null
+  // 出片封面（出片尾巴自动产出；null = 还没有——老项目/生成失败，视频页可重做）
+  cover?: { t: number; title: string } | null
   // 全程 token 消耗（manifest 全量 agent.done 累计，「过程」页头部展示）
   tokens?: { prompt: number; completion: number; calls: number; cached?: number }
 }
@@ -131,12 +133,19 @@ export interface PrepMusic {
   }
 }
 
+// 项目材料库行（GET/POST/DELETE /materials；主题页上传的参考资料，
+// ①文稿 read_source 消费——与原始稿同等对待）
+export interface MaterialFile {
+  name: string
+  chars: number
+}
+
 export interface PrepView {
   exists: boolean // scripts/script.json 在 = 项目走准备工位（终审页签的显示条件）
   confirmed: boolean // 打包终审是否已确认（=开工硬门）
-  running?: boolean // 三工位链在跑（想法页签的进度态）
-  legacy?: boolean // 老项目（legacy 分镜已在，不走准备工位——隐藏想法页签）
-  idea?: string // 已落盘的用户想法（回填文本框）
+  running?: boolean // 三工位链在跑（主题页签的进度态）
+  legacy?: boolean // 老项目（legacy 分镜已在，不走准备工位——隐藏主题页签）
+  idea?: string // 已落盘的主题/想法文本（回填文本框）
   mode?: string // script=文稿驱动（默认，老项目缺省）｜music=音乐驱动 PV
   music?: PrepMusic // 音乐驱动 PV 的三件套视图（brief/曲/地图）
   style_name?: string

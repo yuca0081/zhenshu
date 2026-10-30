@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useMessage, NButton, NInput, NScrollbar, NSelect, NTag } from 'naive-ui'
 import { api, libraryMediaURL, styleClipURL } from '../api'
-import type { ProjectView, Style, StyleSamples, TemplateDetailData, VocabEntry } from '../types'
+import type { PrepView, ProjectView, Style, StyleSamples, TemplateDetailData, VocabEntry } from '../types'
 import { errMsg } from '../format'
 import SampleFrame from './SampleFrame.vue'
 import TemplateDetail from './TemplateDetail.vue'
@@ -19,6 +19,7 @@ const props = defineProps<{
   projectId: string
   view: ProjectView | null
   styleSamples: StyleSamples | null
+  prep: PrepView | null
   videoStale: boolean // 成片生成后风格又改过（重做整片才会进新片）
 }>()
 const emit = defineEmits<{ saved: []; 'confirm-style': []; 'chat-sent': [] }>()
@@ -34,6 +35,10 @@ const step = computed(() => {
 const showPicker = ref(false) // B 态里点「换风格」→ 回 A 态（旧样张仍在，重确认即作废）
 const requested = ref(false) // 已提交出样张、还没等来新样张——步骤条旁的等待提示
 const reviewMode = computed(() => !!props.styleSamples?.samples?.length && !showPicker.value)
+// 准备链在跑（②风格包由 Agent 自己做，样张落盘前这里没有可审的东西）：A 态选风格
+// 入口整块让位给占位说明——旧态会把别的项目的库内推荐亮出来误导用户去手动选
+// （2026-10-30 GUI 实测 t07：页面停在「①选风格」，推荐卡是另一项目的旧风格）。
+const prepBusy = computed(() => !!props.prep?.running && !reviewMode.value)
 // 上次触发复位的样张 JSON 签名：后台刷新会用新引用带同一份样张（loadProject 全量回写），
 // 只看引用变化就把正在换风格的用户弹回样张页——内容没变就不复位
 let lastSamplesSig: string | null = null
@@ -208,7 +213,8 @@ async function draftStyle() {
             />
             <SampleFrame v-else :html="s.html" />
             <figcaption>
-              <b>{{ s.tag }}</b><span>{{ s.desc }}</span>
+              <!-- tag 含说明前缀（判卷/返工流的稳定 id），展示只露「样张 X」，完整说明走 desc -->
+              <b>{{ s.tag.split('·')[0].trim() }}</b><span>{{ s.desc }}</span>
               <span v-if="s.video" class="clip-note ok">迷你真段 · 与成片同工序渲染（动效/字幕带即所得）</span>
               <span v-else-if="s.clip_note" class="clip-note">{{ s.clip_note }}</span>
             </figcaption>
@@ -228,8 +234,14 @@ async function draftStyle() {
         <NButton size="tiny" quaternary @click="showPicker = false">返回样张</NButton>
       </div>
 
+      <!-- 准备链在跑：风格由准备工位②自己做，选风格入口让位（防误导性手动入口） -->
+      <div v-if="prepBusy" class="ms-hint prep-busy">
+        <b>风格工位进行中</b>——准备链正在替你探索风格、渲染样张（进度在「主题」页签，
+        样张多的轮次要十几分钟）。样张出好会自动出现在这里，届时确认即可开工。
+      </div>
+
       <!-- A 态：选风格 -->
-      <template v-if="!reviewMode">
+      <template v-if="!reviewMode && !prepBusy">
         <div v-if="!packs.length" class="ms-hint empty-lib">
           风格库还是空的——去「风格库」页上传参考视频解析入库，或直接用下面的文字描述方向。
         </div>

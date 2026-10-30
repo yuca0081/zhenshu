@@ -66,8 +66,10 @@ const tabs = computed(() => {
     list.push({ id: 'idea', label: '想法' }, { id: 'video', label: '视频' })
     return list
   }
-  if (showIdea.value) list.push({ id: 'idea', label: '想法' })
-  list.push({ id: 'manuscript', label: '文稿' }, { id: 'storyboard', label: '分镜' }, { id: 'style', label: '风格' })
+  if (showIdea.value) list.push({ id: 'idea', label: isMusic.value ? '想法' : '主题' })
+  // 页签序对齐准备链实际顺序 ①文稿→②风格→③分镜（2026-10-30 P3-10：旧序
+  // 文稿/分镜/风格与主题页、过程页的链序三处三个说法）
+  list.push({ id: 'manuscript', label: '文稿' }, { id: 'style', label: '风格' }, { id: 'storyboard', label: '分镜' })
   if (props.prep?.exists) list.push({ id: 'review', label: '终审' })
   // 「过程」不进页签列——独立按钮放在页签行右侧（head-right），点击切到整页过程内容
   list.push({ id: 'video', label: '视频' })
@@ -95,7 +97,7 @@ function tabState(id: TabID): { cls: string[]; title: string; label: string } {
         cls: [props.prep?.running ? 'run' : props.prep?.exists ? 'ok' : 'wait'],
         title: props.prep?.running
           ? '准备阶段进行中（文稿→风格→分镜）'
-          : props.prep?.exists ? '准备工件已出——这里可以换个想法重跑' : '说一句话想法（可空），让 AI 自动跑完文稿→风格→分镜',
+          : props.prep?.exists ? '准备工件已出——这里可以换个主题重跑' : '写下主题、传点材料，让 AI 自动跑完文稿→风格→分镜',
         label: '',
       }
     case 'manuscript':
@@ -316,18 +318,19 @@ async function parseToLibrary() {
             @click="redoFull"
           >{{ redoArmed ? '确认重做？' : '按最新内容重做' }}</NButton>
           <!-- 解析到风格库：项目解析路入口（读定稿设计系统+样张，与上传视频解析同走
-               暂存区草稿→修订→入库；幂等，重复点击复用既有条目。按钮文案取短——
-               页签行宽度紧张，全称在悬停 title 里） -->
+               暂存区草稿→修订→入库；幂等，重复点击复用既有条目。页签行拥挤（2026-10-30）：
+               收成纯图标，全称与解释在悬停 title 里） -->
           <button
-            v-if="view.has_video && !view.producing" class="dl-btn parse-btn" :disabled="parsing"
+            v-if="view.has_video && !view.producing" class="dl-btn parse-btn icon-btn" :disabled="parsing"
             title="解析到风格库：把本片风格解析成风格库条目——读定稿设计系统与样张，去「风格库 → 视频解析」修订后入库，之后新建项目可选用"
             @click="parseToLibrary"
-          ><RIcon name="upload" :size="13" />{{ parsing ? '解析中…' : '解析入库' }}</button>
+          ><RIcon name="upload" :size="13" /></button>
           <!-- 下载成片 -->
           <a
             v-if="view.has_video" class="dl-btn"
             :href="videoURL(videoId, videoRev)" :download="`${view.name}.mp4`"
-          ><RIcon name="download" :size="13" />下载成片</a>
+            title="下载成片 main.mp4"
+          ><RIcon name="download" :size="13" />下载</a>
           <!-- 过程回看：独立按钮（点击切到整页「过程」内容）；
                右侧小字 = 本次制作全部智能体任务的输入 token 与缓存命中率（projectView.tokens） -->
           <button
@@ -403,7 +406,7 @@ async function parseToLibrary() {
           </div>
           <StylePane
             v-else-if="tab === 'style'"
-            :project-id="videoId" :view="view" :style-samples="styleSamples"
+            :project-id="videoId" :view="view" :style-samples="styleSamples" :prep="prep"
             :video-stale="view.video_stale.style"
             @saved="emit('saved')" @confirm-style="emit('confirm-style')" @chat-sent="emit('chat-sent')"
           />
@@ -488,10 +491,12 @@ async function parseToLibrary() {
   transition: color var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
 }
 .dl-btn:hover { border-color: var(--accent); color: var(--accent); }
-/* 解析到风格库：同 dl-btn 方角按钮，button 元素补字体继承与禁用态 */
+/* 解析到风格库：同 dl-btn 方角按钮，button 元素补字体继承与禁用态；
+   icon-btn=纯图标态（页签行拥挤，全称进悬停 title） */
 .parse-btn { font-family: inherit; }
 .parse-btn:disabled { opacity: .55; cursor: default; }
 .parse-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.icon-btn { padding: 4px 7px; }
 /* 过程回看按钮；on=当前正看过程页，live-dot=制作中呼吸灯 */
 .feed-btn {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
@@ -503,10 +508,11 @@ async function parseToLibrary() {
 .feed-btn.on { border-color: var(--accent); color: var(--accent); }
 .feed-btn .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--info); animation: pulse 1.2s infinite; }
 /* 全程 token 小账：输入 token + 缓存命中率，做次要信息色不抢「过程」本体；
-   面板窄于 ~740px 时收起（悬停「过程」的 title 仍在），保页签行单行放下 */
+   面板窄于 ~860px 时收起（悬停「过程」的 title 仍在）——六页签+右侧按钮组的
+   行宽在 740-860px 区间也放不下这份小账（2026-10-30 拥挤优化实测） */
 .feed-btn .feed-tok { margin-left: 2px; font-size: 11px; color: var(--muted); opacity: .85; }
 .feed-btn:hover .feed-tok, .feed-btn.on .feed-tok { color: inherit; opacity: .75; }
-@container (max-width: 739px) { .feed-tok { display: none; } }
+@container (max-width: 859px) { .feed-tok { display: none; } }
 /* 失败未读红点：最近一次制作失败/中断后还没看过过程页 */
 .feed-btn .fail-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--err); box-shadow: 0 0 6px color-mix(in srgb, var(--err) 80%, transparent); }
 
@@ -522,7 +528,9 @@ async function parseToLibrary() {
 .sb-meta { font-size: 12px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
 .sb-dur { margin-left: auto; display: flex; align-items: center; gap: 6px; font-weight: 400; }
 .sb-scroll { flex: 1; min-height: 0; overflow-y: auto; }
-.sb { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* fixed 布局：列宽按表头锁死、旁白列吃剩余宽——auto 布局被长标题/画面内容
+   挤爆时旁白会一字一行竖排（2026-10-30 GUI 实测 t13） */
+.sb { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
 .sb th { position: sticky; top: 0; background: var(--surface); text-align: left; padding: 10px 12px; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); }
 .sb td { padding: 6px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
 .sb-para td {

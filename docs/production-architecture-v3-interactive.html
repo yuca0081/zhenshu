@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>制作架构 · 交互总图（文稿驱动 v3.1 / 音乐驱动 PV / 代码调用链 · 同步 2026-10-28）</title>
+<title>制作架构 · 交互总图（文稿驱动 v3.1 / 音乐驱动 PV / 代码调用链 · 同步 2026-10-30）</title>
 <style>
   :root {
     --bg: #f7f7f8; --panel: #ffffff; --band: #eef0f4; --text: #1c1c1e; --muted: #6e6e73;
@@ -203,7 +203,7 @@
   <div class="hwrap">
     <div>
       <h1>制作架构 · 交互总图</h1>
-      <p class="sub">自动短视频流水线 · 文稿驱动 v3.1 ／ 音乐驱动 PV · 同步 2026-10-28</p>
+      <p class="sub">自动短视频流水线 · 文稿驱动 v3.1 ／ 音乐驱动 PV · 同步 2026-10-30</p>
     </div>
     <nav class="tabs">
       <button class="tab active" data-page="intro" type="button">🏠 新手导读</button>
@@ -587,9 +587,21 @@
     </details>
 
     <details class="ctx">
-      <summary>各工位速查 · 系统提示词 / 工具 / 模型 / 轮次预算（2026-10-28）</summary>
+      <summary>工位模型设置面板 · 模型不再只看 .env（2026-10-29 落地）</summary>
       <div class="ctx-body">
-        <p>本表是一页速览；<em>全文随节点走——点图中方块，下方详情面板里有该工位的系统提示词全文</em>（同步 2026-10-28）。模型分档的来龙去脉见上方「视觉副驾」块。</p>
+        <p>顶栏「设置」按钮（仅管理员可见）进独立设置页（<code>#/settings</code>，不占主导航页签位，「大模型 / 工位图」双页签）。工位的模型与 URL 写进 <code>data/llm-config.json</code>（providers 台账 / role_default 三档兜底 / stations 工位覆盖三层），<em>保存即热生效</em>——调用点全部作业现场 <code>llm.FromEnv(工位常量)</code> 现取，PUT 落盘换 atomic.Pointer 快照；正在跑的作业拿旧值跑完，下一次作业即用新值。</p>
+        <table class="gloss">
+          <tr><th style="width:16em">解析链（<code>llm.resolveRole</code>）</th><th>要点</th></tr>
+          <tr><td>工位绑定 → 档位兜底 → .env → 内置默认</td><td>15 个工位在 <code>llm/settings.go</code> StationRegistry 注册、各标兜底档；供应商字段留空 = 沿用 .env 对应值（可只配模型名，零配置加第二档模型）；文件全空时行为与纯 .env 完全一致，零迁移</td></tr>
+        </table>
+        <p>四条要点：① <em>供应商与思考档是两条独立通道</em>——工位可以只调 effort 不换模型（判卷链降 effort=low 的典型用法）；② <em>Key 只进不出</em>——GET 只回 has_key + 尾 4 位，空 key=保持已存，文件权限 0600；③ 磁盘缓存键含模型名，换模型天然不串缓存；④ 上方「视觉副驾」与下方「各工位速查」所列模型都是<em>默认档</em>——面板绑定后以面板为准，prep 预检也已改查工位（规划档没 key 不再误杀 prep）。仍留 .env 的运维钮：LLM_API_KEY / LLM_EFFORT / LLM_MAX_CONCURRENCY / LLM_CALL_TIMEOUT / DISTILL_JUDGE_MODEL（工位之上的后置覆盖）。</p>
+      </div>
+    </details>
+
+    <details class="ctx">
+      <summary>各工位速查 · 系统提示词 / 工具 / 模型 / 轮次预算（2026-10-28 表 · 模型列为默认档）</summary>
+      <div class="ctx-body">
+        <p>本表是一页速览；<em>全文随节点走——点图中方块，下方详情面板里有该工位的系统提示词全文</em>（同步 2026-10-28）。模型分档的来龙去脉见上方「视觉副驾」块；<em>「模型」列是默认档，可被设置面板按工位覆盖</em>（解析链见「工位模型设置面板」块），提示词与预算不随面板变。</p>
         <table class="gloss">
           <tr><th style="width:7.5em">工位</th><th style="width:10.5em">模型</th><th style="width:12.5em">轮次预算</th><th style="width:19em">工具</th><th>系统提示词要点</th></tr>
           <tr><td>① 文稿</td><td>glm-5.3</td><td>30 轮 / 6 分钟；搜索 ≤4 次、抓页 ≤6 次</td><td>read_source · web_search · fetch_page · estimate_speech_duration · <b>submit_script</b></td><td>口播稿作者：检索 1–2 轮列事实清单再动笔；短句口语、不改事实不丢信息；时长自检后 submit（<code>scriptSystem</code>）</td></tr>
@@ -802,6 +814,13 @@
       <div class="ctx-body">
         <p>准备阶段代码在 <code>server/internal/prep/</code>，制作阶段在 <code>server/internal/produce/</code>，渲染/拼接在 <code>server/internal/pipeline/</code>，审片在 <code>server/internal/review/</code>（按 2026-10-22 工作区代码绘制）。</p>
         <p>实线框 = Go 函数；蓝框 = 调大模型（LLM）；虚线框 = 启动外部进程（⚙ python / node / ffmpeg）；橙虚线箭头 = 打回/重跑回边（旁标轮次上限）；灰蓝长条 = 并行汇合点；灰底大框 = 并行容器。点击任一节点，右侧看调用链详情。</p>
+      </div>
+    </details>
+
+    <details class="ctx">
+      <summary>前端壳 · Rhine 换装（2026-10-30 落地）</summary>
+      <div class="ctx-body">
+        <p>前端整体换 yuca 风格——<em>只换壳，页面结构与命令/进度接口零改动</em>（本页各调用链不受影响）：<code>styles/rhine.css</code>（558 行）双主题令牌——晨雾 day / 月影 night，<code>theme.ts</code> data-theme 切换 + 650ms 全局缓变（zhenshu 无 Pinia，模块级 ref 即全局态）＋ HUD 四角描边；首页 3D 项目书架 <code>three/shelf-scene.ts</code>（ProjectShelf.vue 挂载）；MiSans 字体接入；<code>vt.ts</code> ViewTransition 路由过渡；新组件 ThemeCapsule（主题胶囊）/ RIcon（icons.data.ts 内联 SVG + icon-motion.css 动效）。两坑记录：transmission 白洗改假玻璃、naive-ui 的 naiveOverrides 必须挂在 theme 里（缺 theme 依赖不生效）。</p>
       </div>
     </details>
 
@@ -1446,7 +1465,7 @@
 
 </main>
 
-<footer>准备阶段定稿 <code>docs/prep-agents-design.md</code> · 制作阶段定稿 <code>docs/production-stage-design.md</code> · 音乐驱动 PV <code>docs/pv-music-driven-design.md</code>（M1 音乐工位已落地 2026-10-23）· 方案每改一次须同步更新本图 · 「代码调用链」按 2026-10-22 工作区绘制，行号会漂移、以函数名为准</footer>
+<footer>准备阶段定稿 <code>docs/prep-agents-design.md</code> · 制作阶段定稿 <code>docs/production-stage-design.md</code> · 音乐驱动 PV <code>docs/pv-music-driven-design.md</code>（M1 音乐工位已落地 2026-10-23）· 工位模型设置面板 <code>docs/llm-settings-2026-10-29.md</code> · 方案每改一次须同步更新本图 · 「代码调用链」按 2026-10-22 工作区绘制，行号会漂移、以函数名为准</footer>
 
 <script>
 (function () {
@@ -1817,7 +1836,8 @@
       type: "前端入口", cls: "", title: "新建项目 / 发起准备与制作",
       rows: [
         ["动作", "想法页签填主题 → <code>NewProjectModal.vue:50</code> api.createProject → POST /api/projects；准备入口 <code>IdeaPane.vue:104</code> api.runPrep；制作入口 <code>StagePanel.vue:239</code> api.produce。"],
-        ["原则", "前端只发命令 + 看进度（SSE <code>s.sse</code> server.go:1733 + 轮询 projectView）；所有循环都由 Go 后台拥有——确定性、可重放。"]
+        ["原则", "前端只发命令 + 看进度（SSE <code>s.sse</code> server.go:1733 + 轮询 projectView）；所有循环都由 Go 后台拥有——确定性、可重放。"],
+        ["壳", "Rhine 换装（2026-10-30）：双主题令牌（rhine.css + theme.ts，day/night）+ HUD 描边 + 3D 项目书架（three/shelf-scene.ts）+ MiSans + ViewTransition 路由过渡 + ThemeCapsule/RIcon 新组件——只换壳，本页调用链不变。"]
       ]
     },
     ca_prep: {

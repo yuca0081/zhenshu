@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { NButton, NSelect, NSpin, useMessage } from 'naive-ui'
+import { NButton, NInput, NSelect, NSpin, useMessage } from 'naive-ui'
 import type { AudioMeta, BgmTrack, ProjectView, Storyboard } from '../types'
 import { fmtClock } from '../segtime'
-import { lastProduceFailed, stageLabel } from '../format'
+import { lastProduceCancelled, lastProduceFailed, stageLabel } from '../format'
 import { api, videoURL } from '../api'
 import Timeline from './Timeline.vue'
 import RIcon from './RIcon.vue'
@@ -77,6 +77,40 @@ async function applyBGM(track: string) {
   }
 }
 
+// ── 出片封面：预览 + 标题 + 重做（「用当前画面」= 播放器此刻抽帧）──
+// 本地账面优先于 props.view.cover（重做成功即刷新，不等下一轮轮询回填）。
+const cover = ref<{ t: number; title: string } | null>(null)
+const coverTitle = ref('')
+const coverDirty = ref(false)
+const coverBusy = ref(false)
+const coverRev = ref(0)
+const coverMissing = ref(false)
+watch(() => props.view, v => {
+  if (!coverDirty.value) {
+    cover.value = v?.cover ?? null
+    if (v?.cover?.title) coverTitle.value = v.cover.title
+  }
+}, { immediate: true })
+async function redoCover(useCurrentFrame: boolean) {
+  if (!props.view || coverBusy.value) return
+  coverBusy.value = true
+  try {
+    const body: { t?: number; title?: string } = { title: coverTitle.value }
+    if (useCurrentFrame) body.t = cur.value
+    const r = await api.regenCover(props.view.id, body)
+    cover.value = { t: r.t, title: r.title }
+    coverTitle.value = r.title
+    coverDirty.value = false
+    coverMissing.value = false
+    coverRev.value++
+    message.success(useCurrentFrame ? `封面已换成 ${fmtClock(r.t)} 的画面` : '封面已重做')
+  } catch (e) {
+    message.error((e as Error).message)
+  } finally {
+    coverBusy.value = false
+  }
+}
+
 // ── 视频播放 ↔ 时间轴播放头同步 ──
 const videoEl = ref<HTMLVideoElement | null>(null)
 const cur = ref(0)
@@ -101,6 +135,11 @@ const failedIdleBanner = computed(() =>
   !!props.view && props.view.has_video && !props.view.producing && !props.stageSummary && lastProduceFailed(props.view))
 const pausedWhy = computed(() =>
   props.view?.last_produce?.event.endsWith('.interrupted') ? '因服务重启被中断' : '检查未通过或出错')
+
+// 用户主动停止（区别于失败：无故障、产物按段保留）——恢复入口同样指向对话栏
+const cancelledIdle = computed(() =>
+  !!props.view && !props.view.has_video && !props.view.producing && !props.stageSummary &&
+  lastProduceCancelled(props.view) && !lastProduceFailed(props.view))
 
 // 三件齐+打包终审已确认、还没开工：这是「就绪」不是「没干活」——旧空态
 // 「先填文稿」在这个时点是误导（2026-10-15 实测 P6），引导去对话栏开工
@@ -134,6 +173,15 @@ watch([() => props.videoRev, localRev], () => {
       </p>
     </template>
 
+    <!-- 已停止（用户主动取消）：不是失败也不是就绪，产物按段保留 -->
+    <template v-else-if="cancelledIdle">
+      <div class="prod-title"><RIcon name="pause" :size="16" />已停止制作</div>
+      <p class="prep-hint">
+        按你的要求停了——产物已按段保留（配音、字幕与已渲段落都在）。
+        到下方<b>对话栏</b>说「<b>继续</b>」可从断点接着做，或直接说要改什么。
+      </p>
+    </template>
+
     <!-- 就绪待开工（三件齐+终审已确认） -->
     <template v-else-if="readyToStart">
       <div class="prod-title ok"><RIcon name="check" :size="16" />终审已通过，随时开工</div>
@@ -142,14 +190,22 @@ watch([() => props.videoRev, localRev], () => {
       </p>
     </template>
 
-    <!-- 开工引导（三前置未齐/未开跑） -->
+    <!-- 开工引导（三前置未齐/未开跑）：按门态说下一步——旧文案与实际门不符
+         （样张待确认却教人「说开始」，2026-10-30 GUI 实测 t14） -->
     <template v-else-if="!view.has_video && !view.producing && !stageSummary">
       <div class="prod-title">三件事齐了就开工</div>
-      <p class="prep-hint">
+      <p v-if="view.gates?.style_draft && !view.gates?.style_confirmed" class="prep-hint">
+        文稿、分镜、风格样张都已就绪——还差一道人工门：去<b>「风格」页签</b>看样张并点
+        「确认风格，开工」（或在「终审」页签打包确认）。确认后在对话里说「开始」。
+      </p>
+      <p v-else-if="view.gates?.manuscript && !view.gates?.storyboard" class="prep-hint">
+        <b>文稿</b>已就绪——在下方<b>对话栏</b>说「生成分镜」，我来拆段、写画面、标时长。
+      </p>
+      <p v-else class="prep-hint">
         补齐三个前置：<b>文稿</b>（编辑或 AI 起草）、<b>分镜</b>（我来生成）、<b>风格</b>（选库内或描述方向）——
         就在上方的页签里，齐了在对话里说「开始」。
       </p>
-      <NButton type="primary" @click="emit('go-tab', 'manuscript')">先填文稿</NButton>
+      <NButton v-if="!view.gates?.manuscript" type="primary" @click="emit('go-tab', 'manuscript')">先填文稿</NButton>
     </template>
 
     <!-- 制作中：进度面板 -->
@@ -164,7 +220,9 @@ watch([() => props.videoRev, localRev], () => {
       <button v-if="view.producing" class="stop-btn" @click="emit('cancel')"><RIcon name="stop" :size="13" />停止制作</button>
     </template>
 
-    <!-- 成片：播放器 + 时间轴（整片过期重做按钮在上方页签行） -->
+    <!-- 成片：左=播放器+时间轴，右=封面/配乐竖栏（2026-10-30 拥挤优化：
+         原先横幅/配乐/封面/播放器/时间轴五层横条竖叠，时间轴被挤出屏——
+         附属控制改吃横向富余，播放器+时间轴拿回纵向预算） -->
     <template v-else>
       <!-- 上次制作/重做失败且没在跑：当前播放的是失败前旧版，恢复入口在对话栏 -->
       <div v-if="failedIdleBanner" class="paused-banner">
@@ -182,42 +240,66 @@ watch([() => props.videoRev, localRev], () => {
         <button v-if="view.producing" class="stop-btn" @click="emit('cancel')"><RIcon name="stop" :size="13" />停止</button>
       </div>
       <div v-if="progressLine && stageSummary" class="progress-line">{{ progressLine }}</div>
-      <!-- 配乐条：当前曲+选曲理由 · 试听 · 换曲下拉 · 应用/关闭 -->
-      <div class="bgm-bar">
-        <span class="bgm-now" :title="view.bgm?.reason || ''">
-          <RIcon name="music" :size="14" />{{ view.bgm?.name || '无配乐' }}<i v-if="view.bgm?.reason"> · {{ view.bgm.reason }}</i>
-        </span>
-        <button class="bgm-btn" :disabled="!view.bgm?.name" @click="toggleAudition">
-          <RIcon :name="auditionName === view.bgm?.name ? 'stop' : 'play'" :size="12" />{{ auditionName === view.bgm?.name ? '停' : '试听' }}
-        </button>
-        <NSelect
-          v-model:value="bgmPick" size="tiny" style="width: 240px"
-          :options="bgmOptions" placeholder="换曲…" :loading="bgmBusy"
-          @focus="!bgmLib && api.bgmLibrary().then(l => (bgmLib = l)).catch(() => {})"
-        />
-        <NButton size="tiny" type="primary" :disabled="!bgmPick || bgmBusy" :loading="bgmBusy" @click="bgmPick && applyBGM(bgmPick)">
-          应用
-        </NButton>
-        <NButton v-if="view.bgm?.name" size="tiny" quaternary :disabled="bgmBusy" @click="applyBGM('off')">
-          关配乐
-        </NButton>
+      <div class="out-wrap">
+        <div class="player-col">
+          <div class="player">
+            <video
+              ref="videoEl" :src="videoURL(videoId, videoRev + localRev)" controls preload="metadata"
+              @timeupdate="cur = videoEl!.currentTime"
+              @play="playing = true" @pause="playing = false" @ended="playing = false"
+            />
+            <button v-show="!playing" class="now-btn" @click="pickTime(cur)">
+              引用此刻 {{ fmtClock(cur) }}
+            </button>
+          </div>
+          <Timeline
+            v-if="storyboard"
+            :storyboard="storyboard" :audio-meta="audioMeta" :bgm="view.bgm ?? null"
+            :bgm-dur="bgmDur" :current-time="cur"
+            :picked-idx="pickedIdx" @seek="onSeek" @pick="pickSeg" @pick-time="pickTime"
+          />
+        </div>
+        <aside class="side-rail">
+          <!-- 封面卡：预览 + 标题 + 重做（重做中隐藏——收尾自动出封面，落定再回来看） -->
+          <div v-if="!view.producing && !stageSummary" class="rail-card">
+            <div class="rail-head">封面<span v-if="cover" class="rail-meta" title="封面帧在成片里的时刻">{{ fmtClock(cover.t) }} 帧</span></div>
+            <img
+              v-if="!coverMissing" class="cover-thumb" :class="{ vertical: view.aspect === '9:16' }"
+              :src="api.coverURL(view.id, coverRev)" alt="封面预览"
+              @error="coverMissing = true"
+            />
+            <div v-else class="cover-thumb none" :class="{ vertical: view.aspect === '9:16' }">尚未生成</div>
+            <NInput
+              v-model:value="coverTitle" size="tiny" :disabled="coverBusy"
+              placeholder="封面标题（留空用项目名）" @update:value="coverDirty = true"
+            />
+            <div class="rail-btns">
+              <NButton size="tiny" :loading="coverBusy" :disabled="coverBusy" @click="redoCover(false)">重做封面</NButton>
+              <NButton size="tiny" type="primary" :loading="coverBusy" :disabled="coverBusy" @click="redoCover(true)">用当前画面</NButton>
+            </div>
+          </div>
+          <!-- 配乐卡：当前曲+选曲理由（悬停看全文）· 试听 · 换曲 · 应用/关闭 -->
+          <div class="rail-card">
+            <div class="rail-head">配乐<span class="rail-meta" :title="view.bgm?.reason || ''">{{ view.bgm?.name || '无配乐' }}</span></div>
+            <NSelect
+              v-model:value="bgmPick" size="tiny"
+              :options="bgmOptions" placeholder="换曲…" :loading="bgmBusy"
+              @focus="!bgmLib && api.bgmLibrary().then(l => (bgmLib = l)).catch(() => {})"
+            />
+            <div class="rail-btns">
+              <NButton size="tiny" :disabled="!view.bgm?.name" @click="toggleAudition">
+                <RIcon :name="auditionName === view.bgm?.name ? 'stop' : 'play'" :size="11" />{{ auditionName === view.bgm?.name ? '停' : '试听' }}
+              </NButton>
+              <NButton size="tiny" type="primary" :disabled="!bgmPick || bgmBusy" :loading="bgmBusy" @click="bgmPick && applyBGM(bgmPick)">
+                应用
+              </NButton>
+              <NButton v-if="view.bgm?.name" size="tiny" quaternary :disabled="bgmBusy" @click="applyBGM('off')">
+                关配乐
+              </NButton>
+            </div>
+          </div>
+        </aside>
       </div>
-      <div class="player">
-        <video
-          ref="videoEl" :src="videoURL(videoId, videoRev + localRev)" controls preload="metadata"
-          @timeupdate="cur = videoEl!.currentTime"
-          @play="playing = true" @pause="playing = false" @ended="playing = false"
-        />
-        <button v-show="!playing" class="now-btn" @click="pickTime(cur)">
-          引用此刻 {{ fmtClock(cur) }}
-        </button>
-      </div>
-      <Timeline
-        v-if="storyboard"
-        :storyboard="storyboard" :audio-meta="audioMeta" :bgm="view.bgm ?? null"
-        :bgm-dur="bgmDur" :current-time="cur"
-        :picked-idx="pickedIdx" @seek="onSeek" @pick="pickSeg" @pick-time="pickTime"
-      />
     </template>
   </div>
 </template>
@@ -228,8 +310,8 @@ watch([() => props.videoRev, localRev], () => {
   align-items: center; justify-content: center; gap: 12px; padding: 16px 20px;
 }
 .video-pane.plain { gap: 18px; }
-/* 播放器吃剩余高度，其余行（重做条/时间轴）保持固有高度不被挤出面板 */
-.video-pane > .rework-strip, .video-pane > .tl { flex: none; }
+/* 重做条保持固有高度不被挤出面板；播放器在其下吃剩余高度（成片区布局见 .out-wrap） */
+.video-pane > .rework-strip { flex: none; }
 .player { position: relative; width: min(100%, 1080px); flex: 1 1 0; min-height: 0; display: flex; justify-content: center; align-items: center; }
 .player video { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
 .video-pane.vertical .player { width: auto; }
@@ -246,26 +328,53 @@ watch([() => props.videoRev, localRev], () => {
 .rework-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .rework-hint { font-size: 12px; color: var(--accent); letter-spacing: 0.08em; }
 .progress-line { flex: none; width: 100%; font-size: 12px; color: var(--muted); padding: 0 4px; }
-/* 配乐条：当前曲（含选曲理由）+ 试听/换曲/应用，与时间轴同宽 */
-.bgm-bar {
-  flex: none; width: min(100%, 1080px); display: flex; align-items: center; gap: 8px;
-  font-size: 12px; padding: 0 4px;
+/* ── 成片区布局（2026-10-30 拥挤优化）：左=播放器+时间轴（吃宽度与纵向预算），
+   右=封面/配乐竖栏（固定窄栏，吃横向富余）。栏宽不够时整体换行到播放器下方 ── */
+.out-wrap {
+  flex: 1; min-height: 0; width: 100%;
+  display: flex; align-items: stretch; justify-content: center; gap: 14px;
+  flex-wrap: wrap;
 }
-.bgm-now { color: var(--ink); flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.bgm-now i { font-style: normal; color: var(--muted); }
-.bgm-btn {
-  flex: none; cursor: pointer; font-size: 11px; padding: 3px 10px; font-family: inherit;
-  display: inline-flex; align-items: center; gap: 5px;
-  color: var(--muted); background: transparent; border: 1px solid var(--line);
+.player-col {
+  flex: 1 1 380px; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
 }
-.bgm-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-.bgm-btn:disabled { opacity: .4; cursor: default; }
+.player-col .tl { flex: none; max-width: 100%; }
+/* 附属竖栏：固定窄栏（不收缩——基础宽度和 380+240+14=634，常规三栏下稳稳排得下，
+   真放不下时整体换行到播放器下方）；两卡在栏内纵向堆叠 */
+.side-rail {
+  flex: 0 0 240px; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.rail-card {
+  display: flex; flex-direction: column; gap: 8px;
+  border: 1px solid var(--line-soft); padding: 10px 12px 12px;
+}
+.rail-head {
+  font-size: 12px; font-weight: 600; color: var(--ink);
+  display: flex; align-items: baseline; gap: 8px; min-width: 0;
+}
+.rail-meta {
+  font-weight: 400; font-size: 11.5px; color: var(--muted);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.rail-btns { display: flex; align-items: center; gap: 6px; }
+.cover-thumb {
+  width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block;
+  border: 1px solid var(--line); background: #000;
+}
+.cover-thumb.vertical { width: auto; height: 168px; aspect-ratio: 9 / 16; margin: 0 auto; }
+.cover-thumb.none {
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 11px; background: color-mix(in srgb, var(--ink) 4%, var(--surface));
+}
 /* 制作暂停横幅（有旧成片）：琥珀警示，与 video_stale 黄灯同族色 */
 .paused-banner {
-  flex: none; width: 100%; box-sizing: border-box; font-size: 13px; color: var(--warn);
-  display: inline-flex; align-items: center; gap: 8px;
+  flex: none; width: 100%; box-sizing: border-box; font-size: 12.5px; color: var(--warn);
+  display: inline-flex; align-items: center; gap: 8px; padding: 5px 14px;
   background: color-mix(in srgb, var(--warn) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); padding: 7px 14px;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
 }
 .pstage[data-skip="true"] { opacity: .45; border-style: dashed; }
 

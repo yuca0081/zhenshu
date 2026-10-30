@@ -617,12 +617,7 @@ func sceneValidate(r *Runner, ctx context.Context, p *pipeline.Project, html, se
 	if !strings.Contains(html, "<template") {
 		errs = append(errs, "文件必须是 <template> 片段（无 DOCTYPE/html/head/body）")
 	}
-	if !strings.Contains(html, `data-composition-id="`+segID+`"`) {
-		errs = append(errs, fmt.Sprintf("缺 data-composition-id=%q（根元素，逐字一致）", segID))
-	}
-	if !strings.Contains(html, `window.__timelines["`+segID+`"]`) {
-		errs = append(errs, fmt.Sprintf("未注册 window.__timelines[%q]", segID))
-	}
+	errs = append(errs, contractMarkErrs(html, segID)...)
 	if n := strings.Count(html, "data-hf-name="); n < 3 {
 		errs = append(errs, fmt.Sprintf("data-hf-name 语义标注仅 %d 处（<3；元素级指认依赖它）", n))
 	}
@@ -632,6 +627,23 @@ func sceneValidate(r *Runner, ctx context.Context, p *pipeline.Project, html, se
 	}
 	errs = append(errs, materialWhitelistCheck(p, html)...)
 	errs = append(errs, r.sceneLintWithVend(ctx, html)...)
+	return errs
+}
+
+// contractMarkErrs 两处逐字标记（根元素 id + 时间轴注册）的引号无关检查。
+// JS/HTML 里单双引号语义等价，双引号字面量匹配会把合法产出判死刑：
+// 2026-10-30 para05 实测——13 版产出全部 window.__timelines['para05']，六轮
+// 重生成全灭（与 scene_lint.py T4 __draw_ 的 2026-10-29 单引号教训同款）。
+// 报错文案保留双引号范本：那是对人的说明，不是匹配器。
+func contractMarkErrs(html, segID string) []string {
+	var errs []string
+	id := regexp.QuoteMeta(segID)
+	if !regexp.MustCompile(`data-composition-id\s*=\s*["']` + id + `["']`).MatchString(html) {
+		errs = append(errs, fmt.Sprintf("缺 data-composition-id=%q（根元素，逐字一致）", segID))
+	}
+	if !regexp.MustCompile(`window\.__timelines\s*\[\s*["']` + id + `["']\s*\]`).MatchString(html) {
+		errs = append(errs, fmt.Sprintf("未注册 window.__timelines[%q]", segID))
+	}
 	return errs
 }
 

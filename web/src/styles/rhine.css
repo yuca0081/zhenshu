@@ -35,26 +35,26 @@
 
 :root[data-theme='night'] {
   color-scheme: dark;
-  --bg: #0c121d;
-  --surface: #141d2b;
-  --panel: rgba(19, 27, 41, 0.97);
-  --ink: #eef1f5;
-  --muted: #8a93a3;
-  --line: rgba(255, 255, 255, 0.14);
-  --line-soft: rgba(255, 255, 255, 0.07);
-  --accent: #d0a04c;                      /* 强调色：鎏金 */
-  --accent-hover: #ddb268;
-  --accent-pressed: #b3873c;
-  --accent-ink: #161a22;
-  --veil: 12, 18, 29;
-  --glass-tint: 19, 27, 41;
+  --bg: #0e141d;                          /* 页面底：夜蓝压灰降饱和 */
+  --surface: #151d28;
+  --panel: rgba(20, 28, 39, 0.97);
+  --ink: #e9edf3;
+  --muted: #8590a2;
+  --line: rgba(255, 255, 255, 0.13);
+  --line-soft: rgba(255, 255, 255, 0.06);
+  --accent: #9dc0e8;                      /* 强调色：月光银蓝 */
+  --accent-hover: #b1cfef;
+  --accent-pressed: #7ea6d6;
+  --accent-ink: #0d1420;
+  --veil: 14, 20, 29;
+  --glass-tint: 20, 28, 39;
   --glass-transmission: 0.88;
   --glass-roughness: 0.25;
   --shadow-panel: 0 22px 60px rgba(0, 0, 0, 0.5);
-  --light-band: rgba(190, 205, 235, 0.16);
+  --light-band: rgba(200, 216, 242, 0.14);
   --ok: #7ee2a8;
   --err: #ff6b6b;
-  --info: #8fc7ff;
+  --info: #8ed0e6;                        /* info 走青，与强调色拉开 */
   --warn: #d9b25f;
 }
 

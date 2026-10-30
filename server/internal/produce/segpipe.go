@@ -424,6 +424,8 @@ func (r *Runner) runSegmentPipeline(ctx context.Context, p *pipeline.Project) er
 	}
 	r.emit(id, "stage", "compositions", "done")
 	r.Manifest(p, "stage.finish", "compositions")
+	// 兜底封面（cover.go）：终审过后画面定型才出，失败不挡出片
+	r.makeCoverTail(ctx, p, false)
 	r.emit(id, "done", "", "renders/main.mp4")
 	r.Manifest(p, EventProduceDone, "renders/main.mp4")
 	// 完成通知如实区分「全过」与「带伤」（2026-10-19 中-13），并按本轮实际

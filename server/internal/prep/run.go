@@ -116,14 +116,18 @@ func run(ctx context.Context, p *pipeline.Project, d Deps, strict bool) error {
 	// 文稿三工位整条不进——PV 的分镜工位（M2）与打包门上线前，制作入口另有
 	// 拦截，半条链跑出来只会污染工件区。
 	doneMsg := "三工件就绪，等待打包终审"
+	// 站位落盘即广播 prep_updated：前端（App.vue）监听该事件重拉 view/manuscript/
+	// style/prep——否则异步链只发 stage 事件，各页冻结在链启动前的旧态
+	// （2026-10-30 GUI 实测：文稿页 0 字、风格页初始态、三工件齐了想法页还写进行中）。
+	upd := func(station string) func() { return func() { d.emit(p.ID, "prep_updated", "", station) } }
 	stations := []station{
-		{StationScript, func(c context.Context) error { return runScriptStation(c, p, d) }, nil},
-		{StationStyle, func(c context.Context) error { return runStyleStation(c, p, d) }, nil},
-		{StationStoryboard, func(c context.Context) error { return runStoryboardStation(c, p, d) }, nil},
+		{StationScript, func(c context.Context) error { return runScriptStation(c, p, d) }, upd(StationScript)},
+		{StationStyle, func(c context.Context) error { return runStyleStation(c, p, d) }, upd(StationStyle)},
+		{StationStoryboard, func(c context.Context) error { return runStoryboardStation(c, p, d) }, upd(StationStoryboard)},
 	}
 	if ProjectMode(p) == "music" {
 		stations = []station{
-			{StationMusic, func(c context.Context) error { return runMusicStation(c, p, d) }, nil},
+			{StationMusic, func(c context.Context) error { return runMusicStation(c, p, d) }, upd(StationMusic)},
 		}
 		doneMsg = "音乐三件套就绪（brief/曲/地图）——分镜工位上线后接续"
 	}
@@ -147,11 +151,16 @@ func run(ctx context.Context, p *pipeline.Project, d Deps, strict bool) error {
 			}
 			p.Manifest("prep.error", st.name+": "+pipeline.FirstLine(err.Error(), 160))
 			d.emit(p.ID, "stage", "prep", "error: "+pipeline.FirstLine(err.Error(), 120))
+			d.emit(p.ID, "prep_updated", "", "error") // 链终止也要刷前端（running 态落定）
 			return err
+		}
+		if st.after != nil {
+			st.after()
 		}
 	}
 	p.Manifest("prep.done", doneMsg)
 	d.emit(p.ID, "stage", "prep", "done")
+	d.emit(p.ID, "prep_updated", "", "done")
 	return nil
 }
 

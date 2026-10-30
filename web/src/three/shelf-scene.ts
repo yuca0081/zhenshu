@@ -67,7 +67,7 @@ export class ShelfScene {
   private hoverIndex = -1
   private interactive = true
   private resizeObs: ResizeObserver
-  private bgTarget = new THREE.Color('#0c121d')
+  private bgTarget = new THREE.Color('#0e141d')
 
   constructor(container: HTMLElement, opts: ShelfSceneOptions = {}) {
     this.container = container
@@ -176,7 +176,7 @@ export class ShelfScene {
   applyTheme() {
     const tintArr = cssVar('--glass-tint').split(',').map((v) => parseFloat(v) / 255)
     const tint = new THREE.Color(tintArr[0] || 0.9, tintArr[1] || 0.9, tintArr[2] || 0.9)
-    const bg = cssVar('--bg') || '#0c121d'
+    const bg = cssVar('--bg') || '#0e141d'
 
     this.bgTarget.set(bg)
     for (const p of this.panels) {
@@ -284,10 +284,10 @@ export class ShelfScene {
   }
 
   private updateTextures() {
-    const paperCss = cssVar('--panel') || 'rgba(19,27,41,.97)'
-    const ink = cssVar('--ink') || '#eef1f5'
-    const muted = cssVar('--muted') || '#8a93a3'
-    const accent = cssVar('--accent') || '#d0a04c'
+    const paperCss = cssVar('--panel') || 'rgba(20,28,39,.97)'
+    const ink = cssVar('--ink') || '#e9edf3'
+    const muted = cssVar('--muted') || '#8590a2'
+    const accent = cssVar('--accent') || '#9dc0e8'
     const line = cssVar('--line') || 'rgba(255,255,255,.14)'
 
     for (let i = 0; i < this.panels.length; i++) {

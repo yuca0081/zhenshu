@@ -84,18 +84,20 @@ def lint_text(html: str, seg_hint: str = '') -> list:
             errs.append(('F1', f'片段内出现 {tag}（场景文件不是完整文档）'))
             break
 
-    # F2/F3：composition id 与 timeline 注册
-    m = re.search(r'data-composition-id="([^"]+)"', html)
+    # F2/F3：composition id 与 timeline 注册。标记匹配单双引号都收：JS/HTML 里
+    # 引号语义等价，2026-10-30 para05 实测模型写 window.__timelines['seg']，双引号
+    # 字面量匹配恒判「未注册」六轮重生成全灭（与 T4 __draw_ 的 10-29 教训同款）。
+    m = re.search(r'''data-composition-id=(?:"([^"]+)"|'([^']+)')''', html)
     if not m:
         errs.append(('F2', '缺 data-composition-id（根元素必须有）'))
         seg = seg_hint
     else:
-        seg = m.group(1)
+        seg = m.group(1) or m.group(2)
         if seg_hint and seg != seg_hint:
             errs.append(('F2', f'data-composition-id="{seg}" 与段号 {seg_hint} 不一致'))
     if not re.search(r'gsap\.timeline\s*\(\s*\{\s*paused\s*:\s*true', html):
         errs.append(('F3', '必须是 gsap.timeline({paused:true})（平台时钟，seek 驱动）'))
-    if seg and f'window.__timelines["{seg}"]' not in html:
+    if seg and not re.search(r'''window\.__timelines\s*\[\s*["']''' + re.escape(seg) + r'''["']\s*\]''', html):
         errs.append(('F3', f'未注册 window.__timelines["{seg}"]（渲染器入口）'))
 
     # F5：语义标注计数（硬要求）。F4（clip 轨道层）2026-09-30 降级为指导：

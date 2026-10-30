@@ -114,6 +114,10 @@ func (s *Server) Router() *gin.Engine {
 	// 想法页签：启动/取消三工位链（异步，SSE 播报进度）
 	api.POST("/projects/:id/prep/run", s.runPrep)
 	api.POST("/projects/:id/prep/cancel", s.cancelPrep)
+	// 项目材料库（主题页上传的参考资料，①文稿 read_source 消费）
+	api.GET("/projects/:id/materials", s.listMaterials)
+	api.POST("/projects/:id/materials", s.saveMaterial)
+	api.DELETE("/projects/:id/materials", s.deleteMaterial)
 	api.POST("/projects/:id/chat", s.chat)
 	api.POST("/projects/:id/chat/cancel", s.cancelChat)
 	api.GET("/projects/:id/messages", s.messages)
@@ -124,6 +128,8 @@ func (s *Server) Router() *gin.Engine {
 	api.POST("/projects/:id/cancel", s.cancelProduce)
 	api.POST("/projects/:id/bgm", s.setProjectBGM)
 	api.GET("/projects/:id/video/main.mp4", s.video)
+	api.GET("/projects/:id/cover.png", s.coverPNG)
+	api.POST("/projects/:id/cover", s.regenCover)
 	api.GET("/projects/:id/style/clips/:file", s.styleClip)
 	api.GET("/projects/:id/audio_meta", s.audioMeta)
 	api.GET("/bgm/library", s.bgmLibrary)
@@ -608,12 +614,9 @@ func (s *Server) createProject(c *gin.Context) {
 	if styleID == "" {
 		styleID = in.StylePackID
 	}
-	// 新建只要求名称+主题（文稿/风格是三前置，进工作区后在对话栏标签里补）；
-	// 带稿直建是老路径，兼容保留。
-	if in.Topic == "" && in.Manuscript == "" {
-		c.JSON(400, gin.H{"error": "主题必填（一句话说清要讲什么，例：蚊子为什么嗡嗡叫）"})
-		return
-	}
+	// 新建只要求名称（2026-10-30 起主题挪进工作区「主题」页签——那里能写想法、
+	// 传材料，是比弹窗里的单行框更完整的输入位）。带稿直建是老路径，兼容保留。
+	_ = in.Topic
 	if in.Aspect != "16:9" && in.Aspect != "9:16" {
 		in.Aspect = "9:16"
 	}
@@ -637,6 +640,9 @@ func (s *Server) createProject(c *gin.Context) {
 		in.Name = src
 		if r := []rune(in.Name); len(r) > 24 {
 			in.Name = string(r[:24])
+		}
+		if strings.TrimSpace(in.Name) == "" {
+			in.Name = "未命名视频"
 		}
 	}
 	// id 秒级时间戳：并发/连点创建会同秒撞号——os.Mkdir 原子占号（先 Stat 后建
@@ -854,10 +860,15 @@ func (s *Server) projectView(c *gin.Context) {
 	if ev, _, ts := produce.LastTerminal(p); ev != "" {
 		lastProduce = gin.H{"event": ev, "ts": ts}
 	}
+	var cover any
+	if cs := produce.LoadCover(p); cs != nil {
+		cover = gin.H{"t": cs.T, "title": cs.Title}
+	}
 	pt, ct, ncalls, ncached := agentTokenTotals(p.Artifact("manifest.jsonl"))
 	c.JSON(200, gin.H{
 		"id": id, "name": st.Name, "aspect": aspect, "topic": topic, "mode": mode,
-		"bgm": gin.H{"name": bgmName, "reason": bgmReason},
+		"bgm":   gin.H{"name": bgmName, "reason": bgmReason},
+		"cover": cover,
 		"gates": gin.H{
 			"manuscript": st.HasManuscript, "storyboard": st.HasStoryboard, "style_confirmed": st.StyleConfirmed,
 			"style_draft": st.HasStyle, "style_direction": st.StyleDirection,
@@ -1263,6 +1274,75 @@ func (s *Server) style(c *gin.Context) {
 // runPrep 启动三工位链（想法页签「自动完成」按钮）：异步后台跑，进度走 SSE
 // （stage prep/*），完成/失败经 OnDone 落聊天框。对话侧重跑不经过这里——走
 // agent 工具的同步执行路径，与 Preps.running 同一把互斥（2026-10-19 高-6 收口）。
+// ── 项目材料库（主题页上传的参考资料，①文稿 read_source 消费）─────────────
+
+// prepLocked 材料增删的互斥口径：准备链/对话轮在跑时材料是「本链路的输入」，
+// 改它会让 read_source 的口径在链中途漂移——拒绝，等这轮结束。
+func (s *Server) prepLocked(id string) bool {
+	if s.Preps != nil && s.Preps.IsRunning(id) {
+		return true
+	}
+	if mu, ok := s.turnMu.Load(id); ok {
+		m := mu.(*sync.Mutex)
+		if !m.TryLock() {
+			return true
+		}
+		m.Unlock()
+	}
+	return false
+}
+
+func (s *Server) listMaterials(c *gin.Context) {
+	p, ok := s.project(c)
+	if !ok {
+		return
+	}
+	c.JSON(200, prep.ListMaterials(p))
+}
+
+func (s *Server) saveMaterial(c *gin.Context) {
+	p, ok := s.project(c)
+	if !ok {
+		return
+	}
+	if s.prepLocked(p.ID) {
+		c.JSON(409, gin.H{"error": "准备阶段/对话进行中——材料已在本次链路读取，等这轮结束后再改"})
+		return
+	}
+	var in struct {
+		Name    string `json:"name"`
+		Content string `json:"content"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(400, gin.H{"error": "参数不合法: " + err.Error()})
+		return
+	}
+	list, err := prep.SaveMaterial(p, in.Name, in.Content)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	p.Manifest("materials.saved", in.Name)
+	c.JSON(200, gin.H{"ok": true, "materials": list})
+}
+
+func (s *Server) deleteMaterial(c *gin.Context) {
+	p, ok := s.project(c)
+	if !ok {
+		return
+	}
+	if s.prepLocked(p.ID) {
+		c.JSON(409, gin.H{"error": "准备阶段/对话进行中——材料已在本次链路读取，等这轮结束后再改"})
+		return
+	}
+	list, err := prep.DeleteMaterial(p, c.Query("name"))
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true, "materials": list})
+}
+
 func (s *Server) runPrep(c *gin.Context) {
 	id := c.Param("id")
 	if s.Preps == nil {
@@ -1517,7 +1597,13 @@ func (s *Server) chat(c *gin.Context) {
 	}
 	in.Refs = sanitizeRefs(in.Refs)
 	m := &store.Msg{ProjectID: id, Role: "user", Type: "text", Content: in.Content, Refs: in.Refs}
-	_ = s.Store.SaveMsg(m)
+	// 落库失败必须 5xx：202 却查无此消息＝用户看着输入框清空白等一场空
+	// （2026-10-30 GUI 实测：存储抖动窗口内多次发送静默蒸发，前端还按成功清了草稿）
+	if err := s.Store.SaveMsg(m); err != nil {
+		log.Printf("[api] SaveMsg(%s) 失败: %v", id, err)
+		c.JSON(500, gin.H{"error": "消息保存失败（存储暂不可用），请稍后重发——内容已保留在输入框"})
+		return
+	}
 	s.Hub.Emit(id, "msg", "", in.Content)
 	// 同项目对话轮互斥：连发两条消息会并发跑两个 Agent 循环，互相增删共享产物
 	// （如 update_storyboard 删 spec 时另一轮正读）。排队等上一轮结束；但排队
@@ -1785,6 +1871,79 @@ func (s *Server) video(c *gin.Context) {
 	s.serveArtifact(c, artifacts.ProjectKey(id, "renders/main.mp4"), path, "main.mp4", "no-store", "成片未就绪")
 }
 
+// coverPNG 封面取件（renders/cover.png，出片尾巴自动产出/项目页按需重做）：
+// 本地 miss 回退远端正本，与 video 同源口径。
+func (s *Server) coverPNG(c *gin.Context) {
+	id := c.Param("id")
+	path := pipeline.NewProject(s.DataDir, id).Artifact("renders/cover.png")
+	if _, err := os.Stat(path); err != nil && !(s.Artifacts != nil && s.Artifacts.Stat(artifacts.ProjectKey(id, "renders/cover.png"))) {
+		c.JSON(404, gin.H{"error": "封面未生成"})
+		return
+	}
+	s.serveArtifact(c, artifacts.ProjectKey(id, "renders/cover.png"), path, "cover.png", "no-store", "封面未生成")
+}
+
+// regenCover 按需重做封面（produce.MakeCover，同步——抽帧+无头截图秒级到十几秒）：
+// body {t?, title?} 缺省沿用既有封面账面，再缺省兜底（帧位=总时长30%段中点，
+// 标题=项目名）。制作中拒绝（收尾自动出封面，双写手互斥）；成片不在本机拒绝
+// （抽不了帧，云端-only 项目先在列表页恢复到本机）。
+func (s *Server) regenCover(c *gin.Context) {
+	p, ok := s.project(c)
+	if !ok {
+		return
+	}
+	if s.Producer == nil {
+		c.JSON(500, gin.H{"error": "制作器未接线（demo 容器无制作能力）"})
+		return
+	}
+	if s.Producer.IsRunning(p.ID) {
+		c.JSON(409, gin.H{"error": "制作进行中——收工时会自动出封面，先等这轮结束"})
+		return
+	}
+	if _, err := os.Stat(p.Artifact("renders/main.mp4")); err != nil {
+		c.JSON(409, gin.H{"error": "成片不在本机，抽不了封面帧"})
+		return
+	}
+	var in struct {
+		T     *float64 `json:"t"`
+		Title *string  `json:"title"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(400, gin.H{"error": "参数不合法: " + err.Error()})
+		return
+	}
+	existing := produce.LoadCover(p)
+	t := 0.0
+	switch {
+	case in.T != nil:
+		t = *in.T
+	case existing != nil:
+		t = existing.T
+	default:
+		picked, ok := produce.PickCoverT(p)
+		if !ok {
+			c.JSON(409, gin.H{"error": "没有 timeline（成片未拼接完成），定不了帧位"})
+			return
+		}
+		t = picked
+	}
+	title := ""
+	switch {
+	case in.Title != nil:
+		title = strings.TrimSpace(*in.Title)
+	case existing != nil:
+		title = existing.Title
+	}
+	if title == "" {
+		title = produce.DefaultCoverTitle(p)
+	}
+	if err := s.Producer.MakeCover(c.Request.Context(), p, t, title); err != nil {
+		c.JSON(500, gin.H{"error": "封面生成失败: " + err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true, "t": t, "title": title})
+}
+
 // styleClip 动态样张 mp4（prep② 直渲的 sample-<N> 与 legacy 迷你真段 clip-<N>）。
 // 文件名白名单——style/clips/ 里还有场景片段 html 和装配清单，那些不对外。
 var styleClipRe = regexp.MustCompile(`^(?:clip|sample)-\d+\.mp4$`)
@@ -1924,7 +2083,9 @@ func (s *Server) sse(c *gin.Context) {
 			io.WriteString(c.Writer, "event: "+ev.Type+"\ndata: "+ev.JSON()+"\n\n")
 			fl.Flush()
 		case <-heartbeat.C:
-			io.WriteString(c.Writer, ": ping\n\n")
+			// 具名事件而非注释帧：EventSource 对 ": ping" 不可见，前端拿不到
+			// 「最近心跳」就做不了活性看门狗（半开挂死无法自愈，2026-10-30 GUI 实测）
+			io.WriteString(c.Writer, "event: ping\ndata: {}\n\n")
 			fl.Flush()
 		}
 	}

@@ -242,17 +242,30 @@ func (r *scriptRun) tools() []Tool {
 	}
 }
 
-// readSource 材料唯一入口：article.txt 是原始稿；没有则主题（project.json topic）。
+// readSource 材料唯一入口，优先级：原始稿（article.txt）+ 用户上传材料
+// （input/materials/，主题页落盘）拼成材料主体；两者皆无时退一句话主题
+// （project.json topic），再退主题页的想法文本（prep_idea.txt，2026-10-30
+// 起新建项目不再填主题——想法文本就是主题）。
 func (r *scriptRun) readSource(target float64) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "目标时长：约 %.0f 秒（≈%d 字）。\n", target, int(target*contract.SpeechRate))
-	if raw, err := os.ReadFile(r.p.Artifact("input/article.txt")); err == nil && len(strings.TrimSpace(string(raw))) > 0 {
-		content := strings.TrimSpace(string(raw))
-		mode := "完整稿件"
-		if len([]rune(content)) < 60 {
+	source := ""
+	{
+		var parts []string
+		if raw, err := os.ReadFile(r.p.Artifact("input/article.txt")); err == nil && len(strings.TrimSpace(string(raw))) > 0 {
+			parts = append(parts, strings.TrimSpace(string(raw)))
+		}
+		if mats := MaterialsText(r.p); mats != "" {
+			parts = append(parts, mats)
+		}
+		source = strings.Join(parts, "\n")
+	}
+	if source != "" {
+		mode := "完整稿件/参考资料"
+		if len([]rune(source)) < 60 {
 			mode = "一句话主题（按主题模式处理：先检索后动笔）"
 		}
-		fmt.Fprintf(&b, "材料来源：%s（%d 字）\n---\n%s\n---", mode, len([]rune(content)), content)
+		fmt.Fprintf(&b, "材料来源：%s（%d 字；用户上传材料与原始稿同等对待——不改事实、不增删观点）\n---\n%s\n---", mode, len([]rune(source)), source)
 		return b.String()
 	}
 	if b2, err := os.ReadFile(r.p.Artifact("project.json")); err == nil {
@@ -263,6 +276,10 @@ func (r *scriptRun) readSource(target float64) string {
 			fmt.Fprintf(&b, "材料来源：主题\n主题：%s", strings.TrimSpace(meta.Topic))
 			return b.String()
 		}
+	}
+	if idea := noteFile(r.p, IdeaFile); idea != "" {
+		fmt.Fprintf(&b, "材料来源：主题\n主题（用户在主题页写的想法）：%s", idea)
+		return b.String()
 	}
 	return "既没有原始稿（input/article.txt）也没有主题（project.json topic）——无法开工。"
 }

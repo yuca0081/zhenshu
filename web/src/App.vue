@@ -73,27 +73,13 @@ const current = ref<string>('')
 // / 设置（模型设置，不进页签组——顶栏「设置」按钮进，admin 专属）
 type PageID = 'home' | 'workspace' | 'materials' | 'settings'
 const tabs = [
-  { id: 'home', label: '首页', en: 'HOME', icon: 'home' },
-  { id: 'workspace', label: '工作区', en: 'STUDIO', icon: 'film' },
-  { id: 'materials', label: '风格库', en: 'LIBRARY', icon: 'palette' },
+  { id: 'home', label: '主页', icon: 'home' },
+  { id: 'workspace', label: '工作区', icon: 'film' },
+  { id: 'materials', label: '风格库', icon: 'palette' },
 ] as const
 const page = ref<PageID>('home')
-// 页签切换带 View Transition（旧页上浮淡出/新页升起，HUD 头尾锁定不动）
+// 页签切换带 View Transition（旧页上浮淡出/新页升起，顶栏锁定不动）
 function goPage(p: PageID) { startVt(() => { page.value = p }) }
-
-// HUD 右下角时钟（tabular 秒表）
-const now = ref(new Date())
-const clockText = computed(() => {
-  const d = now.value
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
-})
-const clockTimer = window.setInterval(() => { now.value = new Date() }, 1000)
-// 底部状态栏的模块名
-const hudModule = computed(() => {
-  if (page.value === 'settings') return 'SETTINGS'
-  return tabs.find(t => t.id === page.value)?.en ?? 'HOME'
-})
 // 风格库页签：风格库 / 视频解析（工作区「解析到风格库」按钮跳转时直接落在视频解析）
 const materialsTab = ref<'styles' | 'videos'>('styles')
 const view = ref<ProjectView | null>(null)
@@ -128,11 +114,26 @@ let busyTimer: number | null = null
 let turnTimer: number | null = null
 let activityTimer: number | null = null
 let reqSeq = 0 // 会话内自增：切项目即作废在途响应——A 项目的数据晚到不许覆盖 B 的页
-// 同 key 在途去重：key → 发起时的 reqSeq。只有"发起时与当前同代次"的在途请求才挡新请求；
-// 记录的 seq 已过期（中途切过项目，旧响应注定被作废）时直接被新请求覆盖，否则快速
-// A→B→A 时第二次 loadProject(A) 被旧请求挡掉、旧响应又被 seq 丢弃，页面空白到下个事件。
-// finally 里同样校验代次再删：先完成的旧代请求不许误删新代请求的在途标记。
-const inflight = new Map<string, number>()
+// 同 key 在途去重：key → {发起时的 reqSeq, 发起时刻}。只有"发起时与当前同代次"
+// 且未超龄的在途请求才挡新请求；记录的 seq 已过期（中途切过项目，旧响应注定被作废）
+// 时直接被新请求覆盖，否则快速 A→B→A 时第二次 loadProject(A) 被旧请求挡掉、旧响应
+// 又被 seq 丢弃，页面空白到下个事件。finally 里同样校验代次再删：先完成的旧代请求
+// 不许误删新代请求的在途标记。TTL 保险丝（2026-10-30 GUI 实测根因 B）：api 层虽有
+// 30s 超时，条目再挂 35s 就当僵尸放行——任何一层失灵都不许把某个数据面永久饿死。
+const INFLIGHT_TTL = 35_000
+const inflight = new Map<string, { seq: number; at: number }>()
+
+// 在途检查三态：true=挡（同代次且新鲜）；并顺手覆盖/登记新条目。
+function inflightGuard(key: string, seq: number): boolean {
+  const cur = inflight.get(key)
+  if (cur && cur.seq === seq && Date.now() - cur.at < INFLIGHT_TTL) return true
+  inflight.set(key, { seq, at: Date.now() })
+  return false
+}
+function inflightDone(key: string, seq: number) {
+  const cur = inflight.get(key)
+  if (cur && cur.seq === seq) inflight.delete(key)
+}
 
 // 本次运行收到的第一粒 stage 键（stageState 每次清空后重播）：首制第一粒必是
 // tts（复用轮后端也发 done），重做第一粒是 compositions——判运行类型用；
@@ -182,8 +183,7 @@ function openMaterials(tab: 'styles' | 'videos') {
 async function loadProject(id: string) {
   const key = `project:${id}`
   const seq = reqSeq
-  if (inflight.get(key) === seq) return // 同代次的同 key 在途请求才去重（语义见 inflight 声明处）
-  inflight.set(key, seq)
+  if (inflightGuard(key, seq)) return // 同代次的同 key 在途请求才去重（语义见 inflight 声明处）
   try {
     const v = await api.project(id)
     if (seq !== reqSeq) return
@@ -204,7 +204,7 @@ async function loadProject(id: string) {
     // exists=false 也要保留：running/legacy/idea 是「想法」页签的状态源
     prep.value = pp
   } finally {
-    if (inflight.get(key) === seq) inflight.delete(key)
+    inflightDone(key, seq)
   }
 }
 
@@ -213,8 +213,7 @@ async function loadMsgs() {
   if (!id) return
   const key = `msgs:${id}`
   const seq = reqSeq
-  if (inflight.get(key) === seq) return
-  inflight.set(key, seq)
+  if (inflightGuard(key, seq)) return
   try {
     const after = msgs.value.length ? Math.max(...msgs.value.map(m => m.id)) : 0
     // ?? [] 兜底：服务端把空历史序列化成 null（老接口），null.filter 会崩掉对话栏
@@ -224,7 +223,7 @@ async function loadMsgs() {
     const fresh = inc.filter(m => !seen.has(m.id))
     if (fresh.length) msgs.value.push(...fresh)
   } finally {
-    if (inflight.get(key) === seq) inflight.delete(key)
+    inflightDone(key, seq)
   }
 }
 
@@ -233,14 +232,13 @@ async function loadActivity() {
   if (!id) return
   const key = `activity:${id}`
   const seq = reqSeq
-  if (inflight.get(key) === seq) return
-  inflight.set(key, seq)
+  if (inflightGuard(key, seq)) return
   try {
     const rows = await api.activity(id, 2000).catch(() => null) // 过程页整页回看，尾部窗口放大
     if (rows === null || seq !== reqSeq || id !== current.value) return
     activity.value = rows
   } finally {
-    if (inflight.get(key) === seq) inflight.delete(key)
+    inflightDone(key, seq)
   }
 }
 
@@ -373,9 +371,20 @@ async function cancelAgentTurn() {
   loadMsgs()
 }
 
+// SSE 活性看门狗（2026-10-30 GUI 实测根因 C）：服务端每 15s 发具名 ping 事件；
+// 半开连接（后端/Vite 代理重启窗口）浏览器不报 error 也不重连，事件面全部冻结
+// （实测 12:17 取消事件+聊天确认双双丢失）。OPEN 态 45s（三个心跳周期）无 ping
+// 即判死，主动重建——重连的 open 补偿 + 服务端 64 条 replay 窗补齐错过的事件。
+let lastBeatAt = 0
+let beatTimer: number | null = null
+
 function openSSE(id: string) {
   es?.close()
+  lastBeatAt = Date.now()
   es = new EventSource(sseURL(id))
+  es.addEventListener('ping', () => { lastBeatAt = Date.now() })
+  // 每次（重）连成功做一次全量对账：replay 只回放事件，这里直接拉数据面兜底
+  es.addEventListener('open', () => { lastBeatAt = Date.now(); refresh() })
   es.addEventListener('msg', () => loadMsgs())
   es.addEventListener('agent_msg', ev => {
     agentBusy.value = false
@@ -397,6 +406,10 @@ function openSSE(id: string) {
       stageState.value = { ...stageState.value, [d.stage]: st }
       loadMsgs()
       throttledLoadActivity() // 阶段推进即拉事件流（用时/打回记帐在 manifest 里；3s 节流）
+      // 准备链站位落盘（prep/* done）：补拉 view/manuscript/style——stage 事件本身
+      // 不刷这些，异步链一跑各页会冻结在链启动前的旧态（2026-10-30 GUI 实测）。
+      // 与后端站位级的 prep_updated 事件互为保险。
+      if (typeof d.stage === 'string' && d.stage.startsWith('prep/') && st === 'done') throttledLoadProject()
     } catch { /* 坏事件静默丢弃 */ }
   })
   es.addEventListener('progress', ev => {
@@ -434,33 +447,53 @@ function openSSE(id: string) {
   })
 }
 
-// 两个联动同源（view.producing）合成一个 watch：
-// ① 自愈兜底（覆盖 SSE 断连/丢事件/服务重启）：一旦变 false 就清制作中的瞬时态并换代
-//    成片——磁盘事实（producing=false）永远压过前端内存态；
-// ② 制作中每 5s 轮询事件流：render.seg / 预审轮次这类 manifest 细粒度事件没有对应
-//    SSE，SSE stage/progress 只兜住粗粒度推进，细账靠轮询补。
+// 制作终态自愈（覆盖 SSE 断连/丢事件/服务重启）：producing 一旦变 false 就清制作中
+// 的瞬时态并换代成片——磁盘事实（producing=false）永远压过前端内存态。
 watch(() => view.value?.producing, (now, was) => {
   if (was && now === false) {
     stageState.value = {}
     progressLine.value = ''
     videoRev.value++
   }
-  if (now && activityTimer == null) activityTimer = window.setInterval(loadActivity, 5000)
+})
+
+// busy 兜底轮询（2026-10-30 GUI 实测根因 C/D）：SSE 之外的第二事实源。制作中
+// （producing 是后端内存态，取消/崩溃/他机接管只有重查 GET /project 才落地）、
+// 准备链中（②风格站 15 分钟无任何 SSE 事件）、对话轮中，每 5s 拉事件流+消息
+// （增量接口，很轻），隔跳拉 view（gates/producing/prep 就绪态）。
+let busyTick = 0
+function busyPoll() {
+  loadActivity()
+  loadMsgs()
+  if (++busyTick % 2 === 0 && current.value) loadProject(current.value).catch(() => {})
+}
+const busy = computed(() => !!(view.value?.producing || prep.value?.running || turnActive.value))
+watch(busy, now => {
+  if (now && activityTimer == null) activityTimer = window.setInterval(busyPoll, 5000)
   if (!now && activityTimer != null) { clearInterval(activityTimer); activityTimer = null }
 })
 watch(current, id => {
   if (id) { openSSE(id); refresh() }
   else es?.close() // 项目删空/切换到空：断开上一个项目的订阅
 })
+// 看门狗定时器：常驻（无项目时 openSSE 未建连，循环内自判），App 卸载才拆
+if (beatTimer == null) {
+  beatTimer = window.setInterval(() => {
+    if (!es || !current.value) return
+    if (es.readyState === EventSource.OPEN && Date.now() - lastBeatAt > 45_000) {
+      openSSE(current.value)
+    }
+  }, 20_000)
+}
 // 定时器/SSE/监听的统一拆解（中-L5：原先两处 onBeforeUnmount 分立，漏一个就是泄漏）
 onBeforeUnmount(() => {
   es?.close()
   if (activityTimer != null) clearInterval(activityTimer)
+  if (beatTimer != null) clearInterval(beatTimer)
   if (actTimer != null) clearTimeout(actTimer)
   if (projLoadTimer != null) clearTimeout(projLoadTimer)
   if (busyTimer) clearTimeout(busyTimer)
   if (turnTimer) clearTimeout(turnTimer)
-  clearInterval(clockTimer)
   window.removeEventListener('hashchange', applyHash)
 })
 
@@ -593,6 +626,35 @@ async function confirmStyle() {
   refresh()
 }
 
+// 停止制作（视频页「停止制作」按钮）：取消是协作式信号，runner 收尾有 60s 宽限——
+// 立刻 refresh 大概率撞上收尾期 producing 仍 true，UI 就永远停在「制作管线运行中」
+// （2026-10-30 GUI 实测 t33-t35）。这里以 3s 间隔重查到 producing 翻 false 为止
+// （上限 70s ≈ cancelGrace+余量），随后全量收尾刷新；SSE cancelled 事件到了会先解围。
+async function onStopProduce() {
+  const id = current.value
+  if (!id) return
+  try { await api.cancel(id) } catch { /* 409=没有在跑的任务：也照常走收尾刷新 */ }
+  const deadline = Date.now() + 70_000
+  await new Promise<void>(resolve => {
+    const t = window.setInterval(async () => {
+      if (current.value !== id) { clearInterval(t); resolve(); return } // 用户切走了：不再动别人的页面
+      await loadProject(id).catch(() => {})
+      if (!view.value?.producing || Date.now() > deadline) {
+        clearInterval(t)
+        resolve()
+      }
+    }, 3_000)
+  })
+  refresh()
+}
+
+// 对话发送成功即回读消息：自己那条不能等 SSE msg 事件上屏（SSE 挂死时用户看到的
+// 是「输入框清空、消息没发出去」→ 重复发送，2026-10-30 GUI 实测 P1-1 前端半）
+function onChatSent() {
+  markBusy()
+  loadMsgs()
+}
+
 // 首启的 applyHash 已移入 boot()（登录态确定后才恢复页面）
 </script>
 
@@ -602,17 +664,13 @@ async function confirmStyle() {
       <!-- 登录页（鉴权启用且未登录时独占全屏）；服务不可达的 boot 失败同样停在登录页可重试 -->
       <LoginView v-if="authReady && authRequired && !user" @logged-in="onLoggedIn" />
       <div v-else-if="authReady" class="app">
-        <!-- HUD 四角构图：左上品牌、右上主题胶囊+导航、底部状态条（转场期间头尾锁定不动） -->
+        <!-- HUD 顶栏：左=品牌+导航、右=新建+主题胶囊+账号（转场期间顶栏锁定不动） -->
         <header class="hud-top">
-          <div class="rise">
-            <div class="hb-row">
+          <div class="rise hud-left">
+            <div class="hb-brand">
+              <RIcon name="video" :size="18" />
               <span class="hb-name">帧述</span>
-              <span class="micro">ZHENSU</span>
             </div>
-            <div class="micro hb-sub">VIDEO STUDIO · AI 短视频制作台</div>
-          </div>
-          <div class="hud-right">
-            <ThemeCapsule />
             <nav class="hud-nav" aria-label="主导航">
               <button
                 v-for="t in tabs" :key="t.id"
@@ -620,7 +678,7 @@ async function confirmStyle() {
                 @click="goPage(t.id)"
               >
                 <RIcon :name="t.icon" :size="15" />
-                <span>{{ t.en }}</span>
+                <span>{{ t.label }}</span>
               </button>
               <button
                 v-if="user?.role === 'admin'"
@@ -628,12 +686,16 @@ async function confirmStyle() {
                 title="各工位的大模型与 URL" @click="goPage('settings')"
               >
                 <RIcon name="settings" :size="15" />
-                <span>SETTINGS</span>
-              </button>
-              <button class="hud-new" @click="showNew = true">
-                <RIcon name="plus" :size="13" />新建
+                <span>设置</span>
               </button>
             </nav>
+          </div>
+          <div class="hud-right">
+            <button class="hud-new" @click="showNew = true">
+              <RIcon name="plus" :size="13" />新建
+            </button>
+            <ThemeCapsule />
+            <AccountMenu v-if="user" :user="user" @logout="onLogout" @manage="showUserAdmin = true" />
           </div>
         </header>
 
@@ -677,7 +739,7 @@ async function confirmStyle() {
                 @prep-refresh="refresh"
                 @seg="addRef"
                 @pick-time="addTimeRef"
-                @cancel="async () => { if (current) { await api.cancel(current).catch(() => {}); refresh() } }"
+                @cancel="onStopProduce"
                 @cancel-agent="cancelAgentTurn"
                 @rework-started="refresh"
                 @parse-started="openMaterials"
@@ -689,22 +751,10 @@ async function confirmStyle() {
             </main>
             <ChatPanel
               :key="current" :project-id="current" :msgs="msgs" :busy="agentBusy" v-model:draft="chatDraft" :refs="chatRefs"
-              @sent="markBusy" @remove-ref="removeRef" @clear-refs="chatRefs = []"
+              @sent="onChatSent" @remove-ref="removeRef" @clear-refs="chatRefs = []"
             />
           </div>
         </main>
-
-        <footer class="hud-bottom">
-          <div class="hf-side">
-            <span class="hf-live"><span class="hf-dot" />SYS ONLINE</span>
-            <span class="hf-module">{{ hudModule }}</span>
-          </div>
-          <div class="hf-side">
-            <AccountMenu v-if="user" :user="user" @logout="onLogout" @manage="showUserAdmin = true" />
-            <span v-else>GUEST</span>
-            <span class="num">{{ clockText }}</span>
-          </div>
-        </footer>
       </div>
       </n-message-provider>
       <NewProjectModal v-model:show="showNew" @created="onCreated" />
@@ -724,20 +774,20 @@ async function confirmStyle() {
   view-transition-name: hud-top;
   flex: none;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  padding: 18px 24px 12px;
+  padding: 10px 24px;
 }
-.hb-row { display: flex; align-items: baseline; gap: 12px; }
-.hb-name { font-size: 20px; font-weight: 600; letter-spacing: 0.32em; }
-.hb-sub { margin-top: 4px; }
-.hud-right { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.hb-brand { display: flex; align-items: center; gap: 10px; color: var(--ink); }
+.hb-name { font-size: 20px; font-weight: 600; letter-spacing: 0.32em; line-height: 1.2; }
+.hud-left { display: flex; align-items: center; gap: 22px; }
+.hud-right { display: flex; flex-direction: row; align-items: center; gap: 14px; }
 .hud-nav { display: flex; align-items: center; gap: 4px; }
 .hud-nav-btn {
   display: flex; align-items: center; gap: 7px;
   border: 0; background: transparent; cursor: pointer;
-  padding: 7px 12px; font-family: inherit;
-  font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 6px 10px; font-family: inherit;
+  font-size: 13px; letter-spacing: 0.08em;
   color: var(--muted);
   transition: color var(--dur-2) var(--ease);
 }
@@ -756,22 +806,6 @@ async function confirmStyle() {
 .hud-new:active { transform: translateY(0); }
 
 .hud-main { flex: 1; min-height: 0; position: relative; }
-
-.hud-bottom {
-  view-transition-name: hud-bottom;
-  flex: none;
-  display: flex; align-items: center; justify-content: space-between;
-  border-top: 1px solid var(--line-soft);
-  padding: 7px 24px;
-  font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
-  color: var(--muted);
-}
-.hf-side { display: flex; align-items: center; gap: 20px; }
-.hf-live { display: inline-flex; align-items: center; gap: 8px; }
-.hf-dot {
-  width: 4px; height: 4px; border-radius: 999px;
-  background: var(--accent);
-}
 
 /* ── 工作区三栏 ─────────────────────────────── */
 .shell { height: 100%; display: flex; }

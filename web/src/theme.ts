@@ -53,25 +53,25 @@ const naiveOverrides = computed<GlobalThemeOverrides>(() => {
   // 不摸 theme.value 这个 computed 永远只求值一次，切换主题后组件库拿的还是旧色
   const day = theme.value === 'day'
   void day
-  const ink = cssVar('--ink', '#eef1f5')
-  const muted = cssVar('--muted', '#8a93a3')
-  const accent = cssVar('--accent', '#d0a04c')
-  const surface = cssVar('--surface', '#141d2b')
+  const ink = cssVar('--ink', '#e9edf3')
+  const muted = cssVar('--muted', '#8590a2')
+  const accent = cssVar('--accent', '#9dc0e8')
+  const surface = cssVar('--surface', '#151d28')
   const line = cssVar('--line', 'rgba(255,255,255,.14)')
   const lineSoft = cssVar('--line-soft', 'rgba(255,255,255,.07)')
   return {
     common: {
       fontFamily: "'MiSans VF', 'MiSans', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif",
       primaryColor: accent,
-      primaryColorHover: cssVar('--accent-hover', '#ddb268'),
-      primaryColorPressed: cssVar('--accent-pressed', '#b3873c'),
+      primaryColorHover: cssVar('--accent-hover', '#b1cfef'),
+      primaryColorPressed: cssVar('--accent-pressed', '#7ea6d6'),
       primaryColorSuppl: accent,
       borderRadius: '0px',
       borderRadiusSmall: '0px',
-      bodyColor: cssVar('--bg', '#0c121d'),
+      bodyColor: cssVar('--bg', '#0e141d'),
       cardColor: surface,
       modalColor: surface,
-      popoverColor: cssVar('--panel', 'rgba(19,27,41,.97)'),
+      popoverColor: cssVar('--panel', 'rgba(20,28,39,.97)'),
       inputColor: 'transparent',
       tableColor: surface,
       tableHeaderColor: surface,
@@ -85,7 +85,7 @@ const naiveOverrides = computed<GlobalThemeOverrides>(() => {
       successColor: cssVar('--ok', '#7ee2a8'),
       errorColor: cssVar('--err', '#ff6b6b'),
       warningColor: cssVar('--warn', '#d9b25f'),
-      infoColor: cssVar('--info', '#8fc7ff'),
+      infoColor: cssVar('--info', '#8ed0e6'),
       scrollbarColor: line,
       scrollbarColorHover: muted,
       closeIconColor: muted,

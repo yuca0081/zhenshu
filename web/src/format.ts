@@ -17,6 +17,11 @@ export const dateOf = (iso: string) => (iso ?? '').slice(5, 10).replace('-', '/'
 export const lastProduceFailed = (p: { last_produce?: { event: string } | null }) =>
   !!p.last_produce && (p.last_produce.event.endsWith('.error') || p.last_produce.event.endsWith('.interrupted'))
 
+// 上次制作是被用户主动停止（区别于失败：产物按段保留、无故障）——视频页用独立
+// 「已停止」态而非「就绪待开工」（2026-10-30 GUI 实测：取消后两种现文案都误导）
+export const lastProduceCancelled = (p: { last_produce?: { event: string } | null }) =>
+  !!p.last_produce && p.last_produce.event.endsWith('.cancelled')
+
 // 特色类型 → 中文名（风格详情/视频解析详情共用一份，别再各抄各的）
 export const kindLabel: Record<string, string> = {
   camera: '运镜', transition: '转场', motif: '母题', motion: '动效', material: '素材', palette: '配色',

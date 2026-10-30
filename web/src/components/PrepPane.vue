@@ -19,30 +19,40 @@ const emit = defineEmits<{ confirmed: []; 'chat-sent': [] }>()
 
 const message = useMessage()
 const confirming = ref(false)
+// 确认失败的持久错误条（toast 3s 自灭，2026-10-30 GUI 实测用户只看到「点了没反应」
+// ——t16-t18 三张截图像素级雷同，服务端错误条一次都没被看见）。下次点击/成功清除。
+const confirmErr = ref('')
 // 页内两段式确认（替代 window.confirm）：原生弹窗在部分浏览器/自动化环境被拦
 // 成静默假死（2026-10-16 死按钮、10-18 实测 Playwright 点按 30s 超时同源）。
+// 窗口 5s；确认失败保留待确认态——窗内直击即可重试，不必重过第一段。
 const armed = ref(false)
 let armTimer: number | null = null
 function disarm() {
   armed.value = false
   if (armTimer != null) { clearTimeout(armTimer); armTimer = null }
 }
+function rearm(seconds = 5000) {
+  armed.value = true
+  if (armTimer != null) clearTimeout(armTimer)
+  armTimer = window.setTimeout(disarm, seconds)
+}
 async function confirm() {
   if (!props.projectId || confirming.value) return
   if (!armed.value) {
-    armed.value = true
-    if (armTimer != null) clearTimeout(armTimer)
-    armTimer = window.setTimeout(disarm, 3000)
+    confirmErr.value = ''
+    rearm()
     return
   }
   disarm()
   confirming.value = true
   try {
     const r = await api.confirmPrep(props.projectId)
+    confirmErr.value = ''
     message.success(`打包终审通过：${r.direction}`)
     emit('confirmed')
   } catch (e) {
-    message.error((e as Error).message)
+    confirmErr.value = (e as Error).message
+    rearm()
   } finally {
     confirming.value = false
   }
@@ -149,9 +159,11 @@ const hasDeps = computed(() => vendLibs.value.length > 0 || customFonts.value.le
         <div v-if="confirmed" class="ok-badge">✓ 已确认，可开工</div>
         <NButton
           v-else :type="armed ? 'warning' : 'primary'" :loading="confirming" @click="confirm"
-          :title="armed ? '再点一次即锁定设计系统并允许开工' : '点击后需再确认一次（防误触）'"
+          :title="armed ? '再点一次即锁定设计系统并允许开工（失败会保留待确认态可直接重试）' : '点击后需再确认一次（防误触）'"
         >{{ armed ? '再点一次，确认开工' : '确认打包，允许开工' }}</NButton>
       </header>
+      <!-- 确认失败持久错误条：不再只靠 3s toast（用户实测全程没看到过提示） -->
+      <div v-if="confirmErr" class="confirm-err">确认未生效：{{ confirmErr }}</div>
 
       <div class="scroll">
         <!-- ① 文字稿 -->
@@ -207,7 +219,9 @@ const hasDeps = computed(() => vendLibs.value.length > 0 || customFonts.value.le
                 playsinline controls class="clip-video"
               />
               <SampleFrame v-else :html="s.html" />
-              <figcaption>{{ s.tag }} — {{ s.desc }}</figcaption>
+          <!-- tag 内嵌说明前 20 字（工具/判卷流的稳定 id），渲染侧只露「样张 A」，
+               完整说明由 desc 出——旧写法 tag—desc 把同段话拼两遍（2026-10-30 t24） -->
+              <figcaption><b>{{ s.tag.split('·')[0].trim() }}</b> — {{ s.desc }}</figcaption>
             </figure>
           </div>
         </section>
@@ -273,6 +287,13 @@ const hasDeps = computed(() => vendLibs.value.length > 0 || customFonts.value.le
 .head h3 { font-size: 15px; color: var(--ink); letter-spacing: 0.06em; }
 .head .sub { font-size: 12px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
 .ok-badge { color: var(--ok); font-size: 13px; font-weight: 600; }
+/* 确认失败持久错误条（取代只闪 3s 的 toast） */
+.confirm-err {
+  flex: none; font-size: 12.5px; color: var(--err);
+  background: color-mix(in srgb, var(--err) 8%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--err) 35%, transparent);
+  padding: 6px 18px;
+}
 .scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 18px; display: flex; flex-direction: column; gap: 14px; }
 .card { background: var(--bg); border: 1px solid var(--line-soft); padding: 14px 16px; }
 .card h4 { font-size: 13.5px; color: var(--accent); margin-bottom: 10px; letter-spacing: 0.06em; }
@@ -304,7 +325,9 @@ const hasDeps = computed(() => vendLibs.value.length > 0 || customFonts.value.le
 .dep-font a { color: var(--info); font-size: 11px; }
 .samples { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
 .sample figcaption { font-size: 11.5px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
-.sb { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+/* fixed 布局：长文案按列宽折行，不再把旁白/首末拍挤成一字一行（2026-10-30 t12） */
+.sb { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12.5px; }
+.sb td { overflow-wrap: anywhere; }
 .sb th { text-align: left; padding: 8px 10px; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); }
 .sb td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; color: var(--ink); line-height: 1.6; }
 .para-row td {

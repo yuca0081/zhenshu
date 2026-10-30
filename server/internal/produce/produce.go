@@ -706,6 +706,8 @@ func (r *Runner) runRework(ctx context.Context, p *pipeline.Project, segs []cont
 	if err != nil {
 		return err
 	}
+	// 重做段画面进了成片：封面同帧位重抓刷新（用户挑过的帧位/标题不动，cover.go）
+	r.makeCoverTail(ctx, p, true)
 	r.emit(id, "done", "", "renders/main.mp4")
 	r.Manifest(p, EventReworkDone, only)
 	if r.OnDone != nil {
@@ -1891,10 +1893,17 @@ func (r *Runner) assemble(ctx context.Context, p *pipeline.Project) error {
 // pipeline.CommandContext——整棵进程树击杀，python 拉起的孙进程不残留。
 // 成功时子进程 stdout 只回显尾部（tts_align 每段一行动辄上百行，全量回显淹没日志）。
 func (r *Runner) python(ctx context.Context, script string, projDir string, timeout time.Duration) error {
+	return r.pythonRaw(ctx, script, []string{projDir}, timeout)
+}
+
+// pythonRaw 自由参数版：脚本后跟的 argv 全由调用方定——「脚本 <项目目录>」惯例
+// 之外的调用序（封面截图的 --one 模式）走这里，行为（超时/进程树/输出尾部）与
+// python 完全一致。
+func (r *Runner) pythonRaw(ctx context.Context, script string, args []string, timeout time.Duration) error {
 	py := pipeline.PythonExe()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := pipeline.CommandContext(ctx, py, filepath.Join(r.RootDir, script), projDir)
+	cmd := pipeline.CommandContext(ctx, py, append([]string{filepath.Join(r.RootDir, script)}, args...)...)
 	cmd.Dir = r.RootDir
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf

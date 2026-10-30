@@ -1,4 +1,4 @@
-import type { ActivityEvent, AudioMeta, BgmTrack, TranscriptMsg, AuthStatus, ChatRef, LlmSettingsInput, LlmSettingsView, LlmTestResult, Manuscript, Msg, PrepView, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, UserInfo, UserRow, VocabEntry } from './types'
+import type { ActivityEvent, AudioMeta, BgmTrack, TranscriptMsg, AuthStatus, ChatRef, LlmSettingsInput, LlmSettingsView, LlmTestResult, Manuscript, MaterialFile, Msg, PrepView, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, UserInfo, UserRow, VocabEntry } from './types'
 
 // ── 会话认证（cookie 会话，HttpOnly，浏览器自动携带）──────────
 // 凭据不进 JS：localStorage 存 token / ?token= 进 URL 的旧方案已废。
@@ -6,8 +6,21 @@ import type { ActivityEvent, AudioMeta, BgmTrack, TranscriptMsg, AuthStatus, Cha
 let onUnauthorized: (() => void) | null = null
 export function setOnUnauthorized(fn: () => void) { onUnauthorized = fn }
 
-async function authFetch(input: RequestInfo, init?: RequestInit): Promise<Response> {
-  const res = await fetch(input, init)
+// 请求超时（2026-10-30 GUI 实测根因 B）：fetch 默认无超时，后端重启/代理悬空时
+// 单个请求能挂几分钟，App 的 inflight 去重会把同 key 的后续刷新全部饿死——页面
+// 冻结到浏览器层兜底为止。30s 覆盖常规接口；个别慢接口（封面重做）显式放宽。
+const REQ_TIMEOUT = 30_000
+
+async function authFetch(input: RequestInfo, init?: RequestInit, timeoutMs = REQ_TIMEOUT): Promise<Response> {
+  const timeout = AbortSignal.timeout(timeoutMs)
+  const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout
+  let res: Response
+  try {
+    res = await fetch(input, { ...init, signal })
+  } catch (e) {
+    if (timeout.aborted) throw new Error(`请求超时（${Math.round(timeoutMs / 1000)}s）——服务暂不可达，稍后会自动恢复`)
+    throw e
+  }
   if (res.status === 401) onUnauthorized?.()
   return res
 }
@@ -24,13 +37,13 @@ async function j<T>(res: Response): Promise<T> {
 }
 
 // req/post = authFetch + JSON 解包一步到位（此前 23 处 .then(r => j<T>(r)) 样板）
-async function req<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  return j<T>(await authFetch(input, init))
+async function req<T>(input: RequestInfo, init?: RequestInit, timeoutMs?: number): Promise<T> {
+  return j<T>(await authFetch(input, init, timeoutMs))
 }
-function post<T>(input: RequestInfo, body?: unknown, signal?: AbortSignal): Promise<T> {
+function post<T>(input: RequestInfo, body?: unknown, timeoutMs?: number): Promise<T> {
   return req<T>(input, body === undefined
-    ? { method: 'POST', signal }
-    : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })
+    ? { method: 'POST' }
+    : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, timeoutMs)
 }
 
 export const api = {
@@ -78,6 +91,12 @@ export const api = {
   bgmLibrary: () => req<BgmTrack[]>('/api/bgm/library'),
   bgmAudioURL: (name: string) => `/api/bgm/audio/${encodeURIComponent(name)}`,
 
+  // 出片封面重做（同步；t=帧时刻秒缺省沿用既有帧位，title 缺省沿用既有/项目名）
+  // 同步截图要跑 python，超时放宽到 180s（其余接口默认 30s）
+  regenCover: (id: string, body: { t?: number; title?: string } = {}) =>
+    post<{ ok: boolean; t: number; title: string }>(`/api/projects/${id}/cover`, body, 180_000),
+  coverURL: (id: string, rev = 0) => `/api/projects/${id}/cover.png${rev ? `?v=${rev}` : ''}`,
+
   manuscript: (id: string) => req<Manuscript>(`/api/projects/${id}/manuscript`),
 
   // 文稿保存（article.txt 为真源；storyboard_stale=分镜基于旧稿需重新生成；
@@ -100,10 +119,18 @@ export const api = {
   // 准备阶段三工件打包视图（终审页签；exists=false = 非新路径项目）
   prep: (id: string) => req<PrepView>(`/api/projects/${id}/prep`),
 
-  // 启动/取消三工位链（想法页签；异步跑，进度走 SSE 与轮询）
+  // 启动/取消三工位链（主题页签；异步跑，进度走 SSE 与轮询）
   runPrep: (id: string, idea: string, force = false) =>
     post<{ ok: boolean; started: boolean }>(`/api/projects/${id}/prep/run`, { idea, force }),
   cancelPrep: (id: string) => post<{ ok: boolean }>(`/api/projects/${id}/prep/cancel`),
+
+  // 项目材料库（主题页上传的参考资料，①文稿 read_source 消费；同名覆盖=更新）
+  materials: (id: string) => req<MaterialFile[]>(`/api/projects/${id}/materials`),
+  saveMaterial: (id: string, name: string, content: string) =>
+    post<{ ok: boolean; materials: MaterialFile[] }>(`/api/projects/${id}/materials`, { name, content }),
+  deleteMaterial: (id: string, name: string) =>
+    req<{ ok: boolean; materials: MaterialFile[] }>(
+      `/api/projects/${id}/materials?name=${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
   // 打包终审确认（全流程唯一人工门）：文字稿+风格包+分镜稿一次确认
   confirmPrep: (id: string) => post<{ ok: boolean; direction: string }>(`/api/projects/${id}/prep/confirm`),

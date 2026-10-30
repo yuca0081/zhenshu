@@ -12,11 +12,11 @@ const { theme, setTheme } = useTheme()
     <button
       v-for="[value, icon, label] in ([['day', 'theme-morning', '晨雾'], ['night', 'theme-night', '月影']] as const)"
       :key="value" type="button" class="theme-btn capsule-btn"
+      :aria-label="label" :title="label"
       :aria-pressed="theme === value" :class="{ active: theme === value }"
       @click="setTheme(value)"
     >
       <RIcon :name="icon" :size="14" />
-      {{ label }}
     </button>
   </div>
 </template>
@@ -26,13 +26,9 @@ const { theme, setTheme } = useTheme()
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 6px 14px;
+  padding: 6px 9px;
   border: 0;
   background: transparent;
-  font-family: inherit;
-  font-size: 11px;
-  letter-spacing: 0.14em;
   color: var(--muted);
   cursor: pointer;
   user-select: none;

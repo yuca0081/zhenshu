@@ -4,32 +4,28 @@ import { NButton, NInput, NModal, NRadioButton, NRadioGroup } from 'naive-ui'
 import { api } from '../api'
 import { errMsg } from '../format'
 
-// 新建四件事：驱动模式 + 主题 + 项目名 + 画幅。文稿/分镜/风格三前置走「想法」
-// 页签的准备工位自动完成；音乐驱动走 PV 管线（做曲→音乐地图→分镜，M1 开发中，
-// 项目可先建占位——工作区进 PV 准备页签，制作入口前后端都拦）。
+// 新建三件事：项目名 + 驱动 + 画幅。主题不在这里填（2026-10-30）：它挪进了
+// 工作区第一个页签「主题」——那里能写想法、传材料，是比单行框完整的输入位；
+// 文稿/风格/分镜三前置由主题页的一键链路（准备工位）完成。音乐驱动走 PV
+// 管线（做曲→音乐地图→分镜），项目可先建占位。
 const show = defineModel<boolean>('show')
 const emit = defineEmits<{ created: [id: string] }>()
 const name = ref('')
-const topic = ref('')
 const aspect = ref('9:16')
 const mode = ref<'script' | 'music'>('script')
 const creating = ref(false)
 const error = ref('')
 
-// 文案随驱动模式换：音乐项目的主题是「情绪与画面想象」（分镜从曲子长出来），
-// 不是「讲什么」——同一个输入框，两种世界观。
-const topicHint = computed(() => mode.value === 'music'
-  ? '一句话说清这支 PV 的情绪与画面想象——分镜从曲子长出来'
-  : '一句话说清要讲什么——文稿、分镜都从它长出来')
-const topicPlaceholder = computed(() => mode.value === 'music'
-  ? '例：午夜城市霓虹下的孤独穿行' : '例：蚊子为什么嗡嗡叫')
+const nameHint = computed(() => mode.value === 'music'
+  ? '给这支 PV 起个名字'
+  : '起个名字就行——讲什么、什么感觉，进工作区在「主题」页慢慢说')
 const footHint = computed(() => mode.value === 'music'
   ? '音乐驱动管线开发中（做曲 → 音乐地图 → 分镜，原型已跑通）：项目可先建，准备工位上线前暂不能出片'
-  : '文稿、分镜、风格进工作区后在对话栏上方补齐，齐了就能开工')
+  : '创建后进「主题」页签：写下想做什么、传点参考资料，AI 自动跑完 文稿 → 风格 → 分镜')
 
 watch(show, v => {
   if (v) {
-    name.value = ''; topic.value = ''; aspect.value = '9:16'
+    name.value = ''; aspect.value = '9:16'
     mode.value = 'script'; error.value = ''
   }
 })
@@ -43,11 +39,11 @@ function onEnter(e: KeyboardEvent) {
 }
 
 async function create() {
-  if (!topic.value.trim()) { error.value = '主题必填——一句话说清要讲什么'; return }
+  if (!name.value.trim()) { error.value = '先给项目起个名字'; return }
   creating.value = true
   error.value = ''
   try {
-    const r = await api.createProject(name.value.trim(), topic.value.trim(), aspect.value, mode.value)
+    const r = await api.createProject(name.value.trim(), '', aspect.value, mode.value)
     show.value = false // 创建成功即关：留着极易误点再建一个重复项目（2026-10-16/17 两轮实测踩过）
     emit('created', r.id)
   } catch (e) {
@@ -62,21 +58,17 @@ async function create() {
   <NModal v-model:show="show" preset="card" title="新建视频" class="app-modal np-modal" :mask-closable="!creating">
     <div class="body">
       <div class="field">
-        <span class="label">主题 <em>{{ topicHint }}</em></span>
+        <span class="label">项目名 <em>{{ nameHint }}</em></span>
         <NInput
-          v-model:value="topic" maxlength="120"
-          :placeholder="topicPlaceholder"
+          v-model:value="name" maxlength="48" autofocus
+          placeholder="例：蚊子为什么嗡嗡叫"
           @keydown.enter="onEnter"
         />
-      </div>
-      <div class="field">
-        <span class="label">项目名 <em>留空取主题</em></span>
-        <NInput v-model:value="name" maxlength="48" placeholder="例：蜂巢为什么是六边形" />
       </div>
       <div class="opts">
         <span class="label">驱动</span>
         <NRadioGroup v-model:value="mode" size="small">
-          <NRadioButton value="script" title="从一句话主题长出文稿→分镜→风格，现行管线">文稿驱动</NRadioButton>
+          <NRadioButton value="script" title="从主题与材料长出文稿→分镜→风格，现行管线">文稿驱动</NRadioButton>
           <NRadioButton value="music" title="曲先行：做曲→音乐地图→分镜跟拍走（PV，开发中）">音乐驱动 · PV</NRadioButton>
         </NRadioGroup>
       </div>
@@ -90,7 +82,7 @@ async function create() {
       <div v-if="error" class="err">{{ error }}</div>
       <div class="foot">
         <span class="hint">{{ footHint }}</span>
-        <NButton type="primary" :disabled="!topic.trim()" :loading="creating" @click="create">创建</NButton>
+        <NButton type="primary" :disabled="!name.trim()" :loading="creating" @click="create">创建</NButton>
       </div>
     </div>
   </NModal>
