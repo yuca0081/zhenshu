@@ -34,9 +34,14 @@ type Storyboard struct {
 	Overlay     *Overlay `json:"overlay,omitempty"` // 跨段统一角标（P0-2，可选）
 	// Arc/Motifs 导演统筹（导演定调产物，可选）：弧线给设计/生成/审查提供全片
 	// 视野；缺省 = 无导演字段的老项目，全链路零感知（见 ValidateStoryboard）。
-	Arc      *Arc      `json:"arc,omitempty"`
-	Motifs   []Motif   `json:"motifs,omitempty"`
-	Segments []Segment `json:"segments"`
+	Arc    *Arc    `json:"arc,omitempty"`
+	Motifs []Motif `json:"motifs,omitempty"`
+	// World/CastLegend 镜头层全片共享的世界与角色表（③分镜工位产出，可选）：
+	// 由 Segment.Shot 的逐镜调度引用，sceneGen 注入导演块时保证同一角色跨镜不变形。
+	// shots.json 实验路径同样有这两个字段；老项目为空串零感知。
+	World      string    `json:"world,omitempty"`
+	CastLegend string    `json:"cast_legend,omitempty"`
+	Segments   []Segment `json:"segments"`
 }
 
 type Segment struct {
@@ -57,6 +62,9 @@ type Segment struct {
 	// 内容=相邻 brief 的末拍/首拍）；老项目无此字段零感知。VisualBrief 文本仍是
 	// 注入主渠道（scene+首末拍拼装），Brief 是机器可读的邻段寻址层。
 	Brief *VisualBriefSpec `json:"brief,omitempty"`
+	// Shot 镜头调度（一期：1 镜 = 1 段，可选）：景别/机位/舞台/角色/动作/台词/
+	// 转场/参考帧。sceneGen 从这里构造导演指令块；老项目无此字段走原提示词。
+	Shot *ShotDirection `json:"shot,omitempty"`
 }
 
 // VisualBriefSpec 结构化首末拍（与分镜稿工件同形；缝已退役——延续/开场都写在这里）。
@@ -174,6 +182,12 @@ func ValidateStoryboard(sb *Storyboard) error {
 			return fmt.Errorf("段 %d（%s）idx=%d 重复——段序必须连续唯一", i+1, s.ID, s.Idx)
 		}
 		seenIdx[s.Idx] = true
+		// 镜头字段出现才校验（老项目无 shot 零感知；是否每段都有由 edit/confirm 门管）。
+		if s.Shot != nil {
+			if err := s.Shot.Validate(); err != nil {
+				return fmt.Errorf("段 %d（%s）镜头不合格：%w", i+1, s.ID, err)
+			}
+		}
 	}
 	if sb.TotalHint() > MaxDurationSec {
 		return fmt.Errorf("总时长 %.0fs 超过上限 %ds（需压缩取舍并与用户协商）", sb.TotalHint(), MaxDurationSec)

@@ -99,7 +99,7 @@ func resolveRole(role Role) (resolved, error) {
 	}
 	r.eff, _ = ParseEffort(os.Getenv("LLM_EFFORT"))
 	snap := SettingsSnapshot()
-	if pid, pc, ok := snap.resolveProvider(role); ok {
+	if pid, pc, m, ok := snap.resolveProvider(role); ok {
 		r.name = pid
 		if pc.BaseURL != "" {
 			r.baseURL = pc.BaseURL
@@ -107,8 +107,8 @@ func resolveRole(role Role) (resolved, error) {
 		if pc.APIKey != "" {
 			r.key = pc.APIKey
 		}
-		if pc.Model != "" {
-			r.model = pc.Model
+		if m != "" { // 绑定模型 > 端点列表第一个；空列表 = 沿用 .env 模型名
+			r.model = m
 			r.source = sourceLayer(role)
 		}
 	}

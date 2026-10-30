@@ -126,3 +126,37 @@ func TestMemProductionLease(t *testing.T) {
 	}
 	r2()
 }
+
+// 通用设置 KV（0009）：整存整取 + 覆盖写 + 无行=ok=false（与库报错分开）。
+func TestMemKVRoundtrip(t *testing.T) {
+	s := newMem()
+	if _, _, ok, err := s.GetKV("llm_settings"); err != nil || ok {
+		t.Fatalf("未设置应 ok=false 无错: ok=%v err=%v", ok, err)
+	}
+	if err := s.PutKV("llm_settings", []byte(`{"version":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	val, ts, ok, err := s.GetKV("llm_settings")
+	if err != nil || !ok {
+		t.Fatalf("写入后应可读回: ok=%v err=%v", ok, err)
+	}
+	if string(val) != `{"version":2}` || ts.IsZero() {
+		t.Fatalf("读回不符: %s ts=%v", val, ts)
+	}
+	oldTS := ts
+	time.Sleep(2 * time.Millisecond) // Windows 时钟精度粗，连续写可能同 tick
+	if err := s.PutKV("llm_settings", []byte(`{"version":2,"providers":{}}`)); err != nil {
+		t.Fatal(err)
+	}
+	val, ts, _, _ = s.GetKV("llm_settings")
+	if string(val) != `{"version":2,"providers":{}}` {
+		t.Fatalf("覆盖写不符: %s", val)
+	}
+	if !ts.After(oldTS) {
+		t.Fatalf("覆盖写应推进 updated_at: %v -> %v", oldTS, ts)
+	}
+	// 键隔离
+	if _, _, ok, _ := s.GetKV("other"); ok {
+		t.Fatal("其他键不应串台")
+	}
+}

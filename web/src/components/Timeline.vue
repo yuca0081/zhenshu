@@ -1,22 +1,34 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { AlignWord, AudioMeta, BgmInfo, Storyboard } from '../types'
+import { NDropdown, useMessage } from 'naive-ui'
+import type { DropdownOption } from 'naive-ui'
+import type { AlignWord, AudioMeta, BgmInfo, BgmTrack, Storyboard } from '../types'
 import { segTable, type SegCol } from '../segtime'
+import { api } from '../api'
+import RIcon from './RIcon.vue'
 
-// 多轨时间轴：标尺（可点/拖擦洗）+ 分镜/字幕/配音三轨 + 播放头。
+// 多轨时间轴：标尺（可点/拖擦洗）+ 分镜/字幕/配音/配乐四轨 + 播放头。
 // 数据：分镜 duration_hint；有 audio_meta 时用真实配音时长（+0.35 尾垫，与 MP4 拼接口径一致）
 // 和字级时间戳切短语字幕。
+// 配乐控制集成在配乐轨上（2026-10-30 从视频页右栏移入）：曲名/理由随块展示，
+// 轨头块内嵌试听与换曲下拉（曲库懒加载，含「关配乐」）。
 // 长片可读：内容层与视口层分离——内容层按「平均每段 ≥88px、最短段 ≥48px」定宽（封顶 3 倍视口），
 // 视口出横向滚动条；块定位仍是百分比（相对内容层），三轨/标尺/播放头天然同坐标系。
 const props = defineProps<{
   storyboard: Storyboard | null
   audioMeta: AudioMeta | null
   bgm: BgmInfo | null
-  bgmDur: number
+  videoId: string
   currentTime: number
   pickedIdx: number[]
 }>()
-const emit = defineEmits<{ seek: [t: number]; pick: [idx: number, key: string]; 'pick-time': [t: number] }>()
+const emit = defineEmits<{
+  seek: [t: number]
+  pick: [idx: number, key: string]
+  'pick-time': [t: number]
+  'bgm-applied': [remixed: boolean]
+}>()
+const message = useMessage()
 
 const PUNCT = '，。！？；、：,.!?;:…—·'
 const hasPunct = (s: string) => [...s].some(ch => PUNCT.includes(ch))
@@ -51,11 +63,62 @@ const phrases = computed<Phrase[]>(() => {
 
 const pct = (t: number) => `${(t / total.value) * 100}%`
 
-// 配乐轨：按曲库时长铺循环块（时长未知铺一整条）；头块带曲名，理由进 tooltip
+// ── 配乐控制（从视频页右栏移入，2026-10-30）：当前曲 + 试听 + 换曲/关闭 ──
+// 曲库懒加载（首次展开换曲菜单才拉）；换曲=后端 StitchNow 重混，画面不动、
+// 音轨变——remixed 时父级换播放器 URL 重载，并刷新 view 让曲名/理由即时对齐。
+const bgmLib = ref<BgmTrack[] | null>(null)
+const bgmBusy = ref(false)
+const bgmDur = computed(() =>
+  bgmLib.value?.find(t => t.name === props.bgm?.name)?.duration ?? 0)
+function loadBgmLib() {
+  if (!bgmLib.value) api.bgmLibrary().then(l => (bgmLib.value = l)).catch(() => {})
+}
+const bgmMenu = computed<DropdownOption[]>(() => {
+  const cur = props.bgm?.name
+  const opts: DropdownOption[] = []
+  // 当前曲不在清单（被移库）也兜出选项，避免菜单里看不到现状
+  if (cur && !bgmLib.value?.some(t => t.name === cur)) opts.push({ label: `${cur}（当前）`, key: cur })
+  for (const t of bgmLib.value ?? []) opts.push({ label: `${t.name} · ${t.mood}`, key: t.name })
+  if (cur) opts.push({ type: 'divider', key: 'd' }, { label: '关配乐', key: 'off' })
+  return opts
+})
+const auditionEl = ref<HTMLAudioElement | null>(null)
+const auditioning = ref(false)
+function toggleAudition() {
+  const name = props.bgm?.name
+  if (!name) return
+  if (auditioning.value && auditionEl.value) {
+    auditionEl.value.pause()
+    return
+  }
+  auditionEl.value?.pause()
+  const el = new Audio(api.bgmAudioURL(name))
+  auditionEl.value = el
+  auditioning.value = true
+  void el.play()
+  el.onended = () => { auditioning.value = false }
+}
+onBeforeUnmount(() => { auditionEl.value?.pause(); auditionEl.value = null })
+async function applyBGM(track: string) {
+  if (bgmBusy.value) return
+  bgmBusy.value = true
+  try {
+    const r = await api.setBGM(props.videoId, track)
+    if (r.error) message.error(r.error)
+    else message.success(r.message ?? '配乐已更新')
+    emit('bgm-applied', !!r.remixed)
+  } catch (e) {
+    message.error(String(e))
+  } finally {
+    bgmBusy.value = false
+  }
+}
+
+// 配乐轨：按曲库时长铺循环块（时长未知铺一整条）；头块带曲名与控制，理由进 tooltip
 const bgmBlocks = computed(() => {
   const b = props.bgm
   if (!b?.name) return []
-  const dur = props.bgmDur > 0 ? props.bgmDur : total.value
+  const dur = bgmDur.value > 0 ? bgmDur.value : total.value
   const out: { start: number; dur: number; first: boolean }[] = []
   for (let t = 0; t < total.value - 1e-6; t += dur) {
     out.push({ start: t, dur: Math.min(dur, total.value - t), first: out.length === 0 })
@@ -181,7 +244,7 @@ function onLaneDblClick(e: MouseEvent, start: number, dur: number) {
       <div class="lbl">分镜</div>
       <div v-if="phrases.length" class="lbl">字幕</div>
       <div v-if="audioMeta" class="lbl">配音</div>
-      <div v-if="bgmBlocks.length" class="lbl">配乐</div>
+      <div class="lbl">配乐</div>
     </div>
 
     <div ref="viewportEl" class="viewport">
@@ -246,17 +309,42 @@ function onLaneDblClick(e: MouseEvent, start: number, dur: number) {
         </div>
       </div>
 
-      <!-- 配乐轨：循环铺底（块=曲库时长），点击定位；理由在 tooltip -->
-      <div v-if="bgmBlocks.length" class="lane bgm">
-        <div
-          v-for="(b, i) in bgmBlocks" :key="i" class="bgmblk"
-          :class="{ head: b.first, alt: i % 2 === 1 }"
-          :style="{ left: pct(b.start), width: pct(b.dur) }"
-          :title="`♪ ${bgm!.name}（${bgmDur > 0 ? `曲长 ${bgmDur.toFixed(0)}s 循环铺底` : '铺底'}${bgm!.reason ? '；选曲理由：' + bgm!.reason : ''}）`"
-          @click="emit('seek', b.start + 0.01)"
-        >
-          <template v-if="b.first"><span class="note">♪</span>{{ bgm!.name }}</template>
-          <template v-else>♪</template>
+      <!-- 配乐轨：循环铺底（块=曲库时长），点击定位；理由在 tooltip。
+           控制集成在头块内（试听 + 换曲下拉含「关配乐」）；无配乐时出虚线占位块提供选曲入口 -->
+      <div class="lane bgm">
+        <template v-if="bgmBlocks.length">
+          <div
+            v-for="(b, i) in bgmBlocks" :key="i" class="bgmblk"
+            :class="{ head: b.first, alt: i % 2 === 1 }"
+            :style="{ left: pct(b.start), width: pct(b.dur) }"
+            :title="`♪ ${bgm!.name}（${bgmDur > 0 ? `曲长 ${bgmDur.toFixed(0)}s 循环铺底` : '铺底'}${bgm!.reason ? '；选曲理由：' + bgm!.reason : ''}）`"
+            @click="emit('seek', b.start + 0.01)"
+          >
+            <template v-if="b.first">
+              <span class="note">♪</span><span class="bgm-name">{{ bgm!.name }}</span>
+              <span class="bgm-ctl" @click.stop>
+                <button
+                  class="mini" :disabled="bgmBusy"
+                  :title="auditioning ? '停止试听' : '试听当前配乐'"
+                  @click="toggleAudition"
+                ><RIcon :name="auditioning ? 'stop' : 'play'" :size="10" /></button>
+                <NDropdown trigger="click" :options="bgmMenu" @select="applyBGM" @update:show="(s: boolean) => s && loadBgmLib()">
+                  <button class="mini" :disabled="bgmBusy" title="换曲 / 关配乐">
+                    <RIcon name="music" :size="10" />
+                  </button>
+                </NDropdown>
+              </span>
+            </template>
+            <template v-else>♪</template>
+          </div>
+        </template>
+        <div v-else class="bgmblk none" :style="{ left: pct(0), width: '100%' }" title="还没有配乐——点「选配乐」从曲库挑一首">
+          <span class="note">♪</span>无配乐
+          <span class="bgm-ctl" @click.stop>
+            <NDropdown trigger="click" :options="bgmMenu" @select="applyBGM" @update:show="(s: boolean) => s && loadBgmLib()">
+              <button class="mini" :disabled="bgmBusy"><RIcon name="plus" :size="10" />选配乐</button>
+            </NDropdown>
+          </span>
         </div>
       </div>
 
@@ -330,7 +418,7 @@ function onLaneDblClick(e: MouseEvent, start: number, dur: number) {
 }
 .wav.on i { background: var(--info); }
 
-/* 配乐轨：中性灰调区分配音蓝调；head 块带曲名，后续循环块淡化只留 ♪ */
+/* 配乐轨：中性灰调区分配音蓝调；head 块带曲名+内嵌控制（试听/换曲），后续循环块淡化只留 ♪ */
 .bgmblk {
   position: absolute; top: 0; bottom: 0; cursor: pointer; overflow: hidden; white-space: nowrap;
   display: flex; align-items: center; gap: 4px; padding: 0 6px;
@@ -340,7 +428,19 @@ function onLaneDblClick(e: MouseEvent, start: number, dur: number) {
 }
 .bgmblk:hover { border-color: var(--muted); }
 .bgmblk.alt { opacity: .62; }
+.bgmblk.head { z-index: 1; min-width: 170px; }
+.bgmblk.none { border-style: dashed; }
 .bgmblk .note { font-size: 10px; color: var(--accent); }
+.bgm-name { overflow: hidden; text-overflow: ellipsis; }
+.bgm-ctl { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; flex: none; }
+.mini {
+  display: inline-flex; align-items: center; gap: 3px; cursor: pointer; flex: none;
+  border: 1px solid var(--line-soft); background: transparent; color: var(--muted);
+  font-size: 10px; font-family: inherit; line-height: 1.3; padding: 1px 5px;
+  transition: color var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
+}
+.mini:hover { color: var(--accent); border-color: var(--accent); }
+.mini:disabled { opacity: .55; cursor: default; }
 
 .handle {
   position: absolute; top: -1px; width: 11px; height: 22px; margin-left: -5px; z-index: 3;

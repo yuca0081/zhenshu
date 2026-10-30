@@ -11,9 +11,12 @@ import (
 
 // PythonExe 解析可用的 Python 解释器。Windows 的 `python` 常是 Microsoft Store
 // 的 WindowsApps 占位 stub（LookPath 找得到，一跑就退 9009），跳过它退到 py 启动器。
+// Linux/容器里 Debian 只装 python3、不建 python 别名，所以 python3 必须一起找。
 func PythonExe() string {
-	if p, err := exec.LookPath("python"); err == nil && !storeStub(p) {
-		return p
+	for _, name := range []string{"python", "python3"} {
+		if p, err := exec.LookPath(name); err == nil && !storeStub(p) {
+			return p
+		}
 	}
 	if p, err := exec.LookPath("py"); err == nil {
 		return p

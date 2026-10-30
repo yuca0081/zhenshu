@@ -1226,6 +1226,13 @@ func (s *Server) saveStoryboard(c *gin.Context) {
 		c.JSON(400, gin.H{"error": fmt.Sprintf("段数不能变（现在 %d 段）；要增删段请在对话里让我重新生成分镜", len(prev.Segments))})
 		return
 	}
+	// 旧前端（不认识 world/cast_legend）保存时不要把全片设定清空。
+	if strings.TrimSpace(in.World) == "" {
+		in.World = prev.World
+	}
+	if strings.TrimSpace(in.CastLegend) == "" {
+		in.CastLegend = prev.CastLegend
+	}
 	byIdx := map[int]string{}
 	for _, sg := range prev.Segments {
 		if _, dup := byIdx[sg.Idx]; dup {
@@ -1251,14 +1258,68 @@ func (s *Server) saveStoryboard(c *gin.Context) {
 			c.JSON(400, gin.H{"error": fmt.Sprintf("第 %d 段旁白为空", in.Segments[i].Idx)})
 			return
 		}
+		// 旧前端/局部载荷没带 shot：沿用上一版（不能静默清空已生成的镜头）。
+		if in.Segments[i].Shot == nil {
+			for _, ps := range prev.Segments {
+				if ps.Idx == in.Segments[i].Idx {
+					in.Segments[i].Shot = ps.Shot.Clone()
+					break
+				}
+			}
+		}
+		// 镜头字段：只规整、不在这里卡完整性——分镜页允许边补边存（缺字段由
+		// confirmPrep 的镜头门拦；保存阶段拒绝会让「先填一半、回头再补」做不到）。
+		if sh := in.Segments[i].Shot; sh != nil {
+			sh.Normalize()
+		}
 		in.Segments[i].ID = id
 	}
 	if err := pipeline.WriteFileAtomic(p.Artifact("storyboards/storyboard.json"), pipeline.MustJSONBytes(&in), 0o644); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
+	// 分镜页编辑的是制作契约（storyboard.json），但终审确认看的是工件 C
+	//（draft.json）。镜头字段必须回写，否则「在分镜页补好镜头 → 终审仍报缺镜头」
+	// 的双源分裂。老项目没有 draft 时跳过。
+	if err := syncDraftShots(p, &in); err != nil {
+		c.JSON(500, gin.H{"error": "镜头字段已保存，但回写分镜稿失败：" + err.Error()})
+		return
+	}
 	p.Manifest("storyboard.edited", fmt.Sprintf("手动编辑分镜（%d 段）", len(in.Segments)))
 	c.JSON(200, gin.H{"ok": true})
+}
+
+// syncDraftShots 把 storyboard.json 的镜头字段回写到 storyboards/draft.json
+// （按段 id 对齐；draft 不存在时跳过）。draft 是终审镜头门的读取源。
+func syncDraftShots(p *pipeline.Project, sb *contract.Storyboard) error {
+	dr, err := prep.LoadDraft(p)
+	if err != nil {
+		return nil // 老项目/非准备链：没有工件 C 可回写
+	}
+	byID := make(map[string]*contract.ShotDirection, len(sb.Segments))
+	for _, seg := range sb.Segments {
+		byID[seg.ID] = seg.Shot
+	}
+	changed := false
+	for i := range dr.Segments {
+		sh, ok := byID[dr.Segments[i].ID]
+		if !ok {
+			continue
+		}
+		dr.Segments[i].Shot = sh.Clone()
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	// 空值不覆盖 draft 已有的全片设定（旧前端/局部载荷可能没带 world/cast）。
+	if strings.TrimSpace(sb.World) != "" {
+		dr.World = sb.World
+	}
+	if strings.TrimSpace(sb.CastLegend) != "" {
+		dr.CastLegend = sb.CastLegend
+	}
+	return pipeline.WriteFileAtomic(p.Artifact("storyboards/draft.json"), pipeline.MustJSONBytes(dr), 0o644)
 }
 
 func (s *Server) style(c *gin.Context) {
@@ -1481,6 +1542,9 @@ func (s *Server) prepView(c *gin.Context) {
 	}
 	if dr, err := prep.LoadDraft(p); err == nil {
 		out["draft"] = dr
+		// 镜头完整度：终审镜头板 / 确认门 / 分镜页头共用一个口径（老项目 ready=0
+		// 表示未启用镜头层，前端不显示「缺 N 镜」）。
+		out["shot_gate"] = dr.ShotGate()
 	}
 	out["style_name"] = styleName
 	out["script"] = script
@@ -1542,6 +1606,16 @@ func (s *Server) confirmPrep(c *gin.Context) {
 	// 三工件校验兜底（submit 已各自过闸，这里防手改盘）
 	if verr := contract.ValidateStylePack(sp); verr != nil {
 		c.JSON(400, gin.H{"error": "风格包不合格，重新跑风格工位：" + verr.Error()})
+		return
+	}
+	// 镜头门（一期硬门）：启用了镜头层（ready>0）就必须每段完整。老项目没有
+	// 任何 shot 字段（ready=0）不拦——零感知兼容。用户可在「分镜」页签补/改，
+	// 保存时已回写 draft.json，所以这里读到的是最新值。先于分镜稿校验报错：
+	// 缺字段是最常见的人为状态，提示「去补」比「重跑分镜工位」更准确。
+	if gate := dr.ShotGate(); gate.Enabled() && !gate.Complete() {
+		c.JSON(400, gin.H{"error": fmt.Sprintf(
+			"镜头表不完整（%d/%d）：缺 %s。先到「分镜」页签补全每段的镜头字段，再回来确认",
+			gate.Ready, gate.Total, strings.Join(gate.Missing, "、"))})
 		return
 	}
 	if verr := contract.ValidateStoryboardDraft(dr, script, sp); verr != nil {

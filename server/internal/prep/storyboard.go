@@ -25,10 +25,19 @@ const storyboardBudget = 60
 // storyboardSystem 系统提示词（2026-10-28 边界化）：只装身份/任务、跨工具流程
 // （拟段时长自检、先 validate 后 submit）与手艺政策（切段优先级、句编号引用、
 // 首末拍承诺）；工具机制住各自 description（句编号契约在 get_script）。
-const storyboardSystem = `你是分镜师。任务：基于口播稿与风格包产出分镜稿。材料：get_script、get_style_package；拟段时用 estimate_speech_duration 自检每段落段长带。
+const storyboardSystem = `你是分镜师兼视觉导演。任务：基于口播稿与风格包产出分镜稿。材料：get_script、get_style_package；拟段时用 estimate_speech_duration 自检每段落段长带。
 切段按优先级：话题没讲完不在中间切；句与句之间是天然候选切点（目前没有真实停顿证据，用时长估算顶替）；疏密与段长跟随剪辑语法。想做出「画面连续过渡」，正确做法是并成一段，而不是设缝。
 段落带一句话主题，按段序铺满全部内容；旁白只引用句编号（如 "N3-N4"），不改写原文、不抄写文本。
-每段写场景规划：用风格包的视觉词汇描述画面，并明确**首拍**（如何开场；延续上段场景则写明接续点）与**末拍**（画面收在哪里）——它们是相邻段衔接的全部依据。
+先定全片世界与角色表（world / cast_legend）：世界写舞台、幕布、灯光、道具、观众席；角色表写每个角色的外形、身体、眼睛、性格——全片复用，同一角色跨镜不能变形。
+每段写场景规划（visual_brief：场景 + 首拍 + 末拍）与镜头调度（shot）：
+- size 景别：wide（全景）/ medium（中景）/ close（近景）/ overhead（俯拍）/ full（字卡/满屏）；
+- camera 机位与运镜：写清从哪拍到哪、怎么动（如「从桌面近景横移到屏幕」）；
+- stage 舞台/道具/前后景：本镜画面里真实摆什么；
+- cast 1–4 个出场角色：who 用角色表里的同一名字，pose 写身体动作，emotion 写情绪；
+- action 这一镜必须看得见的戏：谁看谁、谁指、谁退、谁转头、发生了什么；
+- dialogue 只写短台词/字卡（≤12 字），不要复述旁白；没有就留空；
+- transition 与下一镜的接法（匹配切/白闪/直切/叠化）。
+镜头是戏，不是信息图：每镜至少两个角色同场（纯空镜除外），角色要有身体、腿、眼睛、表情，要有反应关系；镜头必须有可感知的景别/机位/运镜变化，禁止整段静态卡片。
 草稿先过 validate_storyboard，按报告修到零错误，再 submit_storyboard。`
 
 // runStoryboardStation 跑③：成功后工件 C 落盘（draft.json + 翻译的 storyboard.json）。
@@ -114,7 +123,7 @@ func storyboardTools(p *pipeline.Project, d Deps, script *contract.Script, pack 
 			},
 		},
 		{
-			Def: toolSchema("validate_storyboard", "校验分镜稿草稿：段落铺满、narration_refs 存在且有序且恰好铺满全部句、id/idx 连续、段长带（入场动画预算计入）、key/场景/首末拍非空。", map[string]any{
+			Def: toolSchema("validate_storyboard", "校验分镜稿草稿：段落铺满、narration_refs 存在且有序且恰好铺满全部句、id/idx 连续、段长带（入场动画预算计入）、key/场景/首末拍非空、每段镜头字段完整。", map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"draft": storyboardDraftParam()},
 				"required":   []string{"draft"},
@@ -127,8 +136,11 @@ func storyboardTools(p *pipeline.Project, d Deps, script *contract.Script, pack 
 				if err := contract.ValidateStoryboardDraft(draft, script, pack); err != nil {
 					return Observation{Text: "未过校验（逐条修完再验）：\n- " + err.Error()}
 				}
-				return Observation{Text: fmt.Sprintf("校验通过：%d 段铺满 %d 句，总时长约 %.0f 秒。可以 submit_storyboard。",
-					len(draft.Segments), len(script.Sentences), draft.TotalHint())}
+				if err := contract.ValidateDraftShots(draft); err != nil {
+					return Observation{Text: "镜头表未过校验（每段都要有完整 shot）：\n- " + err.Error()}
+				}
+				return Observation{Text: fmt.Sprintf("校验通过：%d 段铺满 %d 句，总时长约 %.0f 秒，镜头 %d/%d。可以 submit_storyboard。",
+					len(draft.Segments), len(script.Sentences), draft.TotalHint(), draft.ShotGate().Ready, len(draft.Segments))}
 			},
 		},
 		{
@@ -145,7 +157,10 @@ func storyboardTools(p *pipeline.Project, d Deps, script *contract.Script, pack 
 				if err := contract.ValidateStoryboardDraft(draft, script, pack); err != nil {
 					return Observation{Text: "被拒（先 validate_storyboard 修到零错误）：\n- " + err.Error()}
 				}
-				final := contract.NewStoryboardDraft(draft.Plan, draft.Paragraphs, draft.Segments)
+				if err := contract.ValidateDraftShots(draft); err != nil {
+					return Observation{Text: "被拒（镜头表不完整，先 validate_storyboard 修到零错误）：\n- " + err.Error()}
+				}
+				final := contract.NewStoryboardDraft(draft.Plan, draft.World, draft.CastLegend, draft.Paragraphs, draft.Segments)
 				// 翻译落盘：制作契约 storyboard.json（制作阶段零改动的衔接点）。
 				// legacy（storyboard.json）先落、工件标记（draft.json）最后落
 				// （2026-10-19 中-21，与 script/style 同纪律）：两笔之间崩溃不留
@@ -160,11 +175,11 @@ func storyboardTools(p *pipeline.Project, d Deps, script *contract.Script, pack 
 				if err := writeJSONFile(draftPath(p), final); err != nil {
 					return Observation{Text: "落盘失败：" + err.Error()}
 				}
-				d.emit(p.ID, "stage", "prep/storyboard", fmt.Sprintf("done：%d 段 / %d 段落 / 约 %.0f 秒",
-					len(final.Segments), len(final.Paragraphs), final.TotalHint()))
+				d.emit(p.ID, "stage", "prep/storyboard", fmt.Sprintf("done：%d 段 / %d 段落 / %d 镜 / 约 %.0f 秒",
+					len(final.Segments), len(final.Paragraphs), final.ShotGate().Ready, final.TotalHint()))
 				return Observation{
-					Text: fmt.Sprintf("分镜稿已提交：%d 段铺满 %d 句（%d 个段落），总时长约 %.0f 秒。工件已落盘，等待打包终审。",
-						len(final.Segments), len(script.Sentences), len(final.Paragraphs), final.TotalHint()),
+					Text: fmt.Sprintf("分镜稿已提交：%d 段铺满 %d 句（%d 个段落，%d 个镜头），总时长约 %.0f 秒。工件已落盘，等待打包终审。",
+						len(final.Segments), len(script.Sentences), len(final.Paragraphs), final.ShotGate().Ready, final.TotalHint()),
 					Done: true,
 				}
 			},
@@ -177,7 +192,9 @@ func storyboardDraftParam() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"plan": map[string]any{"type": "string", "description": "一句话分段思路"},
+			"plan":        map[string]any{"type": "string", "description": "一句话分段思路"},
+			"world":       map[string]any{"type": "string", "description": "全片世界/舞台设定（幕布、灯光、道具、观众席），各镜复用"},
+			"cast_legend": map[string]any{"type": "string", "description": "全片角色表：每个角色的外形/身体/眼睛/性格，跨镜保持一致"},
 			"paragraphs": map[string]any{
 				"type":        "array",
 				"description": "段落层：按段序连续铺满全部段。每段 {title:一句话主题, segs:[\"seg01\",\"seg02\"]}",
@@ -192,7 +209,7 @@ func storyboardDraftParam() map[string]any {
 			},
 			"segments": map[string]any{
 				"type":        "array",
-				"description": "段层：id 从 seg01 连续编号，idx 从 1 连续。duration_hint 落在段长带内（入场动画预算计入）。",
+				"description": "段层：id 从 seg01 连续编号，idx 从 1 连续。duration_hint 落在段长带内（入场动画预算计入）。每段同时是这一镜的调度表。",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -212,13 +229,46 @@ func storyboardDraftParam() map[string]any {
 							},
 							"required": []string{"scene", "first_frame", "last_frame"},
 						},
+						"shot": map[string]any{
+							"type":        "object",
+							"description": "这一段的镜头调度（一期：1 镜 = 1 段）——有角色的戏，不是信息图",
+							"properties": map[string]any{
+								"size": map[string]any{
+									"type": "string", "enum": contract.ShotSizes,
+									"description": "景别：wide 全景 / medium 中景 / close 近景 / overhead 俯拍 / full 字卡满屏",
+								},
+								"camera":     map[string]any{"type": "string", "description": "机位与运镜：从哪拍到哪、怎么动"},
+								"stage":      map[string]any{"type": "string", "description": "舞台/道具/前后景：本镜真实摆什么"},
+								"action":     map[string]any{"type": "string", "description": "这一镜必须看得见的戏：谁看谁/谁指/谁退/发生了什么"},
+								"dialogue":   map[string]any{"type": "string", "description": "短台词/字卡（≤12 字），没有留空"},
+								"transition": map[string]any{"type": "string", "description": "与下一镜的接法（匹配切/白闪/直切/叠化）"},
+								"cast": map[string]any{
+									"type":        "array",
+									"description": "出场角色 1–4 个（who 用角色表同一名字，pose 写身体动作，emotion 写情绪）",
+									"minItems":    1,
+									"maxItems":    4,
+									"items": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"who":     map[string]any{"type": "string"},
+											"pose":    map[string]any{"type": "string"},
+											"emotion": map[string]any{"type": "string"},
+										},
+										"required": []string{"who", "pose"},
+									},
+								},
+								"ref_frame": map[string]any{"type": "string", "description": "参考帧项目内相对路径（可空）"},
+								"ref_note":  map[string]any{"type": "string", "description": "参考帧说明（只借构图/光/角色关系）"},
+							},
+							"required": []string{"size", "camera", "stage", "cast", "action"},
+						},
 						"duration_hint": map[string]any{"type": "number", "description": "段长估算秒数（段长带内）"},
 					},
-					"required": []string{"id", "idx", "key", "narration_refs", "visual_brief", "duration_hint"},
+					"required": []string{"id", "idx", "key", "narration_refs", "visual_brief", "shot", "duration_hint"},
 				},
 			},
 		},
-		"required": []string{"paragraphs", "segments"},
+		"required": []string{"world", "cast_legend", "paragraphs", "segments"},
 	}
 }
 
@@ -236,6 +286,9 @@ func parseDraftArg(args string) (*contract.StoryboardDraft, error) {
 	d := in.Draft
 	for i := range d.Segments {
 		d.Segments[i].NarrationRefs = strings.TrimSpace(d.Segments[i].NarrationRefs)
+		if sh := d.Segments[i].Shot; sh != nil {
+			sh.Normalize()
+		}
 	}
 	return d, nil
 }

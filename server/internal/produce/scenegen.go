@@ -34,7 +34,8 @@ import (
 // sceneFingerprint 段级场景文件缓存键（内容指纹）：分镜改稿后段 id 复用而
 // 旁白/画面提示已换，只看「产物存在」跳过会把旧画面静默复用进新成片。
 // 节拍表（导演定调）在场时一并入键：改节拍=改这一段的编排要求，必须过期重生成；
-// 无节拍时保持旧拼接格式——老项目指纹不变，段缓存不被无谓冲掉。
+// 镜头字段同理（改景别/机位/舞台/动作只过期该段）。无节拍/无镜头时保持旧拼接
+// 格式——老项目指纹不变，段缓存不被无谓冲掉。
 func sceneFingerprint(seg contract.Segment) string {
 	beats := ""
 	if len(seg.Beats) > 0 {
@@ -42,7 +43,13 @@ func sceneFingerprint(seg contract.Segment) string {
 			beats = "\x00" + string(b)
 		}
 	}
-	h := sha256.Sum256([]byte(seg.Key + "\x00" + seg.Narration + "\x00" + seg.VisualBrief + "\x00" + strconv.Itoa(int(seg.DurationHint)) + beats))
+	shot := ""
+	if seg.Shot != nil {
+		if b, err := json.Marshal(seg.Shot); err == nil {
+			shot = "\x00" + string(b)
+		}
+	}
+	h := sha256.Sum256([]byte(seg.Key + "\x00" + seg.Narration + "\x00" + seg.VisualBrief + "\x00" + strconv.Itoa(int(seg.DurationHint)) + beats + shot))
 	return hex.EncodeToString(h[:8])
 }
 
@@ -61,7 +68,44 @@ func sceneSidecarFingerprint(p *pipeline.Project, sb *contract.Storyboard, seg c
 	if p.UnitMode() {
 		tail = unitPlanFingerprint(p, seg.ID) // 段落制：单元计划指纹（分组/格子变化→过期）
 	}
-	return sceneFingerprint(seg) + ":" + designFingerprint(p) + directorFingerprint(sb) + tail
+	// 镜头字段已进 sceneFingerprint（Segment 为准）；只有老式 shots.json 实验段
+	// （段上没有 shot）才需要文件指纹兜底，避免双源重复计价。
+	shotFP := ""
+	if seg.Shot == nil {
+		shotFP = shotPlanFingerprint(p, seg.ID)
+	}
+	return sceneFingerprint(seg) + ":" + designFingerprint(p) + directorFingerprint(sb) + shotFP + tail
+}
+
+// shotPlanFingerprint 导演镜头表指纹（按段）：改某镜的机位/动作/舞台只过期该段，
+// 不把全片场景缓存一次冲掉；世界/角色表变更仍会命中所有段（它们共享）。
+func shotPlanFingerprint(p *pipeline.Project, segID string) string {
+	b, err := os.ReadFile(p.Artifact("storyboards/shots.json"))
+	if err != nil || len(b) == 0 {
+		return ""
+	}
+	var sp ShotPlan
+	if json.Unmarshal(b, &sp) != nil {
+		h := sha256.Sum256(b)
+		return ":shot" + hex.EncodeToString(h[:8])
+	}
+	var cur *ShotBrief
+	for i := range sp.Shots {
+		if sp.Shots[i].Seg == segID {
+			cur = &sp.Shots[i]
+			break
+		}
+	}
+	if cur == nil {
+		return ""
+	}
+	payload, _ := json.Marshal(struct {
+		World      string    `json:"world"`
+		CastLegend string    `json:"cast_legend"`
+		Shot       ShotBrief `json:"shot"`
+	}{sp.World, sp.CastLegend, *cur})
+	h := sha256.Sum256(payload)
+	return ":shot" + hex.EncodeToString(h[:8])
 }
 
 // paraNote 段在本片的段落定位注（工件 C 段落层 → 生成侧注入，production-
@@ -144,6 +188,9 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		}
 		return contract.RenderUnit{}, false
 	}
+	// 导演镜头表（一期：Segment.Shot 为准，shots.json 仅实验/导入）：把世界/
+	// 角色/整片镜头表/本镜调度注入到提示词最前面；没有则完全不影响老路径。
+	shotPlan := loadShotPlan(p)
 	// 主脑走文本主力档（2026-10-28 换脑 glm-5.3，无多模态）：写画面会话纯文本，
 	// 看图活全走视觉副驾（llm.VisionDigest，flash 档）——样张/真迹细读成全片
 	// 共享的「风格画像」，素材图段级细读。判卷链（frameQA/段审/终审）仍整段
@@ -209,16 +256,16 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		acc.calls++
 		return d
 	}
-	gen := func(acc *segUsage, user string, out any) (openai.Usage, error) {
+	gen := func(acc *segUsage, system, user string, out any) (openai.Usage, error) {
 		if acc.rec != nil {
 			if acc.calls == 0 { // 系统提示（设计系统/皮肤笼子）每任务记一次：留痕里看得见注入了什么约束
-				acc.rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: sceneSystemFor()})
+				acc.rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: system})
 			}
 			acc.rec.Message(openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: user})
 		}
 		// 纯文本主脑（2026-10-28 换脑）：图不入会话——样张/真迹走全片共享的风格
 		// 画像（styleBook），素材走段级细读；NoThink 取舍不变（结构化 HTML 作业）。
-		u, err := prov.GenerateJSONNoThink(ctx, sceneSystemFor(), user, out)
+		u, err := prov.GenerateJSONNoThink(ctx, system, user, out)
 		acc.prompt += u.PromptTokens
 		acc.compl += u.CompletionTokens
 		acc.cached += genCached(u)
@@ -365,6 +412,21 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		}()
 		v := voices[seg.ID]
 		pn := paraNote(p, seg.ID) // 段落定位注（工件 C 段落层；老项目空串不加行）
+		// SceneIR 试点（2026-10-30）：新项目/项目场景文件显式开 scene_ir=1 时走时间表
+		// 模式。首写用 IR 生成；已有 IR 的修复轮用改动单，不重抄整文件。其余全部
+		// 保留原 HTML 路径（老项目、失败回退、特殊镜头）。
+		irMode := sceneIROn(p)
+		curIR := loadSceneIR(p, seg.ID)
+		fresh := instruction == "" && feedback == ""
+		useIRRepair := irMode && curIR != nil && !fresh
+		useIRGen := irMode && !useIRRepair
+		segTotal := v.DurationS + contract.SegTail
+		systemFor := func() string {
+			if useIRGen {
+				return sceneIRSystem()
+			}
+			return sceneSystemFor()
+		}
 		sceneM, compM := methodsFor(r.RootDir, seg)
 		// 稳定前缀布局（七刀#4）：跨段不变的（样张源码/真迹说明/设计系统主体/风格
 		// 画像）连成整块进共享前缀；段变量（导演统筹/本段版式指派/素材细读）全部
@@ -384,17 +446,52 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			}
 			styleSeg += materialsNote(segMats)
 		}
-		promptFor := func(fb, prev string) string {
+		promptForHTML := func(fb, prev string) string {
+			var base string
 			if u, ok := unitOf(seg.ID); ok {
-				return paraUnitPrompt(seg, v, u, unitList, instruction, fb, cv, styleShared, styleSeg, golden, sceneM, compM, prev)
+				base = paraUnitPrompt(seg, v, u, unitList, instruction, fb, cv, styleShared, styleSeg, golden, sceneM, compM, prev)
+			} else {
+				base = sceneUserPrompt(seg, v, instruction, fb, cv, styleShared, styleSeg, golden, sceneM, compM, len(segMats) == 0, prev, pn)
 			}
-			return sceneUserPrompt(seg, v, instruction, fb, cv, styleShared, styleSeg, golden, sceneM, compM, len(segMats) == 0, prev, pn)
+			if shotPlan != nil {
+				if blk := shotPlan.promptBlock(seg.ID); blk != "" {
+					base = blk + "\n" + base
+				}
+			}
+			return base
+		}
+		promptFor := func(fb, prev string) string {
+			if useIRGen {
+				base := sceneIRUserPrompt(seg, v, instruction, fb, cv, styleShared, styleSeg, pn)
+				if shotPlan != nil {
+					if blk := shotPlan.promptBlock(seg.ID); blk != "" {
+						base = blk + "\n" + base
+					}
+				}
+				return base
+			}
+			return promptForHTML(fb, prev)
 		}
 		fp := sceneSidecarFingerprint(p, sb, seg)
 		var payload struct {
 			HTML          string                  `json:"html"`
 			Elements      []contract.NamedElement `json:"elements"`
 			ImageRequests []materialRequest       `json:"image_requests,omitempty"`
+			IR            *contract.SceneIR       `json:"ir,omitempty"`
+		}
+		// 已有 IR 的打回轮：直接进改动单修复，不重发整段生成提示。IR 编译失败
+		// （版本变更/手改坏）才退回 HTML 路径。
+		needRepair := false
+		if useIRRepair {
+			if html, cerr := CompileSceneIR(curIR, seg.ID, cv, segTotal); cerr == nil {
+				payload.HTML, payload.Elements, payload.IR = html, SceneIRElements(curIR), curIR
+				needRepair = true
+			} else {
+				if acc.rec != nil {
+					acc.rec.Note("已有 IR 编译失败，回退 HTML 修复: %v", cerr)
+				}
+				useIRRepair = false
+			}
 		}
 		// 续写路径（D2，docs/cost-optimization-plan §3.2）：修复/rework 轮且有可用
 		// 会话历史 → 修复指令追加在原对话上（模型带着首轮全上下文改自己的稿），
@@ -422,16 +519,18 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 			hist = h
 			return true
 		}
-		if instruction != "" || feedback != "" { // 打回轮：段审/终审/frameQA/用户改画
-			tryCont(loadSceneHistory(p, seg.ID, fp), sceneContRepairMsg(instruction, feedback))
-		} else if h := loadSceneHistory(p, seg.ID, fp); h != nil && h.Pending != "" {
-			// 机器验收退回的自动重跑（2026-10-30 用户拍板）：携带退回原因回到
-			// 上轮对话继续修改，对话历史沿用之前的。
-			tryCont(h, sceneContRepairMsg("", "机器验收退回（上轮自动重跑遗留，逐条修正）：\n"+h.Pending))
+		if !useIRRepair {
+			if instruction != "" || feedback != "" { // 打回轮：段审/终审/frameQA/用户改画
+				tryCont(loadSceneHistory(p, seg.ID, fp), sceneContRepairMsg(instruction, feedback))
+			} else if h := loadSceneHistory(p, seg.ID, fp); h != nil && h.Pending != "" {
+				// 机器验收退回的自动重跑（2026-10-30 用户拍板）：携带退回原因回到
+				// 上轮对话继续修改，对话历史沿用之前的。
+				tryCont(h, sceneContRepairMsg("", "机器验收退回（上轮自动重跑遗留，逐条修正）：\n"+h.Pending))
+			}
 		}
-		if hist == nil { // 全新会话（首写或续写不可用的修复兜底，行为同旧版）
+		if hist == nil && !useIRRepair { // 全新会话（首写或续写不可用的修复兜底，行为同旧版）
 			user := promptFor(feedback, prevSceneHTML(p, seg.ID))
-			_, gerr := gen(acc, user, &payload)
+			_, gerr := gen(acc, systemFor(), user, &payload)
 			if gerr != nil {
 				werr = fmt.Errorf("%s 场景生成失败: %w", seg.ID, gerr)
 				fail(werr)
@@ -455,7 +554,7 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 					}
 					styleSeg += materialsNote(segMats)
 					u2 := promptFor(feedback, "")
-					_, err2 := gen(acc, u2, &payload)
+					_, err2 := gen(acc, systemFor(), u2, &payload)
 					if err2 != nil {
 						werr = fmt.Errorf("%s 带素材终稿生成失败: %w", seg.ID, err2)
 						fail(werr)
@@ -467,12 +566,106 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 				}
 			}
 		}
+		// SceneIR 落点：模型交 ir → 校验 → 编译成 HTML；校验不过先给一轮改动单修复，
+		// 仍不过才回退 HTML 生成。渲染/检查/拼接下游只认 payload.HTML，保持零改动。
+		if payload.IR != nil {
+			for attempt := 0; attempt < 2; attempt++ {
+				verrs := contract.ValidateSceneIR(payload.IR, segTotal, cv.W, cv.H)
+				if len(verrs) == 0 {
+					if html, cerr := CompileSceneIR(payload.IR, seg.ID, cv, segTotal); cerr == nil {
+						payload.HTML = html
+						payload.Elements = SceneIRElements(payload.IR)
+						curIR = payload.IR
+						break
+					} else {
+						verrs = []string{cerr.Error()}
+					}
+				}
+				if attempt == 0 {
+					next, u, e := repairSceneIR(ctx, prov, payload.IR, verrs, segTotal, acc.rec)
+					acc.prompt += u.PromptTokens
+					acc.compl += u.CompletionTokens
+					acc.cached += genCached(u)
+					acc.calls++
+					if e == nil {
+						payload.IR = next
+						continue
+					}
+					if acc.rec != nil {
+						acc.rec.Note("SceneIR 生成后修复失败，回退 HTML：%v", e)
+					}
+				} else if acc.rec != nil {
+					acc.rec.Note("SceneIR 校验两轮未过，回退 HTML：%s", strings.Join(verrs, "；"))
+				}
+				payload.IR = nil
+				break
+			}
+		}
+		if payload.IR != nil {
+			p.Manifest("scene.ir", fmt.Sprintf("%s elements=%d cues=%d", seg.ID, len(payload.IR.Elements), len(payload.IR.Cues)))
+		}
+		if useIRGen && payload.IR == nil && strings.TrimSpace(payload.HTML) == "" {
+			if acc.rec != nil {
+				acc.rec.Note("SceneIR 未产出，回退 HTML 生成")
+			}
+			p.Manifest("scene.ir.fallback", seg.ID)
+			var hp struct {
+				HTML          string                  `json:"html"`
+				Elements      []contract.NamedElement `json:"elements"`
+				ImageRequests []materialRequest       `json:"image_requests,omitempty"`
+			}
+			fb := instruction + feedback
+			hpUser := promptForHTML(fb, prevSceneHTML(p, seg.ID))
+			if _, gerr := gen(acc, sceneSystemFor(), hpUser, &hp); gerr != nil {
+				werr = fmt.Errorf("%s 场景生成失败（IR/HTML 双路）: %w", seg.ID, gerr)
+				fail(werr)
+				return
+			}
+			payload.HTML, payload.Elements, payload.ImageRequests = hp.HTML, hp.Elements, hp.ImageRequests
+			contMsgs = []openai.ChatCompletionMessage{
+				{Role: openai.ChatMessageRoleUser, Content: hpUser},
+				{Role: openai.ChatMessageRoleAssistant, Content: scenePayloadJSON(hp.HTML, hp.Elements)},
+			}
+			useIRGen = false
+		}
 		errs := sceneValidate(r, ctx, p, payload.HTML, seg.ID)
-		for repair := 0; repair < 2 && len(errs) > 0; repair++ { // 外科修复：违规逐条回喂
+		for repair := 0; repair < 2 && (len(errs) > 0 || needRepair); repair++ { // 外科修复：违规逐条回喂
 			// 2026-10-30：机器验收退回统一带错误清单回原对话续修（含首写轮内，
 			// patch 改动单优先）；续写失败才落回全量重发兜底，行为同旧版。
 			var err2 error
-			if len(contMsgs) > 0 {
+			// IR 场景优先走改动单：只改 cue/单元素，不重抄整段文件。
+			if curIR != nil {
+				issues := append([]string{}, errs...)
+				if instruction != "" {
+					issues = append([]string{"用户修改要求（最高优先级）：" + instruction}, issues...)
+				}
+				if feedback != "" {
+					issues = append([]string{feedback}, issues...)
+				}
+				next, u, e := repairSceneIR(ctx, prov, curIR, issues, segTotal, acc.rec)
+				acc.prompt += u.PromptTokens
+				acc.compl += u.CompletionTokens
+				acc.cached += genCached(u)
+				acc.calls++
+				if e == nil {
+					if html, cerr := CompileSceneIR(next, seg.ID, cv, segTotal); cerr == nil {
+						payload.HTML, payload.Elements, payload.IR = html, SceneIRElements(next), next
+						curIR = next
+						needRepair = false
+						errs = sceneValidate(r, ctx, p, payload.HTML, seg.ID)
+						continue
+					} else {
+						err2 = cerr
+					}
+				} else {
+					err2 = e
+				}
+				if acc.rec != nil {
+					acc.rec.Note("IR 改动单失败，回退 HTML 修复: %v", err2)
+				}
+				curIR = nil // 回退后本轮不再走 IR
+			}
+			if err2 == nil && len(contMsgs) > 0 {
 				var np scenePayload
 				np, contMsgs, err2 = contRepair(acc, contMsgs,
 					scenePayload{HTML: payload.HTML, Elements: payload.Elements},
@@ -489,13 +682,14 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 					HTML     string                  `json:"html"`
 					Elements []contract.NamedElement `json:"elements"`
 				}
-				_, err2 = gen(acc, promptFor(fb, payload.HTML), &fixed)
+				_, err2 = gen(acc, sceneSystemFor(), promptForHTML(fb, payload.HTML), &fixed)
 				if err2 == nil {
-					payload.HTML, payload.Elements = fixed.HTML, fixed.Elements
+					payload.HTML, payload.Elements, payload.IR = fixed.HTML, fixed.Elements, nil
+					curIR = nil
 					// 全量重发＝另起会话：轮内对话据此重建（user 不背 prevHTML——
 					// 成稿已取代旧稿），后续轮继续会话追加形态。
 					contMsgs = []openai.ChatCompletionMessage{
-						{Role: openai.ChatMessageRoleUser, Content: promptFor(fb, "")},
+						{Role: openai.ChatMessageRoleUser, Content: promptForHTML(fb, "")},
 						{Role: openai.ChatMessageRoleAssistant, Content: scenePayloadJSON(fixed.HTML, fixed.Elements)},
 					}
 				}

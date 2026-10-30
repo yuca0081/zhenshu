@@ -3,17 +3,18 @@ import { KeepAlive, computed, ref, watch } from 'vue'
 import { NButton, NInput, NInputNumber, NSelect, NSpin, useMessage } from 'naive-ui'
 import { api, videoURL } from '../api'
 import { cachePct, fmtTok } from '../format'
-import type { ActivityEvent, AudioMeta, Manuscript, PrepView, ProjectView, Segment, Storyboard, StyleSamples, TabID } from '../types'
+import type { ActivityEvent, AudioMeta, Manuscript, PrepView, ProjectView, Segment, ShotDirection, ShotSize, Storyboard, StyleSamples, TabID } from '../types'
 import ManuscriptPane from './ManuscriptPane.vue'
 import StylePane from './StylePane.vue'
 import PrepPane from './PrepPane.vue'
 import IdeaPane from './IdeaPane.vue'
 import MusicIdeaPane from './MusicIdeaPane.vue'
 import VideoPane from './VideoPane.vue'
+import CoverPane from './CoverPane.vue'
 import ActivityPane from './ActivityPane.vue'
 import RIcon from './RIcon.vue'
 
-// 舞台页签宿主（弹窗体系退役）：文稿/分镜/风格/终审/视频/过程页占据中间区域。
+// 舞台页签宿主（弹窗体系退役）：主题/文稿/风格/分镜/终审/视频/封面页占据中间区域。
 // 页签常亮 + 红绿灯（门过没过）+ 过期点（成片落后上游）——App 持有 activeTab
 // （未手动选择时按管线进度自动落页）。KeepAlive 缓存组件页签：切页不丢
 // 文稿编辑态/风格开关态/视频播放位置。右上角常驻「下载成片」；过程页签替代
@@ -64,15 +65,17 @@ const tabs = computed(() => {
   const list: { id: TabID; label: string }[] = []
   if (isMusic.value) {
     list.push({ id: 'idea', label: '想法' }, { id: 'video', label: '视频' })
-    return list
+  } else {
+    if (showIdea.value) list.push({ id: 'idea', label: '主题' })
+    // 页签序对齐准备链实际顺序 ①文稿→②风格→③分镜（2026-10-30 P3-10：旧序
+    // 文稿/分镜/风格与主题页、过程页的链序三处三个说法）
+    list.push({ id: 'manuscript', label: '文稿' }, { id: 'style', label: '风格' }, { id: 'storyboard', label: '分镜' })
+    if (props.prep?.exists) list.push({ id: 'review', label: '终审' })
+    list.push({ id: 'video', label: '视频' })
   }
-  if (showIdea.value) list.push({ id: 'idea', label: isMusic.value ? '想法' : '主题' })
-  // 页签序对齐准备链实际顺序 ①文稿→②风格→③分镜（2026-10-30 P3-10：旧序
-  // 文稿/分镜/风格与主题页、过程页的链序三处三个说法）
-  list.push({ id: 'manuscript', label: '文稿' }, { id: 'style', label: '风格' }, { id: 'storyboard', label: '分镜' })
-  if (props.prep?.exists) list.push({ id: 'review', label: '终审' })
   // 「过程」不进页签列——独立按钮放在页签行右侧（head-right），点击切到整页过程内容
-  list.push({ id: 'video', label: '视频' })
+  // 封面独立成页（从视频页右栏拆出）：有成片才有封面，跟在「视频」后面
+  if (props.view?.has_video) list.push({ id: 'cover', label: '封面' })
   return list
 })
 
@@ -124,6 +127,12 @@ function tabState(id: TabID): { cls: string[]; title: string; label: string } {
         title: props.prep?.exists
           ? (v.gates.style_confirmed ? '打包终审已通过' : '三工件已出，等打包终审确认（全流程唯一人工门）')
           : '这个项目没走准备工位',
+        label: '',
+      }
+    case 'cover':
+      return {
+        cls: [v.cover ? 'ok' : ''].filter(Boolean),
+        title: v.cover ? '出片封面——预览、改标题、重做或从成片取一帧' : '还没有封面——制作收尾自动产出，也可在这里手动重做',
         label: '',
       }
     case 'activity':
@@ -217,6 +226,65 @@ async function saveSb() {
   }
 }
 
+// ── 镜头层（一期：1 镜 = 1 段）：分镜表里的展开行编辑 ──
+// 字段口径与后端 contract.ShotDirection 一致；保存仍走 saveStoryboard（后端回写
+// draft.json，终审镜头门读的是同一份）。老项目没有 shot：先点「+ 补镜头」再编辑，
+// 不点就保持原样（零感知）。
+const shotSizes: { label: string; value: ShotSize }[] = [
+  { label: '全景', value: 'wide' },
+  { label: '中景', value: 'medium' },
+  { label: '近景', value: 'close' },
+  { label: '俯拍', value: 'overhead' },
+  { label: '字卡', value: 'full' },
+]
+const expandedShot = ref<string | null>(null)
+const edSegs = computed(() => edSb.value?.segments ?? [])
+const hasShotLayer = computed(() => edSegs.value.some(s => !!s.shot))
+const shotReady = computed(() => edSegs.value.filter(s => !shotIssue(s.shot)).length)
+function shotSizeLabel(v?: string) {
+  return shotSizes.find(x => x.value === v)?.label ?? (v || '未填')
+}
+function shotIssue(sh?: ShotDirection): string {
+  if (!sh) return '缺镜头'
+  if (!sh.size) return '缺景别'
+  if (!(sh.camera || '').trim()) return '缺机位/运镜'
+  if (!(sh.stage || '').trim()) return '缺舞台'
+  if (!(sh.action || '').trim()) return '缺动作'
+  const cast = (sh.cast || []).filter(c => (c.who || '').trim())
+  if (cast.length < 1) return '至少 1 个角色'
+  if (cast.length > 4) return '角色最多 4 个'
+  return ''
+}
+function addEmptyShot(seg: Segment) {
+  if (!seg.shot) {
+    seg.shot = { size: 'medium', camera: '', stage: '', cast: [], action: '', dialogue: '', transition: '', ref_frame: '', ref_note: '' }
+    sbDirty.value = true
+  }
+  expandedShot.value = seg.id
+}
+function toggleShot(seg: Segment) {
+  if (!seg.shot) {
+    addEmptyShot(seg)
+    return
+  }
+  expandedShot.value = expandedShot.value === seg.id ? null : seg.id
+}
+function addCast(sh: ShotDirection) {
+  if (!sh.cast) sh.cast = []
+  sh.cast.push({ who: '', pose: '', emotion: '' })
+  sbDirty.value = true
+}
+function removeCast(sh: ShotDirection, i: number) {
+  if (!sh.cast) return
+  sh.cast.splice(i, 1)
+  sbDirty.value = true
+}
+// 终审镜头卡「编辑镜头」：跳到分镜页签并展开对应段（不丢当前编辑态）。
+function editShot(id: string) {
+  expandedShot.value = id
+  emit('tab', 'storyboard')
+}
+
 // ── 段落分组行（工件 C 段落层）：段落主题作分界行插进分镜表 ──
 // 行对象直接引用 edSb.segments 的段（v-model 绑定不受影响，保存逻辑零改动）。
 // 编辑只改文案/时长（保存接口锁 id/idx，段数段序不可变），分组不受编辑影响；
@@ -302,13 +370,13 @@ async function parseToLibrary() {
 <template>
   <section class="stage">
     <div class="pane">
-      <!-- 页签行：五页 + 状态灯（红绿灯/过期点）+ 右上角 下载成片/过程 -->
+      <!-- 页签行：主题/文稿/风格/分镜/终审/视频/封面 + 状态灯（红绿灯/过期点）+ 右上角 下载成片/过程 -->
       <header v-if="view" class="tabs">
         <button
-          v-for="(t, ti) in tabs" :key="t.id" class="tab" :class="[tabState(t.id).cls, { on: tab === t.id }]"
+          v-for="t in tabs" :key="t.id" class="tab" :class="[tabState(t.id).cls, { on: tab === t.id }]"
           :title="tabState(t.id).title" @click="emit('tab', t.id)"
         >
-          <span class="dot" /><span class="num tab-no">{{ String(ti + 1).padStart(2, '0') }}</span>{{ t.label }}<span v-if="tabState(t.id).label" class="tab-sub">{{ tabState(t.id).label }}</span>
+          <span class="dot" />{{ t.label }}<span v-if="tabState(t.id).label" class="tab-sub">{{ tabState(t.id).label }}</span>
         </button>
         <div class="head-right">
           <!-- 整片过期重做：悬停显示哪几样改过；两段式确认（第一枪只亮确认态） -->
@@ -366,7 +434,7 @@ async function parseToLibrary() {
           <div v-else-if="tab === 'storyboard' && storyboard" class="sb-wrap">
             <div class="sb-head">
               分镜表
-              <span class="sb-meta">{{ edSb?.segments.length ?? storyboard.segments.length }} 段<template v-if="sbParaCount"> / {{ sbParaCount }} 段落</template> / 约 {{ Math.round(edTotalSec || view.total_hint) }} 秒</span>
+              <span class="sb-meta">{{ edSb?.segments.length ?? storyboard.segments.length }} 段<template v-if="sbParaCount"> / {{ sbParaCount }} 段落</template> / 约 {{ Math.round(edTotalSec || view.total_hint) }} 秒<template v-if="hasShotLayer"> · 镜头 {{ shotReady }}/{{ edSb?.segments.length ?? 0 }}</template></span>
               <span class="sb-dur">
                 <NSelect v-model:value="targetMin" size="tiny" :options="minOptions" :disabled="agentBusy" style="width: 108px" />
                 <NButton size="tiny" :loading="replanning" :disabled="agentBusy" @click="replanStoryboard">按此时长重排</NButton>
@@ -376,7 +444,7 @@ async function parseToLibrary() {
             </div>
             <div class="sb-scroll">
               <table class="sb">
-                <thead><tr><th style="width:44px">段</th><th style="width:130px">标题</th><th>旁白</th><th style="width:200px">画面</th><th style="width:86px">秒</th></tr></thead>
+                <thead><tr><th style="width:44px">段</th><th style="width:130px">标题</th><th>旁白</th><th style="width:220px">镜头</th><th style="width:86px">秒</th></tr></thead>
                 <tbody>
                   <template v-for="r in sbRows" :key="r.seg ? r.seg.id : 'para' + r.no">
                     <tr v-if="r.para" class="sb-para">
@@ -386,13 +454,68 @@ async function parseToLibrary() {
                       <td class="c">{{ r.seg.idx }}</td>
                       <td><NInput v-model:value="r.seg.key" size="tiny" :disabled="agentBusy" @update:value="sbDirty = true" /></td>
                       <td><NInput v-model:value="r.seg.narration" type="textarea" size="tiny" :autosize="{ minRows: 2, maxRows: 7 }" :disabled="agentBusy" @update:value="sbDirty = true" /></td>
-                      <td><NInput v-model:value="r.seg.visual_brief" type="textarea" size="tiny" :autosize="{ minRows: 2, maxRows: 7 }" :disabled="agentBusy" @update:value="sbDirty = true" /></td>
+                      <td class="shot-cell">
+                        <button v-if="r.seg.shot" class="shot-summary" type="button" :disabled="agentBusy" @click="toggleShot(r.seg)">
+                          <b>{{ shotSizeLabel(r.seg.shot.size) }}</b>
+                          <span>{{ r.seg.shot.camera || '未写机位' }}</span>
+                          <i v-if="shotIssue(r.seg.shot)" class="bad">{{ shotIssue(r.seg.shot) }}</i>
+                        </button>
+                        <button v-else class="shot-add" type="button" :disabled="agentBusy" @click="addEmptyShot(r.seg)">+ 补镜头</button>
+                      </td>
                       <td class="c"><NInputNumber v-model:value="r.seg.duration_hint" size="tiny" :min="0.5" :max="180" :step="0.5" :disabled="agentBusy" style="width: 80px" @update:value="sbDirty = true" /></td>
+                    </tr>
+                    <!-- 镜头编辑展开行：一期 1 镜 = 1 段，不另做嵌套镜头编辑器 -->
+                    <tr v-if="r.seg && expandedShot === r.seg.id" class="sb-shot-edit">
+                      <td colspan="5">
+                        <div v-if="r.seg.shot" class="shot-form">
+                          <div class="shot-grid">
+                            <label>景别
+                              <NSelect v-model:value="r.seg.shot.size" size="tiny" :options="shotSizes" :disabled="agentBusy" @update:value="sbDirty = true" />
+                            </label>
+                            <label>机位/运镜
+                              <NInput v-model:value="r.seg.shot.camera" size="tiny" placeholder="从哪拍到哪、怎么动" :disabled="agentBusy" @update:value="sbDirty = true" />
+                            </label>
+                          </div>
+                          <label>舞台 / 道具 / 前后景
+                            <NInput v-model:value="r.seg.shot.stage" type="textarea" size="tiny" :autosize="{ minRows: 1, maxRows: 3 }" :disabled="agentBusy" @update:value="sbDirty = true" />
+                          </label>
+                          <div class="shot-cast">
+                            <span class="shot-label">出场角色</span>
+                            <div v-for="(c, ci) in (r.seg.shot.cast || [])" :key="ci" class="cast-row">
+                              <NInput v-model:value="c.who" size="tiny" placeholder="谁（角色表同名）" :disabled="agentBusy" @update:value="sbDirty = true" />
+                              <NInput v-model:value="c.pose" size="tiny" placeholder="姿态/动作" :disabled="agentBusy" @update:value="sbDirty = true" />
+                              <NInput v-model:value="c.emotion" size="tiny" placeholder="情绪" :disabled="agentBusy" @update:value="sbDirty = true" />
+                              <button class="cast-del" type="button" :disabled="agentBusy" title="删除这个角色" @click="removeCast(r.seg.shot, ci)">×</button>
+                            </div>
+                            <button class="cast-add" type="button" :disabled="agentBusy || (r.seg.shot.cast || []).length >= 4" @click="addCast(r.seg.shot)">+ 角色</button>
+                          </div>
+                          <label>本镜的戏（必须看得见）
+                            <NInput v-model:value="r.seg.shot.action" type="textarea" size="tiny" :autosize="{ minRows: 1, maxRows: 3 }" :disabled="agentBusy" @update:value="sbDirty = true" />
+                          </label>
+                          <div class="shot-grid">
+                            <label>台词 / 字卡
+                              <NInput v-model:value="r.seg.shot.dialogue" size="tiny" placeholder="短句，可空" :disabled="agentBusy" @update:value="sbDirty = true" />
+                            </label>
+                            <label>与下一镜接法
+                              <NInput v-model:value="r.seg.shot.transition" size="tiny" placeholder="匹配切/白闪/直切/叠化" :disabled="agentBusy" @update:value="sbDirty = true" />
+                            </label>
+                          </div>
+                          <div class="shot-grid">
+                            <label>参考帧（项目内路径）
+                              <NInput v-model:value="r.seg.shot.ref_frame" size="tiny" placeholder="可空" :disabled="agentBusy" @update:value="sbDirty = true" />
+                            </label>
+                            <label>参考说明
+                              <NInput v-model:value="r.seg.shot.ref_note" size="tiny" placeholder="只借构图/光/角色关系" :disabled="agentBusy" @update:value="sbDirty = true" />
+                            </label>
+                          </div>
+                          <div class="shot-brief">原画面提示（旧分镜稿，保留作参考）：{{ r.seg.visual_brief }}</div>
+                        </div>
+                      </td>
                     </tr>
                   </template>
                 </tbody>
               </table>
-              <div class="hint">直接在表格里改文案和秒数，改完点右上「保存修改」（保存后成片会标记为旧版）；要增删段或大改结构，在对话里说。加聊天引用请到时间轴点段。</div>
+              <div class="hint">直接在表格里改文案和秒数；点「镜头」格展开导演字段（景别/机位/舞台/角色/动作/台词），改完点右上「保存修改」（保存后成片会标记为旧版）。终审确认要求每段镜头完整；要增删段或大改结构，在对话里说。加聊天引用请到时间轴点段。</div>
             </div>
             <!-- Agent 轮进行中锁分镜：与文稿页同款——提示+中断出口浮在分镜区域内，不单独占行 -->
             <div v-if="agentBusy" class="sb-lock">
@@ -413,7 +536,7 @@ async function parseToLibrary() {
           <PrepPane
             v-else-if="tab === 'review'"
             :project-id="videoId" :prep="prep" :confirmed="!!view.gates.style_confirmed" :agent-busy="agentBusy"
-            @confirmed="emit('confirm-prep')" @chat-sent="emit('chat-sent')"
+            @confirmed="emit('confirm-prep')" @chat-sent="emit('chat-sent')" @edit-shot="editShot"
           />
           <VideoPane
             v-else-if="tab === 'video'"
@@ -422,6 +545,11 @@ async function parseToLibrary() {
             @seg="(i, k) => emit('seg', i, k)" @pick-time="t => emit('pick-time', t)"
             @cancel="emit('cancel')"
             @go-tab="t => emit('go-tab', t)"
+            @refresh="emit('saved')"
+          />
+          <CoverPane
+            v-else-if="tab === 'cover'"
+            :view="view" :video-id="videoId" :video-rev="videoRev"
           />
           <ActivityPane
             v-else-if="tab === 'activity'"
@@ -446,7 +574,7 @@ async function parseToLibrary() {
   container-type: inline-size; /* 页签行按面板实宽做响应式（窄时收起 token 小账） */
 }
 
-/* ── 页签行（RhineTabs 语法：零填充编号 + 激活强调色下划线） ── */
+/* ── 页签行（激活强调色下划线；编号已撤——页签靠文字与状态灯识别） ── */
 /* 三栏布局里中间栏宽度有限（对话栏 400px 固定），这行内容多——所有元素
    nowrap + flex:none 保证文字不折行；真放不下时整行横向滚动兜底，
    不让页签文字被挤成两行（2026-10-29 修）。 */
@@ -464,8 +592,6 @@ async function parseToLibrary() {
 }
 .tab:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 3%, transparent); }
 .tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
-.tab-no { font-size: 10.5px; color: var(--muted); opacity: 0.8; }
-.tab.on .tab-no { color: var(--accent); }
 .tab-sub { font-size: 11px; color: var(--muted); font-weight: 400; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); opacity: 0.5; flex: none; }
 .tab.ok .dot { background: var(--ok); opacity: 1; }
@@ -541,6 +667,42 @@ async function parseToLibrary() {
 .sb-para b { font-weight: 600; margin-right: 8px; opacity: .8; font-variant-numeric: tabular-nums; }
 .sb-para i { font-style: normal; color: var(--muted); margin-left: 10px; font-size: 11.5px; }
 .c { color: var(--muted); text-align: center; vertical-align: middle; font-variant-numeric: tabular-nums; }
+/* ── 镜头格 / 展开编辑行（一期：1 镜 = 1 段）── */
+.shot-cell { padding: 5px 8px; }
+.shot-summary {
+  width: 100%; display: flex; flex-direction: column; gap: 2px; text-align: left;
+  border: 1px solid var(--line-soft); background: color-mix(in srgb, var(--ink) 3%, transparent);
+  padding: 5px 8px; cursor: pointer; font-family: inherit; color: var(--ink);
+}
+.shot-summary:hover { border-color: var(--accent); }
+.shot-summary b { font-size: 11.5px; color: var(--accent); font-weight: 600; }
+.shot-summary span { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shot-summary i { font-style: normal; font-size: 10.5px; color: var(--ok); }
+.shot-summary i.bad { color: var(--warn); }
+.shot-add {
+  width: 100%; border: 1px dashed var(--line); background: transparent; color: var(--muted);
+  font-size: 11.5px; padding: 7px 8px; cursor: pointer; font-family: inherit;
+}
+.shot-add:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.sb-shot-edit > td { background: color-mix(in srgb, var(--ink) 2.5%, var(--surface)); padding: 10px 14px 12px; }
+.shot-form { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.shot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.shot-form label { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-size: 11.5px; }
+.shot-cast { display: flex; flex-direction: column; gap: 4px; }
+.shot-label { color: var(--muted); font-size: 11.5px; }
+.cast-row { display: grid; grid-template-columns: 1fr 1.4fr 0.8fr 24px; gap: 6px; align-items: center; }
+.cast-del { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; }
+.cast-del:hover:not(:disabled) { color: var(--err); }
+.cast-add {
+  align-self: flex-start; border: 1px dashed var(--line); background: transparent; color: var(--muted);
+  font-size: 11.5px; padding: 2px 10px; cursor: pointer; font-family: inherit;
+}
+.cast-add:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.cast-add:disabled, .cast-del:disabled { opacity: .45; cursor: default; }
+.shot-brief {
+  color: var(--muted); font-size: 11.5px; opacity: .75;
+  border-top: 1px dashed var(--line-soft); padding-top: 6px; line-height: 1.6;
+}
 .hint { padding: 10px 14px; color: var(--muted); opacity: .7; font-size: 12px; }
 .sb-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; line-height: 1.9; text-align: center; padding: 20px 40px; }
 /* Agent 轮进行中的分镜锁：覆盖整个分镜区域（含表头按钮行）的提示 + 中断出口 */

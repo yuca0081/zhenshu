@@ -145,8 +145,8 @@ func NewStylePack(styleID, description string, g EditGrammar, ds *StyleSamples, 
 }
 
 // NewStoryboardDraft 组装分镜稿工件（指纹先算，时间戳后填——同 fingerprint 纪律）。
-func NewStoryboardDraft(plan string, paragraphs []DraftParagraph, segments []DraftSegment) *StoryboardDraft {
-	d := &StoryboardDraft{Plan: plan, Paragraphs: paragraphs, Segments: segments}
+func NewStoryboardDraft(plan, world, castLegend string, paragraphs []DraftParagraph, segments []DraftSegment) *StoryboardDraft {
+	d := &StoryboardDraft{Plan: plan, World: world, CastLegend: castLegend, Paragraphs: paragraphs, Segments: segments}
 	d.Fingerprint = fingerprint(d)
 	d.CreatedAt = time.Now()
 	return d
@@ -268,6 +268,177 @@ type VisualBrief struct {
 	LastFrame  string `json:"last_frame"`  // 末拍：画面收在哪里
 }
 
+// ── 镜头层（一期：1 镜 = 1 段）────────────────────────────────
+//
+// 现有 VisualBrief 是「这段画面大概是什么」，回答的是内容；ShotDirection 回答
+// 「怎么拍」：谁在画面里、什么景别、机位在哪、舞台怎么摆、角色做什么动作、
+// 说什么台词、怎么接下一镜。③分镜工位产出，sceneGen 注入导演指令块，
+// confirmPrep 以「每段镜头完整」为硬门。
+
+// ShotCast 本镜出场角色：谁、姿态/动作、情绪。Who 在全片保持同一写法，
+// 让模型跨镜认出同一个角色。
+type ShotCast struct {
+	Who     string `json:"who"`
+	Pose    string `json:"pose"`
+	Emotion string `json:"emotion,omitempty"`
+}
+
+// ShotDirection 一个镜头的调度表（一期内嵌在 Segment / DraftSegment 上）。
+type ShotDirection struct {
+	Size       string     `json:"size"`                 // wide|medium|close|overhead|full
+	Camera     string     `json:"camera"`               // 机位与运镜（如「从桌面近景横移到屏幕」）
+	Stage      string     `json:"stage"`                // 舞台/道具/前后景
+	Cast       []ShotCast `json:"cast"`                 // 出场角色与动作
+	Action     string     `json:"action"`               // 这一镜发生什么（必须看得见）
+	Dialogue   string     `json:"dialogue,omitempty"`   // 短台词/字卡（不是旁白复述）
+	Transition string     `json:"transition,omitempty"` // 与下一镜的接法
+	RefFrame   string     `json:"ref_frame,omitempty"`  // 项目内相对路径（可空）
+	RefNote    string     `json:"ref_note,omitempty"`   // 参考帧说明
+}
+
+// ShotSizes 合法景别（按由远到近排列，供提示词/前端复用）。
+var ShotSizes = []string{"wide", "medium", "close", "overhead", "full"}
+
+// ValidShotSize 景别是否合法（大小写不敏感）。
+func ValidShotSize(size string) bool {
+	s := strings.ToLower(strings.TrimSpace(size))
+	for _, v := range ShotSizes {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// Normalize 去空白、景别转小写、丢弃全空的 cast 行（前端「+ 角色」会先加空行）。
+func (s *ShotDirection) Normalize() {
+	if s == nil {
+		return
+	}
+	s.Size = strings.ToLower(strings.TrimSpace(s.Size))
+	s.Camera = strings.TrimSpace(s.Camera)
+	s.Stage = strings.TrimSpace(s.Stage)
+	s.Action = strings.TrimSpace(s.Action)
+	s.Dialogue = strings.TrimSpace(s.Dialogue)
+	s.Transition = strings.TrimSpace(s.Transition)
+	s.RefFrame = strings.TrimSpace(s.RefFrame)
+	s.RefNote = strings.TrimSpace(s.RefNote)
+	cast := s.Cast[:0]
+	for _, c := range s.Cast {
+		c.Who = strings.TrimSpace(c.Who)
+		c.Pose = strings.TrimSpace(c.Pose)
+		c.Emotion = strings.TrimSpace(c.Emotion)
+		if c.Who == "" && c.Pose == "" && c.Emotion == "" {
+			continue
+		}
+		cast = append(cast, c)
+	}
+	s.Cast = cast
+}
+
+// Clone 深拷贝（Translate / 缓存指纹用，避免草稿与制作契约共享切片）。
+func (s *ShotDirection) Clone() *ShotDirection {
+	if s == nil {
+		return nil
+	}
+	cp := *s
+	cp.Cast = append([]ShotCast(nil), s.Cast...)
+	return &cp
+}
+
+// Validate 镜头调度校验：景别合法、机位/舞台/动作非空、角色 1–4 且都有 who。
+func (s *ShotDirection) Validate() error {
+	if s == nil {
+		return fmt.Errorf("镜头为空")
+	}
+	if !ValidShotSize(s.Size) {
+		return fmt.Errorf("景别 %q 不合法（可选 %s）", s.Size, strings.Join(ShotSizes, "/"))
+	}
+	if strings.TrimSpace(s.Camera) == "" {
+		return fmt.Errorf("机位/运镜为空")
+	}
+	if strings.TrimSpace(s.Stage) == "" {
+		return fmt.Errorf("舞台为空")
+	}
+	if strings.TrimSpace(s.Action) == "" {
+		return fmt.Errorf("本镜动作/戏为空")
+	}
+	if n := len(s.Cast); n < 1 || n > 4 {
+		return fmt.Errorf("出场角色 %d 个（须 1–4 个）", n)
+	}
+	for i, c := range s.Cast {
+		if strings.TrimSpace(c.Who) == "" {
+			return fmt.Errorf("第 %d 个角色缺 who", i+1)
+		}
+	}
+	return nil
+}
+
+// ShotGate 镜头完整度（confirmPrep 硬门 / 前端镜头板共用）。
+type ShotGate struct {
+	Ready   int      `json:"ready"`   // 字段完整的镜数
+	Total   int      `json:"total"`   // 段数
+	Missing []string `json:"missing"` // 缺失/不合格的段 id
+}
+
+// Enabled 是否启用了镜头层：ready=0 视为老项目/未生成，不拦确认（零感知）。
+func (g ShotGate) Enabled() bool { return g.Ready > 0 }
+
+// Complete 全部段都有合格镜头。
+func (g ShotGate) Complete() bool { return g.Total > 0 && g.Ready == g.Total }
+
+func shotIssue(s *ShotDirection) string {
+	if s == nil {
+		return "缺镜头"
+	}
+	if err := s.Validate(); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// ShotGate 分镜稿镜头完整度。
+func (d *StoryboardDraft) ShotGate() ShotGate {
+	g := ShotGate{Total: len(d.Segments), Missing: []string{}}
+	for _, seg := range d.Segments {
+		if shotIssue(seg.Shot) == "" {
+			g.Ready++
+		} else {
+			g.Missing = append(g.Missing, seg.ID)
+		}
+	}
+	return g
+}
+
+// ShotGate 制作契约镜头完整度（分镜页手动编辑后 / 终审用）。
+func (sb *Storyboard) ShotGate() ShotGate {
+	g := ShotGate{Total: len(sb.Segments), Missing: []string{}}
+	for _, seg := range sb.Segments {
+		if shotIssue(seg.Shot) == "" {
+			g.Ready++
+		} else {
+			g.Missing = append(g.Missing, seg.ID)
+		}
+	}
+	return g
+}
+
+// ValidateDraftShots ③分镜工位出口的镜头硬校验：每段都要有合格镜头。
+// 与 ValidateStoryboardDraft 分开——老项目/老测试没有 shot 字段仍可过基础校验，
+// 但新分镜提交必须带镜头（否则 confirmPrep 的镜头板没有内容）。
+func ValidateDraftShots(d *StoryboardDraft) error {
+	var issues []string
+	for _, seg := range d.Segments {
+		if msg := shotIssue(seg.Shot); msg != "" {
+			issues = append(issues, seg.ID+"："+msg)
+		}
+	}
+	if len(issues) > 0 {
+		return fmt.Errorf("镜头表不完整：\n- %s", strings.Join(issues, "\n- "))
+	}
+	return nil
+}
+
 // DraftSegment 分镜稿的段：旁白只引用句编号，不抄写文本。
 type DraftSegment struct {
 	ID            string      `json:"id"` // seg01 起连续
@@ -276,11 +447,15 @@ type DraftSegment struct {
 	NarrationRefs string      `json:"narration_refs"` // 如 "N3-N4"
 	Brief         VisualBrief `json:"visual_brief"`
 	DurationHint  float64     `json:"duration_hint"` // 段长带内（含入场动画预算）
+	// Shot 镜头调度（一期：1 镜 = 1 段）：③工位产出的导演字段，翻译进制作契约。
+	Shot *ShotDirection `json:"shot,omitempty"`
 }
 
 // StoryboardDraft 分镜稿（工件 C）：纯内容，不出现任何缝/转场/机制概念。
 type StoryboardDraft struct {
 	Plan        string           `json:"plan,omitempty"`
+	World       string           `json:"world,omitempty"`       // 全片世界/舞台设定
+	CastLegend  string           `json:"cast_legend,omitempty"` // 全片角色表（外形/身体/性格）
 	Paragraphs  []DraftParagraph `json:"paragraphs"`
 	Segments    []DraftSegment   `json:"segments"`
 	CreatedAt   time.Time        `json:"created_at"`
@@ -378,6 +553,13 @@ func ValidateStoryboardDraft(d *StoryboardDraft, script *Script, pack *StylePack
 		if strings.TrimSpace(seg.Brief.FirstFrame) == "" || strings.TrimSpace(seg.Brief.LastFrame) == "" {
 			return fmt.Errorf("段 %s 首拍/末拍缺一——它们是相邻段衔接的全部依据", seg.ID)
 		}
+		// 有镜头字段就校验（没有 = 老项目/未启用镜头层，零感知；是否要求每段都有
+		// 由 ValidateDraftShots / confirmPrep 的镜头门决定）。
+		if seg.Shot != nil {
+			if err := seg.Shot.Validate(); err != nil {
+				return fmt.Errorf("段 %s 镜头不合格：%w", seg.ID, err)
+			}
+		}
 		if seg.DurationHint < lo || seg.DurationHint > hi {
 			return fmt.Errorf("段 %s duration_hint=%.1fs 超出段长带 [%.1f, %.1f]（入场动画预算计入段长）",
 				seg.ID, seg.DurationHint, lo, hi)
@@ -448,7 +630,7 @@ func (d *StoryboardDraft) TotalHint() float64 {
 // narration_refs 就地展开成旁白全文；场景三件拼成 visual_brief 文本（首末拍
 // 随段落传递，④的邻段注入与⑤的边界帧查项由此拿到内容）。
 func (d *StoryboardDraft) Translate(script *Script, pack *StylePack) *Storyboard {
-	sb := &Storyboard{TimingBasis: "narration"}
+	sb := &Storyboard{TimingBasis: "narration", World: d.World, CastLegend: d.CastLegend}
 	if pack != nil {
 		sb.StyleID = pack.StyleID
 	}
@@ -474,6 +656,7 @@ func (d *StoryboardDraft) Translate(script *Script, pack *StylePack) *Storyboard
 			VisualBrief:  seg.Brief.Scene + "\n首拍：" + seg.Brief.FirstFrame + "\n末拍：" + seg.Brief.LastFrame,
 			DurationHint: seg.DurationHint,
 			Brief:        &VisualBriefSpec{Scene: seg.Brief.Scene, FirstFrame: seg.Brief.FirstFrame, LastFrame: seg.Brief.LastFrame},
+			Shot:         seg.Shot.Clone(),
 		}
 		sb.Segments = append(sb.Segments, s)
 	}

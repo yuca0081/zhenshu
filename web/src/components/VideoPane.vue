@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { NButton, NInput, NSelect, NSpin, useMessage } from 'naive-ui'
-import type { AudioMeta, BgmTrack, ProjectView, Storyboard } from '../types'
+import { computed, ref, watch } from 'vue'
+import { NButton, NSpin } from 'naive-ui'
+import type { AudioMeta, ProjectView, Storyboard } from '../types'
 import { fmtClock } from '../segtime'
 import { lastProduceCancelled, lastProduceFailed, stageLabel } from '../format'
-import { api, videoURL } from '../api'
+import { videoURL } from '../api'
 import Timeline from './Timeline.vue'
 import RIcon from './RIcon.vue'
 
 // 视频页签（原 StagePanel 成片/制作中两态合并 + 过期重做入口）：
 // - 无视频未制作 → 开工引导；制作中 → 进度面板（含段级重做细进度）
 // - 失败/中断后没在跑 → 「制作暂停」面板（等用户在对话栏发话，不许误落开工引导）
-// - 有视频 → 播放器+配乐条+时间轴；上游改过（video_stale）→ 黄条 + 「按最新内容重做」
+// - 有视频 → 播放器+时间轴（配乐控制在时间轴配乐轨上，封面在独立「封面」页签）；
+//   上游改过（video_stale）→ 黄条 + 「按最新内容重做」
 const props = defineProps<{
   view: ProjectView | null
   storyboard: Storyboard | null
@@ -27,89 +28,8 @@ const emit = defineEmits<{
   'pick-time': [t: number]
   cancel: []
   'go-tab': [tab: 'manuscript']
+  refresh: []
 }>()
-const message = useMessage()
-
-// ── 配乐：当前曲 + 换曲下拉 + 试听 + 应用（换曲=后端 StitchNow 重混，画面不动）──
-const bgmLib = ref<BgmTrack[] | null>(null)
-const bgmPick = ref<string | null>(null)
-const bgmBusy = ref(false)
-const bgmDur = computed(() =>
-  bgmLib.value?.find(t => t.name === props.view?.bgm?.name)?.duration ?? 0)
-const bgmOptions = computed(() => {
-  const cur = props.view?.bgm?.name
-  const lib = bgmLib.value ?? []
-  // 当前曲不在清单（被移库）也兜出选项，避免下拉显示成空
-  if (cur && !lib.some(t => t.name === cur)) {
-    return [{ label: `${cur}（当前）`, value: cur }, ...lib.map(t => ({ label: `${t.name} · ${t.mood}`, value: t.name }))]
-  }
-  return lib.map(t => ({ label: `${t.name} · ${t.mood}`, value: t.name }))
-})
-const auditionEl = ref<HTMLAudioElement | null>(null)
-const auditionName = ref('')
-function toggleAudition() {
-  const name = props.view?.bgm?.name
-  if (!name) return
-  if (auditionName.value === name && auditionEl.value) {
-    auditionEl.value.paused ? void auditionEl.value.play() : auditionEl.value.pause()
-    return
-  }
-  auditionEl.value?.pause()
-  const el = new Audio(api.bgmAudioURL(name))
-  auditionEl.value = el
-  auditionName.value = name
-  void el.play()
-  el.onended = () => { auditionName.value = '' }
-}
-onBeforeUnmount(() => auditionEl.value?.pause())
-async function applyBGM(track: string) {
-  if (!props.view || bgmBusy.value) return
-  bgmBusy.value = true
-  try {
-    const r = await api.setBGM(props.view.id, track)
-    if (r.error) message.error(r.error)
-    else message.success(r.message ?? '配乐已更新')
-    if (r.remixed) localRev.value++ // 重混完成 → 本地代次自增，播放器换 URL 重载（画面不动）
-  } catch (e) {
-    message.error(String(e))
-  } finally {
-    bgmBusy.value = false
-  }
-}
-
-// ── 出片封面：预览 + 标题 + 重做（「用当前画面」= 播放器此刻抽帧）──
-// 本地账面优先于 props.view.cover（重做成功即刷新，不等下一轮轮询回填）。
-const cover = ref<{ t: number; title: string } | null>(null)
-const coverTitle = ref('')
-const coverDirty = ref(false)
-const coverBusy = ref(false)
-const coverRev = ref(0)
-const coverMissing = ref(false)
-watch(() => props.view, v => {
-  if (!coverDirty.value) {
-    cover.value = v?.cover ?? null
-    if (v?.cover?.title) coverTitle.value = v.cover.title
-  }
-}, { immediate: true })
-async function redoCover(useCurrentFrame: boolean) {
-  if (!props.view || coverBusy.value) return
-  coverBusy.value = true
-  try {
-    const body: { t?: number; title?: string } = { title: coverTitle.value }
-    if (useCurrentFrame) body.t = cur.value
-    const r = await api.regenCover(props.view.id, body)
-    cover.value = { t: r.t, title: r.title }
-    coverTitle.value = r.title
-    coverDirty.value = false
-    coverMissing.value = false
-    coverRev.value++
-    message.success(useCurrentFrame ? `封面已换成 ${fmtClock(r.t)} 的画面` : '封面已重做')
-  } catch (e) {
-    message.error((e as Error).message)
-  } finally {
-    coverBusy.value = false
-  }
-}
 
 // ── 视频播放 ↔ 时间轴播放头同步 ──
 const videoEl = ref<HTMLVideoElement | null>(null)
@@ -160,6 +80,11 @@ watch([() => props.videoRev, localRev], () => {
     el.addEventListener('loadedmetadata', restore, { once: true })
   }
 })
+// 配乐在时间轴上换完：重混 → 播放器换 URL 重载；顺带刷新 view 让曲名/理由即时对齐
+function onBgmApplied(remixed: boolean) {
+  if (remixed) localRev.value++
+  emit('refresh')
+}
 </script>
 
 <template>
@@ -220,9 +145,7 @@ watch([() => props.videoRev, localRev], () => {
       <button v-if="view.producing" class="stop-btn" @click="emit('cancel')"><RIcon name="stop" :size="13" />停止制作</button>
     </template>
 
-    <!-- 成片：左=播放器+时间轴，右=封面/配乐竖栏（2026-10-30 拥挤优化：
-         原先横幅/配乐/封面/播放器/时间轴五层横条竖叠，时间轴被挤出屏——
-         附属控制改吃横向富余，播放器+时间轴拿回纵向预算） -->
+    <!-- 成片：播放器+时间轴（配乐控制集成在时间轴配乐轨，封面在独立「封面」页签） -->
     <template v-else>
       <!-- 上次制作/重做失败且没在跑：当前播放的是失败前旧版，恢复入口在对话栏 -->
       <div v-if="failedIdleBanner" class="paused-banner">
@@ -255,50 +178,11 @@ watch([() => props.videoRev, localRev], () => {
           <Timeline
             v-if="storyboard"
             :storyboard="storyboard" :audio-meta="audioMeta" :bgm="view.bgm ?? null"
-            :bgm-dur="bgmDur" :current-time="cur"
+            :video-id="videoId" :current-time="cur"
             :picked-idx="pickedIdx" @seek="onSeek" @pick="pickSeg" @pick-time="pickTime"
+            @bgm-applied="onBgmApplied"
           />
         </div>
-        <aside class="side-rail">
-          <!-- 封面卡：预览 + 标题 + 重做（重做中隐藏——收尾自动出封面，落定再回来看） -->
-          <div v-if="!view.producing && !stageSummary" class="rail-card">
-            <div class="rail-head">封面<span v-if="cover" class="rail-meta" title="封面帧在成片里的时刻">{{ fmtClock(cover.t) }} 帧</span></div>
-            <img
-              v-if="!coverMissing" class="cover-thumb" :class="{ vertical: view.aspect === '9:16' }"
-              :src="api.coverURL(view.id, coverRev)" alt="封面预览"
-              @error="coverMissing = true"
-            />
-            <div v-else class="cover-thumb none" :class="{ vertical: view.aspect === '9:16' }">尚未生成</div>
-            <NInput
-              v-model:value="coverTitle" size="tiny" :disabled="coverBusy"
-              placeholder="封面标题（留空用项目名）" @update:value="coverDirty = true"
-            />
-            <div class="rail-btns">
-              <NButton size="tiny" :loading="coverBusy" :disabled="coverBusy" @click="redoCover(false)">重做封面</NButton>
-              <NButton size="tiny" type="primary" :loading="coverBusy" :disabled="coverBusy" @click="redoCover(true)">用当前画面</NButton>
-            </div>
-          </div>
-          <!-- 配乐卡：当前曲+选曲理由（悬停看全文）· 试听 · 换曲 · 应用/关闭 -->
-          <div class="rail-card">
-            <div class="rail-head">配乐<span class="rail-meta" :title="view.bgm?.reason || ''">{{ view.bgm?.name || '无配乐' }}</span></div>
-            <NSelect
-              v-model:value="bgmPick" size="tiny"
-              :options="bgmOptions" placeholder="换曲…" :loading="bgmBusy"
-              @focus="!bgmLib && api.bgmLibrary().then(l => (bgmLib = l)).catch(() => {})"
-            />
-            <div class="rail-btns">
-              <NButton size="tiny" :disabled="!view.bgm?.name" @click="toggleAudition">
-                <RIcon :name="auditionName === view.bgm?.name ? 'stop' : 'play'" :size="11" />{{ auditionName === view.bgm?.name ? '停' : '试听' }}
-              </NButton>
-              <NButton size="tiny" type="primary" :disabled="!bgmPick || bgmBusy" :loading="bgmBusy" @click="bgmPick && applyBGM(bgmPick)">
-                应用
-              </NButton>
-              <NButton v-if="view.bgm?.name" size="tiny" quaternary :disabled="bgmBusy" @click="applyBGM('off')">
-                关配乐
-              </NButton>
-            </div>
-          </div>
-        </aside>
       </div>
     </template>
   </div>
@@ -328,8 +212,8 @@ watch([() => props.videoRev, localRev], () => {
 .rework-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .rework-hint { font-size: 12px; color: var(--accent); letter-spacing: 0.08em; }
 .progress-line { flex: none; width: 100%; font-size: 12px; color: var(--muted); padding: 0 4px; }
-/* ── 成片区布局（2026-10-30 拥挤优化）：左=播放器+时间轴（吃宽度与纵向预算），
-   右=封面/配乐竖栏（固定窄栏，吃横向富余）。栏宽不够时整体换行到播放器下方 ── */
+/* ── 成片区布局：播放器+时间轴占满整宽（配乐控制在时间轴配乐轨上，
+   封面在独立「封面」页签——2026-10-30 右侧附属竖栏已撤） ── */
 .out-wrap {
   flex: 1; min-height: 0; width: 100%;
   display: flex; align-items: stretch; justify-content: center; gap: 14px;
@@ -340,35 +224,6 @@ watch([() => props.videoRev, localRev], () => {
   display: flex; flex-direction: column; align-items: center; gap: 10px;
 }
 .player-col .tl { flex: none; max-width: 100%; }
-/* 附属竖栏：固定窄栏（不收缩——基础宽度和 380+240+14=634，常规三栏下稳稳排得下，
-   真放不下时整体换行到播放器下方）；两卡在栏内纵向堆叠 */
-.side-rail {
-  flex: 0 0 240px; min-width: 0; min-height: 0;
-  display: flex; flex-direction: column; gap: 12px;
-}
-.rail-card {
-  display: flex; flex-direction: column; gap: 8px;
-  border: 1px solid var(--line-soft); padding: 10px 12px 12px;
-}
-.rail-head {
-  font-size: 12px; font-weight: 600; color: var(--ink);
-  display: flex; align-items: baseline; gap: 8px; min-width: 0;
-}
-.rail-meta {
-  font-weight: 400; font-size: 11.5px; color: var(--muted);
-  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-  font-variant-numeric: tabular-nums;
-}
-.rail-btns { display: flex; align-items: center; gap: 6px; }
-.cover-thumb {
-  width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block;
-  border: 1px solid var(--line); background: #000;
-}
-.cover-thumb.vertical { width: auto; height: 168px; aspect-ratio: 9 / 16; margin: 0 auto; }
-.cover-thumb.none {
-  display: flex; align-items: center; justify-content: center;
-  color: var(--muted); font-size: 11px; background: color-mix(in srgb, var(--ink) 4%, var(--surface));
-}
 /* 制作暂停横幅（有旧成片）：琥珀警示，与 video_stale 黄灯同族色 */
 .paused-banner {
   flex: none; width: 100%; box-sizing: border-box; font-size: 12.5px; color: var(--warn);

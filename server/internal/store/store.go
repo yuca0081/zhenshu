@@ -152,6 +152,10 @@ type Store interface {
 	CreateUser(u *User) error                  // ID 为空自动生成；用户名冲突回 ErrDuplicateUser
 	UserByName(username string) (*User, error) // 无此用户回 ErrNoUser
 	ListUsers() ([]User, error)
+	// 通用设置 KV（app_settings 表，migrations/0009）：LLM 工位设置远程事实源等
+	// 低频整存整取场景。GetKV 无行回 ok=false；updatedAt 为该行最近写入时间。
+	GetKV(key string) (val []byte, updatedAt time.Time, ok bool, err error)
+	PutKV(key string, val []byte) error
 	Kind() string
 	// DB 暴露 GORM 句柄给同库共生的账本（stylelib 风格库 PG 后端共用连接池）；
 	// 内存实现返回 nil（调用方据此判定「PG 未接」）。
@@ -192,6 +196,14 @@ func Open(dsn string) (Store, error) {
 		created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 	)`).Error; err != nil {
 		return nil, fmt.Errorf("建 users 表失败: %w", err)
+	}
+	// app_settings 通用设置 KV（migrations/0009 留档；同自管口径，老库不经 deploy 也能起）
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS app_settings (
+		key        TEXT PRIMARY KEY,
+		value      JSONB NOT NULL,
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+	)`).Error; err != nil {
+		return nil, fmt.Errorf("建 app_settings 表失败: %w", err)
 	}
 	// projects 账行加厚列（migrations/0006、0008 留档；这里幂等补齐，
 	// 老库不经 deploy 也能起）
@@ -425,6 +437,27 @@ func (s *pgStore) ListUsers() ([]User, error) {
 	return users, err
 }
 
+func (s *pgStore) GetKV(key string) (val []byte, updatedAt time.Time, ok bool, err error) {
+	var row struct {
+		Value     []byte    `gorm:"column:value"`
+		UpdatedAt time.Time `gorm:"column:updated_at"`
+	}
+	err = s.db.Table("app_settings").Select("value, updated_at").Where("key = ?", key).Scan(&row).Error
+	if err != nil {
+		return nil, time.Time{}, false, fmt.Errorf("app_settings 读 %s 失败: %w", key, err)
+	}
+	if row.Value == nil { // 无行 = 未设置（合法态），与库报错分开
+		return nil, time.Time{}, false, nil
+	}
+	return row.Value, row.UpdatedAt, true, nil
+}
+
+func (s *pgStore) PutKV(key string, val []byte) error {
+	return s.db.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?::jsonb, now())
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+		key, string(val)).Error
+}
+
 // ── 内存实现（PG 不可达时的降级）────────────────────────────
 
 type memStore struct {
@@ -434,6 +467,8 @@ type memStore struct {
 	users    []User
 	seq      int64
 	leases   map[string]bool // 制作租约占坑（进程内语义）
+	kv       map[string][]byte
+	kvTS     map[string]time.Time
 }
 
 func newMem() *memStore { return &memStore{} }
@@ -644,4 +679,26 @@ func (s *memStore) ListUsers() ([]User, error) {
 	out := make([]User, len(s.users))
 	copy(out, s.users)
 	return out, nil
+}
+
+func (s *memStore) GetKV(key string) (val []byte, updatedAt time.Time, ok bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.kv[key]
+	if !ok {
+		return nil, time.Time{}, false, nil
+	}
+	return b, s.kvTS[key], true, nil
+}
+
+func (s *memStore) PutKV(key string, val []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.kv == nil {
+		s.kv = map[string][]byte{}
+		s.kvTS = map[string]time.Time{}
+	}
+	s.kv[key] = val
+	s.kvTS[key] = time.Now()
+	return nil
 }

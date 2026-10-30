@@ -75,8 +75,8 @@ export interface BgmTrack {
   duration: number
 }
 
-// 工作区中央页签（想法/文稿/分镜/风格/终审/视频/过程——「想法」是准备工位的启动页）
-export type TabID = 'idea' | 'manuscript' | 'storyboard' | 'style' | 'review' | 'video' | 'activity'
+// 工作区中央页签（想法/文稿/分镜/风格/终审/视频/封面/过程——「想法」是准备工位的启动页）
+export type TabID = 'idea' | 'manuscript' | 'storyboard' | 'style' | 'review' | 'video' | 'cover' | 'activity'
 
 // ── 准备阶段三工件（GET /prep；docs/prep-agents-design.md）──────
 export interface PrepSentence { id: string; text: string }
@@ -98,6 +98,23 @@ export interface PrepGrammar {
   continuity: string
 }
 
+// ── 镜头层（一期：1 镜 = 1 段，docs/director-layer-plan-2026-10-30.md）──
+export type ShotSize = 'wide' | 'medium' | 'close' | 'overhead' | 'full'
+export interface ShotCast { who: string; pose: string; emotion?: string }
+export interface ShotDirection {
+  size: ShotSize
+  camera: string
+  stage: string
+  cast: ShotCast[]
+  action: string
+  dialogue?: string
+  transition?: string
+  ref_frame?: string
+  ref_note?: string
+}
+// 终审/分镜页共用的镜头完整度（后端 contract.ShotGate 同形）
+export interface ShotGate { ready: number; total: number; missing: string[] }
+
 export interface PrepDraftSeg {
   id: string
   idx: number
@@ -105,6 +122,7 @@ export interface PrepDraftSeg {
   narration_refs: string
   visual_brief: { scene: string; first_frame: string; last_frame: string }
   duration_hint: number
+  shot?: ShotDirection // 一期：每段一镜（老项目缺省）
 }
 
 export interface PrepMusicSection {
@@ -159,8 +177,11 @@ export interface PrepView {
     confirmed: boolean
   }
   design?: StyleSamples // 完整设计系统（样张预览用，与 style_samples.json 同源）
+  shot_gate?: ShotGate // 镜头完整度（ready=0 = 老项目/未启用镜头层）
   draft?: {
     plan?: string
+    world?: string
+    cast_legend?: string
     paragraphs: { title: string; segs: string[] }[]
     segments: PrepDraftSeg[]
   }
@@ -173,10 +194,13 @@ export interface Segment {
   narration: string
   visual_brief: string
   duration_hint: number
+  shot?: ShotDirection // 一期：1 镜 = 1 段（老项目缺省）
 }
 
 export interface Storyboard {
   plan: string
+  world?: string
+  cast_legend?: string
   segments: Segment[]
 }
 
@@ -393,19 +417,21 @@ export interface TemplateDetailData {
 
 // ── 模型设置（docs/llm-settings-2026-10-29.md）：大模型台账 + 工位图绑定 ──
 
-// 大模型台账条目（GET 视图：Key 只出掩码，不回明文）
+// 大模型台账条目（GET 视图：一条数据 = 一个端点 URL+Key + 模型名列表；Key 只出掩码）
 export interface LlmProviderView {
   id: string
   label: string
   base_url: string
-  model: string
+  models: string[]
   has_key: boolean
   key_tail: string
 }
 
-// 绑定：工位/档位 → 供应商。provider 空 = 跟随下一层；effort 空 = .env 默认档
+// 绑定：工位/档位 → 供应商 + 具体模型。provider 空 = 跟随下一层；model 空 =
+// 所选供应商列表第一个；effort 空 = .env 默认档
 export interface LlmBinding {
   provider: string
+  model?: string
   effort?: string
 }
 
@@ -425,21 +451,29 @@ export interface LlmEffective {
   source: 'station' | 'role' | 'env' | 'default'
 }
 
+// 配置事实源：db=远程库（多台工作机共享，30s 内同步）；file=本机文件（未接远程库）
+export interface LlmStorageInfo {
+  backend: 'db' | 'file'
+  updated_at?: string
+}
+
 export interface LlmSettingsView {
   providers: LlmProviderView[]
   role_default: Record<string, LlmBinding>
   stations: Record<string, LlmBinding>
   station_meta: LlmStationMeta[]
   effective: Record<string, LlmEffective>
+  storage?: LlmStorageInfo
   env: { key_set: boolean; base_url: string; model: string; effort: string }
 }
 
-// PUT 载荷：api_key 空 = 保持已存；clear_api_key=true 显式清除
+// PUT 载荷：一条数据 = 一个端点 + models 模型名列表；api_key 空 = 保持已存；
+// clear_api_key=true 显式清除
 export interface LlmProviderInput {
   id: string
   label: string
   base_url: string
-  model: string
+  models?: string[]
   api_key?: string
   clear_api_key?: boolean
 }

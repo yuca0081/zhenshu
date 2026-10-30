@@ -3,7 +3,9 @@ package api
 // 模型设置端点（docs/llm-settings-2026-10-29.md）：GET/PUT /api/llm-settings +
 // POST /api/llm-settings/test。管理员收口——URL/Key 属运维面，普通账号不可见。
 // Key 只进不出：GET 永远掩码（has_key + 尾 4 位），PUT 空 key = 保持已存，
-// clear_api_key=true 显式清除。PUT 原子落盘并换内存快照，下一次作业热生效。
+// clear_api_key=true 显式清除。PUT 原子落存储并换内存快照，下一次作业热生效；
+// PG 已接时写穿远程库（多机共享），写失败回 ok+warning（本机照常生效）。
+// GET storage 段回事实源（db/file）与远程行最近写入时间，面板展示用。
 
 import (
 	"context"
@@ -18,12 +20,12 @@ import (
 )
 
 type llmProviderView struct {
-	ID      string `json:"id"`
-	Label   string `json:"label"`
-	BaseURL string `json:"base_url"`
-	Model   string `json:"model"`
-	HasKey  bool   `json:"has_key"`
-	KeyTail string `json:"key_tail"`
+	ID      string   `json:"id"`
+	Label   string   `json:"label"`
+	BaseURL string   `json:"base_url"`
+	Models  []string `json:"models"` // 该端点可用模型列表（绑定处从这选）
+	HasKey  bool     `json:"has_key"`
+	KeyTail string   `json:"key_tail"`
 }
 
 func keyTail(k string) (bool, string) {
@@ -46,7 +48,11 @@ func (s *Server) getLLMSettings(c *gin.Context) {
 	provs := make([]llmProviderView, 0, len(snap.Providers))
 	for id, p := range snap.Providers {
 		has, tail := keyTail(p.APIKey)
-		provs = append(provs, llmProviderView{ID: id, Label: p.Label, BaseURL: p.BaseURL, Model: p.Model, HasKey: has, KeyTail: tail})
+		models := p.Models
+		if models == nil {
+			models = []string{}
+		}
+		provs = append(provs, llmProviderView{ID: id, Label: p.Label, BaseURL: p.BaseURL, Models: models, HasKey: has, KeyTail: tail})
 	}
 	sort.Slice(provs, func(i, j int) bool { return provs[i].ID < provs[j].ID })
 	eff := gin.H{}
@@ -57,12 +63,17 @@ func (s *Server) getLLMSettings(c *gin.Context) {
 		eff[st.ID] = llm.ResolveEffective(llm.Role(st.ID))
 	}
 	_, model, keySet := llm.EnvFallbacks()
+	backend, updatedAt := llm.StorageInfo()
 	c.JSON(200, gin.H{
 		"providers":    provs,
 		"role_default": snap.RoleDefault,
 		"stations":     snap.Stations,
 		"station_meta": llm.StationRegistry,
 		"effective":    eff,
+		"storage": gin.H{
+			"backend":    backend, // db=远程库事实源（多机共享）；file=本机文件
+			"updated_at": updatedAt,
+		},
 		"env": gin.H{
 			"key_set": keySet,
 			"base_url": func() string {
@@ -78,11 +89,11 @@ func (s *Server) getLLMSettings(c *gin.Context) {
 }
 
 type llmProviderIn struct {
-	ID          string `json:"id"`
-	Label       string `json:"label"`
-	BaseURL     string `json:"base_url"`
-	Model       string `json:"model"`
-	APIKey      string `json:"api_key"`       // 空 = 保持已存
+	ID      string   `json:"id"`
+	Label   string   `json:"label"`
+	BaseURL string   `json:"base_url"`
+	Models  []string `json:"models"` // 模型名列表（服务端再去空白/去重）
+	APIKey  string   `json:"api_key"`       // 空 = 保持已存
 	ClearAPIKey bool   `json:"clear_api_key"` // true = 清除已存
 }
 
@@ -122,11 +133,17 @@ func (s *Server) saveLLMSettings(c *gin.Context) {
 			Label:   strings.TrimSpace(p.Label),
 			BaseURL: strings.TrimSpace(p.BaseURL),
 			APIKey:  key,
-			Model:   strings.TrimSpace(p.Model),
+			Models:  cleanModelList(p.Models),
 		}
 	}
-	if err := llm.SaveSettings(out); err != nil {
+	warning, err := llm.SaveSettingsWithStatus(out)
+	if err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	// ok:true + warning：本机已生效但远程库写失败，面板提示「他机暂不同步」。
+	if warning != "" {
+		c.JSON(200, gin.H{"ok": true, "warning": warning})
 		return
 	}
 	c.JSON(200, gin.H{"ok": true})
@@ -137,6 +154,26 @@ type llmTestIn struct {
 	BaseURL  string `json:"base_url"`
 	APIKey   string `json:"api_key"`
 	Model    string `json:"model"`
+}
+
+// cleanModelList 入参模型名列表清洗：去空白、丢空串、去重、保序（与 llm 包
+// normalize 同规则；这里先清一遍是让 validateSettings 看到的列表已规整，
+// 绑定模型归属校验才不会漏）。导出 llm.CleanModels 会扩公共面，就地实现。
+func cleanModelList(in []string) []string {
+	out := make([]string, 0, len(in))
+	seen := map[string]bool{}
+	for _, m := range in {
+		m = strings.TrimSpace(m)
+		if m == "" || seen[m] {
+			continue
+		}
+		seen[m] = true
+		out = append(out, m)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // testLLMProvider 连通性探针：显式值 > 供应商台账（按 id 取已存 Key）> .env 兜底。
@@ -166,7 +203,7 @@ func (s *Server) testLLMProvider(c *gin.Context) {
 			key = pc.APIKey
 		}
 		if model == "" {
-			model = pc.Model
+			model = pc.FirstModel()
 		}
 	}
 	fbBase, fbModel, _ := llm.EnvFallbacks()

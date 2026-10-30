@@ -71,6 +71,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// 模型设置远程化（docs/llm-settings-2026-10-29.md「远程库存储」）：PG 已接时
+	// app_settings 是事实源，多台工作机共享；本地 llm-config.json 降级为缓存/种子。
+	// 内存模式不接（kv 无跨机意义），维持纯文件行为。
+	if st.Kind() == "pg" {
+		llm.AttachKV(st)
+	}
 	// 风格库媒体后端：MinIO（配了且 PG 已接；连不上 fail-fast，媒体正本在对象存储）
 	// 或本地目录（现状行为，demo/无 PG 环境用）。docs/style-library-cloud-storage.md。
 	var media stylelib.MediaStore

@@ -853,6 +853,16 @@ func readProjectField(p *Project, key string) string {
 	if s, ok := m[key].(string); ok {
 		return s
 	}
+	// 数值/布尔字段也接受：project.json 手写 scene_ir=1（数字）不该静默失效。
+	switch v := m[key].(type) {
+	case bool:
+		if v {
+			return "1"
+		}
+		return ""
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	}
 	return ""
 }
 

@@ -1,8 +1,12 @@
 // 工位模型设置（docs/llm-settings-2026-10-29.md）：设置面板两层结构的数据层。
 // providers = 供应商台账（URL/Key/模型名）；role_default = 三档兜底绑定；
 // stations = 工位覆盖绑定。FromEnv 解析链：工位绑定 → 档位兜底 → .env → 内置
-// 默认——文件全空时行为与纯 .env 完全一致，零迁移。FromEnv 每次作业现读快照，
+// 默认——设置全空时行为与纯 .env 完全一致，零迁移。FromEnv 每次作业现读快照，
 // 保存即热生效（正在跑的作业拿旧值跑完，可接受）。
+//
+// 存储双模式（settingskv.go）：PG 已接 → app_settings 行 'llm_settings' 是事实源，
+// 本地 data/llm-config.json 降级为缓存（种子/回灌/30s 轮询/保存写穿）；
+// PG 未接 → 维持纯文件模式。
 package llm
 
 import (
@@ -12,8 +16,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // 工位常量：值即设置文件 stations 段的键。每个工位从属三档之一（BaseRole），
@@ -82,19 +88,42 @@ func BaseRole(r Role) Role {
 	return r
 }
 
-// ProviderCfg 供应商台账条目：一个 OpenAI 兼容端点。字段留空 = 沿用 .env 兜底值
-//（可只配模型名复用 .env 的 URL/Key，零配置加第二档模型）。
+// ProviderCfg 供应商台账条目：一条数据 = 一个 OpenAI 兼容端点（URL+Key），
+// Models = 该端点可用的模型名列表，绑定处从列表里选具体模型。
+// 字段留空 = 沿用 .env 兜底值；Models 空 = 模型名沿用 .env（可只配 URL/Key
+// 复用 .env 分档模型）。
 type ProviderCfg struct {
-	Label   string `json:"label"`            // 面板显示名（空 = 用 id）
-	BaseURL string `json:"base_url"`         // 留空 = .env LLM_BASE_URL
-	APIKey  string `json:"api_key,omitempty"` // 留空 = .env LLM_API_KEY；接口侧永不回明文
-	Model   string `json:"model"`            // 留空 = .env 模型名
+	Label   string   `json:"label"`              // 面板显示名（空 = 用 id）
+	BaseURL string   `json:"base_url"`           // 留空 = .env LLM_BASE_URL
+	APIKey  string   `json:"api_key,omitempty"`  // 留空 = .env LLM_API_KEY；接口侧永不回明文
+	Models  []string `json:"models,omitempty"`   // 模型名列表；绑定取 Model 字段从这选
+	Model   string   `json:"model,omitempty"`    // 【只读兼容】v2 单模型字段：normalize 迁移进 Models 后清空
 }
 
-// Binding 绑定：工位或档 → 供应商。Provider 空 = 不绑定（回落下一层）。
-// Effort 可选覆盖思考档（low/high/disabled），空 = .env LLM_EFFORT。
+// FirstModel 该端点的默认模型（列表第一个；空列表 = ""，解析链回落 .env）。
+func (p ProviderCfg) FirstModel() string {
+	if len(p.Models) > 0 {
+		return p.Models[0]
+	}
+	return ""
+}
+
+// HasModel 绑定校验用：模型名在列表内（列表空 = 未配模型，绑定不该带模型名）。
+func (p ProviderCfg) HasModel(m string) bool {
+	for _, v := range p.Models {
+		if v == m {
+			return true
+		}
+	}
+	return false
+}
+
+// Binding 绑定：工位或档 → 供应商 + 具体模型。Provider 空 = 不绑定（回落下一层）；
+// Model 空 = 用所选供应商列表的第一个；Effort 可选覆盖思考档（low/high/disabled），
+// 空 = .env LLM_EFFORT。
 type Binding struct {
 	Provider string `json:"provider"`
+	Model    string `json:"model,omitempty"`
 	Effort   string `json:"effort,omitempty"`
 }
 
@@ -151,39 +180,64 @@ func SettingsPath() string { return settingsPath }
 
 var providerIDPat = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
-// SaveSettings 校验 → 原子落盘（tmp+rename）→ 换快照。校验失败返回错误不改现状。
-// 先严格校验（PUT 方要看到错误）再宽容清洗（全空绑定不落盘）——启动读盘走
-// LoadSettings 才是纯宽容路径。
+// SaveSettings 校验 → 落存储（kv 模式写穿远程库；file 模式 tmp+rename 原子落盘）
+// → 换快照。校验失败返回错误不改现状。先严格校验（PUT 方要看到错误）再宽容清洗
+// （全空绑定不落盘）——启动读盘走 LoadSettings 才是纯宽容路径。warning 弃置
+// （内部/测试调用只关心成败）；API 层用 SaveSettingsWithStatus 拿同步状态。
 func SaveSettings(s *Settings) error {
+	_, err := SaveSettingsWithStatus(s)
+	return err
+}
+
+// SaveSettingsWithStatus SaveSettings 的带状态版：远程库写失败不阻塞本机——
+// 快照+文件照常生效，以 warning 回传（面板提示「其他工作机暂不会同步」）。
+// 纯文件模式保持旧语义：落盘失败返回错误且不换快照。
+func SaveSettingsWithStatus(s *Settings) (warning string, err error) {
 	if s == nil {
 		s = &Settings{}
 	}
 	if err := validateSettings(s); err != nil {
-		return err
+		return "", err
 	}
 	normalizeSettings(s)
 	settingsMu.Lock()
 	defer settingsMu.Unlock()
-	s.Version = 2
-	b, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return err
+	s.Version = 3 // v3：台账 model 单值 → models 列表（读 v2 靠 normalize 迁移）
+	b := mustMarshalIndent(s)
+	kvMode := settingsKV != nil
+	if kvMode {
+		if perr := settingsKV.PutKV(llmSettingsKey, b); perr != nil {
+			warning = fmt.Sprintf("远程库写入失败（%v）：本机已生效，其他工作机暂不会同步", perr)
+		} else {
+			kvLastCanon = canonSettings(b)
+			kvUpdatedAt = time.Now() // StorageInfo 展示「上次更新」用（近似 DB 服务器时钟）
+		}
 	}
-	if settingsPath == "" {
-		return errors.New("设置文件路径未初始化（InitSettings）")
+	if settingsPath != "" {
+		if ferr := writeSettingsFile(b); ferr != nil {
+			if !kvMode {
+				return "", ferr // 纯文件模式无处落盘：报错不换快照
+			}
+			fmt.Printf("⚠  模型设置本地缓存写失败（%v）——远程库已生效，不影响本机\n", ferr)
+		}
+	} else if !kvMode {
+		return "", errors.New("设置存储未初始化（InitSettings / AttachKV）")
 	}
+	settingsSnap.Store(s)
+	return warning, nil
+}
+
+// writeSettingsFile 原子落盘（tmp+rename；0600，含 key 权限收紧）。
+// kv 模式下这是缓存，file 模式下是正本。
+func writeSettingsFile(b []byte) error {
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		return err
 	}
 	tmp := settingsPath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil { // 含 key，权限收紧
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, settingsPath); err != nil {
-		return err
-	}
-	settingsSnap.Store(s)
-	return nil
+	return os.Rename(tmp, settingsPath)
 }
 
 // NormalizeSettings normalizeSettings 的导出包装（API 视图层补空 map 用）。
@@ -202,10 +256,17 @@ func normalizeSettings(s *Settings) {
 	for id, p := range s.Providers {
 		if p.Label == "" {
 			p.Label = id
-			s.Providers[id] = p
 		}
+		// v2 单模型 → 模型列表迁移（读旧库/旧缓存文件的唯一入口；写盘后即 v3 形状）
+		if len(p.Models) == 0 && p.Model != "" {
+			p.Models = []string{p.Model}
+		}
+		p.Model = ""
+		p.Models = cleanModels(p.Models)
+		s.Providers[id] = p
 	}
 	for k, b := range s.Stations {
+		b.Model = pruneBoundModel(b.Model, b.Provider, s.Providers)
 		if b.Provider != "" {
 			if _, ok := s.Providers[b.Provider]; !ok {
 				b.Provider = "" // 悬空引用只掐供应商，保留可能存在的 effort 覆盖
@@ -218,6 +279,7 @@ func normalizeSettings(s *Settings) {
 		s.Stations[k] = b
 	}
 	for k, b := range s.RoleDefault {
+		b.Model = pruneBoundModel(b.Model, b.Provider, s.Providers)
 		if b.Provider != "" {
 			if _, ok := s.Providers[b.Provider]; !ok {
 				b.Provider = ""
@@ -229,6 +291,37 @@ func normalizeSettings(s *Settings) {
 		}
 		s.RoleDefault[k] = b
 	}
+}
+
+// cleanModels 模型名列表清洗：去空白、丢空串、去重、保序。
+func cleanModels(in []string) []string {
+	out := make([]string, 0, len(in))
+	seen := map[string]bool{}
+	for _, m := range in {
+		m = strings.TrimSpace(m)
+		if m == "" || seen[m] {
+			continue
+		}
+		seen[m] = true
+		out = append(out, m)
+	}
+	if len(out) == 0 {
+		return nil // 空列表归 nil：JSON 不落 models 键，与 v2 兼容形状一致
+	}
+	return out
+}
+
+// pruneBoundModel 绑定里的模型名防悬空：供应商缺省或列表里没这个名字 → 掐掉
+//（保留 provider/effort，模型回落列表第一个）。
+func pruneBoundModel(model, provider string, provs map[string]ProviderCfg) string {
+	if model == "" {
+		return ""
+	}
+	pc, ok := provs[provider]
+	if !ok || !pc.HasModel(model) {
+		return ""
+	}
+	return model
 }
 
 // validateSettings PUT 前置校验：供应商 id 形状、URL scheme、effort 枚举、
@@ -251,6 +344,9 @@ func validateSettings(s *Settings) error {
 		if _, ok := s.Providers[b.Provider]; b.Provider != "" && !ok {
 			return fmt.Errorf("档位 %s 绑定了不存在的供应商 %q", k, b.Provider)
 		}
+		if err := checkBoundModel("档位 "+k, b, s.Providers); err != nil {
+			return err
+		}
 		if _, ok := ParseEffort(b.Effort); b.Effort != "" && !ok {
 			return fmt.Errorf("档位 %s 的思考档 %q 不合法（low/high/disabled）", k, b.Effort)
 		}
@@ -262,9 +358,34 @@ func validateSettings(s *Settings) error {
 		if _, ok := s.Providers[b.Provider]; b.Provider != "" && !ok {
 			return fmt.Errorf("工位 %s 绑定了不存在的供应商 %q", k, b.Provider)
 		}
+		if err := checkBoundModel("工位 "+k, b, s.Providers); err != nil {
+			return err
+		}
 		if _, ok := ParseEffort(b.Effort); b.Effort != "" && !ok {
 			return fmt.Errorf("工位 %s 的思考档 %q 不合法（low/high/disabled）", k, b.Effort)
 		}
+	}
+	return nil
+}
+
+// checkBoundModel 绑定的模型名必须在所选供应商的列表内（列表未配也拒——
+// 显式绑定模型却无处安放是表单错误，静默吞掉会掩盖配置意图）。
+func checkBoundModel(what string, b Binding, provs map[string]ProviderCfg) error {
+	if b.Model == "" {
+		return nil
+	}
+	if b.Provider == "" {
+		return fmt.Errorf("%s 绑定了模型 %q 但没选供应商", what, b.Model)
+	}
+	pc, ok := provs[b.Provider]
+	if !ok {
+		return fmt.Errorf("%s 绑定的供应商 %q 不存在", what, b.Provider)
+	}
+	if len(pc.Models) == 0 {
+		return fmt.Errorf("供应商 %s 还没配模型列表，先在「大模型」里加模型名", b.Provider)
+	}
+	if !pc.HasModel(b.Model) {
+		return fmt.Errorf("%s 绑定的模型 %q 不在供应商 %s 的列表里", what, b.Model, b.Provider)
 	}
 	return nil
 }
@@ -274,25 +395,34 @@ func hasHTTPScheme(u string) bool {
 	return (n > 7 && u[:8] == "https://") || (n > 6 && u[:7] == "http://")
 }
 
-// resolveProvider 解析 role 的供应商：工位层优先，无/悬空回落档位层。
+// resolveProvider 解析 role 的供应商：工位层优先，无/悬空回落档位层；同时选出
+// 绑定模型（绑定 model 优先，空 = 该端点列表第一个，列表也空 = 回落 .env）。
 // 供应商与思考档是两条独立通道（工位可以只调 effort 不换模型）。
-func (s *Settings) resolveProvider(role Role) (string, ProviderCfg, bool) {
+func (s *Settings) resolveProvider(role Role) (string, ProviderCfg, string, bool) {
 	if s == nil {
-		return "", ProviderCfg{}, false
+		return "", ProviderCfg{}, "", false
 	}
 	if IsStation(role) {
 		if b, ok := s.Stations[string(role)]; ok && b.Provider != "" {
 			if pc, ok := s.Providers[b.Provider]; ok {
-				return b.Provider, pc, true
+				return b.Provider, pc, pickBoundModel(b.Model, pc), true
 			}
 		}
 	}
 	if b, ok := s.RoleDefault[string(BaseRole(role))]; ok && b.Provider != "" {
 		if pc, ok := s.Providers[b.Provider]; ok {
-			return b.Provider, pc, true
+			return b.Provider, pc, pickBoundModel(b.Model, pc), true
 		}
 	}
-	return "", ProviderCfg{}, false
+	return "", ProviderCfg{}, "", false
+}
+
+// pickBoundModel 绑定层模型选择：显式绑定 > 列表第一个 > ""（回落 .env 模型名）。
+func pickBoundModel(bound string, pc ProviderCfg) string {
+	if bound != "" {
+		return bound
+	}
+	return pc.FirstModel()
 }
 
 // resolveEffort 绑定层思考档：工位层非空优先，否则档位层。空 = 未覆盖（回落 env）。

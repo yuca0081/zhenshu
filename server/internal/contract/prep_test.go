@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -144,11 +145,18 @@ func TestTranslate(t *testing.T) {
 	pack := &StylePack{StyleID: "sp-x", Grammar: EditGrammar{BandMin: 5, BandMax: 20}}
 	d := &StoryboardDraft{
 		Plan:       "p",
+		World:      "纸剧场",
+		CastLegend: "剪辑师：炭黑三角、细腿、圆点眼",
 		Paragraphs: []DraftParagraph{{Title: "全部", Segs: []string{"seg01"}}},
 		Segments: []DraftSegment{{
 			ID: "seg01", Idx: 1, Key: "k", NarrationRefs: "N1-N2",
 			Brief:        VisualBrief{Scene: "s", FirstFrame: "f", LastFrame: "l"},
 			DurationHint: 9,
+			Shot: &ShotDirection{
+				Size: "medium", Camera: "从桌面横移到屏幕", Stage: "木桌/屏幕",
+				Cast: []ShotCast{{Who: "剪辑师", Pose: "俯身"}}, Action: "指尖连点三下",
+				Dialogue: "十分钟", Transition: "白闪",
+			},
 		}},
 	}
 	if err := ValidateStoryboardDraft(d, script, pack); err != nil {
@@ -157,6 +165,9 @@ func TestTranslate(t *testing.T) {
 	sb := d.Translate(script, pack)
 	if sb.TimingBasis != "narration" || sb.StyleID != "sp-x" {
 		t.Errorf("翻译头不对: %+v", sb)
+	}
+	if sb.World != "纸剧场" || sb.CastLegend == "" {
+		t.Errorf("世界/角色表未随翻译落盘: world=%q cast=%q", sb.World, sb.CastLegend)
 	}
 	seg := sb.Segments[0]
 	if seg.Narration != "这是第1句。这是第2句。" {
@@ -168,8 +179,80 @@ func TestTranslate(t *testing.T) {
 	if seg.Brief == nil || seg.Brief.FirstFrame != "f" || seg.Brief.LastFrame != "l" {
 		t.Errorf("结构化 brief 未随翻译落段: %+v", seg.Brief)
 	}
+	if seg.Shot == nil || seg.Shot.Camera != "从桌面横移到屏幕" || len(seg.Shot.Cast) != 1 {
+		t.Errorf("镜头字段未随翻译落段: %+v", seg.Shot)
+	}
 	if err := ValidateStoryboard(sb); err != nil {
 		t.Errorf("翻译产物未过制作契约校验: %v", err)
+	}
+}
+
+func TestShotDirectionValidate(t *testing.T) {
+	valid := &ShotDirection{
+		Size: "medium", Camera: "横摇", Stage: "木桌", Action: "点脚尖",
+		Cast: []ShotCast{{Who: "AI", Pose: "俯身"}},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("合法镜头被拒: %v", err)
+	}
+	cases := []struct {
+		name string
+		shot *ShotDirection
+		want string
+	}{
+		{"缺景别", &ShotDirection{Camera: "x", Stage: "y", Action: "z", Cast: []ShotCast{{Who: "a"}}}, "景别"},
+		{"非法景别", &ShotDirection{Size: "macro", Camera: "x", Stage: "y", Action: "z", Cast: []ShotCast{{Who: "a"}}}, "不合法"},
+		{"缺机位", &ShotDirection{Size: "wide", Stage: "y", Action: "z", Cast: []ShotCast{{Who: "a"}}}, "机位"},
+		{"缺舞台", &ShotDirection{Size: "wide", Camera: "x", Action: "z", Cast: []ShotCast{{Who: "a"}}}, "舞台"},
+		{"缺动作", &ShotDirection{Size: "wide", Camera: "x", Stage: "y", Cast: []ShotCast{{Who: "a"}}}, "动作"},
+		{"没角色", &ShotDirection{Size: "wide", Camera: "x", Stage: "y", Action: "z"}, "1–4"},
+		{"角色太多", &ShotDirection{Size: "wide", Camera: "x", Stage: "y", Action: "z", Cast: []ShotCast{{Who: "a"}, {Who: "b"}, {Who: "c"}, {Who: "d"}, {Who: "e"}}}, "1–4"},
+		{"角色缺名", &ShotDirection{Size: "wide", Camera: "x", Stage: "y", Action: "z", Cast: []ShotCast{{Pose: "站着"}}}, "who"},
+	}
+	for _, c := range cases {
+		err := c.shot.Validate()
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err=%v，期望包含 %q", c.name, err, c.want)
+		}
+	}
+}
+
+func TestShotGate(t *testing.T) {
+	mk := func(shots ...*ShotDirection) *StoryboardDraft {
+		d := &StoryboardDraft{}
+		for i, sh := range shots {
+			d.Segments = append(d.Segments, DraftSegment{
+				ID: fmt.Sprintf("seg%02d", i+1), Idx: i + 1, Shot: sh,
+			})
+		}
+		return d
+	}
+	okShot := &ShotDirection{Size: "wide", Camera: "x", Stage: "y", Action: "z", Cast: []ShotCast{{Who: "a"}}}
+	badShot := &ShotDirection{Size: "wide", Camera: "", Stage: "y", Action: "z", Cast: []ShotCast{{Who: "a"}}}
+
+	legacy := mk(nil, nil)
+	if g := legacy.ShotGate(); g.Enabled() || g.Ready != 0 || g.Total != 2 {
+		t.Errorf("老项目 gate 不对: %+v", g)
+	}
+	if err := ValidateDraftShots(legacy); err == nil {
+		t.Error("老项目提交到③出口应被镜头校验拦下")
+	}
+
+	partial := mk(okShot, nil, badShot)
+	g := partial.ShotGate()
+	if !g.Enabled() || g.Ready != 1 || g.Total != 3 || len(g.Missing) != 2 {
+		t.Errorf("部分镜头 gate 不对: %+v", g)
+	}
+	if g.Complete() {
+		t.Error("部分镜头不应判完整")
+	}
+
+	all := mk(okShot, okShot)
+	if g := all.ShotGate(); !g.Enabled() || !g.Complete() {
+		t.Errorf("全镜头 gate 不对: %+v", g)
+	}
+	if err := ValidateDraftShots(all); err != nil {
+		t.Errorf("全镜头被拒: %v", err)
 	}
 }
 

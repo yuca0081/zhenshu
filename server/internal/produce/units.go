@@ -73,6 +73,13 @@ func BuildUnitsIfEligible(p *pipeline.Project, sb *contract.Storyboard, voices m
 	if pin == "seg" {
 		return nil
 	}
+	// 镜头层（一期：1 镜 = 1 段）必须一段一个 HTML：段落制会把多个分镜并进
+	// 一个单元，一个镜头表塞不进一张连续 timeline（二期段内多镜再解）。有
+	// Segment.Shot 就钉回分镜制，已有单元缓存自然不再命中。
+	if storyboardHasShots(sb) {
+		pinUnit(p, "seg")
+		return nil
+	}
 	if pin == "" && !virginProject(p) {
 		pinUnit(p, "seg") // 老项目：钉住分镜制，永不静默迁移
 		return nil

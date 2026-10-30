@@ -193,10 +193,11 @@ export const api = {
     post<{ ok: boolean; ref_id: string; existing?: boolean }>(`/api/projects/${id}/style/parse`),
 
   // ── 模型设置（管理员，docs/llm-settings-2026-10-29.md）──
-  // GET 视图含工位清单与各工位生效值；PUT 整体保存（key 空=保持已存）；test 连通探针
+  // GET 视图含工位清单与各工位生效值；PUT 整体保存（key 空=保持已存；warning=远程库
+  // 写失败但本机已生效）；test 连通探针
   llmSettings: () => req<LlmSettingsView>('/api/llm-settings'),
   saveLlmSettings: (cfg: LlmSettingsInput) =>
-    req<{ ok: boolean }>('/api/llm-settings', {
+    req<{ ok: boolean; warning?: string }>('/api/llm-settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(cfg),

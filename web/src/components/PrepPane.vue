@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { NButton, NInput, useMessage } from 'naive-ui'
 import { api } from '../api'
-import type { PrepDraftSeg, PrepView } from '../types'
+import type { PrepDraftSeg, PrepView, ShotDirection, ShotGate } from '../types'
 import SampleFrame from './SampleFrame.vue'
 
 // 打包终审（全流程唯一人工门，docs/prep-agents-design.md §2）：
@@ -15,7 +15,7 @@ const props = defineProps<{
   confirmed: boolean
   agentBusy: boolean
 }>()
-const emit = defineEmits<{ confirmed: []; 'chat-sent': [] }>()
+const emit = defineEmits<{ confirmed: []; 'chat-sent': []; 'edit-shot': [id: string] }>()
 
 const message = useMessage()
 const confirming = ref(false)
@@ -38,6 +38,11 @@ function rearm(seconds = 5000) {
 }
 async function confirm() {
   if (!props.projectId || confirming.value) return
+  // 镜头门：启用了镜头层就必须每段完整（后端 confirmPrep 同样硬拦）。
+  if (shotEnabled.value && !shotComplete.value) {
+    confirmErr.value = `镜头表不完整（${shotGate.value.ready}/${shotGate.value.total}），缺 ${shotMissingText.value}——先到「分镜」页签补全每段镜头`
+    return
+  }
   if (!armed.value) {
     confirmErr.value = ''
     rearm()
@@ -92,6 +97,40 @@ const clipSrc = (video: string) => `/api/projects/${props.projectId}/style/clips
 const segs = computed(() => props.prep?.draft?.segments ?? [])
 const paragraphs = computed(() => props.prep?.draft?.paragraphs ?? [])
 const sentences = computed(() => props.prep?.script?.sentences ?? [])
+
+// ── 镜头层（一期：1 镜 = 1 段）：镜头板 + 确认硬门 ──
+// 后端 prepView 的 shot_gate 与本地计算同口径；老项目 ready=0 = 未启用镜头层，
+// 不显示「缺 N 镜」也不拦确认（零感知）。
+function shotIssue(sh?: ShotDirection): string {
+  if (!sh) return '缺镜头'
+  if (!sh.size) return '缺景别'
+  if (!(sh.camera || '').trim()) return '缺机位/运镜'
+  if (!(sh.stage || '').trim()) return '缺舞台'
+  if (!(sh.action || '').trim()) return '缺动作'
+  const cast = (sh.cast || []).filter(c => (c.who || '').trim())
+  if (cast.length < 1) return '至少 1 个角色'
+  if (cast.length > 4) return '角色最多 4 个'
+  return ''
+}
+const shotGate = computed<ShotGate>(() => {
+  if (props.prep?.shot_gate) return props.prep.shot_gate
+  const ss = segs.value
+  const missing = ss.filter(s => shotIssue(s.shot)).map(s => s.id)
+  return { ready: ss.length - missing.length, total: ss.length, missing }
+})
+const shotEnabled = computed(() => shotGate.value.ready > 0)
+const shotComplete = computed(() => shotGate.value.total > 0 && shotGate.value.ready === shotGate.value.total)
+const shotMissingText = computed(() => (shotGate.value.missing ?? []).join('、'))
+const shotSizeLabels: Record<string, string> = { wide: '全景', medium: '中景', close: '近景', overhead: '俯拍', full: '字卡' }
+function shotSummary(s: PrepDraftSeg) {
+  if (!s.shot) return '未填镜头'
+  const cam = (s.shot.camera || '').trim()
+  return `${shotSizeLabels[s.shot.size] ?? s.shot.size}${cam ? ' · ' + cam : ''}`
+}
+function castText(sh: ShotDirection) {
+  return (sh.cast || []).filter(c => (c.who || '').trim())
+    .map(c => `${c.who}${c.pose ? '（' + c.pose + '）' : ''}`).join('，')
+}
 
 // ── ③ 段落分组行（工件 C 段落层）：段落主题作分界行插进段表 ──
 // draft 缺段落（老项目）或段落与段表对不齐时退回平铺，不硬凑。
@@ -153,17 +192,25 @@ const hasDeps = computed(() => vendLibs.value.length > 0 || customFonts.value.le
           <h3>打包终审</h3>
           <p class="sub">
             文字稿 {{ sentences.length }} 句 · 风格「{{ prep.stylepack.direction || prep.style_name || prep.stylepack.style_id }}」 ·
-            分镜 {{ segs.length }} 段<template v-if="paragraphs.length"> · {{ paragraphs.length }} 段落</template> / 约 {{ Math.round(segs.reduce((a, s) => a + s.duration_hint, 0)) }} 秒
+            分镜 {{ segs.length }} 段<template v-if="paragraphs.length"> · {{ paragraphs.length }} 段落</template> / 约 {{ Math.round(segs.reduce((a, s) => a + s.duration_hint, 0)) }} 秒<template v-if="shotEnabled"> · 镜头 {{ shotGate.ready }}/{{ shotGate.total }}</template>
           </p>
         </div>
         <div v-if="confirmed" class="ok-badge">✓ 已确认，可开工</div>
         <NButton
           v-else :type="armed ? 'warning' : 'primary'" :loading="confirming" @click="confirm"
-          :title="armed ? '再点一次即锁定设计系统并允许开工（失败会保留待确认态可直接重试）' : '点击后需再确认一次（防误触）'"
+          :disabled="shotEnabled && !shotComplete"
+          :title="shotEnabled && !shotComplete
+            ? `镜头表不完整（${shotGate.ready}/${shotGate.total}）——先到「分镜」页签补全每段镜头`
+            : (armed ? '再点一次即锁定设计系统并允许开工（失败会保留待确认态可直接重试）' : '点击后需再确认一次（防误触）')"
         >{{ armed ? '再点一次，确认开工' : '确认打包，允许开工' }}</NButton>
       </header>
       <!-- 确认失败持久错误条：不再只靠 3s toast（用户实测全程没看到过提示） -->
       <div v-if="confirmErr" class="confirm-err">确认未生效：{{ confirmErr }}</div>
+      <!-- 镜头不完整：直接在终审页给出缺口与入口 -->
+      <div v-if="shotEnabled && !shotComplete" class="shot-warn">
+        镜头表不完整（{{ shotGate.ready }}/{{ shotGate.total }}）：缺 {{ shotMissingText }}——
+        到「分镜」页签补全每段镜头后才能确认开工。
+      </div>
 
       <div class="scroll">
         <!-- ① 文字稿 -->
@@ -228,7 +275,7 @@ const hasDeps = computed(() => vendLibs.value.length > 0 || customFonts.value.le
 
         <!-- ③ 分镜稿 -->
         <section class="card">
-          <h4>③ 分镜稿<span v-if="paragraphs.length" class="meta">{{ paragraphs.length }} 个段落——段落内是同一话题的画面延续，段落之间换话题</span></h4>
+          <h4>③ 分镜稿<span v-if="paragraphs.length" class="meta">{{ paragraphs.length }} 个段落——段落内是同一话题的画面延续，段落之间换话题</span><span v-if="shotEnabled" class="shot-badge" :class="{ bad: !shotComplete }">镜头 {{ shotGate.ready }}/{{ shotGate.total }}</span></h4>
           <table class="sb">
             <thead><tr><th style="width:44px">段</th><th style="width:120px">标题</th><th style="width:80px">旁白</th><th>场景 / 首拍 / 末拍</th><th style="width:56px">秒</th></tr></thead>
             <tbody>
@@ -250,6 +297,29 @@ const hasDeps = computed(() => vendLibs.value.length > 0 || customFonts.value.le
               </template>
             </tbody>
           </table>
+          <!-- 镜头板（一期：1 镜 = 1 段）：终审时一眼看全片调度，缺字段就地标黄 -->
+          <div v-if="shotEnabled" class="shot-board">
+            <div v-for="s in segs" :key="s.id" class="shot-card" :class="{ bad: !!shotIssue(s.shot) }">
+              <div class="shot-card-head">
+                <b>镜{{ s.idx }}</b>
+                <span>{{ shotSummary(s) }}</span>
+                <em v-if="s.shot?.transition">{{ s.shot.transition }}</em>
+              </div>
+              <template v-if="s.shot">
+                <p v-if="s.shot.stage"><b>舞台</b>{{ s.shot.stage }}</p>
+                <p v-if="castText(s.shot)"><b>角色</b>{{ castText(s.shot) }}</p>
+                <p v-if="s.shot.action"><b>动作</b>{{ s.shot.action }}</p>
+                <p v-if="s.shot.dialogue"><b>台词</b>{{ s.shot.dialogue }}</p>
+                <p v-if="s.shot.ref_frame" class="shot-ref"><b>参考帧</b>{{ s.shot.ref_frame }}</p>
+                <p v-if="s.shot.ref_note" class="shot-ref"><b>参考</b>{{ s.shot.ref_note }}</p>
+              </template>
+              <div class="shot-card-foot">
+                <span v-if="shotIssue(s.shot)" class="shot-missing">{{ shotIssue(s.shot) }}</span>
+                <button type="button" @click="emit('edit-shot', s.id)">编辑镜头</button>
+              </div>
+            </div>
+          </div>
+          <div v-else class="shot-board-empty">老项目未启用镜头层：这段分镜没有逐镜调度，制作时按原画面提示生成。新项目由③分镜工位自动产出镜头表。</div>
         </section>
       </div>
 
@@ -293,6 +363,13 @@ const hasDeps = computed(() => vendLibs.value.length > 0 || customFonts.value.le
   background: color-mix(in srgb, var(--err) 8%, transparent);
   border-bottom: 1px solid color-mix(in srgb, var(--err) 35%, transparent);
   padding: 6px 18px;
+}
+/* 镜头不完整提示条（与确认失败条同位置，颜色用 warn 区分） */
+.shot-warn {
+  flex: none; font-size: 12.5px; color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  padding: 6px 18px; line-height: 1.5;
 }
 .scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 18px; display: flex; flex-direction: column; gap: 14px; }
 .card { background: var(--bg); border: 1px solid var(--line-soft); padding: 14px 16px; }
@@ -341,6 +418,44 @@ const hasDeps = computed(() => vendLibs.value.length > 0 || customFonts.value.le
 .refs { font-family: Consolas, monospace; font-size: 11.5px; }
 .brief b { color: var(--muted); font-weight: 600; margin-right: 6px; font-size: 11.5px; }
 .brief p { margin: 0 0 4px; }
+/* ── 镜头板（终审页 ③ 下方）── */
+.shot-badge {
+  margin-left: 10px; font-size: 11.5px; font-weight: 600; color: var(--ok);
+  border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent); padding: 1px 7px;
+}
+.shot-badge.bad { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.shot-board {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px; margin-top: 12px;
+}
+.shot-card {
+  border: 1px solid var(--line-soft); background: var(--surface);
+  padding: 8px 10px; font-size: 12px; line-height: 1.55;
+}
+.shot-card.bad { border-color: color-mix(in srgb, var(--warn) 45%, var(--line-soft)); }
+.shot-card-head {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--line-soft); padding-bottom: 5px; margin-bottom: 5px;
+}
+.shot-card-head b { color: var(--accent); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.shot-card-head span { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.shot-card-head em { margin-left: auto; font-style: normal; color: var(--muted); font-size: 10.5px; }
+.shot-card p { margin: 0 0 3px; color: var(--ink); }
+.shot-card p b { color: var(--muted); font-weight: 600; margin-right: 5px; font-size: 11px; }
+.shot-card .shot-ref { color: var(--muted); font-size: 11.5px; }
+.shot-card-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-top: 7px; padding-top: 5px; border-top: 1px dashed var(--line-soft);
+}
+.shot-missing { color: var(--warn); font-size: 11px; }
+.shot-card-foot button {
+  margin-left: auto; border: 1px solid var(--line); background: transparent; color: var(--muted);
+  font-size: 11.5px; padding: 2px 10px; cursor: pointer; font-family: inherit;
+}
+.shot-card-foot button:hover { border-color: var(--accent); color: var(--accent); }
+.shot-board-empty {
+  margin-top: 10px; color: var(--muted); opacity: .75; font-size: 11.5px; line-height: 1.7;
+}
 .feedback {
   flex: none; display: flex; align-items: center; gap: 10px;
   padding: 10px 18px; border-top: 1px solid var(--line-soft); background: var(--bg);

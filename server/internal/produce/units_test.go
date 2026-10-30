@@ -63,6 +63,31 @@ func TestBuildRenderUnits(t *testing.T) {
 	}
 }
 
+// 镜头层（一期：1 镜 = 1 段）必须钉回分镜制：段落制会合并多个分镜，一张连续
+// timeline 装不下逐镜调度。已有 para 钉选也要改钉。
+func TestBuildUnitsIfEligiblePinsSegForShots(t *testing.T) {
+	p := pipeline.NewProject(t.TempDir(), "p-shot")
+	if err := os.MkdirAll(p.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.Artifact("project.json"), []byte(`{"unit":"para"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sb := &contract.Storyboard{Segments: []contract.Segment{{
+		ID: "seg01", Key: "k", Narration: "n", DurationHint: 5,
+		Shot: &contract.ShotDirection{
+			Size: "wide", Camera: "推", Stage: "舞台", Action: "走",
+			Cast: []contract.ShotCast{{Who: "甲", Pose: "站"}},
+		},
+	}}}
+	if units := BuildUnitsIfEligible(p, sb, nil); units != nil {
+		t.Fatalf("有镜头层不应构建段落单元: %+v", units)
+	}
+	if got := pipeline.ReadProjectField(p, "unit"); got != "seg" {
+		t.Fatalf("镜头层应钉 unit=seg，得到 %q", got)
+	}
+}
+
 // 45 秒上限独立于分镜数触发（4 段 × 12s = 48s > 45 → 拆）。
 func TestBuildRenderUnitsDurSplit(t *testing.T) {
 	paras := []contract.DraftParagraph{{Title: "长段", Segs: []string{"seg01", "seg02", "seg03", "seg04"}}}
