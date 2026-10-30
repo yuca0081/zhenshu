@@ -49,3 +49,49 @@ func TestDeriveSeedsVocabOnColdStart(t *testing.T) {
 		t.Fatalf("词表应有 1 条，实际 %d", got)
 	}
 }
+
+// TestDeriveLocalStaysOutOfLibrary 方案乙（2026-10-30）：临时条目组装成功、
+// 继承基风格，但不进账本、不种词表——公用库不再吃 agent 自动登记。
+func TestDeriveLocalStaysOutOfLibrary(t *testing.T) {
+	lib := New(t.TempDir())
+	base, err := lib.Derive(DeriveInput{
+		Name: "基风格", Delta: "测试基", Tags: &contract.StyleTags{Main: "国风"},
+	})
+	if err != nil {
+		t.Fatalf("基风格登记被拒: %v", err)
+	}
+	vocabBefore := len(lib.VocabList())
+	loc, err := lib.DeriveLocal(DeriveInput{
+		BaseID: base.ID, Name: "本片临时款", Delta: "更哑光、密度更低",
+	})
+	if err != nil {
+		t.Fatalf("临时条目组装被拒: %v", err)
+	}
+	if loc.ID == "" || loc.ID == base.ID {
+		t.Fatalf("临时条目 id 异常: %q", loc.ID)
+	}
+	if loc.Tags.Main != base.Tags.Main {
+		t.Fatalf("衍生未继承主标签: %s ≠ %s", loc.Tags.Main, base.Tags.Main)
+	}
+	if _, ok := lib.Get(loc.ID); ok {
+		t.Fatal("临时条目进了账本（应只在 run 内）")
+	}
+	if n := len(lib.VocabList()); n != vocabBefore {
+		t.Fatalf("临时条目动了词表: %d → %d", vocabBefore, n)
+	}
+	// 自定义（无基风格）允许词表外标签：条目不进库，词表纪律与它无关
+	loc2, err := lib.DeriveLocal(DeriveInput{
+		Name: "自造款", Delta: "测试", Tags: &contract.StyleTags{Main: "词表外标签"},
+	})
+	if err != nil {
+		t.Fatalf("词表外标签的自定义临时条目被拒: %v", err)
+	}
+	if loc2.Tags.Main != "词表外标签" {
+		t.Fatalf("自定义主标签被改写: %s", loc2.Tags.Main)
+	}
+	// BriefFrom：临时条目交卷落简报的唯一通道
+	b := lib.BriefFrom(loc, nil)
+	if b.EntryID != loc.ID || b.EntryName != loc.Name {
+		t.Fatalf("BriefFrom 条目信息不对: %+v", b)
+	}
+}

@@ -26,11 +26,22 @@ type DeriveInput struct {
 	Facets  *StyleFacets
 }
 
-// Derive 衍生/自定义登记：新条目 published=false + unverified=true，衍生自动带
-// derived_from 出处。单次 run 限登记 1 个的治理在调用方（风格工位）掐。
-func (l *Library) Derive(in DeriveInput) (*Style, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+// inheritBase 衍生条目的基风格继承：标签/分面/特色/标签证据整包拷贝。
+// 标签证据一并继承（2026-10-24）：衍生=基风格调个方向，标签所指的气质
+// 没变，例证帧同源适用——此前不继承，库里衍生条目 tag_evidence 全空，
+// 简报的「标签证据优先」对它们整层落空。覆盖了标签的衍生，旧证据描述的
+// 是被换掉的标签，留给库页人工修剪——机械层不做猜谜。
+func inheritBase(s, base *Style) {
+	s.Tags = base.Tags
+	s.Facets = base.Facets
+	s.Signatures = append([]contract.Signature(nil), base.Signatures...)
+	s.TagEvidence = append([]contract.TagEvidence(nil), base.TagEvidence...)
+}
+
+// assembleDerived 衍生/自定义条目的字段组装（Derive 与 DeriveLocal 共用）：
+// 基风格继承 + 覆盖 + 必填校验。词表相关的校验/种词不在这里——那是账本写入
+// 的纪律，临时条目不进库与之无关。
+func (l *Library) assembleDerived(in DeriveInput) (*Style, error) {
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		return nil, fmt.Errorf("风格名为空")
@@ -38,8 +49,6 @@ func (l *Library) Derive(in DeriveInput) (*Style, error) {
 	s := Style{
 		Name:        name,
 		Subject:     strings.TrimSpace(in.Subject),
-		Published:   false,
-		Unverified:  true,
 		CreatedAt:   time.Now(),
 		DerivedFrom: strings.TrimSpace(in.BaseID),
 	}
@@ -48,14 +57,7 @@ func (l *Library) Derive(in DeriveInput) (*Style, error) {
 		if !ok {
 			return nil, fmt.Errorf("基风格 %s 不存在", base)
 		}
-		s.Tags = st.Tags
-		s.Facets = st.Facets
-		s.Signatures = append([]contract.Signature(nil), st.Signatures...)
-		// 标签证据一并继承（2026-10-24）：衍生=基风格调个方向，标签所指的气质
-		// 没变，例证帧同源适用——此前不继承，库里衍生条目 tag_evidence 全空，
-		// 简报的「标签证据优先」对它们整层落空。覆盖了标签的衍生，旧证据描述的
-		// 是被换掉的标签，留给库页人工修剪——机械层不做猜谜。
-		s.TagEvidence = append([]contract.TagEvidence(nil), st.TagEvidence...)
+		inheritBase(&s, st)
 	}
 	if in.Tags != nil {
 		if strings.TrimSpace(in.Tags.Main) != "" {
@@ -74,6 +76,44 @@ func (l *Library) Derive(in DeriveInput) (*Style, error) {
 	if strings.TrimSpace(in.Delta) == "" {
 		return nil, fmt.Errorf("delta 为空（与基风格的差异必须成文）")
 	}
+	return &s, nil
+}
+
+// DeriveLocal 本片临时条目（2026-10-30 方案乙）：与 Derive 同一套组装（基风格
+// 继承、覆盖、结构校验），但不写全局账本、不种词表、不做词表校验——agent 现场
+// 造的风格只活在本次备料 run/项目内（submit_style 交卷 + 简报落盘用），公用库
+// 不再被自动登记膨胀。实测六连登记零复用：闭环没发生，先掐住积累。
+func (l *Library) DeriveLocal(in DeriveInput) (*Style, error) {
+	s, err := l.assembleDerived(in)
+	if err != nil {
+		return nil, err
+	}
+	// id 不与库内现有条目撞号（同秒登记的极端情形会让 submit 把临时 id 当库条目）
+	styles, err := l.cat.ListStyles()
+	if err != nil {
+		return nil, fmt.Errorf("风格库读取失败: %w", err)
+	}
+	s.ID = newID(styles)
+	s.Signatures = renumberSigs(s.Signatures)
+	if errs := validateEntry(s); len(errs) > 0 {
+		return nil, fmt.Errorf("风格条目不合格: %s", strings.Join(errs, "; "))
+	}
+	return s, nil
+}
+
+// Derive 衍生/自定义登记（写库版）：新条目 published=false + unverified=true，
+// 衍生自动带 derived_from 出处。单次 run 限登记 1 个的治理在调用方（风格工位）掐。
+// 2026-10-30 起风格工位改走 DeriveLocal（临时条目不入库），本方法保留作底座——
+// 将来放开「真迹条目衍生入库」（vid- 带特色与证据帧，衍生有实义）时复用。
+func (l *Library) Derive(in DeriveInput) (*Style, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s, err := l.assembleDerived(in)
+	if err != nil {
+		return nil, err
+	}
+	s.Published = false
+	s.Unverified = true
 	styles, err := l.cat.ListStyles()
 	if err != nil {
 		return nil, fmt.Errorf("风格库读取失败（不写入）: %w", err)
@@ -94,7 +134,7 @@ func (l *Library) Derive(in DeriveInput) (*Style, error) {
 			}
 			if id, err := l.vocabCreateLocked(VocabEntry{
 				Name:  t,
-				Brief: "风格工位登记「" + name + "」时收入",
+				Brief: "风格工位登记「" + s.Name + "」时收入",
 			}); err == nil && id != "" {
 				*tag = id
 			}
@@ -106,13 +146,13 @@ func (l *Library) Derive(in DeriveInput) (*Style, error) {
 		}
 	}
 	s.Signatures = renumberSigs(s.Signatures)
-	if err := l.validateWrite(&s); err != nil {
+	if err := l.validateWrite(s); err != nil {
 		return nil, err
 	}
-	if err := l.cat.PutStyle(&s); err != nil {
+	if err := l.cat.PutStyle(s); err != nil {
 		return nil, err
 	}
-	return &s, nil
+	return s, nil
 }
 
 // RefillFacets 存量分面回填（-backfill-facets 子命令用）：只写 Facets，其余字段

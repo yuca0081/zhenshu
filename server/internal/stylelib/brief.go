@@ -25,6 +25,12 @@ func (l *Library) BuildBrief(id string, disabled map[string]bool) (*contract.Sty
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrNoEntry, id)
 	}
+	return l.BriefFrom(st, disabled), nil
+}
+
+// BriefFrom 直接从条目组装简报——不查账本，给不在库里的条目用（风格工位
+// DeriveLocal 的本片临时条目：交卷时简报落盘是它进项目的唯一通道）。
+func (l *Library) BriefFrom(st *Style, disabled map[string]bool) *contract.StyleBrief {
 	b := &contract.StyleBrief{
 		EntryID:   st.ID,
 		EntryName: st.Name,
@@ -70,7 +76,7 @@ func (l *Library) BuildBrief(id string, disabled map[string]bool) (*contract.Sty
 	for _, sg := range b.Signatures {
 		add(sg.Frames, "特色「"+sg.Name+"」的例证帧")
 	}
-	return b, nil
+	return b
 }
 
 // WriteBriefFile 简报落盘（原子写；路径通常是 <project>/style/style_brief.json）。

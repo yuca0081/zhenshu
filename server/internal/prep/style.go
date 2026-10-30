@@ -46,7 +46,7 @@ const styleGrabWindow = 4 * time.Minute
 // get_style_detail、判卷修复内循环与 vend/字体声明在 render_sample、登记治理在
 // register_style、四件字段契约在 submit_style 的 schema。
 const styleSystem = `你是美术指导。任务：为口播稿选定视觉风格，产出可直接指导制作的风格包。流程：get_script 拿口播稿；search_styles 按情绪与题材定分面、有筛选地浏览，get_style_detail 细看候选条目；render_sample 渲染动态样张逐张验证落地效果；完成即调用 submit_style 一次交齐四件——风格描述（视觉语言、色彩、质感、构图倾向，附选择理由，分镜工位靠它理解语境）、剪辑语法（切分密度 / 段长带 / 同舞台延续）、设计系统（皮肤、字体角色、动效语言、贯穿装置、版式、负面清单、标准入场/收尾动画模板）、样张 id 列表。
-规则：只在库内风格（含本次衍生登记）中选择，库中没有合适的就从最接近的条目衍生登记（register_style）；口播稿文本一个字不改。`
+规则：只在库内风格（含本次衍生）中选择，库中没有合适的就从最接近的条目衍生一个本片专用条目（register_style，只对本片生效不进风格库）；口播稿文本一个字不改。`
 
 // runStyleStation 跑②：成功后工件 B 落盘（stylepack.json + legacy style_samples.json 未确认态）。
 func runStyleStation(ctx context.Context, p *pipeline.Project, d Deps) error {
@@ -135,6 +135,9 @@ type styleRun struct {
 	refCache []string
 	// registered 本次 run 衍生登记的条目 id（空=未登记；单次限 1 个）。
 	registered string
+	// derived registered 对应的条目本体（2026-10-30 方案乙：DeriveLocal 临时条目，
+	// 不进全局库）——交卷校验后的简报组装（BriefFrom）靠它，别处一律查库查不到。
+	derived *stylelib.Style
 	// lastRepairSig 上一轮修复前的问题签名（样张刹车判据；每张样张渲染完清零）。
 	lastRepairSig string
 	// grabAt 抢收线（2026-10-23 中-2）：工位预算 deadline 前 styleGrabWindow 的
@@ -390,6 +393,23 @@ func (r *styleRun) getStyleDetailTool(loop *Loop) Tool {
 			}
 			if err := decodeArgs(args, &in); err != nil {
 				return Observation{Text: err.Error()}
+			}
+			// 本片临时条目（DeriveLocal，不在库）：直接回文字档案。不切 chosen——
+			// 它没有真迹媒体，切过去会让后续样张的判卷对照整层落空，基风格仍是
+			// 视觉最近邻（register 时已补位）。
+			if r.derived != nil && r.derived.ID == strings.TrimSpace(in.ID) {
+				st := r.derived
+				var b strings.Builder
+				fmt.Fprintf(&b, "风格 %s「%s」（本片专用，不入库）\n", st.ID, st.Name)
+				if st.Subject != "" {
+					fmt.Fprintf(&b, "题材（只供理解，不进画面）：%s\n", st.Subject)
+				}
+				fmt.Fprintf(&b, "主标签：%s\n", st.Tags.Main)
+				if st.Facets.Mood != "" || st.Facets.Tone != "" || st.Facets.Density != "" {
+					fmt.Fprintf(&b, "分面：情绪 %s / 色调 %s / 密度 %s\n", st.Facets.Mood, st.Facets.Tone, st.Facets.Density)
+				}
+				fmt.Fprintf(&b, "样张图库：暂无（本片条目无历史实拍；以你自己写的风格描述与 delta 为准）\n")
+				return Observation{Text: b.String()}
 			}
 			st, ok := r.d.Lib.Get(strings.TrimSpace(in.ID))
 			if !ok {
@@ -1196,10 +1216,11 @@ func (r *styleRun) loadDraft() *styleDraft {
 	return &d
 }
 
-// registerStyleTool register_style：衍生/自定义登记（治理见包注释）。
+// registerStyleTool register_style：衍生/自定义一个本片专用条目（不进风格库，
+// 2026-10-30 方案乙——实测六连登记零复用，公用库不再吃自动登记）。
 func (r *styleRun) registerStyleTool() Tool {
 	return Tool{
-		Def: toolSchema("register_style", "库中没有合适的风格时，从最接近的条目衍生一个（自动带出处与「未验证」标签，出片后才转正；单次 run 限登记 1 个；不开放已有条目编辑/删除）。base_id 可空=完全自定义（须给 tags_main，从词表选）。", map[string]any{
+		Def: toolSchema("register_style", "库中没有合适的风格时，从最接近的条目衍生一个本片专用条目（只对本片生效，不进风格库；单次限 1 个）。base_id 可空=完全自定义（须给 tags_main）。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"base_id":   map[string]any{"type": "string", "description": "基风格 id（可空=自定义）"},
@@ -1237,7 +1258,7 @@ func (r *styleRun) registerStyleTool() Tool {
 			if s := strings.TrimSpace(in.TagsMain); s != "" {
 				tags.Main = s
 			}
-			st, err := r.d.Lib.Derive(stylelib.DeriveInput{
+			st, err := r.d.Lib.DeriveLocal(stylelib.DeriveInput{
 				BaseID:  strings.TrimSpace(in.BaseID),
 				Name:    in.Name,
 				Delta:   in.Delta,
@@ -1246,27 +1267,17 @@ func (r *styleRun) registerStyleTool() Tool {
 				Facets:  &stylelib.StyleFacets{Mood: in.Mood, Tone: in.Tone, Density: in.Density},
 			})
 			if err != nil {
-				msg := "登记被拒：" + err.Error()
-				// 词表相关的拒绝把现有词表列出来——盲猜词表名是死循环的根源
-				if strings.Contains(msg, "词表") && r.d.Lib != nil {
-					if vocab := r.d.Lib.VocabList(); len(vocab) > 0 {
-						names := make([]string, 0, len(vocab))
-						for _, e := range vocab {
-							names = append(names, e.Name)
-						}
-						msg += "。当前词表收了这些风格名（任选其一或衍生）：" + strings.Join(names, "、")
-					}
-				}
-				return Observation{Text: msg}
+				return Observation{Text: "登记被拒：" + err.Error()}
 			}
 			r.registered = st.ID
+			r.derived = st
 			// 衍生条目不自带媒体：对照真迹退回基风格（视觉最近邻），chosen 空时才补位
 			if r.chosen == "" && st.DerivedFrom != "" {
 				r.chosen = st.DerivedFrom
 				r.refCache = nil
 			}
 			r.p.Manifest("prep.style_registered", st.ID+" "+st.Name)
-			return Observation{Text: fmt.Sprintf("已登记衍生风格 %s「%s」（未验证，出片后转正）。submit_style 时 style_id 用它。", st.ID, st.Name)}
+			return Observation{Text: fmt.Sprintf("已生成本片风格 %s「%s」（仅本片使用，不进风格库）。submit_style 时 style_id 用它。", st.ID, st.Name)}
 		},
 	}
 }
@@ -1475,7 +1486,14 @@ func (r *styleRun) submitStyleTool() Tool {
 			// 已有同条目简报（applyStyle 落的）不动；换条目时重写。
 			if r.d.Lib != nil {
 				if cur := pipeline.LoadStyleBrief(r.p); cur == nil || cur.EntryID != sid {
-					if b, berr := r.d.Lib.BuildBrief(sid, nil); berr == nil {
+					var b *contract.StyleBrief
+					var berr error
+					if r.derived != nil && sid == r.derived.ID {
+						b = r.d.Lib.BriefFrom(r.derived, nil) // 本片临时条目：不在账本，直接组装
+					} else {
+						b, berr = r.d.Lib.BuildBrief(sid, nil)
+					}
+					if berr == nil {
 						if werr := stylelib.WriteBriefFile(r.p.Artifact("style/style_brief.json"), b); werr == nil {
 							r.p.Manifest("prep.style_brief", "简报落盘 "+sid+"（制作阶段真迹注入可用）")
 						}
