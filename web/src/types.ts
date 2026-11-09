@@ -180,6 +180,7 @@ export interface PrepView {
   running?: boolean // 三工位链在跑（主题页签的进度态）
   active?: PrepStation[] // 本次链实际会重写的工位（含补跑前置）——工作区锁区集合
   legacy?: boolean // 老项目（legacy 分镜已在，不走准备工位——隐藏主题页签）
+  unified?: boolean // 统一准备链（rev2 实验档：单 agent 一条循环，无站序）
   idea?: string // 已落盘的主题/想法文本（回填文本框）
   mode?: string // script=文稿驱动（默认，老项目缺省）｜music=音乐驱动 PV
   music?: PrepMusic // 音乐驱动 PV 的三件套视图（brief/曲/地图）

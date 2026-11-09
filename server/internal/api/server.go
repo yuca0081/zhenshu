@@ -1514,6 +1514,9 @@ func (s *Server) prepView(c *gin.Context) {
 		"legacy":  prep.LegacyProject(p),
 		"idea":    strings.TrimSpace(readFileLoose(p.Artifact("input/prep_idea.txt"))),
 		"mode":    projectMode(p),
+		// unified = 统一准备链（rev2 实验档：一个 agent 一条循环产三件，无站序）。
+		// 前端据此把「①→②→③ 顺序」文案换成「AI 自定顺序」，进度按工件落地计。
+		"unified": prep.UnifiedPrep(p),
 		// active = 本次链实际会重写的工位（含补跑前置）。前端据此锁工作区：
 		// 「勾了什么锁什么」不够——下游要跑时缺件会上游补跑，那块也得锁。
 		"active": active,

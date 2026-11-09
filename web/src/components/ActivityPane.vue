@@ -313,6 +313,13 @@ const items = computed<Item[]>(() => {
       case 'prep.style_font_degrade':
         add({ state: 'info', title: '字体降级（回退渲染，不挡样张）', timeText: t, detail: firstLine(ev.detail), minor: true })
         break
+      // 统一准备链（rev2 实验档）
+      case 'prep.unified_plan':
+        add({ state: 'info', title: '统一链启动：三件一锅端', timeText: t, minor: true })
+        break
+      case 'prep.unified_autofinish':
+        add({ state: 'ok', title: '预算耗尽，自动终检放行（三件过闸咬合）', timeText: t, minor: true })
+        break
       default:
         break // llm.usage / seg.* 状态机账 / fonts.* / produce.tts 等记账类与技术性事件不上屏
     }

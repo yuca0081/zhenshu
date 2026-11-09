@@ -76,15 +76,19 @@ const has = computed<Record<PrepStation, boolean>>(() => ({
 }))
 const ORDER: PrepStation[] = ['script', 'style', 'storyboard']
 const STATION_LABEL: Record<PrepStation, string> = { script: '① 文稿', style: '② 风格', storyboard: '③ 分镜' }
+// 统一链（rev2 实验档）：单 agent 一条循环产三件，顺序由 AI 定——勾选集被
+// 服务端收敛为三件全选（三件互相影响，部分重做没有意义），前端同口径展示。
+const unified = computed(() => !!local.value?.unified)
 
 const plan = computed<PrepStation[]>(() => {
+  if (unified.value) return [...ORDER]
   const want: PickMap = { ...picked.value }
   if (want.storyboard && (want.script || !has.value.script || !has.value.style)) want.style = true
   if ((want.style || want.storyboard) && !has.value.script) want.script = true
   return ORDER.filter(k => want[k])
 })
-const planText = computed(() => plan.value.map(k => STATION_LABEL[k]).join(' → '))
-const autoAdded = computed(() => plan.value.filter(k => !picked.value[k]))
+const planText = computed(() => plan.value.map(k => STATION_LABEL[k]).join(unified.value ? '、' : ' → '))
+const autoAdded = computed(() => unified.value ? [] : plan.value.filter(k => !picked.value[k]))
 const willReplace = computed(() => plan.value.some(k => has.value[k]))
 // 计划没跑到③ = 有下游会被本次上游重做连累作废（只重做③则没有下游）。
 const dropsDownstream = computed(() => plan.value.length > 0 && plan.value[plan.value.length - 1] !== 'storyboard')
@@ -140,10 +144,11 @@ const stations = computed(() => {
   ]
 })
 // 跑动中的「本次生成」以服务端 active 为准：刷新/换页回来后勾选集会被默认值重置，
-// 但链实际在跑什么只有 active 知道。
-const activeText = computed(() => active.value.map(k => STATION_LABEL[k]).join(' → '))
+// 但链实际在跑什么只有 active 知道。统一链没有站序——不画箭头链。
+const activeText = computed(() =>
+  unified.value ? '三件一起做（AI 自定顺序）' : active.value.map(k => STATION_LABEL[k]).join(' → '))
 const stateTag = (s: StationState) =>
-  s === 'running' ? '进行中' : s === 'done' ? '完成' : s === 'error' ? '出错' : '排队中'
+  s === 'running' ? '进行中' : s === 'done' ? '完成' : s === 'error' ? '出错' : (unified.value ? '待产出' : '排队中')
 // 内容链已返回、但 Async 运行器还在补传/收尾（active 已清空）：锁已放，进度卡收一下，
 // 不把三站全标成「本次不动」误导用户。
 const finishing = computed(() => running.value && active.value.length === 0)
@@ -329,7 +334,12 @@ async function cancel() {
         <h3>说说这个视频的主题</h3>
         <p class="sub">
           想讲什么、给谁看、什么感觉——想到哪写到哪；<b>留空就让 AI 自由发挥</b>。
-          勾选要生成的工件，AI 会按 <b>① 文稿 → ② 风格 → ③ 分镜</b> 的顺序自动跑；缺的前置会自动补跑。
+          <template v-if="unified">
+            这是<b>统一链</b>项目（实验档）：三件由同一个 AI 一起做，<b>顺序与返工节奏由 AI 自己定</b>。
+          </template>
+          <template v-else>
+            勾选要生成的工件，AI 会按 <b>① 文稿 → ② 风格 → ③ 分镜</b> 的顺序自动跑；缺的前置会自动补跑。
+          </template>
         </p>
         <NInput
           v-model:value="idea" type="textarea" placeholder="例：给上班族讲清楚「复利」是怎么回事，节奏快点，画面别太卡通…"
@@ -389,7 +399,7 @@ async function cancel() {
         </div>
         <p class="plan-line" :class="{ 'plan-warn': willReplace }">
           <template v-if="plan.length">
-            将生成：<b>{{ planText }}</b><template v-if="autoAdded.length">（{{ autoAdded.map(k => STATION_LABEL[k]).join('、') }}自动带上：缺件补跑，或上游重做后必须跟跑）</template>。运行期间对应工作区锁定只读，结束后自动解锁。
+            将生成：<b>{{ planText }}</b><template v-if="unified">（统一链：三件一锅端，AI 自定顺序与返工节奏）</template><template v-else-if="autoAdded.length">（{{ autoAdded.map(k => STATION_LABEL[k]).join('、') }}自动带上：缺件补跑，或上游重做后必须跟跑）</template>。运行期间对应工作区锁定只读，结束后自动解锁。
           </template>
           <template v-else>先勾选至少一个工件——勾选 = 让 AI 生成/重做它。</template>
         </p>
