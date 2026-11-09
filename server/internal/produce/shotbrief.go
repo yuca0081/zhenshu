@@ -39,6 +39,10 @@ type ShotBrief struct {
 	Transition string     `json:"transition"` // 与下一镜的接法
 	RefFrame   string     `json:"ref_frame,omitempty"`
 	RefNote    string     `json:"ref_note,omitempty"`
+	// Images 本镜必须落地的真图素材（2026-11-02）。导演块是提示词里优先级最高的
+	// 一层，必需素材必须在这里出现一次——只写在 styleSeg 的备注块里会被
+	// 「本镜硬要求」压过去（事故里模型就是照着硬要求画纯几何）。
+	Images []contract.ShotImage `json:"images,omitempty"`
 }
 
 // ShotPlan storyboards/shots.json 全文。
@@ -129,6 +133,7 @@ func shotPlanFromStoryboard(sb *contract.Storyboard) *ShotPlan {
 			Size: seg.Shot.Size, Camera: seg.Shot.Camera, Stage: seg.Shot.Stage,
 			Cast: cast, Action: seg.Shot.Action, Dialogue: seg.Shot.Dialogue,
 			Transition: seg.Shot.Transition, RefFrame: seg.Shot.RefFrame, RefNote: seg.Shot.RefNote,
+			Images: append([]contract.ShotImage(nil), seg.Shot.Images...),
 		})
 	}
 	if len(sp.Shots) == 0 {
@@ -192,6 +197,22 @@ func (sp *ShotPlan) promptBlock(segID string) string {
 	}
 	if s := strings.TrimSpace(cur.RefFrame); s != "" {
 		fmt.Fprintf(&b, "- 参考帧文件：%s\n", s)
+	}
+	// 必需素材放「本镜硬要求」之前、且逐条量化：这是导演块里唯一不会被
+	// 「每镜至少两个角色同场」等硬要求挤掉的位置。
+	if len(cur.Images) > 0 {
+		b.WriteString("- 本镜必需素材（必须真的出现在画面上，不是装饰）：\n")
+		for _, im := range cur.Images {
+			fmt.Fprintf(&b, "  - %s（%s，面积 ≥%.0f%% 画面）", im.File, areaDesc(im.Role), contract.ImageAreaMin(im.Role)*100)
+			if im.At > 0 || im.Hold > 0 {
+				fmt.Fprintf(&b, "，%.1fs 入场、至少停留 %.1fs", im.At, im.Hold)
+			}
+			b.WriteString("\n")
+			if s := strings.TrimSpace(im.Present); s != "" {
+				b.WriteString("    - 摆法：" + s + "\n")
+			}
+		}
+		b.WriteString("  - 必须写 <img src=…> 且显式给 width/height（px）；缩成角标/只在末帧闪一下 = 返工\n")
 	}
 	b.WriteString(`
 ### 本镜硬要求（违反任意一条 = 画面平，试验失败）

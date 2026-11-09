@@ -51,6 +51,9 @@ type Material struct {
 	Width     int    `json:"width,omitempty"`
 	Height    int    `json:"height,omitempty"`
 	Note      string `json:"note,omitempty"` // 申请时给的用途一句话
+	// Required 用户上传时勾了「必需」（2026-11-02）：必须出现在成片里。与 Met 的
+	// 「按需检索、可落空」相反——必需素材落地失败是硬错，分镜阶段就要认领。
+	Required bool `json:"required,omitempty"`
 }
 
 // MaterialStore 素材库落盘（assets/materials.json，按需追加）。
@@ -100,6 +103,56 @@ func materialFiles(st *MaterialStore) map[string]bool {
 		out[m.File] = true
 	}
 	return out
+}
+
+// ListMaterials 素材库全量（API 用；无文件返回空切片）。
+func ListMaterials(p *pipeline.Project) []Material {
+	if st := loadMaterials(p); st != nil {
+		return st.Materials
+	}
+	return []Material{}
+}
+
+// AddMaterials 追加/覆盖登记（上传素材的唯一写入口）。按 file 去重：同 file 覆盖
+// 元信息（重新上传同一张图 = 改标题/改必需开关）。返回落盘后的全量。
+func AddMaterials(p *pipeline.Project, mats []Material) ([]Material, error) {
+	if len(mats) == 0 {
+		return ListMaterials(p), nil
+	}
+	matStoreMu.Lock()
+	defer matStoreMu.Unlock()
+	st := loadMaterials(p)
+	if st == nil {
+		st = &MaterialStore{PlannedAt: time.Now()}
+	}
+	idx := map[string]int{}
+	for i, m := range st.Materials {
+		idx[m.File] = i
+	}
+	for _, m := range mats {
+		if i, ok := idx[m.File]; ok {
+			st.Materials[i] = m
+			continue
+		}
+		idx[m.File] = len(st.Materials)
+		st.Materials = append(st.Materials, m)
+	}
+	if err := saveMaterials(p, st); err != nil {
+		return nil, err
+	}
+	return st.Materials, nil
+}
+
+// ReplaceMaterials 整体重写登记簿（删除素材用；保留 planned_at/notes 之外的全量）。
+func ReplaceMaterials(p *pipeline.Project, mats []Material) error {
+	matStoreMu.Lock()
+	defer matStoreMu.Unlock()
+	st := loadMaterials(p)
+	if st == nil {
+		st = &MaterialStore{PlannedAt: time.Now()}
+	}
+	st.Materials = mats
+	return saveMaterials(p, st)
 }
 
 // materialsForSeg 登记簿里首次申请段是 segID 的素材——本段此前申请到的真图，

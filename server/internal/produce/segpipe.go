@@ -1194,6 +1194,9 @@ func (c *coordinator) auditSegment(ctx context.Context, req auditReq) {
 		AnchorTimes: c.anchorFramesFor(s, ends),
 		LogPath:     c.p.Artifact(fmt.Sprintf("reviews/seg-%s.tools.jsonl", s.seg.ID)),
 	}
+	// 真图素材（2026-11-03）：把原图与落地要求喂给判卷官——闸门只核声明面积，
+	// 「声明很大、实际被遮罩/角色盖住」这一层只能靠对照原图判。
+	in.Materials, in.MaterialImgs = segAuditMaterials(c.p, &s.seg)
 	if round > 1 {
 		in.Prior = c.loadVerdictFile("seg", s.seg.ID, round-1)
 	}
@@ -1567,6 +1570,9 @@ func (c *coordinator) finalAudit(ctx context.Context, round int, recheck []strin
 	in := review.FinalInput{
 		Frames: frames, Paragraphs: paragraphs, SegBriefs: segBriefs, TotalDur: total, Round: round,
 		LogPath: c.p.Artifact(fmt.Sprintf("reviews/final-r%d.tools.jsonl", round)),
+		// 真图清单（2026-11-03）：段审降级时，终审是「素材进没进片、看不看得见」
+		// 的最后一道兜底——清单给到，判据才落得到这一层。
+		Materials: filmAuditMaterials(c.p, c.sb),
 	}
 	if round > 1 && len(recheck) > 0 {
 		// 复核轮瘦身的前提是上轮意见单还在（它是复核的判卷基准）——意见单缺失

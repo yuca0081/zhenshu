@@ -179,6 +179,12 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 		l.record(msg)
 		msgs = append(msgs, msg)
+		// 两遍扫描（2026-11-03 修）：先执行本轮全部 tool_calls、把 N 条 tool 消息
+		// **连续**追加；再把本轮所有取证图合成**一条** user 附图消息接在块尾。
+		// 旧版把附图插在循环体内：并行 tool_calls 时 tool 消息被 user 图消息隔断，
+		// GLM 端点回 400（"assistant tool_calls must be followed by tool messages"），
+		// 整审降级放行——2026-11-02 素材链测试 9/9 段审就是这么全程盲跑的。
+		var roundImgs []string
 		for _, call := range msg.ToolCalls {
 			l.step(round, "action", call.Function.Name+" "+compactJSON(call.Function.Arguments))
 			obs := l.exec(ctx, call.Function.Name, call.Function.Arguments)
@@ -192,16 +198,13 @@ func (l *Loop) Run(ctx context.Context) error {
 			}
 			msgs = append(msgs, tool)
 			l.record(tool)
-			if len(obs.Images) > 0 {
-				im := imageFollowUp(obs.Images)
-				msgs = append(msgs, im)
-				imgs = append(imgs, imgMsgAt{idx: len(msgs) - 1, round: round})
-				l.record(im)
-			}
+			roundImgs = append(roundImgs, obs.Images...)
 			if call.Function.Name == l.Submit && obs.Done {
+				l.recordImgsOnly(roundImgs) // 已收工，图不再外发，只进留痕
 				return nil
 			}
 		}
+		msgs, imgs = l.appendRoundImgs(msgs, imgs, round, roundImgs)
 	}
 	return ErrBudgetExhausted
 }
@@ -298,6 +301,40 @@ func (l *Loop) exec(ctx context.Context, name, args string) Observation {
 func (l *Loop) step(round int, kind, detail string) {
 	if l.OnStep != nil {
 		l.OnStep(round, kind, detail)
+	}
+}
+
+// validImageDataURLs 滤掉端点必拒的坏载荷（空/截断/本地路径）。过滤与附图消息
+// 构造共用一个口径：本轮图全坏时不追加空附图消息，也不占裁剪记账位。
+func validImageDataURLs(images []string) []string {
+	out := make([]string, 0, len(images))
+	for _, u := range images {
+		if llm.ValidImageData(u) {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// appendRoundImgs 把本轮取证图合成一条 user 附图消息接在最后一条 tool 消息之后，
+// 并登记裁剪位置。返回新的消息表与登记簿；无有效图时原样返回。
+func (l *Loop) appendRoundImgs(msgs []openai.ChatCompletionMessage, imgs []imgMsgAt, round int, images []string) ([]openai.ChatCompletionMessage, []imgMsgAt) {
+	valid := validImageDataURLs(images)
+	if len(valid) == 0 {
+		return msgs, imgs
+	}
+	im := imageFollowUp(valid)
+	msgs = append(msgs, im)
+	imgs = append(imgs, imgMsgAt{idx: len(msgs) - 1, round: round})
+	l.record(im)
+	return msgs, imgs
+}
+
+// recordImgsOnly 收工留痕：submit 在本轮通过、循环即将返回——本轮取证图已不可能被
+// 模型看见，但留痕要如实记下取证过什么（过程页缩略图与回放靠它）。
+func (l *Loop) recordImgsOnly(images []string) {
+	if valid := validImageDataURLs(images); len(valid) > 0 {
+		l.record(imageFollowUp(valid))
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -283,17 +284,84 @@ type ShotCast struct {
 	Emotion string `json:"emotion,omitempty"`
 }
 
+// ShotImage 本镜必须出现在画面上的真图素材（用户上传时勾了「必需」，或分镜主动
+// 认领）。2026-11-02 事故修复：素材只在写作期以旁挂备注出现时模型会整段忽略
+// （实测 10 段 9 段不写 <img>），写进分镜并带量化约束才能变成硬要求。
+type ShotImage struct {
+	File string `json:"file"` // assets/img/xxx.jpg，逐字命中素材清单
+	// Role 决定闸门的面积下限，只给两档——档位多了模型就乱填，闸门也定不了线：
+	//   hero  主画面（面积 ≥ 25% 画面）
+	//   inset 贴图/画中画（面积 ≥ 6% 画面，且短边 ≥ 200px）
+	Role string `json:"role"`
+	// At 段内出现时刻（秒）；Hold 最短停留（秒）。空/0 = 交给画面工程师自定，
+	// 但闸门仍按 role 的面积下限卡（时间维度靠抽帧复核，不进静态闸门）。
+	At      float64 `json:"at,omitempty"`
+	Hold    float64 `json:"hold,omitempty"`
+	Present string  `json:"present,omitempty"` // 呈现配方：摆位/裁切/边框/重点描哪
+}
+
+// ShotImageRoles 合法角色（hero 主画面 / inset 贴图）。
+var ShotImageRoles = []string{"hero", "inset"}
+
+// ValidImageRole 角色是否合法（大小写不敏感）。
+func ValidImageRole(role string) bool {
+	r := strings.ToLower(strings.TrimSpace(role))
+	for _, v := range ShotImageRoles {
+		if r == v {
+			return true
+		}
+	}
+	return false
+}
+
+// ImageAreaMin 该角色要求的画面面积占比下限（0–1）。闸门用它把「贴了一张 300×97
+// 的缩略图」判成没落地——那正是 2026-11-02 那支片子唯一「用到」素材的方式。
+func ImageAreaMin(role string) float64 {
+	if strings.ToLower(strings.TrimSpace(role)) == "hero" {
+		return 0.25
+	}
+	return 0.06
+}
+
+// Normalize 去空白、角色转小写。
+func (im *ShotImage) Normalize() {
+	if im == nil {
+		return
+	}
+	im.File = strings.TrimSpace(im.File)
+	im.Role = strings.ToLower(strings.TrimSpace(im.Role))
+	im.Present = strings.TrimSpace(im.Present)
+}
+
+// Validate 单条素材约束：file 非空、role 合法、长度/时刻非负。
+func (im *ShotImage) Validate() error {
+	if im == nil {
+		return fmt.Errorf("素材条目为空")
+	}
+	if strings.TrimSpace(im.File) == "" {
+		return fmt.Errorf("缺 file")
+	}
+	if !ValidImageRole(im.Role) {
+		return fmt.Errorf("file=%s 的 role %q 不合法（可选 %s）", im.File, im.Role, strings.Join(ShotImageRoles, "/"))
+	}
+	if im.At < 0 || im.Hold < 0 {
+		return fmt.Errorf("file=%s 的 at/hold 不能为负", im.File)
+	}
+	return nil
+}
+
 // ShotDirection 一个镜头的调度表（一期内嵌在 Segment / DraftSegment 上）。
 type ShotDirection struct {
-	Size       string     `json:"size"`                 // wide|medium|close|overhead|full
-	Camera     string     `json:"camera"`               // 机位与运镜（如「从桌面近景横移到屏幕」）
-	Stage      string     `json:"stage"`                // 舞台/道具/前后景
-	Cast       []ShotCast `json:"cast"`                 // 出场角色与动作
-	Action     string     `json:"action"`               // 这一镜发生什么（必须看得见）
-	Dialogue   string     `json:"dialogue,omitempty"`   // 短台词/字卡（不是旁白复述）
-	Transition string     `json:"transition,omitempty"` // 与下一镜的接法
-	RefFrame   string     `json:"ref_frame,omitempty"`  // 项目内相对路径（可空）
-	RefNote    string     `json:"ref_note,omitempty"`   // 参考帧说明
+	Size       string      `json:"size"`                 // wide|medium|close|overhead|full
+	Camera     string      `json:"camera"`               // 机位与运镜（如「从桌面近景横移到屏幕」）
+	Stage      string      `json:"stage"`                // 舞台/道具/前后景
+	Cast       []ShotCast  `json:"cast"`                 // 出场角色与动作
+	Action     string      `json:"action"`               // 这一镜发生什么（必须看得见）
+	Dialogue   string      `json:"dialogue,omitempty"`   // 短台词/字卡（不是旁白复述）
+	Transition string      `json:"transition,omitempty"` // 与下一镜的接法
+	RefFrame   string      `json:"ref_frame,omitempty"`  // 项目内相对路径（可空）
+	RefNote    string      `json:"ref_note,omitempty"`   // 参考帧说明
+	Images     []ShotImage `json:"images,omitempty"`     // 本镜必须落地的真图素材
 }
 
 // ShotSizes 合法景别（按由远到近排列，供提示词/前端复用）。
@@ -323,6 +391,15 @@ func (s *ShotDirection) Normalize() {
 	s.Transition = strings.TrimSpace(s.Transition)
 	s.RefFrame = strings.TrimSpace(s.RefFrame)
 	s.RefNote = strings.TrimSpace(s.RefNote)
+	imgs := s.Images[:0]
+	for i := range s.Images {
+		s.Images[i].Normalize()
+		if s.Images[i].File == "" {
+			continue
+		}
+		imgs = append(imgs, s.Images[i])
+	}
+	s.Images = imgs
 	cast := s.Cast[:0]
 	for _, c := range s.Cast {
 		c.Who = strings.TrimSpace(c.Who)
@@ -343,6 +420,7 @@ func (s *ShotDirection) Clone() *ShotDirection {
 	}
 	cp := *s
 	cp.Cast = append([]ShotCast(nil), s.Cast...)
+	cp.Images = append([]ShotImage(nil), s.Images...)
 	return &cp
 }
 
@@ -371,7 +449,122 @@ func (s *ShotDirection) Validate() error {
 			return fmt.Errorf("第 %d 个角色缺 who", i+1)
 		}
 	}
+	for i := range s.Images {
+		if err := s.Images[i].Validate(); err != nil {
+			return fmt.Errorf("第 %d 张素材：%w", i+1, err)
+		}
+	}
 	return nil
+}
+
+// ValidateShotImages 分镜稿的素材落地校验（分镜工位 validate/submit 内置）：
+//  1. 每段 images 的 file 必须逐字命中素材清单（清单外渲染必裂图）；
+//  2. 单条约束（role 合法、at/hold 非负）；
+//  3. 认领了图的段，visual_brief.scene 里要能读到它——写作阶段实际读的是
+//     visual_brief 拼成的画面提示，不在散文里出现一次，图就会变成旁挂贴纸；
+//  4. 用户勾了「必需」（required）的素材必须被至少一段认领。
+//
+// 第 4 条是 2026-11-02 事故的直接堵口：素材只在写作期以旁挂备注出现时，模型
+// 10 段里 9 段整段忽略。写进分镜、且分镜阶段就报「没认领」，才不会无声漏掉。
+func ValidateShotImages(d *StoryboardDraft, required, allowed []string) error {
+	if d == nil {
+		return fmt.Errorf("分镜稿为空")
+	}
+	allow := map[string]bool{}
+	for _, f := range allowed {
+		allow[strings.TrimSpace(f)] = true
+	}
+	claimed := map[string]bool{}
+	var issues []string
+	for _, seg := range d.Segments {
+		if seg.Shot == nil || len(seg.Shot.Images) == 0 {
+			continue
+		}
+		scene := seg.Brief.Scene
+		for i := range seg.Shot.Images {
+			im := &seg.Shot.Images[i]
+			im.Normalize()
+			if err := im.Validate(); err != nil {
+				issues = append(issues, seg.ID+"："+err.Error())
+				continue
+			}
+			if len(allow) > 0 && !allow[im.File] {
+				issues = append(issues, fmt.Sprintf("%s：素材 %s 不在素材清单内（只准引用清单里的文件）", seg.ID, im.File))
+			}
+			if !sceneMentionsImage(scene, im.File) {
+				issues = append(issues, fmt.Sprintf("%s：shot.images 认领了 %s，但 visual_brief.scene 里没写这张图（画面提示必须能读到它，否则写作期只会画纯图形）", seg.ID, im.File))
+			}
+			claimed[im.File] = true
+		}
+	}
+	var missing []string
+	for _, f := range required {
+		f = strings.TrimSpace(f)
+		if f == "" || claimed[f] {
+			continue
+		}
+		missing = append(missing, f)
+	}
+	if len(missing) > 0 {
+		issues = append(issues, fmt.Sprintf("以下必需素材没有任何一段认领（用户勾了「必需」= 必须出现在成片里）：\n    - %s\n  → 请在合适的段补 shot.images 条目（file 逐字一致）",
+			strings.Join(missing, "\n    - ")))
+	}
+	if len(issues) > 0 {
+		return fmt.Errorf("素材未落地：\n- %s", strings.Join(issues, "\n- "))
+	}
+	return nil
+}
+
+// sceneMentionsImage 画面提示里是否点到了这张图。接受文件名主干，也接受
+// 「图/截图/架构图/表格/照片/实拍」这类指代——不要求逐字写路径，但必须有一次
+// 明确的指认，且不能只在末拍里当装饰。
+func sceneMentionsImage(scene, file string) bool {
+	s := strings.ToLower(strings.TrimSpace(scene))
+	if s == "" {
+		return false
+	}
+	base := strings.ToLower(file)
+	if i := strings.LastIndexAny(base, "/\\"); i >= 0 {
+		base = base[i+1:]
+	}
+	stem := strings.TrimSuffix(base, path.Ext(base))
+	if stem != "" && strings.Contains(s, stem) {
+		return true
+	}
+	if strings.Contains(s, strings.ToLower(file)) {
+		return true
+	}
+	// 只认具体指代：本片设计系统满篇「工程图纸」，裸判「图」会永远命中（等于没查）。
+	for _, kw := range []string{"截图", "实拍", "照片", "架构图", "表格", "画中画", "贴图", "素材", "真图"} {
+		if strings.Contains(s, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// UsedImageFiles 分镜稿里被认领的全部素材路径（按首次出现顺序去重）——闸门与
+// 报告共用：这些文件必须在场景 HTML 里真的出现。
+func UsedImageFiles(d *StoryboardDraft) []string {
+	if d == nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, seg := range d.Segments {
+		if seg.Shot == nil {
+			continue
+		}
+		for _, im := range seg.Shot.Images {
+			f := strings.TrimSpace(im.File)
+			if f == "" || seen[f] {
+				continue
+			}
+			seen[f] = true
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // ShotGate 镜头完整度（confirmPrep 硬门 / 前端镜头板共用）。
@@ -648,12 +841,23 @@ func (d *StoryboardDraft) Translate(script *Script, pack *StylePack) *Storyboard
 				}
 			}
 		}
+		vb := seg.Brief.Scene + "\n首拍：" + seg.Brief.FirstFrame + "\n末拍：" + seg.Brief.LastFrame
+		// 认领了真图的段，把素材行焊进 visual_brief 文本（2026-11-02）：写作阶段
+		// 实际读的是这段散文，图只躺在 shot.images 里就会被整段忽略。
+		if seg.Shot != nil {
+			for _, im := range seg.Shot.Images {
+				if strings.TrimSpace(im.File) == "" {
+					continue
+				}
+				vb += fmt.Sprintf("\n必须出现素材：%s（%s，面积≥%.0f%%）", im.File, im.Role, ImageAreaMin(im.Role)*100)
+			}
+		}
 		s := Segment{
 			ID:           seg.ID,
 			Idx:          seg.Idx,
 			Key:          seg.Key,
 			Narration:    strings.Join(lines, ""),
-			VisualBrief:  seg.Brief.Scene + "\n首拍：" + seg.Brief.FirstFrame + "\n末拍：" + seg.Brief.LastFrame,
+			VisualBrief:  vb,
 			DurationHint: seg.DurationHint,
 			Brief:        &VisualBriefSpec{Scene: seg.Brief.Scene, FirstFrame: seg.Brief.FirstFrame, LastFrame: seg.Brief.LastFrame},
 			Shot:         seg.Shot.Clone(),

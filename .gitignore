@@ -124,3 +124,10 @@ server/pgq.exe
 
 # 本地数据库备份/清库脚本（PG dump 含真实数据，只住本地）
 backups/
+
+# 沙箱/离线跑 go test 的构建缓存与临时目录（GOCACHE/GOTMPDIR，可再生，别入仓）
+.gocache/
+.gotmp/
+
+# 分析用临时对照帧（可随时删除）
+.tmp-frames/

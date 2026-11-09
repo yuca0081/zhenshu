@@ -71,6 +71,24 @@ type SegInput struct {
 	SourceText string
 	// AnchorTimes 锚点帧时刻表（程序按句末时刻+首末帧算好，标注随图注入）
 	AnchorTimes []AnchorFrame
+	// Materials 本段认领的必需素材（2026-11-03「素材进片但看不见」事故修复）：
+	// 声明面积达标不等于观众看得见——判卷要拿原图对照帧里没被盖住的部分。
+	Materials []MaterialRef
+	// MaterialImgs 素材原图（与 Materials 同序；URL 注入模型、Path/Label 给缩略图）。
+	MaterialImgs []llm.ImgRef
+}
+
+// MaterialRef 一条真图素材的落地要求（produce 侧从登记簿+分镜认领装配）。
+// File/Title 供人看，Role/AreaMin 是分镜给的呈现档位，Present 是摆法承诺。
+type MaterialRef struct {
+	File    string
+	Title   string
+	Role    string // hero / inset
+	At      float64
+	Hold    float64
+	Present string
+	AreaMin float64 // 要求面积下限（0–1）：hero 0.25 / inset 0.06
+	SegID   string  // 认领段（终审清单用）
 }
 
 // AnchorFrame 一张锚点帧：时刻 + 人话标注（「此刻刚念完 N3」）。
@@ -108,6 +126,9 @@ type FinalInput struct {
 	Recheck []string
 	Prior   *Verdict
 	LogPath string
+	// Materials 全片必需素材清单（认领段+落地要求，2026-11-03）。终审是「素材到底
+	// 进没进片、观众看不看得见」的最后一道兜底——段审降级时这里是唯一能拦的点。
+	Materials []MaterialRef
 }
 
 // provider 审核模型：RoleVisual 档（多模态），判卷低温。
@@ -302,7 +323,8 @@ const segmentSystem = `你是成片审片员，对本段成片判卷，产出结
 4. 设计规则要点——贯穿装置与皮肤切换规则（可能为空）
 5. 事实清单——硬事实与出处
 6. 锚点帧——每帧标注「此刻刚念完 N 几」
-7. 画面源文本——本段 HTML 的全部文字，是画面文字内容的唯一权威
+7. 真图素材原图——本段分镜认领的真图（可能为空）：判「素材到底看不看得见」的对照底
+8. 画面源文本——本段 HTML 的全部文字，是画面文字内容的唯一权威
 
 ## 职责划分（先读这个）
 你是视觉审片员：帧用来判断**美术风格、视觉表达、可读性**（好不好看、清不清楚、承诺的元素画没画）。
@@ -323,6 +345,14 @@ const segmentSystem = `你是成片审片员，对本段成片判卷，产出结
 | ④ | 首末拍合规 | 首帧按 brief 首拍开场、末帧收在 brief 末拍 | 开场或收尾与承诺不符 | 无 |
 | ⑤ | 装置落点 | 贯穿装置/皮肤切换符合设计规则 | 违反规则或漏落点 | 设计规则为空 |
 | ⑥ | 字幕文字 | 分两层判：**错字/缺字/乱码看画面源文本**（源文本无错即 pass，帧上读差异不立案）；**渲染与节拍看帧**——文字糊成团/被裁切/被遮挡导致不可读、字幕断句或进度与旁白错配 | 源文本有错，或帧上文字确实不可读/错配 | 画面无文字 |
+
+## 素材可见性（①内容一致的核心子判据，2026-11-03）
+真素材不是「声明了尺寸就算落地」，观众得在帧里认出这张图。拿「真图素材原图」对照锚点帧，出现任一情形记 ① fail（high）：
+- 素材被遮罩/蒙层/半透明色块盖住大半，只剩淡影或一条窄带——观众认不出是那张图；
+- 素材的关键内容（旁白点名的数字、署名、界面元素）在图里看不见，只由叠字/字卡「代说」——那是设计自证，不是证据；
+- 角色/道具/字幕压住素材主体，或素材缩成角标、当背景垫图；
+- 素材只在末帧闪一下，本段大部分时间看不到。
+面积按**没被盖住的部分**估：声明面积够了但可见部分明显不足（正是「素材进了片、观众看不见」的形态），就是本条 fail。证据里写清「可见的是什么、被什么盖住了」。
 
 ## 意见条目
 每条 fail 写一条 finding：
@@ -353,6 +383,37 @@ const segmentSystem = `你是成片审片员，对本段成片判卷，产出结
 
 ## 输出
 完成判卷即调用 submit_verdict；除工具调用外不要输出结论文本。`
+
+// writeMaterialSection 段审 kickoff 的「本段真图素材」小节。base = 这段之前已经
+// 外发的图数（锚点帧+样张），原图图号从 base+1 起顺延。
+//
+// 只有真能外发的原图才占图号；缺图条目显式写「原图缺失」——既不许指针指向别的图
+// （编号错位让判卷官对着 A 图判 B 素材），也不许把「读不到原图」当成「素材没出现」。
+func writeMaterialSection(b *strings.Builder, mats []MaterialRef, imgs []llm.ImgRef, base int) {
+	next := base + 1
+	for i, m := range mats {
+		fmt.Fprintf(b, "%d. `%s`", i+1, m.File)
+		if m.Title != "" && m.Title != m.File {
+			b.WriteString("｜" + m.Title)
+		}
+		if m.Role != "" {
+			fmt.Fprintf(b, "｜role=%s（要求面积 ≥%.0f%%）", m.Role, m.AreaMin*100)
+		}
+		b.WriteString("\n")
+		if m.At > 0 || m.Hold > 0 {
+			fmt.Fprintf(b, "   - 分镜要求：%.1fs 入场，至少停留 %.1fs\n", m.At, m.Hold)
+		}
+		if m.Present != "" {
+			b.WriteString("   - 摆法：" + m.Present + "\n")
+		}
+		if i < len(imgs) && llm.ValidImageData(imgs[i].URL) {
+			fmt.Fprintf(b, "   - 原图 = 图%d\n", next)
+			next++
+		} else {
+			b.WriteString("   - 原图缺失（本地文件读不出来——按声明摆法判，别把「读不到」当「没出现」）\n")
+		}
+	}
+}
 
 // AuditSegment 段审。返回（意见单, error）；审查器自身故障（模型失败/预算烧尽）
 // 由调用方按降级哲学处理。
@@ -422,12 +483,31 @@ func (s *Service) AuditSegment(ctx context.Context, in SegInput) (Verdict, error
 		refs = append(refs, smp)
 		fmt.Fprintf(&kick, "图%d = 样张%d（风格实物基准）\n", len(in.AnchorTimes)+i+1, i+1)
 	}
+	// 必需素材：原图一并注入（判「帧里的图是不是被盖住了」的对照底）。原图坏载荷
+	// 直接丢——不许出现「正文说图N、附图里没这张」的错位（编号按实际外发顺序算）。
+	if len(in.Materials) > 0 {
+		base := len(in.AnchorTimes) + len(in.Samples)
+		var matImgs []llm.ImgRef
+		for _, mi := range in.MaterialImgs {
+			if llm.ValidImageData(mi.URL) {
+				matImgs = append(matImgs, mi)
+			}
+		}
+		kick.WriteString("\n## 7. 本段真图素材（分镜已认领，必须真的可辨认）\n")
+		writeMaterialSection(&kick, in.Materials, in.MaterialImgs, base)
+		for _, mi := range matImgs {
+			imgs = append(imgs, mi.URL)
+		}
+		refs = append(refs, matImgs...)
+	} else {
+		kick.WriteString("\n## 7. 本段真图素材：（无——素材可见性不参与本段判定）\n")
+	}
 	// 画面源文本（2026-10-29）：错字/数字/专名的判定权威——判卷官从缩图读字必糊，
 	// 职责划分=视觉管美术与可读性，文字内容以源码为准（见 segmentSystem 职责划分段）。
 	if in.SourceText != "" {
-		kick.WriteString("\n## 7. 画面源文本（画面文字的唯一权威）\n" + in.SourceText + "\n")
+		kick.WriteString("\n## 8. 画面源文本（画面文字的唯一权威）\n" + in.SourceText + "\n")
 	} else {
-		kick.WriteString("\n## 7. 画面源文本：（缺——字幕文字维的错字/缺字退化为按帧判，须标注「帧读存疑」并降 low）\n")
+		kick.WriteString("\n## 8. 画面源文本：（缺——字幕文字维的错字/缺字退化为按帧判，须标注「帧读存疑」并降 low）\n")
 	}
 	if in.Prior != nil {
 		b, _ := json.MarshalIndent(in.Prior, "", "  ")
@@ -607,6 +687,7 @@ const finalSystem = `你是成片审片员，对整部成片判卷，产出结�
 1. 帧格 12–16 张——每帧标注「此刻=第几段/段落界」（t 为全片秒）
 2. 段落主题列表（全片结构）
 3. 逐段内容清单（该段旁白讲什么、画面该有什么——content 查项的对照底稿）
+4. 真图素材清单（分镜认领的真图 + 认领段 + 要求面积；可能为空）
 
 ## 判卷流程
 1. 先读段落主题列表，明确全片结构：几章、每段该是什么气质。
@@ -621,7 +702,7 @@ const finalSystem = `你是成片审片员，对整部成片判卷，产出结�
 | ② | deadair | 单点长时间无信息空转：某一帧附近画面长时间静止且旁白也无推进 |
 | ③ | stitch | 段序错、黑帧、音画错位、拼接点闪跳 |
 | ④ | drift | 段间风格渐变：相邻段风格要素（色系/字体/质感/密度）像两部片 |
-| ⑤ | content | 图文不符：抽到的帧所属段，画面内容与该段内容清单明显对不上（旁白讲 A 画面还是早前的 B）。风格化演绎、比喻可视化不算不符；一帧只是片段，看不出违和不硬报 |
+| ⑤ | content | 图文不符：抽到的帧所属段，画面内容与该段内容清单明显对不上（旁白讲 A 画面还是早前的 B）。风格化演绎、比喻可视化不算不符；一帧只是片段，看不出违和不硬报。**另：真图素材清单里的图没出现，或出现却认不出（被遮罩成淡影/被角色字幕压住/关键内容只由叠字代说）= fail** |
 
 ## 意见条目
 每条 fail 写一条 finding：
@@ -664,6 +745,23 @@ func (s *Service) AuditFinal(ctx context.Context, in FinalInput) (Verdict, error
 			kick.WriteString("- " + b + "\n")
 		}
 		kick.WriteString("\n")
+	}
+	if len(in.Materials) > 0 {
+		kick.WriteString("## 真图素材清单（分镜认领，必须真的可辨认）\n")
+		for _, m := range in.Materials {
+			fmt.Fprintf(&kick, "- `%s`", m.File)
+			if m.Title != "" && m.Title != m.File {
+				kick.WriteString("｜" + m.Title)
+			}
+			if m.SegID != "" {
+				fmt.Fprintf(&kick, "｜认领段 %s", m.SegID)
+			}
+			if m.Role != "" {
+				fmt.Fprintf(&kick, "｜role=%s（要求面积 ≥%.0f%%）", m.Role, m.AreaMin*100)
+			}
+			kick.WriteString("\n")
+		}
+		kick.WriteString("判法：每条都要在注入帧里找得到、且看得出是那张图（没被遮罩成淡影、没被角色/字幕压住、关键内容不是叠字代说）。找不到/认不出记 ⑤ content fail（high），anchor 写该段时刻。只判注入帧确实覆盖到的段——某段一帧都没抽到就别报它（帧格没覆盖 ≠ 素材没出现）。\n\n")
 	}
 	if in.Prior != nil {
 		// 复核轮（重进瘦身）：只注入重写段及邻段帧。未注入段的问题不凭空报，

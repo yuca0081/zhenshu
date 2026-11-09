@@ -437,14 +437,22 @@ func (r *Runner) sceneGen(ctx context.Context, p *pipeline.Project, instruction,
 		}
 		_, styleSeg := designNotesFor(p, seg.Idx)
 		styleSeg = directorNoteFor(sb, seg) + styleSeg
-		segMats := materialsForSeg(p, seg.ID)
+		segMats := materialsForShot(p, &seg)
+		reqImgs := requiredMaterialsForSeg(p, &seg)
 		if len(segMats) > 0 {
 			if d := digest(acc, materialVisImgs(p, segMats), qSegMaterials); d != "" {
-				styleSeg += "\n- 素材真图细读（视觉副驾，公版检索所得——看清内容再决定用不用、怎么摆位）：\n" + d + "\n"
+				styleSeg += "\n- 素材真图细读（视觉副驾——看清内容再定摆位与呈现）：\n" + d + "\n"
 			} else {
 				styleSeg += materialNote(len(segMats))
 			}
-			styleSeg += materialsNote(segMats)
+		}
+		// 必需素材走硬约束块（2026-11-02）：与下面的「可选加分」语气分开，
+		// 同一张图不再重复注入两种口径。
+		if len(reqImgs) > 0 {
+			styleSeg += requiredMaterialsNote(reqImgs)
+		}
+		if opt := optionalMaterials(segMats, reqImgs); len(opt) > 0 {
+			styleSeg += materialsNote(opt)
 		}
 		promptForHTML := func(fb, prev string) string {
 			var base string
@@ -859,6 +867,9 @@ func sceneValidate(r *Runner, ctx context.Context, p *pipeline.Project, html, se
 		errs = append(errs, "禁止字幕标注（data-ph/data-w）——字幕带由平台按 TTS 时间戳机械装配，内容留在上 83%")
 	}
 	errs = append(errs, materialWhitelistCheck(p, html)...)
+	// 必需素材落地闸门（2026-11-02）：分镜认领的真图必须真的在画面里且够大。
+	// 排在白名单之后：先保证引用的文件存在，再核占比。
+	errs = append(errs, requiredImageCheck(p, html, segID)...)
 	errs = append(errs, r.sceneLintWithVend(ctx, html)...)
 	return errs
 }

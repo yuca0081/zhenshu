@@ -37,7 +37,9 @@ const storyboardSystem = `你是分镜师兼视觉导演。任务：基于口播
 - action 这一镜必须看得见的戏：谁看谁、谁指、谁退、谁转头、发生了什么；
 - dialogue 只写短台词/字卡（≤12 字），不要复述旁白；没有就留空；
 - transition 与下一镜的接法（匹配切/白闪/直切/叠化）。
+真图素材：开工先 get_materials 看项目上传了哪些实拍图/截图。**标了「必需」的素材必须被某一镜认领**——在该段写 shot.images（file 逐字一致、role=hero|inset、at/hold、present 摆位），并且该段 visual_brief.scene 里要把这张图写进画面（写文件名或「截图/架构图/表格」这类具体指代）。必需素材漏认领 = 提交被拒。没有必需素材就整片不要写 shot.images，全部画面程序化绘制。
 镜头是戏，不是信息图：每镜至少两个角色同场（纯空镜除外），角色要有身体、腿、眼睛、表情，要有反应关系；镜头必须有可感知的景别/机位/运镜变化，禁止整段静态卡片。
+真图是「证据」，不是贴纸：认领它的那一镜，画面要围着它演（角色在指/在翻/在对比），别把截图塞进角落当角标。
 草稿先过 validate_storyboard，按报告修到零错误，再 submit_storyboard。`
 
 // runStoryboardStation 跑③：成功后工件 C 落盘（draft.json + 翻译的 storyboard.json）。
@@ -77,7 +79,7 @@ func mustTextProv() react.ChatClient {
 }
 
 func storyboardKickoff(p *pipeline.Project) string {
-	k := "开工。用 get_script 与 get_style_package 读取材料，然后切段。"
+	k := "开工。用 get_script 与 get_style_package 读取材料，然后用 get_materials 看有没有必须出现的真图素材，再切段。"
 	if notes := noteFile(p, "input/storyboard_notes.txt"); notes != "" {
 		k += "\n用户对分镜的修改要求（优先满足）：" + notes
 	}
@@ -100,6 +102,14 @@ func storyboardTools(p *pipeline.Project, d Deps, script *contract.Script, pack 
 			}),
 			Run: func(context.Context, string) Observation {
 				return Observation{Text: formatStylePackForStoryboard(p, pack)}
+			},
+		},
+		{
+			Def: toolSchema("get_materials", "读取项目上传的真图素材清单（实拍图/截图/官方图表），带「必需」标记与内容说明。必需素材必须被某一镜认领，否则提交被拒。", map[string]any{
+				"type": "object", "properties": map[string]any{},
+			}),
+			Run: func(context.Context, string) Observation {
+				return Observation{Text: formatImageMaterialsForPeer(loadImageMaterials(p))}
 			},
 		},
 		{
@@ -139,8 +149,12 @@ func storyboardTools(p *pipeline.Project, d Deps, script *contract.Script, pack 
 				if err := contract.ValidateDraftShots(draft); err != nil {
 					return Observation{Text: "镜头表未过校验（每段都要有完整 shot）：\n- " + err.Error()}
 				}
-				return Observation{Text: fmt.Sprintf("校验通过：%d 段铺满 %d 句，总时长约 %.0f 秒，镜头 %d/%d。可以 submit_storyboard。",
-					len(draft.Segments), len(script.Sentences), draft.TotalHint(), draft.ShotGate().Ready, len(draft.Segments))}
+				req, all := imageFileSets(p)
+				if err := contract.ValidateShotImages(draft, req, all); err != nil {
+					return Observation{Text: "未过校验（逐条修完再验）：\n- " + err.Error()}
+				}
+				return Observation{Text: fmt.Sprintf("校验通过：%d 段铺满 %d 句，总时长约 %.0f 秒，镜头 %d/%d，真图 %d 张已认领。可以 submit_storyboard。",
+					len(draft.Segments), len(script.Sentences), draft.TotalHint(), draft.ShotGate().Ready, len(draft.Segments), len(contract.UsedImageFiles(draft)))}
 			},
 		},
 		{
@@ -159,6 +173,10 @@ func storyboardTools(p *pipeline.Project, d Deps, script *contract.Script, pack 
 				}
 				if err := contract.ValidateDraftShots(draft); err != nil {
 					return Observation{Text: "被拒（镜头表不完整，先 validate_storyboard 修到零错误）：\n- " + err.Error()}
+				}
+				req, all := imageFileSets(p)
+				if err := contract.ValidateShotImages(draft, req, all); err != nil {
+					return Observation{Text: "被拒（必需素材没被认领/认领了但画面提示没写，先 validate_storyboard 修到零错误）：\n- " + err.Error()}
 				}
 				final := contract.NewStoryboardDraft(draft.Plan, draft.World, draft.CastLegend, draft.Paragraphs, draft.Segments)
 				// 翻译落盘：制作契约 storyboard.json（制作阶段零改动的衔接点）。
@@ -259,6 +277,24 @@ func storyboardDraftParam() map[string]any {
 								},
 								"ref_frame": map[string]any{"type": "string", "description": "参考帧项目内相对路径（可空）"},
 								"ref_note":  map[string]any{"type": "string", "description": "参考帧说明（只借构图/光/角色关系）"},
+								"images": map[string]any{
+									"type":        "array",
+									"description": "本镜必须出现在画面上的真图素材（只准引用 get_materials 清单里的文件）。没有就不写。每条「必需」素材至少被一段认领。",
+									"items": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"file": map[string]any{"type": "string", "description": "assets/img/xxx.jpg，与素材清单逐字一致"},
+											"role": map[string]any{
+												"type": "string", "enum": contract.ShotImageRoles,
+												"description": "hero 主画面（面积 ≥25%）/ inset 贴图（面积 ≥6%、短边 ≥200px）",
+											},
+											"at":      map[string]any{"type": "number", "description": "段内出现秒数（0/省略 = 首帧就在）"},
+											"hold":    map[string]any{"type": "number", "description": "最短停留秒数"},
+											"present": map[string]any{"type": "string", "description": "呈现配方：摆位/裁切/边框/重点描哪"},
+										},
+										"required": []string{"file", "role"},
+									},
+								},
 							},
 							"required": []string{"size", "camera", "stage", "cast", "action"},
 						},

@@ -115,6 +115,11 @@ func (l *Loop) Run(ctx context.Context) error {
 		}
 		l.record(msg)
 		msgs = append(msgs, msg)
+		// 两遍扫描（2026-11-03 修，与 review.Loop 同款）：先执行全部 tool_calls、把
+		// N 条 tool 消息**连续**追加，再把本轮所有附图合成**一条** user 消息接在块尾。
+		// 旧版把附图插在循环体内，并行 tool_calls 时 tool 消息被 user 图消息隔断，
+		// 端点回 400（"tool_calls must be followed by tool messages"）→ 整站失败重试。
+		var roundImgs []string
 		for _, call := range msg.ToolCalls {
 			l.step(round, "action", call.Function.Name+" "+compactJSON(call.Function.Arguments))
 			obs := l.exec(ctx, call.Function.Name, call.Function.Arguments)
@@ -125,14 +130,18 @@ func (l *Loop) Run(ctx context.Context) error {
 			}
 			msgs = append(msgs, tool)
 			l.record(tool)
-			if len(obs.Images) > 0 {
-				im := imageFollowUp(obs.Images)
-				msgs = append(msgs, im)
-				l.record(im)
-			}
+			roundImgs = append(roundImgs, obs.Images...)
 			if call.Function.Name == l.Submit && obs.Done {
+				if valid := validImageDataURLs(roundImgs); len(valid) > 0 {
+					l.record(imageFollowUp(valid)) // 已收工，图不再外发，只进留痕
+				}
 				return nil
 			}
+		}
+		if valid := validImageDataURLs(roundImgs); len(valid) > 0 {
+			im := imageFollowUp(valid)
+			msgs = append(msgs, im)
+			l.record(im)
 		}
 	}
 	return ErrBudgetExhausted
@@ -175,6 +184,18 @@ func (l *Loop) step(round int, kind, detail string) {
 	if l.OnStep != nil {
 		l.OnStep(round, kind, detail)
 	}
+}
+
+// validImageDataURLs 滤掉端点必拒的坏载荷（空/截断/本地路径）——本轮图全坏时不
+// 追加空附图消息（附图消息与循环外发共用同一口径）。
+func validImageDataURLs(images []string) []string {
+	out := make([]string, 0, len(images))
+	for _, u := range images {
+		if llm.ValidImageData(u) {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 // imageFollowUp 多模态附图：user 角色 + image_url 块（GenerateJSONVision 同一通道，实测可靠）。

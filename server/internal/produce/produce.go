@@ -836,6 +836,14 @@ func (r *Runner) run(ctx context.Context, p *pipeline.Project) error {
 	if !IsPrepProject(p) {
 		return fmt.Errorf("此项目是旧架构产物（legacy 管线已退役），不再支持制作——请新建项目；老项目目录仍在 data/projects 下，素材可自取")
 	}
+	// 兜底：分镜确认后才勾「必需」的素材不会被任何镜头认领（认领发生在分镜阶段）。
+	// 不静默放过——否则又是「素材在库里、成片里一张没有」。
+	if lost := unclaimedRequired(p); len(lost) > 0 {
+		r.Manifest(p, "materials.unclaimed", strings.Join(lost, ", "))
+		r.emit(p.ID, "progress", "compositions",
+			fmt.Sprintf("⚠ 有 %d 条「必需」素材没有被任何镜头认领（分镜确认之后才勾的？）：%s —— 这些图不会进片。重跑准备阶段让分镜重新认领。",
+				len(lost), strings.Join(lost, "、")))
+	}
 	return r.runSegmentPipeline(ctx, p)
 }
 
@@ -979,6 +987,7 @@ var segIDRe = regexp.MustCompile(`seg\d{2,}`)
 //   - Layout 版面：九种诊断全围文字可见性/位置（文字互叠/被盖/出画布/贴边裁字/
 //     隐形字/坐标错等），条条有故意用法（层次排版/字从物后滑出/海报裁字/出血面板），
 //     整段摘。真事故的兜底仍在：AI 判卷官看帧（带伤放行机制）+ 终审。
+//
 // 仍然判死的：Lint（缺库）/Motion（动画卡顿类）/Runtime（JS 崩溃）的 ✗——那是
 // 「能不能跑」不是「好不好看」。
 func blockingCheckErrors(out string) string {

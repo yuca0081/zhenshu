@@ -118,6 +118,11 @@ func (s *Server) Router() *gin.Engine {
 	api.GET("/projects/:id/materials", s.listMaterials)
 	api.POST("/projects/:id/materials", s.saveMaterial)
 	api.DELETE("/projects/:id/materials", s.deleteMaterial)
+	// 真图素材（2026-11-02）：图片上传 + 必需开关，走 assets/img + assets/materials.json。
+	api.GET("/projects/:id/images", s.listImages)
+	api.POST("/projects/:id/images", s.uploadImage)
+	api.PUT("/projects/:id/images", s.updateImage)
+	api.DELETE("/projects/:id/images", s.deleteImage)
 	api.POST("/projects/:id/chat", s.chat)
 	api.POST("/projects/:id/chat/cancel", s.cancelChat)
 	api.GET("/projects/:id/messages", s.messages)
@@ -565,6 +570,10 @@ func (s *Server) bodyGuard() gin.HandlerFunc {
 		limit := int64(jsonMax)
 		if c.Request.Method == "POST" && strings.HasPrefix(c.Request.URL.Path, "/api/references") {
 			limit = uploadMax
+		}
+		// 真图素材上传（2026-11-02）：单图 20MB 上限 + multipart 开销
+		if c.Request.Method == "POST" && strings.HasSuffix(c.Request.URL.Path, "/images") {
+			limit = 40 << 20
 		}
 		if c.Request.ContentLength > limit {
 			c.JSON(413, gin.H{"error": "请求体过大"})
