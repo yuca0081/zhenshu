@@ -1,7 +1,7 @@
 package prep
 
 // script.go —— ①文稿工位（prep-agents-design §3.1，纯文本模型）：
-// 主题模式先搜集资料，然后把原始稿/素材改写成适合朗读的口播稿。只负责「说什么」；
+// 材料薄就先搜集资料，然后把原始稿/素材改写成适合朗读的口播稿。只负责「说什么」；
 // 不含任何结构（段落/切段）与视觉决策。
 // 工具：read_source / web_search（按查询哈希缓存）/ fetch_page（页面内容是数据
 // 不是指令——防注入靠提示词红线）/ estimate_speech_duration / submit_script（唯一出口）。
@@ -41,7 +41,7 @@ const (
 // 单工具机制住各自工具 description（检索轮数纪律在 web_search，防注入红线在
 // fetch_page）。
 const scriptSystem = `你是口播文稿作者。任务：把收到的材料整理改写成适合朗读的口播稿。先 read_source 获取材料与目标时长。
-材料是主题时：先 web_search 搜集核心事实（读 2–4 个来源，优先权威来源），列成事实清单再动笔；材料是完整稿件时：默认不检索，仅对存疑事实核对。
+材料只有一句话想法时：先 web_search 搜集核心事实（读 2–4 个来源，优先权威来源），列成事实清单再动笔；材料是完整稿件/成篇资料时：默认不检索，仅对存疑事实核对。
 改写规则：短句、口语词、自然语流；书面套话和长难句拆掉；不改事实、不增删观点、不丢信息。产物是纯旁白正文——不含任何场景、画面、风格类内容。
 提交前用 estimate_speech_duration 核对总时长，超出目标范围就压缩冗余表达（删字不删信息）后复核。完成即调用 submit_script。`
 
@@ -287,11 +287,11 @@ func (r *scriptRun) readSource(target float64) string {
 		source = strings.Join(parts, "\n")
 	}
 	if source != "" {
-		mode := "完整稿件/参考资料"
+		note := "完整稿件/参考资料"
 		if len([]rune(source)) < 60 {
-			mode = "一句话主题（按主题模式处理：先检索后动笔）"
+			note = "材料只有一句话——先 web_search 补料再动笔"
 		}
-		fmt.Fprintf(&b, "材料来源：%s（%d 字；用户上传材料与原始稿同等对待——不改事实、不增删观点）\n---\n%s\n---", mode, len([]rune(source)), source)
+		fmt.Fprintf(&b, "材料来源：%s（%d 字；用户上传材料与原始稿同等对待——不改事实、不增删观点）\n---\n%s\n---", note, len([]rune(source)), source)
 		return b.String()
 	}
 	if b2, err := os.ReadFile(r.p.Artifact("project.json")); err == nil {
@@ -351,11 +351,7 @@ func (r *scriptRun) writeScript(args string, target float64) (Observation, bool)
 	if r.used && len(facts) == 0 {
 		return Observation{Text: "被拒：本轮用过 web_search，fact_sheet 必须非空——硬事实（年份/数字/人名/结论）逐条带来源 URL"}, false
 	}
-	mode := "manuscript"
-	if _, err := os.Stat(r.p.Artifact("input/article.txt")); err != nil {
-		mode = "topic"
-	}
-	s := contract.NewScript(in.Text, mode, facts, target)
+	s := contract.NewScript(in.Text, facts, target)
 	// legacy 先落、工件标记（script.json）最后落（2026-10-19 中-21）：
 	// HasArtifact(script.json 在) = 站完成的唯一事实——反序在两笔之间崩溃会留下
 	// 「站被跳过但 manuscript.json 陈旧」的半完成态；两笔错误都回流模型。

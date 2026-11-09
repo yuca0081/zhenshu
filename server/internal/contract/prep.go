@@ -27,7 +27,6 @@ import (
 // 分镜稿只引用句编号（narration_refs），零转抄漂移；fact_sheet 随工件进指纹，
 // 供审核工位「事实核查」查项使用。
 type Script struct {
-	SourceMode    string     `json:"source_mode"` // topic（输入是主题，走过检索）| manuscript（输入是完整稿件）
 	Text          string     `json:"text"`
 	Sentences     []Sentence `json:"sentences"`
 	FactSheet     []FactItem `json:"fact_sheet,omitempty"`
@@ -117,9 +116,8 @@ func FirstRunes(s string, n int) string {
 }
 
 // NewScript 组装文字稿工件：切句、编号、字数、指纹。
-func NewScript(text, sourceMode string, facts []FactItem, targetSeconds float64) *Script {
+func NewScript(text string, facts []FactItem, targetSeconds float64) *Script {
 	s := &Script{
-		SourceMode:    sourceMode,
 		Text:          strings.TrimSpace(text),
 		Sentences:     SplitSentences(text),
 		FactSheet:     facts,

@@ -796,7 +796,7 @@ const sampleJudgeSystem = `你是样张质检员。给一条短视频动态样�
 func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 	cv := pipeline.ProjectCanvas(r.p) // 画幅跟项目走：横版样张上验竖版版式=无效验证（2026-10-15 实测 P1）
 	w, h := int(cv.W), int(cv.H)
-	desc := fmt.Sprintf(`渲染一张动态样张（%.1f 秒 mp4，与成片同一台渲染器同一套工序，动效/字体/质感即所得）。scene_brief=场景简述（必须取自口播稿代表性内容，禁止通用示例）；html=%d×%d 自包含动态页面：
+	desc := fmt.Sprintf(`渲染一张动态样张（%.1f 秒 mp4，与成片同一台渲染器同一套工序，动效/字体/质感即所得）。scene_brief=场景简述（必须画本片的真实构思内容——来自文稿、画面构想或分镜皆可，禁止通用示例）；html=%d×%d 自包含动态页面：
 - 根元素 <div data-composition-id="main" data-width="%d" data-height="%d" data-start="0" data-duration="%.1f">，%.1f 秒走完一次完整揭示节拍（开场视觉锚点即亮，收尾定格在内容帧不拖尾）
 - <head> 里保留 <script src="assets/gsap.min.js"></script> 与 <script src="assets/hf.js"></script>（漏写平台会机械补）
 - 动效全写进一条 gsap 时间轴：var tl=gsap.timeline({paused:true}); …; window.__timelines=window.__timelines||{}; window.__timelines["main"]=tl; 可补间只有 opacity/x/y/scale/rotation；禁 CSS animation/transition/@keyframes；禁 rAF/setTimeout/setInterval/Date.now；Math.random 必须种子化
@@ -809,7 +809,7 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 		Def: toolSchema("render_sample", desc, map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"scene_brief": map[string]any{"type": "string", "description": "场景简述（一句话：这张样张画口播稿的哪个代表性内容）"},
+				"scene_brief": map[string]any{"type": "string", "description": "场景简述（一句话：这张样张画本片的哪个真实构思内容）"},
 				"html":        map[string]any{"type": "string", "description": fmt.Sprintf("样张 HTML（完整自包含动态文档，画布 %d×%d，时长 %.1f 秒）", w, h, sampleDur)},
 				"replace":     map[string]any{"type": "integer", "description": "要替换的样张序号（1-based：2=样张B）；0/缺省=新增。同一张被判卷打回后的返工重渲必须带 replace，别新增重复样张"},
 			},
@@ -836,7 +836,7 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 				return Observation{Text: fmt.Sprintf("被拒：样张 HTML 超过 %d 字符（目标 ≤%d）——拆掉重复样式、用 class 归并", sampleHTMLMax, sampleHTMLTarget)}
 			}
 			if strings.TrimSpace(in.SceneBrief) == "" {
-				return Observation{Text: "被拒：scene_brief 为空——样张场景必须取自口播稿代表性内容"}
+				return Observation{Text: "被拒：scene_brief 为空——样张必须画本片的真实构思内容（禁止通用示例）"}
 			}
 			draft := r.loadDraft()
 			reworkIdx := -1 // ≥0 = 替换已有槽位（文件名不变，不多占一张）
@@ -1472,7 +1472,7 @@ func (r *styleRun) writeStylepack(ctx context.Context, args string) (Observation
 		}
 	}
 	if len(draft.Samples) < 1 {
-		return reply("被拒：还没有样张——先 render_sample 至少 1 张（场景取自口播稿代表性内容）"), false
+		return reply("被拒：还没有样张——先 render_sample 至少 1 张"), false
 	}
 	ids := in.SampleIDs
 	if len(ids) == 0 {

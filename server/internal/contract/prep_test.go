@@ -89,7 +89,7 @@ func scriptForN(t *testing.T, n int) *Script {
 	for i := range parts {
 		parts[i] = "这是第" + string(rune('0'+i+1)) + "句。"
 	}
-	s := NewScript(strings.Join(parts, ""), "manuscript", nil, 60)
+	s := NewScript(strings.Join(parts, ""), nil, 60)
 	if len(s.Sentences) != n {
 		t.Fatalf("切句 %d, want %d", len(s.Sentences), n)
 	}

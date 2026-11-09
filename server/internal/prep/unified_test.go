@@ -31,7 +31,7 @@ func unifiedFixture(t *testing.T) (*pipeline.Project, *unifiedRun) {
 // unifiedScript 写工件 A（两句稿）。
 func unifiedScript(t *testing.T) *contract.Script {
 	t.Helper()
-	return contract.NewScript("第一句在这里。第二句在这里。", "", nil, 120)
+	return contract.NewScript("第一句在这里。第二句在这里。", nil, 120)
 }
 
 // unifiedDraft 写工件 C（两段铺满两句、带内、零角色——吃 2026-11-09 放宽的

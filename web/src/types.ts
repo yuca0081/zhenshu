@@ -86,7 +86,6 @@ export interface PrepSentence { id: string; text: string }
 export interface PrepFact { claim: string; url: string }
 
 export interface PrepScript {
-  source_mode: string
   text: string
   sentences: PrepSentence[]
   fact_sheet?: PrepFact[]
