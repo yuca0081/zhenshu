@@ -1,7 +1,6 @@
 # 统一准备智能体设计 rev2：无阶段（文稿+风格+分镜 一个 agent 一条循环）
 
-状态：设计稿 rev2（2026-11-09 讨论定稿）· 未实施
-前身：docs/prep-agents-design.md（三工位 v3.1，现行）、rev1（同日本档首版）
+状态：rev2 已实施（2026-11-09，§12 步 1–5 落库；E 系列实验待跑）· 前身：docs/prep-agents-design.md（三工位 v3.1，现行兜底）、rev1（同日本档首版）
 
 ## 0. rev1 → rev2 演进（本次讨论的三个转折）
 
@@ -195,10 +194,11 @@ rev1 §11 曾声称 2026-11-09 已完成"角色去强制化 + ValidateDraftShots
 
 ## 12. 落地拆步
 
-1. §11 前置项落库（独立提交，老链先受益）
-2. runner.go 分支 + unifiedAgent 骨架（loop.go 复用）+ 崩溃续跑注入
-3. write_* 三工具（submit 改造：去终局语义、加失效提醒）+ finish_prep
-4. 工具描述收敛（scene_brief 放宽、模式措辞清理、readSource 措辞）+
-   source_mode 退役（NewScript/types.ts）
-5. 前端进度改三件过闸状态（0/3→3/3；过程页 manifest 词表微调）
-6. E 系列实验 → 数据 → 决策
+1. ✅ §11 前置项落库（f87731a，独立提交，老链先受益）
+2. ✅ runner.go 分支 + unifiedAgent 骨架 + 崩溃续跑注入（874d83b，与步 3 合一提交）
+3. ✅ write_* 三工具（保存即校验+失效提醒）+ finish_prep + 预算耗尽自动终检（874d83b）
+4. ✅ 工具描述收敛（scene_brief 放宽、模式措辞清理、readSource 措辞）+
+   source_mode 退役（791562b）
+5. ✅ 前端进度改三件过闸状态（c8573fb；建项目接口增 unified 参数 01a02b6）
+6. ⏳ E 系列实验 → 数据 → 决策（实验项目：`POST /api/projects` 带
+   `unified:true`；老链对照组同参数不带 unified；同一想法+材料各跑 3 片）
