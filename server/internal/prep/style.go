@@ -59,21 +59,7 @@ func runStyleStation(ctx context.Context, p *pipeline.Project, d Deps) error {
 	if dl, ok := ctx.Deadline(); ok {
 		r.grabAt = dl.Add(-styleGrabWindow)
 	}
-	// 用户选定条目三层恢复：简报在 → 直接用（applyStyle 落的硬要求）；简报被反馈
-	// 重跑作废但 project.json style_id 还在 → 重建简报（选型是项目级决定，不随
-	// 工件作废）；都没有 → ②自主探索。chosen 是判卷对照物的起点。
-	if brief := pipeline.LoadStyleBrief(p); brief != nil {
-		r.chosen = brief.EntryID
-	} else if sid := projectStyleID(p); sid != "" && d.Lib != nil {
-		if _, ok := d.Lib.Get(sid); ok {
-			if b, berr := d.Lib.BuildBrief(sid, nil); berr == nil {
-				if werr := stylelib.WriteBriefFile(p.Artifact("style/style_brief.json"), b); werr == nil {
-					r.chosen = sid
-					p.Manifest("prep.style_brief", "选定简报重建 "+sid)
-				}
-			}
-		}
-	}
+	r.chosen = restoreStyleChoice(p, d)
 	log := openSessionLog(p, StationStyle)
 	defer log.close()
 	loop := &Loop{
@@ -116,6 +102,27 @@ func styleKickoff(p *pipeline.Project) string {
 	return k
 }
 
+// restoreStyleChoice 用户选定条目三层恢复（runStyleStation 与统一链共用）：
+// 简报在 → 直接用（applyStyle 落的硬要求）；简报被反馈重跑作废但 project.json
+// style_id 还在 → 重建简报（选型是项目级决定，不随工件作废）；都没有 →
+// 自主探索。返回 chosen 条目 id（判卷对照物的起点）。
+func restoreStyleChoice(p *pipeline.Project, d Deps) string {
+	if brief := pipeline.LoadStyleBrief(p); brief != nil {
+		return brief.EntryID
+	}
+	if sid := projectStyleID(p); sid != "" && d.Lib != nil {
+		if _, ok := d.Lib.Get(sid); ok {
+			if b, berr := d.Lib.BuildBrief(sid, nil); berr == nil {
+				if werr := stylelib.WriteBriefFile(p.Artifact("style/style_brief.json"), b); werr == nil {
+					p.Manifest("prep.style_brief", "选定简报重建 "+sid)
+					return sid
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // styleDraft ②进行中的样张草稿（style/prep-draft.json）：render_sample 逐张积累，
 // submit_style 时并进正式工件。与正式 style_samples.json 分离——后者必须一次成文
 // （设计系统+样张+未确认态），中途半成品不进正式产物。
@@ -141,9 +148,20 @@ type styleRun struct {
 	// lastRepairSig 上一轮修复前的问题签名（样张刹车判据；每张样张渲染完清零）。
 	lastRepairSig string
 	// grabAt 抢收线（2026-10-23 中-2）：工位预算 deadline 前 styleGrabWindow 的
-	// 时刻点。过后 render_sample 拒起新活——逼模型立即 submit_style 带伤交付，
+	// 时刻点。过后 render_sample 拒起新活——逼模型立即收口带伤交付，
 	// 优先于撞预算线全烧（三次真机两轮超时的直接对策）。
 	grabAt time.Time
+	// grabHint 抢收指路话术（默认指向 submit_style；统一链覆写为先 write_stylepack
+	// 落盘再 finish_prep 收口）。
+	grabHint string
+}
+
+// grabMessage 抢收拒渲时的话术（render_sample 用）。
+func (r *styleRun) grabMessage() string {
+	if r.grabHint != "" {
+		return r.grabHint
+	}
+	return fmt.Sprintf("时间预算将尽（剩不足 %s）——不要再渲新样张也不要再修旧的，立即调用 submit_style 提交当前成果：带伤提交优先于超时全烧，缺一张样张是小事，链超时是全烧。", styleGrabWindow)
 }
 
 // refDetailMax get_style_detail 随观察附的真迹帧数：探索期一条 3 张，看几条
@@ -799,9 +817,9 @@ func (r *styleRun) renderSampleTool(snapLeft *int, loop *Loop) Tool {
 		}),
 		Run: func(ctx context.Context, args string) Observation {
 			// 抢收门（2026-10-23 中-2）：预算窗口将尽，拒起新样张——渲一张带修复
-			// ~7 分钟，撞线时开新活等于整链作废。回喂直接指路 submit_style。
+			// ~7 分钟，撞线时开新活等于整链作废。回喂直接指路收口工具。
 			if !r.grabAt.IsZero() && time.Now().After(r.grabAt) {
-				return Observation{Text: fmt.Sprintf("时间预算将尽（剩不足 %s）——不要再渲新样张也不要再修旧的，立即调用 submit_style 提交当前成果：带伤提交优先于超时全烧，缺一张样张是小事，链超时是全烧。", styleGrabWindow)}
+				return Observation{Text: r.grabMessage()}
 			}
 			var in struct {
 				SceneBrief string `json:"scene_brief"`
@@ -1401,128 +1419,148 @@ func (r *styleRun) submitStyleTool() Tool {
 			"required": []string{"style_id", "description", "grammar", "design_system"},
 		}),
 		Run: func(ctx context.Context, args string) Observation {
-			normArgs, notes := normalizeStyleArgs(args)
-			// 归一说明附在每次回喂头部：这次放行不等于下次也放——模型得学会给对
-			reply := func(text string) Observation {
-				if len(notes) > 0 {
-					text = "（已自动归一：" + strings.Join(notes, "；") + "——下次按 schema 标注的类型直接给对）\n" + text
-				}
-				return Observation{Text: text}
+			obs, ok := r.writeStylepack(ctx, args)
+			if ok {
+				obs.Done = true
 			}
-			var in struct {
-				StyleID      string                `json:"style_id"`
-				Description  string                `json:"description"`
-				Grammar      contract.EditGrammar  `json:"grammar"`
-				DesignSystem contract.StyleSamples `json:"design_system"`
-				SampleIDs    []string              `json:"sample_ids"`
-			}
-			if err := decodeArgs(normArgs, &in); err != nil {
-				return reply(err.Error())
-			}
-			// style_id 已存在（库内含未入库草稿，或本次登记）
-			sid := strings.TrimSpace(in.StyleID)
-			if r.d.Lib != nil {
-				if _, ok := r.d.Lib.Get(sid); !ok && sid != r.registered {
-					return reply(fmt.Sprintf("被拒：style_id %s 不在库内也不是本次登记的条目（本次登记：%s）", sid, r.registered))
-				}
-			}
-			if sid == "" {
-				return reply("被拒：style_id 为空")
-			}
-			draft := r.loadDraft()
-			if len(draft.Samples) < 1 {
-				return reply("被拒：还没有样张——先 render_sample 至少 1 张（场景取自口播稿代表性内容）")
-			}
-			ids := in.SampleIDs
-			if len(ids) == 0 {
-				for _, s := range draft.Samples {
-					ids = append(ids, s.Tag)
-				}
-			}
-			ds := in.DesignSystem
-			ds.StyleID = sid
-			ds.Samples = draft.Samples
-			ds.VendLibs = sampleVendLibs(draft.Samples) // 样张自采货架：正式段优先复现
-			// 样张自装字体记账（终审页披露 + 制作段钳制放行的依据）：HTML 声明 ∪
-			// 申请书账——修复轮重写 HTML 可能弄丢声明，申请书是持久 BOM，并集才不丢
-			var cfHTMLs []string
-			for _, s := range draft.Samples {
-				cfHTMLs = append(cfHTMLs, s.HTML)
-			}
-			ds.CustomFonts = pipeline.MergeCustomFonts(
-				pipeline.CustomFontsFromHTMLs(cfHTMLs),
-				pipeline.CustomFontsFromRequest(r.p))
-			ds.Confirmed = false // 打包终审硬门：确认前禁止开工
-			sp := contract.NewStylePack(sid, in.Description, in.Grammar, &ds, ids)
-			if err := contract.ValidateStylePack(sp); err != nil {
-				return reply("被拒：" + err.Error())
-			}
-			// 字体闸：设计声明里出现渲染端没有的字体族 = 样张与正片双双静默回退
-			//（齐马蓝教训，2026-10-21 呼啸骑士战实测复犯）。可用=目录/系统白名单/
-			// 通用族/已 ensure 的样张字体（assets——目录与自装都进 font_assets.json）。
-			// 打回并列出可用品类，模型当场换——比事后剥族保得住设计意图。
-			if bad := pipeline.UnresolvedDesignFonts(&ds, pipeline.LoadSampleFontAssets(r.p)); len(bad) > 0 {
-				return reply(fmt.Sprintf("被拒：设计系统字体栈含渲染端没有的字体族「%s」。目录字体可选：%s；系统字体：微软雅黑/黑体/宋体/楷体/仿宋/Noto Sans SC；样张自装的字体以样张里 <!-- font: … --> 声明过的家族名为准（设计栈与声明写法逐字一致）。换好后重交。",
-					strings.Join(bad, "、"), pipeline.FontCatalogList()))
-			}
-			// 设计锁定（legacy 路径同源）：字体钳制/接缝契约机械执法/目录字体申请书/
-			// design.md+skin.json。prep 路径此前没人跑 LockDesign，目录字体申请书
-			// 从未落盘——font_tool 永远空转，样张只能拿系统字体兜底（实测缺口）。
-			if err := pipeline.LockDesign(r.p, &ds); err != nil {
-				return reply("设计锁定失败：" + err.Error())
-			}
-			// legacy 先落、工件标记（stylepack.json）最后落（2026-10-19 中-21，
-			// 与 script/storyboard 同纪律）：两笔之间崩溃不留「站被跳过但
-			// style_samples 陈旧」的半完成态
-			if err := writeJSONFile(r.p.Artifact("style/style_samples.json"), &ds); err != nil {
-				return reply("设计系统落盘失败：" + err.Error())
-			}
-			if err := writeJSONFile(stylePackPath(r.p), sp); err != nil {
-				return reply("落盘失败：" + err.Error())
-			}
-			_ = pipeline.SetProjectField(r.p, "style_id", sid)
-			// 简报保底：②自己选的条目（用户没在界面选过）也要落 style_brief.json——
-			// 制作阶段的真迹注入（sceneGen 对照/frameqa 考卷）全靠它，②不落则下游全盲。
-			// 已有同条目简报（applyStyle 落的）不动；换条目时重写。
-			if r.d.Lib != nil {
-				if cur := pipeline.LoadStyleBrief(r.p); cur == nil || cur.EntryID != sid {
-					var b *contract.StyleBrief
-					var berr error
-					if r.derived != nil && sid == r.derived.ID {
-						b = r.d.Lib.BriefFrom(r.derived, nil) // 本片临时条目：不在账本，直接组装
-					} else {
-						b, berr = r.d.Lib.BuildBrief(sid, nil)
-					}
-					if berr == nil {
-						if werr := stylelib.WriteBriefFile(r.p.Artifact("style/style_brief.json"), b); werr == nil {
-							r.p.Manifest("prep.style_brief", "简报落盘 "+sid+"（制作阶段真迹注入可用）")
-						}
-					}
-				}
-			}
-			_ = os.Remove(styleDraftPath(r.p))
-			// 字体准备 + 全量重截：首渲染时 font_assets 未备好，样张截图回退过系统
-			// 字体——ensure 出真字体后按缓存键（font_assets.json 新鲜度）重截全部
-			// 样张。失败只降级记账，不挡交稿。
-			if ferr := r.runAIScript(ctx, 6*time.Minute, "font_tool.py", "ensure", r.p.Dir); ferr != nil {
-				r.p.Manifest("prep.style_font_degrade", pipeline.FirstLine(ferr.Error(), 160))
-			} else if serr := r.runAIScript(ctx, 2*time.Minute, "snap_samples.py", r.p.Dir); serr != nil {
-				r.p.Manifest("prep.style_resnap_error", pipeline.FirstLine(serr.Error(), 160))
-			}
-			r.d.emit(r.p.ID, "stage", "prep/style", fmt.Sprintf("done：%s「%s」语法[%s %.0f-%.0fs] 样张×%d",
-				sid, ds.Direction, in.Grammar.Density, in.Grammar.BandMin, in.Grammar.BandMax, len(draft.Samples)))
-			customNote := "无"
-			if len(ds.CustomFonts) > 0 {
-				names := make([]string, 0, len(ds.CustomFonts))
-				for _, c := range ds.CustomFonts {
-					names = append(names, c.Family)
-				}
-				customNote = strings.Join(names, "、")
-			}
-			done := reply(fmt.Sprintf("风格包已提交：%s（%s）；剪辑语法 %s / %.0f–%.0f 秒 / %s；样张 %d 张；自采库：%s；自装字体：%s。自装清单会随终审页列出（含协议与来源）。样张未经用户终审确认前禁止开工。",
-				sid, ds.Direction, in.Grammar.Density, in.Grammar.BandMin, in.Grammar.BandMax, in.Grammar.Continuity, len(draft.Samples), orNone(ds.VendLibs), customNote))
-			done.Done = true
-			return done
+			return obs
 		},
 	}
+}
+
+// writeStylepack submit_style / write_stylepack 共体：归一 → 校验（style_id
+// 在册、样张 ≥1、ValidateStylePack、字体闸）→ 设计锁定 → 落盘 → 简报保底 →
+// 字体补装重截。ok=true 表示已落盘（submit 置 Done；统一链追加下游失效提醒）。
+// 可重入：prep-draft 已并包时样张从上一版 style_samples.json 回读（统一链
+// 允许多次 write）。
+func (r *styleRun) writeStylepack(ctx context.Context, args string) (Observation, bool) {
+	normArgs, notes := normalizeStyleArgs(args)
+	// 归一说明附在每次回喂头部：这次放行不等于下次也放——模型得学会给对
+	reply := func(text string) Observation {
+		if len(notes) > 0 {
+			text = "（已自动归一：" + strings.Join(notes, "；") + "——下次按 schema 标注的类型直接给对）\n" + text
+		}
+		return Observation{Text: text}
+	}
+	var in struct {
+		StyleID      string                `json:"style_id"`
+		Description  string                `json:"description"`
+		Grammar      contract.EditGrammar  `json:"grammar"`
+		DesignSystem contract.StyleSamples `json:"design_system"`
+		SampleIDs    []string              `json:"sample_ids"`
+	}
+	if err := decodeArgs(normArgs, &in); err != nil {
+		return reply(err.Error()), false
+	}
+	// style_id 已存在（库内含未入库草稿，或本次登记）
+	sid := strings.TrimSpace(in.StyleID)
+	if r.d.Lib != nil {
+		if _, ok := r.d.Lib.Get(sid); !ok && sid != r.registered {
+			return reply(fmt.Sprintf("被拒：style_id %s 不在库内也不是本次登记的条目（本次登记：%s）", sid, r.registered)), false
+		}
+	}
+	if sid == "" {
+		return reply("被拒：style_id 为空"), false
+	}
+	draft := r.loadDraft()
+	if len(draft.Samples) == 0 {
+		// 可重入回读：统一链允许多次 write——prep-draft 已并包时，样张从
+		// 上一版设计系统回读（老链 submit 一次成文，走不到这条）。
+		var prev contract.StyleSamples
+		if err := readJSONFile(r.p.Artifact("style/style_samples.json"), &prev); err == nil {
+			draft.Samples = prev.Samples
+		}
+	}
+	if len(draft.Samples) < 1 {
+		return reply("被拒：还没有样张——先 render_sample 至少 1 张（场景取自口播稿代表性内容）"), false
+	}
+	ids := in.SampleIDs
+	if len(ids) == 0 {
+		for _, s := range draft.Samples {
+			ids = append(ids, s.Tag)
+		}
+	}
+	ds := in.DesignSystem
+	ds.StyleID = sid
+	ds.Samples = draft.Samples
+	ds.VendLibs = sampleVendLibs(draft.Samples) // 样张自采货架：正式段优先复现
+	// 样张自装字体记账（终审页披露 + 制作段钳制放行的依据）：HTML 声明 ∪
+	// 申请书账——修复轮重写 HTML 可能弄丢声明，申请书是持久 BOM，并集才不丢
+	var cfHTMLs []string
+	for _, s := range draft.Samples {
+		cfHTMLs = append(cfHTMLs, s.HTML)
+	}
+	ds.CustomFonts = pipeline.MergeCustomFonts(
+		pipeline.CustomFontsFromHTMLs(cfHTMLs),
+		pipeline.CustomFontsFromRequest(r.p))
+	ds.Confirmed = false // 打包终审硬门：确认前禁止开工
+	sp := contract.NewStylePack(sid, in.Description, in.Grammar, &ds, ids)
+	if err := contract.ValidateStylePack(sp); err != nil {
+		return reply("被拒：" + err.Error()), false
+	}
+	// 字体闸：设计声明里出现渲染端没有的字体族 = 样张与正片双双静默回退
+	//（齐马蓝教训，2026-10-21 呼啸骑士战实测复犯）。可用=目录/系统白名单/
+	// 通用族/已 ensure 的样张字体（assets——目录与自装都进 font_assets.json）。
+	// 打回并列出可用品类，模型当场换——比事后剥族保得住设计意图。
+	if bad := pipeline.UnresolvedDesignFonts(&ds, pipeline.LoadSampleFontAssets(r.p)); len(bad) > 0 {
+		return reply(fmt.Sprintf("被拒：设计系统字体栈含渲染端没有的字体族「%s」。目录字体可选：%s；系统字体：微软雅黑/黑体/宋体/楷体/仿宋/Noto Sans SC；样张自装的字体以样张里 <!-- font: … --> 声明过的家族名为准（设计栈与声明写法逐字一致）。换好后重交。",
+			strings.Join(bad, "、"), pipeline.FontCatalogList())), false
+	}
+	// 设计锁定（legacy 路径同源）：字体钳制/接缝契约机械执法/目录字体申请书/
+	// design.md+skin.json。prep 路径此前没人跑 LockDesign，目录字体申请书
+	// 从未落盘——font_tool 永远空转，样张只能拿系统字体兜底（实测缺口）。
+	if err := pipeline.LockDesign(r.p, &ds); err != nil {
+		return reply("设计锁定失败：" + err.Error()), false
+	}
+	// legacy 先落、工件标记（stylepack.json）最后落（2026-10-19 中-21，
+	// 与 script/storyboard 同纪律）：两笔之间崩溃不留「站被跳过但
+	// style_samples 陈旧」的半完成态
+	if err := writeJSONFile(r.p.Artifact("style/style_samples.json"), &ds); err != nil {
+		return reply("设计系统落盘失败：" + err.Error()), false
+	}
+	if err := writeJSONFile(stylePackPath(r.p), sp); err != nil {
+		return reply("落盘失败：" + err.Error()), false
+	}
+	_ = pipeline.SetProjectField(r.p, "style_id", sid)
+	// 简报保底：②自己选的条目（用户没在界面选过）也要落 style_brief.json——
+	// 制作阶段的真迹注入（sceneGen 对照/frameqa 考卷）全靠它，②不落则下游全盲。
+	// 已有同条目简报（applyStyle 落的）不动；换条目时重写。
+	if r.d.Lib != nil {
+		if cur := pipeline.LoadStyleBrief(r.p); cur == nil || cur.EntryID != sid {
+			var b *contract.StyleBrief
+			var berr error
+			if r.derived != nil && sid == r.derived.ID {
+				b = r.d.Lib.BriefFrom(r.derived, nil) // 本片临时条目：不在账本，直接组装
+			} else {
+				b, berr = r.d.Lib.BuildBrief(sid, nil)
+			}
+			if berr == nil {
+				if werr := stylelib.WriteBriefFile(r.p.Artifact("style/style_brief.json"), b); werr == nil {
+					r.p.Manifest("prep.style_brief", "简报落盘 "+sid+"（制作阶段真迹注入可用）")
+				}
+			}
+		}
+	}
+	_ = os.Remove(styleDraftPath(r.p))
+	// 字体准备 + 全量重截：首渲染时 font_assets 未备好，样张截图回退过系统
+	// 字体——ensure 出真字体后按缓存键（font_assets.json 新鲜度）重截全部
+	// 样张。失败只降级记账，不挡交稿。
+	if ferr := r.runAIScript(ctx, 6*time.Minute, "font_tool.py", "ensure", r.p.Dir); ferr != nil {
+		r.p.Manifest("prep.style_font_degrade", pipeline.FirstLine(ferr.Error(), 160))
+	} else if serr := r.runAIScript(ctx, 2*time.Minute, "snap_samples.py", r.p.Dir); serr != nil {
+		r.p.Manifest("prep.style_resnap_error", pipeline.FirstLine(serr.Error(), 160))
+	}
+	r.d.emit(r.p.ID, "stage", "prep/style", fmt.Sprintf("done：%s「%s」语法[%s %.0f-%.0fs] 样张×%d",
+		sid, ds.Direction, in.Grammar.Density, in.Grammar.BandMin, in.Grammar.BandMax, len(draft.Samples)))
+	customNote := "无"
+	if len(ds.CustomFonts) > 0 {
+		names := make([]string, 0, len(ds.CustomFonts))
+		for _, c := range ds.CustomFonts {
+			names = append(names, c.Family)
+		}
+		customNote = strings.Join(names, "、")
+	}
+	done := reply(fmt.Sprintf("风格包已提交：%s（%s）；剪辑语法 %s / %.0f–%.0f 秒 / %s；样张 %d 张；自采库：%s；自装字体：%s。自装清单会随终审页列出（含协议与来源）。样张未经用户终审确认前禁止开工。",
+		sid, ds.Direction, in.Grammar.Density, in.Grammar.BandMin, in.Grammar.BandMax, in.Grammar.Continuity, len(draft.Samples), orNone(ds.VendLibs), customNote))
+	return done, true
 }

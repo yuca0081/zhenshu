@@ -179,30 +179,37 @@ func storyboardTools(p *pipeline.Project, d Deps, script *contract.Script, pack 
 					return Observation{Text: "被拒（必需素材没被认领/认领了但画面提示没写，先 validate_storyboard 修到零错误）：\n- " + err.Error()}
 				}
 				final := contract.NewStoryboardDraft(draft.Plan, draft.World, draft.CastLegend, draft.Paragraphs, draft.Segments)
-				// 翻译落盘：制作契约 storyboard.json（制作阶段零改动的衔接点）。
-				// legacy（storyboard.json）先落、工件标记（draft.json）最后落
-				// （2026-10-19 中-21，与 script/style 同纪律）：两笔之间崩溃不留
-				// 「站被跳过但制作契约陈旧」的半完成态
-				sb := final.Translate(script, pack)
-				if err := contract.ValidateStoryboard(sb); err != nil {
-					return Observation{Text: "翻译产物未过制作契约校验（内部错误，请原样重交）：" + err.Error()}
-				}
-				if err := writeJSONFile(p.Artifact("storyboards/storyboard.json"), sb); err != nil {
+				summary, err := persistDraft(p, d, final, script, pack)
+				if err != nil {
 					return Observation{Text: "分镜落盘失败：" + err.Error()}
 				}
-				if err := writeJSONFile(draftPath(p), final); err != nil {
-					return Observation{Text: "落盘失败：" + err.Error()}
-				}
-				d.emit(p.ID, "stage", "prep/storyboard", fmt.Sprintf("done：%d 段 / %d 段落 / %d 镜 / 约 %.0f 秒",
-					len(final.Segments), len(final.Paragraphs), final.ShotGate().Ready, final.TotalHint()))
 				return Observation{
-					Text: fmt.Sprintf("分镜稿已提交：%d 段铺满 %d 句（%d 个段落，%d 个镜头），总时长约 %.0f 秒。工件已落盘，等待打包终审。",
-						len(final.Segments), len(script.Sentences), len(final.Paragraphs), final.ShotGate().Ready, final.TotalHint()),
+					Text: "分镜稿已提交：" + summary + "。工件已落盘，等待打包终审。",
 					Done: true,
 				}
 			},
 		},
 	}
+}
+
+// persistDraft 分镜稿过闸后落盘（老链 submit_storyboard 与统一链 write_storyboard
+// 共体）：翻译制作契约 storyboard.json（先落）+ 工件 draft.json（最后落）——
+// 两笔之间崩溃不留「站被跳过但制作契约陈旧」的半完成态。返回随观察回喂的摘要。
+func persistDraft(p *pipeline.Project, d Deps, final *contract.StoryboardDraft, script *contract.Script, pack *contract.StylePack) (string, error) {
+	sb := final.Translate(script, pack)
+	if err := contract.ValidateStoryboard(sb); err != nil {
+		return "", fmt.Errorf("翻译产物未过制作契约校验（内部错误，请原样重交）：%w", err)
+	}
+	if err := writeJSONFile(p.Artifact("storyboards/storyboard.json"), sb); err != nil {
+		return "", err
+	}
+	if err := writeJSONFile(draftPath(p), final); err != nil {
+		return "", err
+	}
+	d.emit(p.ID, "stage", "prep/storyboard", fmt.Sprintf("done：%d 段 / %d 段落 / %d 镜 / 约 %.0f 秒",
+		len(final.Segments), len(final.Paragraphs), final.ShotGate().Ready, final.TotalHint()))
+	return fmt.Sprintf("%d 段铺满 %d 句（%d 个段落，%d 个镜头），总时长约 %.0f 秒",
+		len(final.Segments), len(script.Sentences), len(final.Paragraphs), final.ShotGate().Ready, final.TotalHint()), nil
 }
 
 // storyboardDraftParam 分镜稿参数 schema（结构化字段格式放工具参数，§5.3）。

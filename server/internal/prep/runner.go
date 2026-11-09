@@ -155,6 +155,12 @@ func (r *Runner) Start(id, idea string, force bool, stations []string) (bool, []
 			release()
 			return false, nil, ErrPrepNoWork
 		}
+		// 统一链（rev2）：三件互相影响，部分重做没有意义——勾选集收敛为三件
+		// 全选（锁区按全三件；执行走 runUnified 单 agent 循环）。
+		if UnifiedPrep(p) {
+			plan = []string{StationScript, StationStyle, StationStoryboard}
+			p.Manifest("prep.unified_plan", "统一链：三件一锅端（rev2 实验档）")
+		}
 	}
 	if idea = strings.TrimSpace(idea); idea != "" {
 		if err := os.MkdirAll(filepath.Dir(p.Artifact(IdeaFile)), 0o755); err != nil {

@@ -134,6 +134,11 @@ func run(ctx context.Context, p *pipeline.Project, d Deps, strict bool, plan []s
 	// 闸挂在编排器一处比每个工位各自设防可靠。
 	sp, sc, sl := agentlog.ProjectSpend(p)
 	ctx = llm.WithAccount(ctx, llm.NewAccount(int64(sp), int64(sc), int64(sl), llm.ProjectTokenBudget()))
+	// 统一准备链分支（rev2，docs/prep-unified-agent-design.md §3）：
+	// unified_prep=1 的项目走单 agent 一条循环，不再按站分账。音乐模式优先。
+	if ProjectMode(p) != "music" && UnifiedPrep(p) {
+		return runUnified(ctx, p, d, plan)
+	}
 	type station struct {
 		name  string
 		run   func(context.Context) error
