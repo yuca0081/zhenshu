@@ -28,17 +28,17 @@ const storyboardBudget = 60
 const storyboardSystem = `你是分镜师兼视觉导演。任务：基于口播稿与风格包产出分镜稿。材料：get_script、get_style_package；拟段时用 estimate_speech_duration 自检每段落段长带。
 切段按优先级：话题没讲完不在中间切；句与句之间是天然候选切点（目前没有真实停顿证据，用时长估算顶替）；疏密与段长跟随剪辑语法。想做出「画面连续过渡」，正确做法是并成一段，而不是设缝。
 段落带一句话主题，按段序铺满全部内容；旁白只引用句编号（如 "N3-N4"），不改写原文、不抄写文本。
-先定全片世界与角色表（world / cast_legend）：世界写舞台、幕布、灯光、道具、观众席；角色表写每个角色的外形、身体、眼睛、性格——全片复用，同一角色跨镜不能变形。
+先定全片世界（world）：舞台、幕布、灯光、道具、观众席。有没有角色形象、画什么角色，由题材、文稿口吻与风格气质决定——定了角色就写 cast_legend：每个角色的外形、身体、眼睛、性格，全片复用，同一角色跨镜不能变形，镜头 who 用角色表里的同一名字。
 每段写场景规划（visual_brief：场景 + 首拍 + 末拍）与镜头调度（shot）：
 - size 景别：wide（全景）/ medium（中景）/ close（近景）/ overhead（俯拍）/ full（字卡/满屏）；
 - camera 机位与运镜：写清从哪拍到哪、怎么动（如「从桌面近景横移到屏幕」）；
 - stage 舞台/道具/前后景：本镜画面里真实摆什么；
-- cast 1–4 个出场角色：who 用角色表里的同一名字，pose 写身体动作，emotion 写情绪；
+- cast 本镜出场角色（0–4 个）：有角色才写，who 用角色表里的同一名字，pose 写身体动作，emotion 写情绪；没有角色的镜头（空镜/物件/字卡）不写；
 - action 这一镜必须看得见的戏：谁看谁、谁指、谁退、谁转头、发生了什么；
 - dialogue 只写短台词/字卡（≤12 字），不要复述旁白；没有就留空；
 - transition 与下一镜的接法（匹配切/白闪/直切/叠化）。
 真图素材：开工先 get_materials 看项目上传了哪些实拍图/截图。**标了「必需」的素材必须被某一镜认领**——在该段写 shot.images（file 逐字一致、role=hero|inset、at/hold、present 摆位），并且该段 visual_brief.scene 里要把这张图写进画面（写文件名或「截图/架构图/表格」这类具体指代）。必需素材漏认领 = 提交被拒。没有必需素材就整片不要写 shot.images，全部画面程序化绘制。
-镜头是戏，不是信息图：每镜至少两个角色同场（纯空镜除外），角色要有身体、腿、眼睛、表情，要有反应关系；镜头必须有可感知的景别/机位/运镜变化，禁止整段静态卡片。
+镜头是调度，不是信息图：镜头必须有可感知的景别/机位/运镜变化，禁止整段静态卡片；有角色的镜里，角色要有身体、眼睛、表情与反应关系。
 真图是「证据」，不是贴纸：认领它的那一镜，画面要围着它演（角色在指/在翻/在对比），别把截图塞进角落当角标。
 草稿先过 validate_storyboard，按报告修到零错误，再 submit_storyboard。`
 
@@ -212,7 +212,7 @@ func storyboardDraftParam() map[string]any {
 		"properties": map[string]any{
 			"plan":        map[string]any{"type": "string", "description": "一句话分段思路"},
 			"world":       map[string]any{"type": "string", "description": "全片世界/舞台设定（幕布、灯光、道具、观众席），各镜复用"},
-			"cast_legend": map[string]any{"type": "string", "description": "全片角色表：每个角色的外形/身体/眼睛/性格，跨镜保持一致"},
+			"cast_legend": map[string]any{"type": "string", "description": "全片角色表：每个角色的外形/身体/眼睛/性格，跨镜保持一致。没有角色可不写；写了，镜头 cast.who 必须用表内同名"},
 			"paragraphs": map[string]any{
 				"type":        "array",
 				"description": "段落层：按段序连续铺满全部段。每段 {title:一句话主题, segs:[\"seg01\",\"seg02\"]}",
@@ -249,7 +249,7 @@ func storyboardDraftParam() map[string]any {
 						},
 						"shot": map[string]any{
 							"type":        "object",
-							"description": "这一段的镜头调度（一期：1 镜 = 1 段）——有角色的戏，不是信息图",
+							"description": "这一段的镜头调度（一期：1 镜 = 1 段）",
 							"properties": map[string]any{
 								"size": map[string]any{
 									"type": "string", "enum": contract.ShotSizes,
@@ -262,8 +262,7 @@ func storyboardDraftParam() map[string]any {
 								"transition": map[string]any{"type": "string", "description": "与下一镜的接法（匹配切/白闪/直切/叠化）"},
 								"cast": map[string]any{
 									"type":        "array",
-									"description": "出场角色 1–4 个（who 用角色表同一名字，pose 写身体动作，emotion 写情绪）",
-									"minItems":    1,
+									"description": "本镜出场角色 0–4 个（who 用角色表同一名字，pose 写身体动作，emotion 写情绪）；没有角色的镜头（空镜/物件/字卡）不写",
 									"maxItems":    4,
 									"items": map[string]any{
 										"type": "object",
@@ -296,7 +295,7 @@ func storyboardDraftParam() map[string]any {
 									},
 								},
 							},
-							"required": []string{"size", "camera", "stage", "cast", "action"},
+							"required": []string{"size", "camera", "stage", "action"},
 						},
 						"duration_hint": map[string]any{"type": "number", "description": "段长估算秒数（段长带内）"},
 					},
@@ -304,7 +303,7 @@ func storyboardDraftParam() map[string]any {
 				},
 			},
 		},
-		"required": []string{"world", "cast_legend", "paragraphs", "segments"},
+		"required": []string{"world", "paragraphs", "segments"},
 	}
 }
 

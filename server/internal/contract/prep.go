@@ -424,7 +424,9 @@ func (s *ShotDirection) Clone() *ShotDirection {
 	return &cp
 }
 
-// Validate 镜头调度校验：景别合法、机位/舞台/动作非空、角色 1–4 且都有 who。
+// Validate 镜头调度校验：景别合法、机位/舞台/动作非空、角色 0–4 且都有 who。
+// 角色可全空（2026-11-09 角色强制令拆除：有没有角色、几个角色是创作决定，
+// 一致性由 ValidateDraftShots 的 cast_legend 对账兜住）。
 func (s *ShotDirection) Validate() error {
 	if s == nil {
 		return fmt.Errorf("镜头为空")
@@ -441,8 +443,8 @@ func (s *ShotDirection) Validate() error {
 	if strings.TrimSpace(s.Action) == "" {
 		return fmt.Errorf("本镜动作/戏为空")
 	}
-	if n := len(s.Cast); n < 1 || n > 4 {
-		return fmt.Errorf("出场角色 %d 个（须 1–4 个）", n)
+	if n := len(s.Cast); n > 4 {
+		return fmt.Errorf("出场角色 %d 个（最多 4 个；没有角色的镜头可不写 cast）", n)
 	}
 	for i, c := range s.Cast {
 		if strings.TrimSpace(c.Who) == "" {
@@ -616,7 +618,9 @@ func (sb *Storyboard) ShotGate() ShotGate {
 	return g
 }
 
-// ValidateDraftShots ③分镜工位出口的镜头硬校验：每段都要有合格镜头。
+// ValidateDraftShots ③分镜工位出口的镜头硬校验：每段都要有合格镜头；镜头里
+// 出场的角色必须在 cast_legend 里立得住（角色不再是硬性要求，但一旦上场，
+// 角色表就是跨镜一致性的锚——名字对不上当场报）。
 // 与 ValidateStoryboardDraft 分开——老项目/老测试没有 shot 字段仍可过基础校验，
 // 但新分镜提交必须带镜头（否则 confirmPrep 的镜头板没有内容）。
 func ValidateDraftShots(d *StoryboardDraft) error {
@@ -626,10 +630,62 @@ func ValidateDraftShots(d *StoryboardDraft) error {
 			issues = append(issues, seg.ID+"："+msg)
 		}
 	}
+	issues = append(issues, castLegendIssues(d)...)
 	if len(issues) > 0 {
 		return fmt.Errorf("镜头表不完整：\n- %s", strings.Join(issues, "\n- "))
 	}
 	return nil
+}
+
+// castLegendIssues cast_legend ↔ cast 一致性对账（2026-11-09 随角色 0–4 可选
+// 引入）：镜头有角色而角色表为空、或 who 在角色表里找不到，都报。匹配在去
+// 空白与中英文标点、小写化之后做包含判断——角色表按「名字：外形/身体/性格」
+// 的写法自然可过；who 与表内名字对不上时照报错改齐即可。
+func castLegendIssues(d *StoryboardDraft) []string {
+	if d == nil {
+		return nil
+	}
+	legend := normalizeForMatch(d.CastLegend)
+	var issues []string
+	for _, seg := range d.Segments {
+		if seg.Shot == nil || len(seg.Shot.Cast) == 0 {
+			continue
+		}
+		if legend == "" {
+			issues = append(issues, fmt.Sprintf("%s：镜头有角色但 cast_legend 为空（先在角色表里立住外形/身体/性格，角色再上场）", seg.ID))
+			continue
+		}
+		for _, c := range seg.Shot.Cast {
+			who := strings.TrimSpace(c.Who)
+			if who == "" {
+				continue // 空 who 由 ShotDirection.Validate 拦
+			}
+			if !strings.Contains(legend, normalizeForMatch(who)) {
+				issues = append(issues, fmt.Sprintf("%s：角色 %q 不在 cast_legend 里（镜头 who 要用角色表里的同一名字）", seg.ID, who))
+			}
+		}
+	}
+	return issues
+}
+
+// normalizeForMatch 名字匹配用的归一：小写化、去空白与常见中英文标点。
+// 角色表写「小林：圆脸……」、镜头写 who「小林」即可命中。
+func normalizeForMatch(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		switch r {
+		case ' ', '\t', '\n', '\r', '　',
+			'，', '。', '、', '；', '：', '？', '！',
+			'「', '」', '『', '』', '（', '）', '【', '】', '《', '》',
+			'·', '—', '…',
+			',', '.', ';', ':', '?', '!',
+			'"', '\'', '(', ')', '[', ']', '{', '}', '<', '>',
+			'-', '_', '/', '\\', '|', '*', '#', '@':
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // DraftSegment 分镜稿的段：旁白只引用句编号，不抄写文本。

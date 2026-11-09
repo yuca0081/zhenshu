@@ -195,6 +195,10 @@ func TestShotDirectionValidate(t *testing.T) {
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("合法镜头被拒: %v", err)
 	}
+	noCast := &ShotDirection{Size: "full", Camera: "缓推", Stage: "字卡", Action: "标题定格"}
+	if err := noCast.Validate(); err != nil {
+		t.Fatalf("无角色镜头被拒（角色 0–4 可选）: %v", err)
+	}
 	cases := []struct {
 		name string
 		shot *ShotDirection
@@ -205,8 +209,7 @@ func TestShotDirectionValidate(t *testing.T) {
 		{"缺机位", &ShotDirection{Size: "wide", Stage: "y", Action: "z", Cast: []ShotCast{{Who: "a"}}}, "机位"},
 		{"缺舞台", &ShotDirection{Size: "wide", Camera: "x", Action: "z", Cast: []ShotCast{{Who: "a"}}}, "舞台"},
 		{"缺动作", &ShotDirection{Size: "wide", Camera: "x", Stage: "y", Cast: []ShotCast{{Who: "a"}}}, "动作"},
-		{"没角色", &ShotDirection{Size: "wide", Camera: "x", Stage: "y", Action: "z"}, "1–4"},
-		{"角色太多", &ShotDirection{Size: "wide", Camera: "x", Stage: "y", Action: "z", Cast: []ShotCast{{Who: "a"}, {Who: "b"}, {Who: "c"}, {Who: "d"}, {Who: "e"}}}, "1–4"},
+		{"角色太多", &ShotDirection{Size: "wide", Camera: "x", Stage: "y", Action: "z", Cast: []ShotCast{{Who: "a"}, {Who: "b"}, {Who: "c"}, {Who: "d"}, {Who: "e"}}}, "最多 4"},
 		{"角色缺名", &ShotDirection{Size: "wide", Camera: "x", Stage: "y", Action: "z", Cast: []ShotCast{{Pose: "站着"}}}, "who"},
 	}
 	for _, c := range cases {
@@ -248,11 +251,38 @@ func TestShotGate(t *testing.T) {
 	}
 
 	all := mk(okShot, okShot)
+	all.CastLegend = "a 的设定：圆点眼、细腿" // 镜头有角色，角色表要立得住
 	if g := all.ShotGate(); !g.Enabled() || !g.Complete() {
 		t.Errorf("全镜头 gate 不对: %+v", g)
 	}
 	if err := ValidateDraftShots(all); err != nil {
 		t.Errorf("全镜头被拒: %v", err)
+	}
+}
+
+// 角色不再是硬性要求（0–4 可选），但一旦上场就必须在 cast_legend 里立得住。
+func TestCastLegendConsistency(t *testing.T) {
+	mk := func(legend string, who ...string) *StoryboardDraft {
+		var cast []ShotCast
+		for _, w := range who {
+			cast = append(cast, ShotCast{Who: w, Pose: "站"})
+		}
+		return &StoryboardDraft{CastLegend: legend, Segments: []DraftSegment{{
+			ID: "seg01", Idx: 1,
+			Shot: &ShotDirection{Size: "wide", Camera: "x", Stage: "y", Action: "z", Cast: cast},
+		}}}
+	}
+	if err := ValidateDraftShots(mk("")); err != nil {
+		t.Errorf("无角色镜头不应要求角色表: %v", err)
+	}
+	if err := ValidateDraftShots(mk("小林（主角）：圆脸、黑框眼镜", "小林")); err != nil {
+		t.Errorf("角色在表内（含标点差异）不应被拒: %v", err)
+	}
+	if err := ValidateDraftShots(mk("", "小林")); err == nil || !strings.Contains(err.Error(), "cast_legend 为空") {
+		t.Errorf("有角色而表空应拦: %v", err)
+	}
+	if err := ValidateDraftShots(mk("小林：圆脸", "机器人")); err == nil || !strings.Contains(err.Error(), "不在 cast_legend") {
+		t.Errorf("表外角色应拦: %v", err)
 	}
 }
 

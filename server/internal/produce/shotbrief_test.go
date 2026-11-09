@@ -44,6 +44,42 @@ func TestShotPlanFromStoryboard(t *testing.T) {
 	}
 }
 
+// 角色强制令拆除（2026-11-09）：无角色镜的导演块不再注入「演员/同场/反应」类
+// 硬要求；有角色镜保留身体/互动手艺但不强制人数；具体影片条款（seg06/米纸/
+// 三角）彻底退役。
+func TestPromptBlockCastBranching(t *testing.T) {
+	sp := &ShotPlan{
+		World: "数据看板世界",
+		Shots: []ShotBrief{
+			{Seg: "seg01", Title: "数据开场", Size: "overhead", Camera: "俯推", Stage: "图表", Action: "数字翻滚"},
+			{Seg: "seg02", Title: "解说出场", Size: "medium", Camera: "横移", Stage: "桌", Action: "指屏",
+				Cast: []ShotCast{{Who: "讲解员", Pose: "站", Emotion: "认真"}}},
+		},
+	}
+	blk := sp.promptBlock("seg01")
+	for _, ban := range []string{"演员", "同场", "角色表", "群演"} {
+		if strings.Contains(blk, ban) {
+			t.Errorf("无角色镜不应含 %q:\n%s", ban, blk)
+		}
+	}
+	for _, want := range []string{"导演指令", "镜头是“镜头”", "机位/景别/运镜"} {
+		if !strings.Contains(blk, want) {
+			t.Errorf("无角色镜缺 %q:\n%s", want, blk)
+		}
+	}
+	blk2 := sp.promptBlock("seg02")
+	for _, want := range []string{"演员", "讲解员", "互动"} {
+		if !strings.Contains(blk2, want) {
+			t.Errorf("有角色镜缺 %q:\n%s", want, blk2)
+		}
+	}
+	for _, ban := range []string{"至少两个角色", "seg06", "米纸", "轮廓必须是三角"} {
+		if strings.Contains(blk, ban) || strings.Contains(blk2, ban) {
+			t.Errorf("导演块仍含已拆除的条款 %q", ban)
+		}
+	}
+}
+
 // 双源：新项目以 Segment.Shot 为准，shots.json 只补世界/角色表（导入/实验兜底）。
 func TestLoadShotPlanPrefersSegment(t *testing.T) {
 	p := pipeline.NewProject(t.TempDir(), "p-shot")
