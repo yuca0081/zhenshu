@@ -612,6 +612,7 @@ func (s *Server) createProject(c *gin.Context) {
 		Mode        string `json:"mode"`         // script（默认，文稿驱动）| music（音乐驱动 PV）
 		StyleID     string `json:"style_id"`     // 风格库条目（可空 = 不选，样张阶段模型自由发挥）
 		StylePackID string `json:"stylepack_id"` // 旧字段名，过渡期兼容（applyStyle 同款双字段）
+		Unified     bool   `json:"unified"`      // 统一准备链（rev2 实验档，E 系列对照实验用）
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
@@ -695,12 +696,18 @@ func (s *Server) createProject(c *gin.Context) {
 		}
 		s.putArtifact(artifacts.ProjectKey(id, "input/article.txt"), p.Artifact("input/article.txt"))
 	}
-	meta, _ := json.MarshalIndent(map[string]any{
+	metaMap := map[string]any{
 		"id": id, "name": in.Name, "status": "created", "aspect": in.Aspect,
 		"topic": in.Topic, "style_id": styleID, "mode": in.Mode,
 		"user_id":    uid, // 归属（磁盘快照；projectGuard 读它，账本行同列）
 		"created_at": time.Now().Format(time.RFC3339),
-	}, "", "  ")
+	}
+	// 统一准备链（rev2 实验档，docs/prep-unified-agent-design.md）：E 系列对照
+	// 实验用——一个 agent 一条循环产三件。前端建项目不传它，curl/对话建实验项目。
+	if in.Unified {
+		metaMap["unified_prep"] = "1"
+	}
+	meta, _ := json.MarshalIndent(metaMap, "", "  ")
 	_ = os.WriteFile(p.Artifact("project.json"), meta, 0o644)
 	// 项目账本行：可检索元数据 + 桶内相对路径 + 驱动模式（列表事实源，方案甲）。
 	// 建行先行于内容上传，保证 PG 行/前缀表与首批 key 同时就位。
