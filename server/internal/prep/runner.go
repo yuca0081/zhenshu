@@ -30,6 +30,10 @@ var (
 	ErrPrepRunning = errors.New("准备阶段已在运行中")
 	ErrPrepLegacy  = errors.New("老项目（legacy 分镜已在）不走准备工位——改稿用对话")
 	ErrPrepNoLLM   = errors.New("LLM 未配置（LLM_API_KEY），准备工位无法启动")
+	// ErrPrepNoWork 勾选集为空（前端未选任何工位）；未知工位名单独报。
+	ErrPrepNoWork = errors.New("没有要生成的工件——至少勾选一个工位")
+	// ErrPrepStation 勾选集里出现未知工位名（api 层转 400，不落到 409 的「已在跑」）。
+	ErrPrepStation = errors.New("工位名不合法")
 )
 
 // Runner 准备阶段运行器。main 构造一次，api 与 OnDone 回调共用。
@@ -42,11 +46,27 @@ type Runner struct {
 
 	mu      sync.Mutex
 	running map[string]context.CancelFunc
+	// active 本次链实际要跑的工位（含为满足下游而自动补跑的前置）。
+	// 主题页签的「选区锁定」与 /prep 的 active 字段都读它；跑完即清。
+	active map[string][]string
 }
 
 // NewRunner 构造运行器（Deps 与管线钩子共用同一份，emit/账本单源）。
 func NewRunner(dataDir string, deps Deps) *Runner {
-	return &Runner{DataDir: dataDir, Deps: deps, running: map[string]context.CancelFunc{}}
+	return &Runner{
+		DataDir: dataDir, Deps: deps,
+		running: map[string]context.CancelFunc{},
+		active:  map[string][]string{},
+	}
+}
+
+// ActiveStations 本次链实际在跑的工位（未在跑返回空）。前端据此锁工作区：
+// 不是「勾了什么锁什么」，而是「实际会重写什么锁什么」——下游要跑时上游
+// 缺件会补跑，那个上游区域也必须锁，否则用户会在链跑到它之前改坏输入。
+func (r *Runner) ActiveStations(id string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string{}, r.active[id]...)
 }
 
 // IsRunning 该项目的准备链是否在跑。
@@ -57,21 +77,27 @@ func (r *Runner) IsRunning(id string) bool {
 	return live
 }
 
-// Start 启动三工位链。idea 非空落 input/prep_idea.txt（①②kickoff 消费）；
-// force=true 先按「改文字」级联作废既有工件再跑（按新想法重跑全部）。
-// 返回 (false, nil) = 已在跑（幂等）；非 nil 错误 = 未启动。
-// 注：登记 running 故意放在最前——登记即互斥，先检查后登记会开并发窗口；
-// 代价只是检查失败到 release 的短暂窗口内 IsRunning 误报 true（无害）。
-func (r *Runner) Start(id, idea string, force bool) (bool, error) {
+// Start 启动准备链。idea 非空落 input/prep_idea.txt（①②kickoff 消费）。
+//
+// stations = 本次要（重新）生成的工位（script/style/storyboard）：
+//   - 空 = 三工位全选（老客户端/音乐 PV 兼容）；
+//   - 勾了的下游缺前置时自动补跑（缺文稿补①、缺风格补②），planStations 求闭包；
+//   - 勾选即重做：被勾的工位即使工件已在也重跑，成功后级联作废下游
+//     （脚本成功→清风格/分镜；风格成功→清分镜）。未勾的下游不会被自动重做，
+//     所以「只重做文稿」会留下空着的风格/分镜——这是链式依赖的事实，UI 要说明。
+//
+// force 仅保留给音乐 PV（三件套一锅端重做）；文稿链按勾选集驱动，不再需要它。
+// 返回 (false, nil, nil) = 已在跑（幂等）；第二个返回值 = 实际执行计划（含补跑前置）。
+func (r *Runner) Start(id, idea string, force bool, stations []string) (bool, []string, error) {
 	r.mu.Lock()
 	if _, live := r.running[id]; live {
 		r.mu.Unlock()
-		return false, nil
+		return false, nil, nil
 	}
 	p := pipeline.NewProject(r.DataDir, id)
 	if _, err := os.Stat(p.Dir); err != nil {
 		r.mu.Unlock()
-		return false, fmt.Errorf("项目不存在: %w", err)
+		return false, nil, fmt.Errorf("项目不存在: %w", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r.running[id] = cancel
@@ -79,51 +105,83 @@ func (r *Runner) Start(id, idea string, force bool) (bool, error) {
 	release := func() {
 		r.mu.Lock()
 		delete(r.running, id)
+		delete(r.active, id)
 		r.mu.Unlock()
 	}
 
 	if LegacyProject(p) {
 		release()
-		return false, ErrPrepLegacy
+		return false, nil, ErrPrepLegacy
 	}
 	if !Available() {
 		release()
-		return false, ErrPrepNoLLM
+		return false, nil, ErrPrepNoLLM
 	}
-	// 终站按驱动模式分流：音乐 PV 的完成标记是音乐地图（不是分镜稿）。
-	doneStation := StationStoryboard
-	forceFrom := StationScript
-	if ProjectMode(p) == "music" {
-		doneStation = StationMusic
-		forceFrom = StationMusic
-	}
-	if HasArtifact(p, doneStation) && !force {
-		release()
-		return false, errors.New("准备工件已生成——去「终审」页签确认，或勾选「按新想法重跑」")
-	}
-	if force {
-		// force 无条件作废：上轮失败停在半途时，旧写法只在终站工件为真才
-		// InvalidateFrom，新想法只落 input 不被消费（2026-10-19 中-1）。
-		// 无任何工件时 InvalidateFrom 是幂等空操作。
-		InvalidateFrom(p, forceFrom)
+	music := ProjectMode(p) == "music"
+	var plan []string
+	if music {
+		// 音乐 PV 单站：完成标记是音乐地图；force 语义照旧（三件套一锅端）。
+		if HasArtifact(p, StationMusic) && !force {
+			release()
+			return false, nil, errors.New("准备工件已生成——去「终审」页签确认，或勾选「按新想法重跑」")
+		}
+		if force {
+			InvalidateFrom(p, StationMusic)
+		}
+		plan = []string{StationMusic}
+	} else {
+		// 老客户端（不传 stations）保留旧保护：三件齐时不再无确认地全量重跑。
+		// 新主题页总会传勾选集（空勾选在前端就被禁用）。
+		if len(stations) == 0 && !force && HasArtifact(p, StationStoryboard) {
+			release()
+			return false, nil, errors.New("准备工件已生成——勾选要重做的工件，或 force=true 全量重跑")
+		}
+		want, err := parseStations(stations)
+		if err != nil {
+			release()
+			return false, nil, err
+		}
+		// 老客户端不传 stations：沿用「缺哪站跑哪站」的缓存语义（与管线 Run 一致），
+		// 不要把它理解成「全勾重做」——那会在半成品项目上无谓重烧已完成工位。
+		if len(stations) == 0 && !force {
+			want = map[string]bool{
+				StationScript:     !HasArtifact(p, StationScript),
+				StationStyle:      !HasArtifact(p, StationStyle),
+				StationStoryboard: !HasArtifact(p, StationStoryboard),
+			}
+		}
+		plan = planStations(p, want)
+		if len(plan) == 0 {
+			release()
+			return false, nil, ErrPrepNoWork
+		}
 	}
 	if idea = strings.TrimSpace(idea); idea != "" {
 		if err := os.MkdirAll(filepath.Dir(p.Artifact(IdeaFile)), 0o755); err != nil {
 			release()
-			return false, err
+			return false, nil, err
 		}
 		if err := os.WriteFile(p.Artifact(IdeaFile), []byte(idea), 0o644); err != nil {
 			release()
-			return false, err
+			return false, nil, err
 		}
 		applyIdeaDuration(p, idea)
 	}
-	startMsg := "启动三工位链（想法页/对话入口）"
-	if ProjectMode(p) == "music" {
+	// 先登记 active 再起 goroutine：前端可能在 stage running 事件后立刻拉 /prep，
+	// 锁区集合不能晚于链启动出现（否则会闪一下可编辑态）。
+	r.mu.Lock()
+	r.active[id] = append([]string(nil), plan...)
+	r.mu.Unlock()
+
+	startMsg := "启动准备链（勾选 " + strings.Join(plan, "、") + "）"
+	if music {
 		startMsg = "启动音乐工位（做曲→音乐地图）"
 	}
 	p.Manifest("prep.start", startMsg)
 	r.Deps.emit(id, "stage", "prep", "running")
+	// 立即广播一次：前端要尽快拿到 active 去锁工作区。只靠每个工位跑完后的
+	// prep_updated 太晚——第一站可能跑几分钟，这期间对应页签会一直可编辑。
+	r.Deps.emit(id, "prep_updated", "", "start")
 	// 总闸：回合预算放宽后（①30/②12/③10），单站烧穿预算的最坏墙钟很可观，
 	// 再叠一次冷重试必须有个链级上限兜底——prepChainBudget（80 分钟，2026-10-27
 	// 随③站闸 25 放宽）覆盖正常长链，卡死（端点挂住/无限重试）到点收口，不无限拖。
@@ -139,7 +197,14 @@ func (r *Runner) Start(id, idea string, force bool) (bool, error) {
 				fmt.Printf("[artifacts] %s 回源 %d 个文件\n", id, n)
 			}
 		}
-		err := RunStrict(runCtx, p, r.Deps)
+		err := run(runCtx, p, r.Deps, true, plan)
+		// 内容链已收口：先放开锁区（active 清空）再补发终态刷新。prep_updated done
+		// 若在清空之前发出，停在别的页签（IdeaPane 轮询已暂停）的前端会刷新到
+		// 「running=true + active 还在」的旧态，锁就再也等不到解锁事件。
+		r.mu.Lock()
+		delete(r.active, id)
+		r.mu.Unlock()
+		r.Deps.emit(id, "prep_updated", "", "unlock")
 		if r.Deps.Artifacts != nil && r.Deps.Artifacts.Available() {
 			if n, err := artifacts.SyncUp(r.Deps.Artifacts, r.DataDir, artifacts.LocalPrefix(id)); err != nil {
 				// 补传失败必须留痕：链终了的「全量补传」静默丢了，云端正本会
@@ -157,7 +222,49 @@ func (r *Runner) Start(id, idea string, force bool) (bool, error) {
 			r.OnDone(id, err)
 		}
 	}()
-	return true, nil
+	return true, plan, nil
+}
+
+// parseStations 解析勾选集：未知工位名报错；空集 = 全选（老客户端兼容）。
+func parseStations(in []string) (map[string]bool, error) {
+	want := map[string]bool{}
+	if len(in) == 0 {
+		for _, s := range []string{StationScript, StationStyle, StationStoryboard} {
+			want[s] = true
+		}
+		return want, nil
+	}
+	for _, s := range in {
+		switch s {
+		case StationScript, StationStyle, StationStoryboard:
+			want[s] = true
+		default:
+			return nil, fmt.Errorf("%w：%q（只能是 script/style/storyboard）", ErrPrepStation, s)
+		}
+	}
+	return want, nil
+}
+
+// planStations 把勾选集求成实际执行闭包（按链序 ①→②→③）：
+//   - 分镜要跑 → 风格必须可用；文稿要重跑或缺席时风格也得跟跑（它的输入变了）；
+//   - 风格/分镜要跑 → 文稿必须可用，缺则补跑；
+//   - 文稿单独重跑 → 只跑①，下游由链成功后的级联作废清空（不自动重做）。
+func planStations(p *pipeline.Project, want map[string]bool) []string {
+	if want[StationStoryboard] {
+		if want[StationScript] || !HasArtifact(p, StationScript) || !HasArtifact(p, StationStyle) {
+			want[StationStyle] = true
+		}
+	}
+	if (want[StationStyle] || want[StationStoryboard]) && !HasArtifact(p, StationScript) {
+		want[StationScript] = true
+	}
+	var plan []string
+	for _, s := range []string{StationScript, StationStyle, StationStoryboard} {
+		if want[s] {
+			plan = append(plan, s)
+		}
+	}
+	return plan
 }
 
 // RunInline 对话侧同步执行（agent 的 rerun_prep / draft_* 工具用）：与异步链
@@ -166,6 +273,11 @@ func (r *Runner) Start(id, idea string, force bool) (bool, error) {
 // （2026-10-19 高-6 收口：对话侧原先直接 RunStrict 不登记，与想法页可双开
 // 两条链互踩工件）。run 闭包里放作废+执行，ErrPrepRunning 时不会白作废。
 func (r *Runner) RunInline(ctx context.Context, id string, run func(ctx context.Context) error) error {
+	// 对话侧重跑不传勾选集：按全链锁（保守），避免某个工位正在被写而前端可编辑。
+	plan := []string{StationScript, StationStyle, StationStoryboard}
+	if ProjectMode(pipeline.NewProject(r.DataDir, id)) == "music" {
+		plan = []string{StationMusic}
+	}
 	r.mu.Lock()
 	if _, live := r.running[id]; live {
 		r.mu.Unlock()
@@ -173,11 +285,15 @@ func (r *Runner) RunInline(ctx context.Context, id string, run func(ctx context.
 	}
 	ictx, cancel := context.WithCancel(ctx)
 	r.running[id] = cancel
+	r.active[id] = plan
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
 		delete(r.running, id)
+		delete(r.active, id)
 		r.mu.Unlock()
+		// 对话侧同步重跑同样有锁区：先清 active 再补发刷新，避免前端停在锁住的终态。
+		r.Deps.emit(id, "prep_updated", "", "unlock")
 	}()
 	return run(ictx)
 }

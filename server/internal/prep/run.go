@@ -46,15 +46,31 @@ func stationBudget(name string) time.Duration {
 	return 15 * time.Minute
 }
 
+// stationLabels 工位人话名（预算收口/勾选集摘要共用）。
+var stationLabels = map[string]string{
+	StationMusic:      "音乐三件套",
+	StationScript:     "①文字稿",
+	StationStyle:      "②风格包",
+	StationStoryboard: "③分镜稿",
+}
+
+// StationListText 计划工位的中文摘要（按执行序；api 的启动提示与 done 账共用）。
+func StationListText(plan []string) string {
+	out := make([]string, 0, len(plan))
+	for _, s := range plan {
+		if l := stationLabels[s]; l != "" {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, " → ")
+}
+
 // doneStations 已落盘工件的人话清单（预算收口时报进度：烧在谁身上、还缺谁）。
 func doneStations(p *pipeline.Project) string {
-	labels := map[string]string{
-		StationScript: "①文字稿", StationStyle: "②风格包", StationStoryboard: "③分镜稿",
-	}
 	var done []string
 	for _, st := range []string{StationScript, StationStyle, StationStoryboard} {
 		if HasArtifact(p, st) {
-			done = append(done, labels[st])
+			done = append(done, stationLabels[st])
 		}
 	}
 	if len(done) == 0 {
@@ -84,23 +100,34 @@ func LegacyProject(p *pipeline.Project) bool {
 	return err == nil
 }
 
-// Run 管线入口（stagePrep 调用）。
+// Run 管线入口（stagePrep 调用）：缓存语义——缺哪站跑哪站，已有工件跳过。
 func Run(ctx context.Context, p *pipeline.Project, d Deps) error {
-	return run(ctx, p, d, false)
+	return run(ctx, p, d, false, nil)
 }
 
-// RunStrict 严格入口（反馈重跑）：LLM 不可用/失败都上抛。
+// RunStrict 严格入口（反馈重跑）：失败上抛；同为缓存语义（调用方先 InvalidateFrom）。
 func RunStrict(ctx context.Context, p *pipeline.Project, d Deps) error {
-	return run(ctx, p, d, true)
+	return run(ctx, p, d, true, nil)
 }
 
-func run(ctx context.Context, p *pipeline.Project, d Deps, strict bool) error {
+// run 准备链编排。plan 为空 = 缓存语义（Run/RunStrict：存在即跳过）；
+// plan 非空 = 主题页勾选集（Runner.Start）：只跑计划内工位，且计划内工位
+// 一律重跑（勾选即重做）。计划内工位成功后级联作废其下游——这样「只勾文稿」
+// 不会把新稿配旧风格，而是让风格/分镜空出来等下一次勾选。
+func run(ctx context.Context, p *pipeline.Project, d Deps, strict bool, plan []string) error {
 	if !Available() {
 		if strict {
 			return errors.New("LLM 未配置（LLM_API_KEY），准备工位无法重跑")
 		}
 		p.Manifest("prep.skipped", "LLM 未配置，准备阶段降级 legacy 单发路径")
 		return nil
+	}
+	var planned map[string]bool
+	if plan != nil {
+		planned = make(map[string]bool, len(plan))
+		for _, s := range plan {
+			planned[s] = true
+		}
 	}
 	// 项目 token 预算账（P0-1）：历史用量从 manifest 播种（重启不归零），塞进
 	// ctx 后三工位的全部 LLM 调用自动过闸记账——风格包实测 17–26 万 token/片，
@@ -116,6 +143,17 @@ func run(ctx context.Context, p *pipeline.Project, d Deps, strict bool) error {
 	// 文稿三工位整条不进——PV 的分镜工位（M2）与打包门上线前，制作入口另有
 	// 拦截，半条链跑出来只会污染工件区。
 	doneMsg := "三工件就绪，等待打包终审"
+	if planned != nil {
+		doneMsg = "本次已生成：" + StationListText(plan)
+		if len(plan) == 3 {
+			doneMsg = "三工件就绪，等待打包终审"
+		} else if len(plan) > 0 && plan[len(plan)-1] != StationStoryboard {
+			// 计划没跑到③：依赖本次上游的下游工件已被级联作废、留空
+			doneMsg += "（下游未勾选，已按依赖作废，等下次补跑）"
+		} else {
+			doneMsg += "（其余工件保持原样）"
+		}
+	}
 	// 站位落盘即广播 prep_updated：前端（App.vue）监听该事件重拉 view/manuscript/
 	// style/prep——否则异步链只发 stage 事件，各页冻结在链启动前的旧态
 	// （2026-10-30 GUI 实测：文稿页 0 字、风格页初始态、三工件齐了想法页还写进行中）。
@@ -133,7 +171,10 @@ func run(ctx context.Context, p *pipeline.Project, d Deps, strict bool) error {
 	}
 	d.emit(p.ID, "stage", "prep", "running")
 	for _, st := range stations {
-		if HasArtifact(p, st.name) {
+		if planned != nil && !planned[st.name] {
+			continue // 勾选集之外的工位：不跑、不动
+		}
+		if planned == nil && HasArtifact(p, st.name) {
 			p.Manifest("prep.skip_cached", st.name)
 			continue
 		}
@@ -154,13 +195,27 @@ func run(ctx context.Context, p *pipeline.Project, d Deps, strict bool) error {
 			d.emit(p.ID, "prep_updated", "", "error") // 链终止也要刷前端（running 态落定）
 			return err
 		}
+		// 勾选即重做：本工位刚换了内容，下游工件立刻失效（不自动重做，除非也在
+		// 计划里）。删除放在成功后——本工位失败时旧下游至少还能和旧上游配套。
+		if planned != nil {
+			switch st.name {
+			case StationScript:
+				InvalidateFrom(p, StationStyle)
+			case StationStyle:
+				InvalidateFrom(p, StationStoryboard)
+			}
+		}
 		if st.after != nil {
 			st.after()
 		}
 	}
 	p.Manifest("prep.done", doneMsg)
 	d.emit(p.ID, "stage", "prep", "done")
-	d.emit(p.ID, "prep_updated", "", "done")
+	if plan == nil {
+		d.emit(p.ID, "prep_updated", "", "done")
+	}
+	// 勾选集的终态 prep_updated 由 Runner 在清空 active 之后补发：先清锁区再通知，
+	// 前端刷新时读到的就是「已结束、已解锁」，不会停在锁着的完成态。
 	return nil
 }
 

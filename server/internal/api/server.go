@@ -1440,8 +1440,9 @@ func (s *Server) runPrep(c *gin.Context) {
 		m.Unlock()
 	}
 	var in struct {
-		Idea  string `json:"idea"`
-		Force bool   `json:"force"`
+		Idea     string   `json:"idea"`
+		Force    bool     `json:"force"`
+		Stations []string `json:"stations"` // 本次要生成的工位；空 = 三工位全选（老客户端）
 	}
 	_ = c.ShouldBindJSON(&in)
 	// 音乐驱动 PV：主题必填（地图推不出情绪色彩层，主题+终审门人工纠正才是
@@ -1451,7 +1452,7 @@ func (s *Server) runPrep(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "音乐驱动项目要先给主题（一句话，做什么氛围的曲子）"})
 		return
 	}
-	started, err := s.Preps.Start(id, in.Idea, in.Force)
+	started, plan, err := s.Preps.Start(id, in.Idea, in.Force, in.Stations)
 	if err != nil {
 		switch {
 		case errors.Is(err, prep.ErrPrepRunning):
@@ -1460,23 +1461,25 @@ func (s *Server) runPrep(c *gin.Context) {
 			c.JSON(400, gin.H{"error": err.Error()})
 		case errors.Is(err, prep.ErrPrepNoLLM):
 			c.JSON(400, gin.H{"error": err.Error()})
+		case errors.Is(err, prep.ErrPrepNoWork), errors.Is(err, prep.ErrPrepStation):
+			c.JSON(400, gin.H{"error": err.Error()})
 		default:
 			c.JSON(409, gin.H{"error": err.Error()})
 		}
 		return
 	}
 	if !started {
-		c.JSON(200, gin.H{"ok": true, "started": false})
+		c.JSON(200, gin.H{"ok": true, "started": false, "stations": plan})
 		return
 	}
-	note := "准备阶段已启动：文稿 → 风格 → 分镜，进度在「想法」页签与事件流。"
+	note := "准备阶段已启动：" + prep.StationListText(plan) + "。进度在「主题」页签，完成后去「终审」确认。"
 	if music {
 		note = "PV 准备工位已启动：做曲 → 音乐地图，完成后在「想法」页签试听。"
 	} else if in.Idea != "" {
-		note = "准备阶段已带着你的想法启动：文稿 → 风格 → 分镜，完成后去「终审」页签确认。"
+		note = "准备阶段已带着你的主题启动：" + prep.StationListText(plan) + "。完成后去「终审」页签确认。"
 	}
 	s.Hub.Emit(id, "msg", "", note)
-	c.JSON(202, gin.H{"ok": true, "started": true})
+	c.JSON(202, gin.H{"ok": true, "started": true, "stations": plan})
 }
 
 // cancelPrep 取消在跑的准备链（工位回合边界退出；终态经 OnDone 落聊天框）。
@@ -1500,11 +1503,20 @@ func (s *Server) prepView(c *gin.Context) {
 		return
 	}
 	// 想法页签的状态三件（exists=false 的早返回也要带：链在跑时页签全靠它）
+	active := []string{}
+	running := false
+	if s.Preps != nil {
+		running = s.Preps.IsRunning(p.ID)
+		active = s.Preps.ActiveStations(p.ID)
+	}
 	state := gin.H{
-		"running": s.Preps != nil && s.Preps.IsRunning(p.ID),
+		"running": running,
 		"legacy":  prep.LegacyProject(p),
 		"idea":    strings.TrimSpace(readFileLoose(p.Artifact("input/prep_idea.txt"))),
 		"mode":    projectMode(p),
+		// active = 本次链实际会重写的工位（含补跑前置）。前端据此锁工作区：
+		// 「勾了什么锁什么」不够——下游要跑时缺件会上游补跑，那块也得锁。
+		"active": active,
 	}
 	// 音乐驱动 PV：文稿三工件不适用，回三件套视图（想法页签的做曲面板）
 	if state["mode"] == "music" {
