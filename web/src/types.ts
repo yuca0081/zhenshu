@@ -79,6 +79,9 @@ export interface BgmTrack {
 export type TabID = 'idea' | 'manuscript' | 'storyboard' | 'style' | 'review' | 'video' | 'cover' | 'activity'
 
 // ── 准备阶段三工件（GET /prep；docs/prep-agents-design.md）──────
+// 工位 id（主题页勾选项、链进度、锁区集合共用）。
+export type PrepStation = 'script' | 'style' | 'storyboard'
+
 export interface PrepSentence { id: string; text: string }
 export interface PrepFact { claim: string; url: string }
 
@@ -158,10 +161,25 @@ export interface MaterialFile {
   chars: number
 }
 
+// 真图素材行（GET/POST/PUT/DELETE /images；主题页上传的实拍图、截图、官方图表
+// ——会作为画面里的真图出现，与上面的纯文本参考资料不是一回事）。
+// required = 用户勾了「必需」：分镜阶段必须被某一镜认领，成片里必须出现。
+export interface ImageMaterial {
+  file: string // assets/img/xxx.jpg（项目内相对路径）
+  source: string // upload | editorial | met
+  title?: string
+  note?: string
+  width?: number
+  height?: number
+  required?: boolean
+  seg?: string
+}
+
 export interface PrepView {
   exists: boolean // scripts/script.json 在 = 项目走准备工位（终审页签的显示条件）
   confirmed: boolean // 打包终审是否已确认（=开工硬门）
   running?: boolean // 三工位链在跑（主题页签的进度态）
+  active?: PrepStation[] // 本次链实际会重写的工位（含补跑前置）——工作区锁区集合
   legacy?: boolean // 老项目（legacy 分镜已在，不走准备工位——隐藏主题页签）
   idea?: string // 已落盘的主题/想法文本（回填文本框）
   mode?: string // script=文稿驱动（默认，老项目缺省）｜music=音乐驱动 PV

@@ -79,9 +79,56 @@ const tabs = computed(() => {
   return list
 })
 
+// 准备链锁区：勾选集实际会重写的工位在跑动期间只读。
+// 锁的不是「当前页面」而是「这次链会改的工件」：跑到②时①已写完也会锁着，
+// 因为成功后会级联作废下游、链还要继续消费它；跑完（running=false）自动解锁。
+const prepActive = computed<Set<string>>(() => {
+  const a = props.prep?.active
+  if (a) return new Set(a) // [] 是「链已收口、锁区已放」，不是缺字段
+  // 旧后端/对话侧同步重跑没有 active：running 时保守锁全链
+  return props.prep?.running ? new Set(['script', 'style', 'storyboard']) : new Set()
+})
+const prepRunning = computed(() => !!props.prep?.running)
+function prepStationOf(tab: TabID): 'script' | 'style' | 'storyboard' | null {
+  if (tab === 'manuscript') return 'script'
+  if (tab === 'style') return 'style'
+  if (tab === 'storyboard') return 'storyboard'
+  return null
+}
+function isPrepLocked(tab: TabID): boolean {
+  if (!prepRunning.value) return false
+  if (tab === 'review') return prepActive.value.size > 0
+  const s = prepStationOf(tab)
+  return !!s && prepActive.value.has(s)
+}
+// 当前页签的锁提示（空 = 未锁）；文案按页签区分，终审是「不能确认」而非「不能编辑」
+const prepLockLabel = computed(() => {
+  if (!isPrepLocked(props.tab)) return ''
+  if (props.tab === 'review') return '准备工件'
+  return props.tab === 'manuscript' ? '文稿' : props.tab === 'style' ? '风格' : '分镜'
+})
+const prepLockText = computed(() => props.tab === 'review'
+  ? '准备工件正在重写——终审确认暂时关闭，跑完自动开放'
+  : `${prepLockLabel.value}工位正在生成——本区域锁定只读，AI 结束后自动解锁`)
+const cancellingPrep = ref(false)
+async function cancelPrepRun() {
+  if (!props.videoId || cancellingPrep.value) return
+  cancellingPrep.value = true
+  try { await api.cancelPrep(props.videoId) } catch (e) { message.error((e as Error).message) } finally { cancellingPrep.value = false }
+}
+
 function tabState(id: TabID): { cls: string[]; title: string; label: string } {
   const v = props.view
   if (!v) return { cls: [], title: '', label: '' }
+  // 锁区优先于工件状态灯：这关现在不能动，告诉用户为什么
+  if (isPrepLocked(id)) {
+    const name = id === 'manuscript' ? '文稿' : id === 'style' ? '风格' : '分镜'
+    return {
+      cls: ['run'],
+      title: id === 'review' ? '准备工件正在重写，终审确认暂时关闭' : `AI 正在生成${name}——完成后自动解锁`,
+      label: id === 'review' ? '暂停' : '锁定',
+    }
+  }
   const stale = v.video_stale
   switch (id) {
     case 'idea':
@@ -414,6 +461,8 @@ async function parseToLibrary() {
       </header>
 
       <template v-if="view">
+        <!-- 锁区覆盖层只盖内容区（不盖页签行）：跑动中仍可切页查看，但不能编辑 -->
+        <div class="tab-body">
         <!-- KeepAlive 要求恰好一个子节点：内部不许放注释/多根（v-if 链整体算一个） -->
         <KeepAlive>
           <MusicIdeaPane
@@ -556,6 +605,13 @@ async function parseToLibrary() {
             :project-id="videoId" :events="activity" :producing="!!view.producing" :totals="view.tokens"
           />
         </KeepAlive>
+        <!-- 准备链锁区：本页对应的工件正在被 AI 重写时，整块内容只读 -->
+        <div v-if="prepLockLabel" class="prep-lock">
+          <NSpin :size="16" />
+          <span>{{ prepLockText }}</span>
+          <NButton size="tiny" quaternary :loading="cancellingPrep" @click="cancelPrepRun">取消生成</NButton>
+        </div>
+        </div>
       </template>
 
       <div v-else class="empty">
@@ -644,6 +700,20 @@ async function parseToLibrary() {
 
 .empty { flex: 1; display: flex; align-items: center; justify-content: center; }
 .none { color: var(--muted); }
+
+/* 内容区包裹：准备链锁区覆盖层的定位锚（只盖内容，不盖页签行——
+   跑动中仍可切页查看进度，只是不能编辑） */
+.tab-body { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.prep-lock {
+  position: absolute; inset: 0; z-index: 40;
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(2px);
+  color: var(--accent); font-size: 12.5px; text-align: center; padding: 0 28px;
+}
+.prep-lock span { max-width: 560px; line-height: 1.8; }
+.prep-lock :deep(.n-button) { color: var(--accent); flex: none; }
+.prep-lock :deep(.n-button:hover) { color: var(--accent-hover); }
 
 /* ── 分镜表（发丝线 + tabular 数字） ── */
 .sb-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }

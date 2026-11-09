@@ -403,6 +403,16 @@ function openSSE(id: string) {
         : d.detail.startsWith('done') ? 'done'
         : d.detail.startsWith('error') || d.detail.startsWith('repair') ? 'error' : 'running'
       if (!Object.keys(stageState.value).length) firstStageKey.value = d.stage
+      // 新一轮准备链开跑：清掉上一轮各站点的 done/error 残留——否则「本次只勾分镜」
+      // 时文稿/风格卡片会顶着上一轮的「完成」，看起来像本轮也跑了（2026-11-03）。
+      if (d.stage === 'prep' && st === 'running') {
+        const next = { ...stageState.value }
+        for (const k of ['prep/script', 'prep/style', 'prep/storyboard', 'prep/music']) delete next[k]
+        stageState.value = next
+        // 链刚起：立刻拉一次 /prep 拿 active，别等第一站跑完的 prep_updated
+        //（否则锁区要等几分钟才出现）
+        throttledLoadProject()
+      }
       stageState.value = { ...stageState.value, [d.stage]: st }
       loadMsgs()
       throttledLoadActivity() // 阶段推进即拉事件流（用时/打回记帐在 manifest 里；3s 节流）

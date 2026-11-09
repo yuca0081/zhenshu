@@ -1,4 +1,4 @@
-import type { ActivityEvent, AudioMeta, BgmTrack, TranscriptMsg, AuthStatus, ChatRef, LlmSettingsInput, LlmSettingsView, LlmTestResult, Manuscript, MaterialFile, Msg, PrepView, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, UserInfo, UserRow, VocabEntry } from './types'
+import type { ActivityEvent, AudioMeta, BgmTrack, TranscriptMsg, AuthStatus, ChatRef, ImageMaterial, LlmSettingsInput, LlmSettingsView, LlmTestResult, Manuscript, MaterialFile, Msg, PrepStation, PrepView, ProjectRow, ProjectView, RefVideo, RefVideoStyle, Storyboard, Style, StyleSamples, UserInfo, UserRow, VocabEntry } from './types'
 
 // ── 会话认证（cookie 会话，HttpOnly，浏览器自动携带）──────────
 // 凭据不进 JS：localStorage 存 token / ?token= 进 URL 的旧方案已废。
@@ -119,9 +119,12 @@ export const api = {
   // 准备阶段三工件打包视图（终审页签；exists=false = 非新路径项目）
   prep: (id: string) => req<PrepView>(`/api/projects/${id}/prep`),
 
-  // 启动/取消三工位链（主题页签；异步跑，进度走 SSE 与轮询）
-  runPrep: (id: string, idea: string, force = false) =>
-    post<{ ok: boolean; started: boolean }>(`/api/projects/${id}/prep/run`, { idea, force }),
+  // 启动/取消准备链（主题页签；异步跑，进度走 SSE 与轮询）。
+  // stations = 本次要（重新）生成的工位；空 = 三工位全选（兼容旧调用）。
+  // 后端可能补跑缺失前置，返回实际执行计划。
+  runPrep: (id: string, idea: string, force = false, stations: PrepStation[] = []) =>
+    post<{ ok: boolean; started: boolean; stations?: PrepStation[] }>(
+      `/api/projects/${id}/prep/run`, { idea, force, stations }),
   cancelPrep: (id: string) => post<{ ok: boolean }>(`/api/projects/${id}/prep/cancel`),
 
   // 项目材料库（主题页上传的参考资料，①文稿 read_source 消费；同名覆盖=更新）
@@ -131,6 +134,26 @@ export const api = {
   deleteMaterial: (id: string, name: string) =>
     req<{ ok: boolean; materials: MaterialFile[] }>(
       `/api/projects/${id}/materials?name=${encodeURIComponent(name)}`, { method: 'DELETE' }),
+
+  // 真图素材（主题页上传的实拍图/截图；required=必须出现在成片里）
+  images: (id: string) => req<{ images: ImageMaterial[] }>(`/api/projects/${id}/images`),
+  uploadImage: (id: string, file: File, opts: { title?: string; note?: string; required?: boolean } = {}) => {
+    const fd = new FormData()
+    fd.append('image', file)
+    if (opts.title) fd.append('title', opts.title)
+    if (opts.note) fd.append('note', opts.note)
+    fd.append('required', opts.required ? '1' : '')
+    return req<{ ok: boolean; material: ImageMaterial; materials: ImageMaterial[] }>(
+      `/api/projects/${id}/images`, { method: 'POST', body: fd })
+  },
+  updateImage: (id: string, file: string, patch: { required?: boolean; title?: string; note?: string }) =>
+    req<{ ok: boolean; materials: ImageMaterial[] }>(`/api/projects/${id}/images`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file, ...patch }),
+    }),
+  deleteImage: (id: string, file: string) =>
+    req<{ ok: boolean; materials: ImageMaterial[] }>(
+      `/api/projects/${id}/images?file=${encodeURIComponent(file)}`, { method: 'DELETE' }),
 
   // 打包终审确认（全流程唯一人工门）：文字稿+风格包+分镜稿一次确认
   confirmPrep: (id: string) => post<{ ok: boolean; direction: string }>(`/api/projects/${id}/prep/confirm`),

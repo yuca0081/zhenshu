@@ -325,7 +325,9 @@ async function save() {
 </template>
 
 <style scoped>
-.lm-page { flex: 1; min-height: 0; overflow: auto; }
+/* hud-main 是定高块容器（非 flex），高度必须自己拿满 100%，flex:1 在这里失效
+   （失效 = 页面长过视口时底部保存按钮被 body overflow:hidden 裁掉，够不着） */
+.lm-page { height: 100%; overflow: auto; }
 .lm-wrap { max-width: 880px; margin: 0 auto; padding: 26px 28px 40px; }
 .lm-head h2 { font-size: 18px; letter-spacing: 0.12em; color: var(--ink); margin-bottom: 6px; }
 .lm-head p { color: var(--muted); font-size: 13px; margin-bottom: 18px; line-height: 1.6; }
