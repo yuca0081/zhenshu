@@ -165,18 +165,27 @@ func TestFinishTool(t *testing.T) {
 	}
 }
 
-// TestUnifiedWriteCap write_* 病理上限：第 11 次拒收并提示复盘。
+// TestUnifiedWriteCap write_* 病理上限：只计成功落盘——参数错/被拒不烧额度
+// （2026-11-09 首跑教训：deepseek-flash 大 JSON 截断连败 6 次差点烧光），
+// 成功 10 次后拒收并提示复盘。
 func TestUnifiedWriteCap(t *testing.T) {
 	p, u := unifiedFixture(t)
 	tool := u.writeScriptTool()
+	// 参数错×多次：不计数，之后仍可正常写
+	for i := 0; i < 5; i++ {
+		obs := tool.Run(context.Background(), `{bad json`)
+		if !strings.Contains(obs.Text, "参数") {
+			t.Fatalf("坏参数应报参数错: %s", obs.Text)
+		}
+	}
 	for i := 0; i < unifiedWriteMax; i++ {
 		obs := tool.Run(context.Background(), `{"text":"第几稿都是这两句。第二句。"}`)
 		if strings.Contains(obs.Text, "病理上限") {
-			t.Fatalf("第 %d 次不应触顶", i+1)
+			t.Fatalf("第 %d 次成功写不应触顶", i+1)
 		}
 	}
 	obs := tool.Run(context.Background(), `{"text":"超限的一稿。第二句。"}`)
-	if !strings.Contains(obs.Text, "病理上限") || !strings.Contains(obs.Text, "复盘") {
+	if !strings.Contains(obs.Text, "病理上限") || !strings.Contains(obs.Text, "空转") {
 		t.Fatalf("超限应拒收并提示复盘: %s", obs.Text)
 	}
 	_ = p

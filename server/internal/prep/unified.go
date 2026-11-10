@@ -237,17 +237,21 @@ func (u *unifiedRun) estimateTool() Tool {
 	}
 }
 
-// spendWrite write_* 病理上限（每件 ≤unifiedWriteMax 次）：只防死循环空转。
-func (u *unifiedRun) spendWrite(name string) bool {
+// writeCapped write_* 病理上限的入口检查（每件成功落盘 ≤unifiedWriteMax 次）。
+// 只计成功落盘——参数解析失败（deepseek-flash 大 JSON 截断会连败多次，2026-11-09
+// 首跑 8 次里 6 次是参数错差点烧光额度）与被拒不计数：帽防的是「写成了还在
+// 反复重写」的空转，修错迭代交给时间闸与回合预算。
+func (u *unifiedRun) writeCapped(name string) bool {
+	return u.writes[name] >= unifiedWriteMax
+}
+
+// countWrite 成功落盘后计数（与 writeCapped 配对）。
+func (u *unifiedRun) countWrite(name string) {
 	u.writes[name]++
-	if u.writes[name] > unifiedWriteMax {
-		return false
-	}
-	return true
 }
 
 func writeCapMessage(name string, n int) string {
-	return fmt.Sprintf("write_%s 已是第 %d 次（病理上限 %d）——同一件反复重写通常是没消化上一轮的过闸错误。停下复盘：把上次返回的错误清单逐条修完再一次写对；或先去做别的件，回头再收这件。", name, n, unifiedWriteMax)
+	return fmt.Sprintf("write_%s 已成功落盘 %d 次（病理上限 %d）——同一件反复重写是在空转。停下复盘：要么按上一轮的失效提醒把下游一并改到重新咬合，要么先去做别的件，回头再收这件。", name, n, unifiedWriteMax)
 }
 
 // writeScriptTool 落盘/改写文稿（保存即校验 + 下游失效提醒）。
@@ -272,13 +276,14 @@ func (u *unifiedRun) writeScriptTool() Tool {
 			"required": []string{"text"},
 		}),
 		Run: func(_ context.Context, args string) Observation {
-			if !u.spendWrite("script") {
+			if u.writeCapped("script") {
 				return Observation{Text: writeCapMessage("script", u.writes["script"])}
 			}
 			obs, ok := u.sr.writeScript(args, u.target)
 			if !ok {
 				return obs
 			}
+			u.countWrite("script")
 			if s, err := LoadScript(u.p); err == nil {
 				if note := u.scriptExpiryNote(s); note != "" {
 					obs.Text += "\n" + note
@@ -352,13 +357,14 @@ func (u *unifiedRun) writeStylepackTool() Tool {
 			"required": []string{"style_id", "description", "grammar", "design_system"},
 		}),
 		Run: func(ctx context.Context, args string) Observation {
-			if !u.spendWrite("stylepack") {
+			if u.writeCapped("stylepack") {
 				return Observation{Text: writeCapMessage("stylepack", u.writes["stylepack"])}
 			}
 			obs, ok := u.st.writeStylepack(ctx, args)
 			if !ok {
 				return obs
 			}
+			u.countWrite("stylepack")
 			if sp, err := LoadStylePack(u.p); err == nil {
 				if note := u.bandExpiryNote(sp.Grammar); note != "" {
 					obs.Text += "\n" + note
@@ -401,7 +407,7 @@ func (u *unifiedRun) writeStoryboardTool() Tool {
 			"required":   []string{"draft"},
 		}),
 		Run: func(_ context.Context, args string) Observation {
-			if !u.spendWrite("storyboard") {
+			if u.writeCapped("storyboard") {
 				return Observation{Text: writeCapMessage("storyboard", u.writes["storyboard"])}
 			}
 			draft, err := parseDraftArg(args)
@@ -431,6 +437,7 @@ func (u *unifiedRun) writeStoryboardTool() Tool {
 			if err != nil {
 				return Observation{Text: "分镜落盘失败：" + err.Error()}
 			}
+			u.countWrite("storyboard")
 			return Observation{Text: "分镜稿已落盘：" + summary + "。"}
 		},
 	}
