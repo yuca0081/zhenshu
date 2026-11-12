@@ -21,10 +21,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -386,6 +388,26 @@ func (s *Store) Analyze(id string) (bool, error) {
 	return true, nil
 }
 
+// flexInt 帧序号宽容解析：视觉模型偶发把序号写成小数（如 10.5）或数字串，
+// 严格 int 反序列化会让整批构图分析报废重试三次全灭（2026-11-10 暖金星尘实跑教训）。
+type flexInt int
+
+func (f *flexInt) UnmarshalJSON(b []byte) error {
+	var fl float64
+	if err := json.Unmarshal(b, &fl); err == nil {
+		*f = flexInt(int(math.Round(fl)))
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
+			*f = flexInt(n)
+			return nil
+		}
+	}
+	return fmt.Errorf("帧序号无法解析: %s", string(b))
+}
+
 // analyzeCompositions 分批把关键帧喂 vision，逐帧记录构图观察（打标的构图证据）。
 func (s *Store) analyzeCompositions(ctx context.Context, prov *llm.Provider, frames []featureFrame) (string, error) {
 	var batches [][]featureFrame
@@ -412,8 +434,8 @@ func (s *Store) analyzeCompositions(ctx context.Context, prov *llm.Provider, fra
 		}
 		var out struct {
 			Frames []struct {
-				Index int    `json:"index"`
-				Comp  string `json:"composition"`
+				Index flexInt `json:"index"`
+				Comp  string  `json:"composition"`
 			} `json:"frames"`
 		}
 		_, err := prov.GenerateJSONVisionNoThink(ctx,
@@ -425,7 +447,7 @@ func (s *Store) analyzeCompositions(ctx context.Context, prov *llm.Provider, fra
 			return "", fmt.Errorf("构图分析失败: %w", err)
 		}
 		for _, o := range out.Frames {
-			if o.Index >= 0 && o.Index < bi*3+len(batch) && o.Comp != "" {
+			if o.Index >= 0 && int(o.Index) < bi*3+len(batch) && o.Comp != "" {
 				fmt.Fprintf(&all, "帧%d: %s\n", o.Index, o.Comp)
 			}
 		}
