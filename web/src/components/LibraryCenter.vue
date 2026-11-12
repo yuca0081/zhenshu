@@ -27,7 +27,9 @@ const tab = ref<'styles' | 'videos'>(props.initialTab ?? 'styles')
 </template>
 
 <style scoped>
-.mc { flex: 1; min-height: 0; padding: 14px 28px 14px; }
+/* hud-main 是定高块容器（非 flex），flex:1 在这里失效——条目一多内容溢出视口
+   又被 body overflow:hidden 裁掉就"不能滚动"（同 LlmSettingsPage 的坑，2026-11-11） */
+.mc { height: 100%; min-height: 0; padding: 14px 28px 14px; }
 /* 高度链打通到 tab pane，滚动条才出得来（naive-ui 实际类名是单数 n-tab-pane） */
 .mc :deep(.n-tabs) { height: 100%; display: flex; flex-direction: column; }
 .mc :deep(.n-tabs-nav) { flex: none; }
